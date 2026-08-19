@@ -1,0 +1,17 @@
+# Line endings are LF in the repository and LF in every working tree.
+#
+# This repository is edited on Windows and run on Linux in three places: the
+# Netlify build and its Node functions, the GitHub Actions runner, and the Deno
+# edge runtime that will load src/lib/core/** unchanged under AD-2. A file that
+# picks up CRLF on the way through a Windows checkout is a file whose diff
+# depends on who committed it.
+#
+# `core.autocrlf=true` is what introduces that: it writes CRLF into working
+# copies on checkout. Every tracked file is already LF in the index, so this
+# file changes no repository content — it settles the working tree and keeps
+# future commits from drifting.
+#
+# Git decides text vs binary by content, so `text=auto` leaves genuinely binary
+# files alone without needing them enumerated here.
+
+* text=auto eol=lf
