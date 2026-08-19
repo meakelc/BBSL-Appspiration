@@ -1,0 +1,59 @@
+# Runs the suite that `npm run build` does not.
+#
+# The build path is `check-pins && vite build`, so nothing in the deploy
+# pipeline invokes vitest or svelte-check. Without this workflow all 183 tests
+# can be red — or the drift gate removed from the build script entirely — while
+# a Netlify deploy still succeeds.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# The suite reads the tree and nothing else.
+permissions:
+  contents: read
+
+# A newer push to the same ref supersedes the run in flight.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: test and typecheck
+    runs-on: ubuntu-latest
+
+    steps:
+      # Actions are pinned to a commit, not a tag, and the tag is recorded
+      # beside it. A tag is mutable and this repository does not float pins.
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # .nvmrc is the source of truth and check-pins.js asserts it names
+          # major 24. A literal here would be a fourth place the Node pin lives.
+          node-version-file: .nvmrc
+          cache: npm
+
+      # ci, not install — direct dependencies are pinned exactly, but transitive
+      # versions resolve fresh unless the lockfile is installed from.
+      - name: Install
+        run: npm ci
+
+      # Also covers the drift gate against the real repository: pins.test.ts
+      # drives checkPins(readRepositoryInputs()), so a separate check:pins step
+      # would assert the same thing twice.
+      - name: Test
+        run: npm test
+
+      # svelte-kit sync && svelte-check. Nothing else runs this — the build
+      # does not typecheck.
+      - name: Typecheck
+        run: npm run check
