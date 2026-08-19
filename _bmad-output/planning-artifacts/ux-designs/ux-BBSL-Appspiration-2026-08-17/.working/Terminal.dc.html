@@ -1,0 +1,136 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    body { margin: 0; }
+    * { box-sizing: border-box; }
+    a { color: #3FD98A; } a:hover { color: #6FE7AA; }
+  </style>
+</helmet>
+<div style="width: 375px; min-height: 1180px; background: #0E1114; color: #DCE6EC; font-family: ui-monospace, 'Cascadia Mono', Consolas, 'SF Mono', monospace; padding: 18px 14px 26px; display: flex; flex-direction: column; gap: 22px;">
+
+  <div style="display: flex; align-items: center; justify-content: space-between;">
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{brand}}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V10"></path><path d="M12 10c0-3.5 2.5-6 6-6 0 3.5-2.5 6-6 6z"></path><path d="M12 13c0-3-2-5-5-5 0 3 2 5 5 5z"></path></svg>
+      <span style="font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; color: {{brand}};">Appspiration</span>
+    </div>
+    <span style="font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: #5C6873;">Terminal</span>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 8px;">
+    <div style="font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: #5C6873;">Bid Board</div>
+
+    <div style="background: #151A1F; border: 1px solid #232B33; padding: 12px; display: flex; flex-direction: column; gap: 7px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+        <span style="font-size: 15px; letter-spacing: -0.01em; color: #F2F7FA;">Jalen Duren</span>
+        <span style="border: 1px solid #2E3A44; color: #8A98A4; padding: 2px 6px; font-size: 9px; letter-spacing: 0.1em;">OPEN</span>
+      </div>
+      <div style="font-size: 11px; color: #8A98A4; letter-spacing: 0.02em;">DET &#183; C &#183; $12.0M &#183; 2YR</div>
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 3px;">
+        <span style="font-size: 26px; line-height: 1; color: #F2F7FA; letter-spacing: -0.02em;">$14.5M</span>
+        <span style="display: inline-flex; align-items: center; gap: 5px; background: #E0A64A; color: #14100A; padding: 4px 7px; font-size: 9px; letter-spacing: 0.1em;">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#14100A" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"></path><path d="M19 12l-7 7-7-7"></path></svg>
+          OUTBID
+        </span>
+      </div>
+      <div style="display: flex; justify-content: space-between; font-size: 11px; color: #8A98A4;"><span>LAK &#183; Skeeter</span><span>4h 12m</span></div>
+      <div style="font-size: 10px; color: #5C6873;">CLOSES 02:14 WED &#183; LOCAL</div>
+    </div>
+
+    <div style="background: #151A1F; border: 1px solid #232B33; border-left: 3px solid #6E7BE0; padding: 12px; display: flex; flex-direction: column; gap: 7px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+        <span style="font-size: 15px; letter-spacing: -0.01em; color: #F2F7FA;">Naz Reid</span>
+        <span style="display: inline-flex; align-items: center; gap: 4px; border: 1px solid #6E7BE0; color: #9AA5EA; padding: 2px 6px; font-size: 9px; letter-spacing: 0.1em;">
+          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#9AA5EA" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5"></path><path d="M4 20L21 3"></path><path d="M21 16v5h-5"></path><path d="M15 15l6 6"></path><path d="M4 4l5 5"></path></svg>
+          LOTTERY
+        </span>
+      </div>
+      <div style="font-size: 11px; color: #8A98A4; letter-spacing: 0.02em;">MIN &#183; F/C &#183; $9.0M &#183; 1YR</div>
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 3px;">
+        <span style="font-size: 26px; line-height: 1; color: #F2F7FA; letter-spacing: -0.02em;">$1.0M</span>
+        <span style="display: inline-flex; align-items: center; gap: 5px; border: 1px solid #3E4A55; color: #DCE6EC; padding: 4px 7px; font-size: 9px; letter-spacing: 0.1em;">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#DCE6EC" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l6 6L20 6"></path></svg>
+          YOU LEAD
+        </span>
+      </div>
+      <div style="display: flex; justify-content: space-between; font-size: 11px; color: #8A98A4;"><span>6 CONTENDERS</span><span>9h 40m</span></div>
+      <div style="font-size: 10px; color: #5C6873; line-height: 1.5;">CLOCK DOES NOT RESET ON A JOIN. DRAWN AT EXPIRY.</div>
+    </div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 8px;">
+    <div style="font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: #5C6873;">Your Maximum Bid</div>
+    <div style="background: #151A1F; border: 1px solid #232B33; padding: 12px; display: flex; flex-direction: column; gap: 6px; font-size: 12px;">
+      <div style="display: flex; justify-content: space-between;"><span style="color: #8A98A4;">SALARY CAP</span><span>$165.0M</span></div>
+      <div style="display: flex; justify-content: space-between;"><span style="color: #8A98A4;">EXISTING CONTRACTS</span><span>&#8722;$142.0M</span></div>
+      <div style="display: flex; justify-content: space-between;"><span style="color: #8A98A4;">COMMITTED BIDS</span><span>&#8722;$6.0M</span></div>
+      <div style="display: flex; justify-content: space-between;"><span style="color: #8A98A4;">MINORS EXPOSURE</span><span>&#8722;$1.0M</span></div>
+      <div style="display: flex; justify-content: space-between; border-top: 1px solid #232B33; padding-top: 6px;"><span style="color: #8A98A4;">AVAILABLE CAP SPACE</span><span>$16.0M</span></div>
+      <div style="display: flex; justify-content: space-between;"><span style="color: #8A98A4;">ROSTER RESERVE</span><span>&#8722;$2.0M</span></div>
+      <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #3E4A55; padding-top: 8px; margin-top: 2px;">
+        <span style="color: {{brand}}; letter-spacing: 0.06em;">MAXIMUM BID</span>
+        <span style="font-size: 21px; color: #F2F7FA; letter-spacing: -0.02em;">$14.0M</span>
+      </div>
+      <div style="font-size: 10px; color: #5C6873; line-height: 1.55;">RESERVE HOLDS $1.0M FOR EACH OF THE 2 SLOTS YOU MUST STILL FILL. ROSTER COUNT 9/12.</div>
+    </div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 8px;">
+    <div style="font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: #5C6873;">Refusal</div>
+    <div style="background: #151A1F; border: 1px solid #232B33; border-top: 3px solid #E0A64A; padding: 12px; display: flex; flex-direction: column; gap: 11px;">
+      <div style="font-size: 15px; color: #F2F7FA; letter-spacing: 0.01em;">THIS BID WAS NOT PLACED.</div>
+      <div style="font-size: 11.5px; line-height: 1.65; color: #B6C3CC;">$15.0M exceeds your Maximum Bid of $14.0M by $1.0M. Nothing has been committed and the Auction is unchanged.</div>
+
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="display: flex; align-items: flex-start; gap: 7px;">
+          <span style="display: inline-flex; align-items: center; gap: 4px; background: #E0A64A; color: #14100A; padding: 2px 6px; font-size: 9px; letter-spacing: 0.1em; white-space: nowrap;">
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#14100A" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg>
+            CAP
+          </span>
+          <span style="font-size: 11px; color: #B6C3CC; line-height: 1.5;">Refused &#8212; amount is above your Maximum Bid.</span>
+        </div>
+        <div style="display: flex; align-items: flex-start; gap: 7px;">
+          <span style="display: inline-flex; align-items: center; gap: 4px; border: 1px solid #3E4A55; color: #8A98A4; padding: 2px 6px; font-size: 9px; letter-spacing: 0.1em; white-space: nowrap;">
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#8A98A4" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l6 6L20 6"></path></svg>
+            SLOTS
+          </span>
+          <span style="font-size: 11px; color: #8A98A4; line-height: 1.5;">Passed &#8212; Roster Count would be 10/12.</span>
+        </div>
+      </div>
+
+      <div style="border-top: 1px solid #232B33; padding-top: 10px; display: flex; flex-direction: column; gap: 6px; font-size: 11.5px;">
+        <div style="font-size: 10px; color: #5C6873; padding-bottom: 2px;">YOUR FIGURES AT 02:14 WED</div>
+        <div style="display: flex; justify-content: space-between;"><span style="color: #8A98A4;">AVAILABLE CAP SPACE</span><span>$16.0M</span></div>
+        <div style="display: flex; justify-content: space-between;"><span style="color: #8A98A4;">COMMITTED BIDS</span><span>&#8722;$6.0M</span></div>
+        <div style="display: flex; justify-content: space-between;"><span style="color: #8A98A4;">MINORS EXPOSURE</span><span>&#8722;$1.0M</span></div>
+        <div style="display: flex; justify-content: space-between;"><span style="color: #8A98A4;">ROSTER RESERVE</span><span>&#8722;$2.0M</span></div>
+        <div style="display: flex; justify-content: space-between; border-top: 1px solid #3E4A55; padding-top: 7px;"><span>MAXIMUM BID</span><span>$14.0M</span></div>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 7px;">
+        <div style="display: flex; gap: 7px;">
+          <div style="flex-grow: 1; height: 46px; border: 1px solid #232B33; background: #0E1114; color: #5C6873; display: flex; align-items: center; padding: 0 11px; font-size: 15px;">$15.0M</div>
+          <div style="height: 46px; min-width: 100px; border: 1px solid #232B33; background: #0E1114; color: #4A555F; display: flex; align-items: center; justify-content: center; font-size: 11px; letter-spacing: 0.08em;">PLACE BID</div>
+        </div>
+        <div style="font-size: 10px; color: #5C6873; line-height: 1.6;">BIDDING UNAVAILABLE. NEXT LEGAL BID $15.0M &#183; YOUR MAXIMUM BID $14.0M.</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+<script data-dc-script data-props='{"brand":{"editor":"color","default":"#3FD98A","options":["#3FD98A","#5E9E76","#6FD3A0","#2FC7C7"]},"$preview":{"width":375,"height":1180}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { brand: this.props.brand ?? '#3FD98A' };
+  }
+}
+</script>
+</body>
+</html>

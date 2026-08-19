@@ -1,0 +1,176 @@
+/*
+ * Global foundation. The only stylesheet a route imports.
+ *
+ * Dark only. There is no light theme and none is planned. Nothing in this
+ * codebase may declare prefers-color-scheme, a light token set, or light-dark().
+ * tests/tokens.test.ts scans src/ and fails naming the offending file.
+ *
+ * No shadows, no elevation, no glows. Depth is a 1px border and a surface one
+ * step above the ground.
+ */
+
+@import './tokens.css';
+@import './commissioner.css';
+
+/* --- Reset ---------------------------------------------------------------- */
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+
+html,
+body,
+h1,
+h2,
+h3,
+h4,
+p,
+figure,
+blockquote,
+dl,
+dd,
+ul,
+ol {
+	margin: 0;
+	padding: 0;
+}
+
+ul,
+ol {
+	list-style: none;
+}
+
+img,
+picture,
+svg,
+video {
+	display: block;
+	max-width: 100%;
+}
+
+button,
+input,
+select,
+textarea {
+	font: inherit;
+	color: inherit;
+	letter-spacing: inherit;
+	font-variant-numeric: inherit;
+}
+
+table {
+	border-collapse: collapse;
+	border-spacing: 0;
+}
+
+/* --- Ground and text ------------------------------------------------------ */
+
+html {
+	background-color: var(--color-ground);
+	-webkit-text-size-adjust: 100%;
+}
+
+body {
+	min-height: 100svh;
+	background-color: var(--color-ground);
+	color: var(--color-text);
+	font-family: var(--font-ui);
+	font-size: var(--size-13);
+	line-height: 1.5;
+
+	/*
+	 * Tabular numerals are the inherited default in every numeric context, not an
+	 * opt-in. A money column that does not align on the decimal point is what
+	 * makes a dense table unscannable, and every surface in this product is a
+	 * dense table. Declared on body and inherited by everything, including form
+	 * controls (see the reset above, which does not let them opt out).
+	 */
+	font-variant-numeric: var(--numerals);
+	font-feature-settings: 'tnum' 1;
+}
+
+/* Display face: player names, the wordmark, Maximum Bid, refusal headlines.
+   Nothing else. */
+h1,
+h2,
+h3,
+.display {
+	font-family: var(--font-display);
+	font-weight: 400;
+	line-height: 1.3;
+}
+
+a {
+	color: var(--color-brand);
+	text-decoration-thickness: 1px;
+	text-underline-offset: 0.2em;
+}
+
+/* --- Shared primitives ---------------------------------------------------- */
+
+.page {
+	padding: var(--space-page-padding);
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-section-gap);
+}
+
+.panel {
+	background-color: var(--color-surface);
+	border: var(--border-width) solid var(--color-border);
+	border-radius: var(--rounded-panel);
+	padding: var(--space-panel-padding);
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-row-gap);
+}
+
+/* 10px, uppercase, 0.16em tracking, text-tertiary. */
+.section-label {
+	font-size: var(--size-10);
+	text-transform: uppercase;
+	letter-spacing: 0.16em;
+	color: var(--color-text-tertiary);
+}
+
+.prose {
+	color: var(--color-text-prose);
+	font-size: var(--size-12-5);
+	line-height: 1.6;
+}
+
+.money {
+	font-family: var(--font-ui);
+	font-variant-numeric: var(--numerals);
+	letter-spacing: -0.025em;
+	color: var(--color-text);
+}
+
+.visually-hidden:not(:focus):not(:active) {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+}
+
+:where(a, button, input, select, textarea):focus-visible {
+	outline: 2px solid var(--color-border-interactive);
+	outline-offset: 2px;
+}
+
+/* No urgency design: no pulsing, no countdown animation, no celebration.
+   Motion is honoured as a preference and there is very little of it to honour. */
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+		scroll-behavior: auto !important;
+	}
+}

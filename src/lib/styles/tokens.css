@@ -1,0 +1,129 @@
+/*
+ * Design tokens — declared once, here.
+ *
+ * Every value below is copied character-for-character from the frontmatter of
+ * DESIGN.md (_bmad-output/planning-artifacts/ux-designs/ux-BBSL-Appspiration-2026-08-17).
+ * tests/tokens.test.ts asserts that parity in both directions: a value edited
+ * here without editing DESIGN.md fails, and a token present in DESIGN.md but
+ * absent here fails.
+ *
+ * DESIGN.md is the source. If a value is wrong, change it there first.
+ *
+ * Dark only. There is no light theme and none is planned — no
+ * prefers-color-scheme block, no light token set, anywhere in this codebase.
+ */
+
+:root {
+	color-scheme: dark;
+
+	/* --- Colours (20) ------------------------------------------------------ */
+
+	/* Page background. Deep green-black — the eco-bank ground. */
+	--color-ground: #0D1712;
+	/* Panels, cards, the persistent strip. */
+	--color-surface: #15211B;
+	/* Input fields and disabled controls. */
+	--color-surface-sunken: #101B15;
+	/* Panel borders and internal rules — decorative only, never a control boundary. */
+	--color-border: #24332A;
+	/* Totals rules, strip top edge. */
+	--color-border-strong: #5E7568;
+	/* Mandatory on every input, button and meaning-carrying chip outline. */
+	--color-border-interactive: #5E7568;
+	/* Primary text and money figures. */
+	--color-text: #E8F0E9;
+	/* Body sentences in refusals and explanations. */
+	--color-text-prose: #C3D0C6;
+	/* Row labels, player metadata, bidder line. */
+	--color-text-secondary: #93A69A;
+	/* Section labels, timestamps, footnotes. */
+	--color-text-tertiary: #7F9187;
+	/* Disabled control labels. Exempt from 1.4.3 only because a disabled
+	   control always states its reason beside it. */
+	--color-text-disabled: #4E5F55;
+	/* Brand only. Never signals leading, winning, safe or approved. */
+	--color-brand: #6FD3A0;
+	/* The single attention colour in the product. Amber, never red. */
+	--color-attention: #E8B366;
+	--color-attention-ink: #16110A;
+	/* Minimum-Bid Contention accent bar. */
+	--color-lottery: #8B98E0;
+	--color-lottery-text: #A3AFE8;
+	/* Commissioner control class — dashed rules and outlines only. */
+	--color-admin: #6E8592;
+	--color-admin-text: #8FA6B2;
+	--color-admin-label: #7E939D;
+	/* The recessed ground a Commissioner control block sits on. */
+	--color-admin-ground: #131C1C;
+
+	/* --- Typography -------------------------------------------------------- */
+
+	/* Player names, the wordmark, the words Maximum Bid, refusal headlines. */
+	--font-display: Georgia, 'Palatino Linotype', Palatino, serif;
+	/* Every label, number, control and body string. */
+	--font-ui: system-ui, 'Segoe UI', -apple-system, sans-serif;
+	/* The default in every numeric context — see global.css. */
+	--numerals: tabular-nums;
+
+	/* Type scale, ten steps. Named by value so a size cannot be misread. */
+	--size-10: 10px;
+	--size-11: 11px;
+	--size-12: 12px;
+	--size-12-5: 12.5px;
+	--size-13: 13px;
+	--size-15: 15px;
+	--size-18: 18px;
+	--size-19: 19px;
+	--size-21: 21px;
+	--size-26: 26px;
+
+	/* --- Radii ------------------------------------------------------------- */
+	/* Near-square, deliberately. Not 0, not 12-14px. */
+
+	--rounded-panel: 3px;
+	--rounded-chip: 3px;
+	--rounded-control: 3px;
+
+	/* --- Spacing ----------------------------------------------------------- */
+	/* Every layout is flex or grid with gap. Never margins between siblings. */
+
+	--space-panel-padding: 12px;
+	--space-row-gap: 7px;
+	--space-card-gap: 8px;
+	--space-section-gap: 22px;
+	--space-page-padding: 18px 14px 26px;
+
+	/* --- Component dimensions ---------------------------------------------- */
+
+	/* Bid control height, above the 44px touch floor. */
+	--control-height: 46px;
+	--touch-min: 44px;
+	--strip-height: 52px;
+	/* Depth is a 1px border. There are no shadows and no elevation layers. */
+	--border-width: 1px;
+	/* Minimum-Bid Contention left bar; refusal-panel top bar. Nothing else. */
+	--accent-bar-width: 3px;
+
+	/* --- Declared beyond the DESIGN.md frontmatter -------------------------- */
+
+	/* DESIGN.md:229 specifies the Manager control fill as a raw #223028, which is
+	   not one of the twenty frontmatter colour tokens. It is declared here rather
+	   than hardcoded in commissioner.css so there is still exactly one place the
+	   value lives. Flagged in the story's Design Notes rather than silently
+	   folded into the palette.
+
+	   CORRECTED to #1D2922, and the correction is deliberate.
+
+	   DESIGN.md:229's #223028 bounded by border-interactive #5E7568 measures
+	   2.77:1. WCAG 1.4.11 requires 3:1 of any non-text element needed to identify
+	   a control, so a filled Manager button at that value fails. DESIGN.md:116
+	   did audit control boundaries — at 3.34:1 — but measured against surface
+	   #15211B, never against the fill the boundary actually sits on, so the
+	   audit's premise does not hold for a filled control. #1D2922 measures
+	   3.031:1 against #5E7568 and clears it.
+
+	   This is the same class of correction DESIGN.md:113-116 records twice
+	   already, made for the same reason: measured, not assumed.
+	   tests/commissioner.test.ts asserts the ratio so it cannot regress. */
+	--control-fill: #1D2922;
+}

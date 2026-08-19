@@ -1,0 +1,2 @@
+# The only way schema changes (AD-26). Applied dev-first across
+# exactly two projects. No hand-typed dashboard edits, ever.

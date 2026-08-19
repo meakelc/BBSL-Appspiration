@@ -1,0 +1,23 @@
+node_modules
+.svelte-kit
+build
+.netlify
+.vercel
+.output
+.vite
+
+# Environment. Everything except the committed example, which holds names only
+# and never a value.
+.env
+.env.*
+!.env.example
+
+# Installed agent skills. Reinstalled per machine, not project history.
+.claude/
+
+# Editors and OS
+.DS_Store
+Thumbs.db
+*.local
+*.log
+npm-debug.log*

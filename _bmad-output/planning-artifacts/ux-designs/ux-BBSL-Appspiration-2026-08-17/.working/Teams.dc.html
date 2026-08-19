@@ -1,0 +1,225 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    body { margin: 0; }
+    * { box-sizing: border-box; }
+    a { color: #6FD3A0; } a:hover { color: #94E2BB; }
+  </style>
+</helmet>
+<div style="width: 375px; min-height: 1020px; background: #0D1712; color: #E8F0E9; font-family: system-ui, 'Segoe UI', sans-serif; display: flex; flex-direction: column;">
+
+  <div style="display: flex; align-items: center; justify-content: space-between; padding: 14px; border-bottom: 1px solid #24332A;">
+    <div style="display: flex; align-items: center; gap: 9px;">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#93A69A" stroke-width="2" stroke-linecap="round"><path d="M4 7h16"></path><path d="M4 12h16"></path><path d="M4 17h16"></path></svg>
+      <span style="font-family: Georgia, 'Palatino Linotype', serif; font-size: 15px;">Teams</span>
+    </div>
+    <span style="font-size: 12px; color: #93A69A; font-variant-numeric: tabular-nums;">30 teams</span>
+  </div>
+
+  <div style="display: flex; gap: 6px; padding: 11px 14px; border-bottom: 1px solid #24332A; overflow: hidden;">
+    <span style="display: inline-flex; align-items: center; gap: 5px; border: 1px solid #5E7568; background: #223028; color: #E8F0E9; border-radius: 3px; padding: 6px 10px; font-size: 11.5px; white-space: nowrap;">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#E8F0E9" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10"></path><path d="M4 12h7"></path><path d="M4 18h4"></path><path d="M17 5v14"></path><path d="M14 16l3 3 3-3"></path></svg>
+      Team name
+    </span>
+    <span style="border: 1px solid #24332A; color: #93A69A; border-radius: 3px; padding: 6px 10px; font-size: 11.5px; white-space: nowrap;">Available</span>
+    <span style="border: 1px solid #24332A; color: #93A69A; border-radius: 3px; padding: 6px 10px; font-size: 11.5px; white-space: nowrap;">Free slots</span>
+    <span style="border: 1px solid #24332A; color: #93A69A; border-radius: 3px; padding: 6px 10px; font-size: 11.5px; white-space: nowrap;">Cap space</span>
+  </div>
+
+  <div style="flex-grow: 1; display: flex; flex-direction: column;">
+
+    <div style="display: flex; flex-direction: column; gap: 7px; padding: 11px 14px 12px 12px; border-bottom: 1px solid #24332A; border-left: 2px solid #5E7568;">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 10px;">
+        <span style="font-size: 15px;">Bucks <span style="color: #93A69A;">&#8212; you</span></span>
+        <span style="font-size: 11px; color: #7F9187; white-space: nowrap;">Slot &#183; Kuminga</span>
+      </div>
+      <div style="font-size: 12px; color: #93A69A; font-variant-numeric: tabular-nums;">Roster <span style="color: #E8F0E9;">9 of 12</span> &#183; Minors <span style="color: #E8F0E9;">3 of 3</span> &#183; IR <span style="color: #E8F0E9;">1</span></div>
+      <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;">
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <span style="font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #7F9187;">Cap space</span>
+          <span style="font-size: 15px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums;">$23.0M</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <span style="font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #7F9187;">Committed</span>
+          <span style="font-size: 15px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums;">$7.0M</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <span style="font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #7F9187;">Available</span>
+          <span style="font-size: 15px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums;">$16.0M</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 7px; padding: 11px 14px; border-bottom: 1px solid #24332A;">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 10px;">
+        <span style="font-size: 15px;">Bulls <span style="color: #93A69A;">&#8212; Ana Ruiz</span></span>
+        <span style="font-size: 11px; color: #7F9187; white-space: nowrap;">Slot free</span>
+      </div>
+      <div style="font-size: 12px; color: #93A69A; font-variant-numeric: tabular-nums;">Roster <span style="color: #E8F0E9;">12 of 12</span> &#183; Minors <span style="color: #E8F0E9;">1 of 3</span> &#183; IR <span style="color: #E8F0E9;">0</span></div>
+      <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;">
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <span style="font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #7F9187;">Cap space</span>
+          <span style="font-size: 15px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums;">$8.5M</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <span style="font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #7F9187;">Committed</span>
+          <span style="font-size: 15px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums;">$0.0M</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <span style="font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #7F9187;">Available</span>
+          <span style="font-size: 15px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums;">$8.5M</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 7px; padding: 11px 14px; border-bottom: 1px solid #24332A;">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 10px;">
+        <span style="font-size: 15px;">Cavaliers <span style="color: #93A69A;">&#8212; Theo Marsh</span></span>
+        <span style="font-size: 11px; color: #7F9187; white-space: nowrap;">Slot &#183; Aldama</span>
+      </div>
+      <div style="font-size: 12px; color: #93A69A; font-variant-numeric: tabular-nums;">Roster <span style="color: #E8F0E9;">7 of 12</span> &#183; Minors <span style="color: #E8F0E9;">0 of 3</span> &#183; IR <span style="color: #E8F0E9;">2</span></div>
+      <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;">
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <span style="font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #7F9187;">Cap space</span>
+          <span style="font-size: 15px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums;">$41.0M</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <span style="font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #7F9187;">Committed</span>
+          <span style="font-size: 15px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums;">$12.5M</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <span style="font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #7F9187;">Available</span>
+          <span style="font-size: 15px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums;">$28.5M</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 7px; padding: 11px 14px; border-bottom: 1px solid #24332A;">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 10px;">
+        <span style="font-size: 15px;">Celtics <span style="color: #93A69A;">&#8212; Priya Raman</span></span>
+        <span style="font-size: 11px; color: #7F9187; white-space: nowrap;">Slot free</span>
+      </div>
+      <div style="font-size: 12px; color: #93A69A; font-variant-numeric: tabular-nums;">Roster <span style="color: #E8F0E9;">11 of 12</span> &#183; Minors <span style="color: #E8F0E9;">2 of 3</span> &#183; IR <span style="color: #E8F0E9;">1</span></div>
+      <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;">
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <span style="font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #7F9187;">Cap space</span>
+          <span style="font-size: 15px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums;">$6.0M</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <span style="font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #7F9187;">Committed</span>
+          <span style="font-size: 15px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums;">$4.5M</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <span style="font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #7F9187;">Available</span>
+          <span style="font-size: 15px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums;">$1.5M</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 7px; padding: 11px 14px; border-bottom: 1px solid #24332A;">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 10px;">
+        <span style="font-size: 15px;">Clippers <span style="color: #93A69A;">&#8212; Dev Okoye</span></span>
+        <span style="font-size: 11px; color: #7F9187; white-space: nowrap;">Slot &#183; Reid</span>
+      </div>
+      <div style="font-size: 12px; color: #93A69A; font-variant-numeric: tabular-nums;">Roster <span style="color: #E8F0E9;">10 of 12</span> &#183; Minors <span style="color: #E8F0E9;">3 of 3</span> &#183; IR <span style="color: #E8F0E9;">0</span></div>
+      <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;">
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <span style="font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #7F9187;">Cap space</span>
+          <span style="font-size: 15px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums;">$9.5M</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <span style="font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #7F9187;">Committed</span>
+          <span style="font-size: 15px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums;">$9.5M</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <span style="font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #7F9187;">Available</span>
+          <span style="font-size: 15px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums;">$0.0M</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 7px; padding: 11px 14px; border-bottom: 1px solid #24332A;">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 10px;">
+        <span style="font-size: 15px;">Grizzlies <span style="color: #93A69A;">&#8212; Sam Iyer</span></span>
+        <span style="font-size: 11px; color: #7F9187; white-space: nowrap;">Slot free</span>
+      </div>
+      <div style="font-size: 12px; color: #93A69A; font-variant-numeric: tabular-nums;">Roster <span style="color: #E8F0E9;">12 of 12</span> &#183; Minors <span style="color: #E8F0E9;">2 of 3</span> &#183; IR <span style="color: #E8F0E9;">1</span></div>
+      <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;">
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <span style="font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #7F9187;">Cap space</span>
+          <span style="font-size: 15px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums;">$2.0M</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <span style="font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #7F9187;">Committed</span>
+          <span style="font-size: 15px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums;">$0.0M</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <span style="font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #7F9187;">Available</span>
+          <span style="font-size: 15px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums;">$2.0M</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 7px; padding: 11px 14px; border-bottom: 1px solid #24332A;">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 10px;">
+        <span style="font-size: 15px;">Hawks <span style="color: #93A69A;">&#8212; Rae Lindqvist</span></span>
+        <span style="font-size: 11px; color: #7F9187; white-space: nowrap;">Slot &#183; Duren</span>
+      </div>
+      <div style="font-size: 12px; color: #93A69A; font-variant-numeric: tabular-nums;">Roster <span style="color: #E8F0E9;">8 of 12</span> &#183; Minors <span style="color: #E8F0E9;">1 of 3</span> &#183; IR <span style="color: #E8F0E9;">0</span></div>
+      <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;">
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <span style="font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #7F9187;">Cap space</span>
+          <span style="font-size: 15px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums;">$30.5M</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <span style="font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #7F9187;">Committed</span>
+          <span style="font-size: 15px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums;">$18.0M</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <span style="font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #7F9187;">Available</span>
+          <span style="font-size: 15px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums;">$12.5M</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="padding: 12px 14px; font-size: 11.5px; color: #7F9187; font-variant-numeric: tabular-nums;">23 more teams</div>
+
+  </div>
+
+  <div style="border-top: 1px solid #5E7568; padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 7px;">
+    <span style="font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #7F9187;">Median &#183; 30 teams</span>
+    <div style="display: flex; gap: 22px; color: #93A69A; font-size: 15px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums;">
+      <span>2 free slots</span>
+      <span>$4.0M available</span>
+    </div>
+    <span style="font-size: 11px; color: #7F9187; line-height: 1.5;">The lower of the two middle values, so the figure always lands on the $500,000 grid.</span>
+  </div>
+
+  <div style="position: sticky; bottom: 0; background: #15211B; border-top: 1px solid #5E7568; padding: 0 14px; height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+    <div style="display: flex; align-items: baseline; gap: 8px; font-variant-numeric: tabular-nums;">
+      <span style="font-family: Georgia, 'Palatino Linotype', serif; font-size: 12px; color: {{brand}};">Maximum Bid</span>
+      <span style="font-size: 17px; letter-spacing: -0.02em;">$14.0M</span>
+      <span style="font-size: 12px; color: #7F9187;">&#183;</span>
+      <span style="font-size: 12px; color: #93A69A;">Roster 9 of 12</span>
+    </div>
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#93A69A" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 15l-6-6-6 6"></path></svg>
+  </div>
+
+</div>
+</x-dc>
+<script data-dc-script data-props='{"brand":{"editor":"color","default":"#6FD3A0","options":["#6FD3A0","#5E9E76","#3FD98A","#8ADFC0"]},"$preview":{"width":375,"height":1020}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { brand: this.props.brand ?? '#6FD3A0' };
+  }
+}
+</script>
+</body>
+</html>

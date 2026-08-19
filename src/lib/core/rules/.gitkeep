@@ -1,0 +1,2 @@
+# PURE core. evaluate() -> GateResults; decide() -> Accepted | Rejected.
+# Bidding, nomination, clocks, contention, allotment. Filled from Epic 2.

@@ -1,0 +1,110 @@
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created, ready for development
+#   - in-progress: Developer actively working on implementation
+#   - review: Implementation complete, ready for review
+#   - done: Story completed
+
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+
+# Action Item Status:
+#   - open: Committed during a retrospective, not yet addressed
+#   - in-progress: Actively being worked on
+#   - done: Completed
+
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when its first story starts (via build's sprint sync)
+# - Stories can be worked in parallel if team capacity allows
+# - Developer typically creates the next story after the previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+# - Retrospective appends its action items to action_items; the status view surfaces open ones
+generated: 08-18-2026 13:11
+last_updated: 08-18-2026
+project: BBSL-Appspiration
+project_key: NOKEY
+tracking_system: file-system
+story_location: _bmad-output/implementation-artifacts
+development_status:
+  epic-1: in-progress
+  1-1-deployable-skeleton-on-the-pinned-stack: review
+  1-2-the-pure-core-boundary-and-integer-money: backlog
+  1-3-sign-in-with-discord: backlog
+  1-4-teams-managers-and-the-commissioner-role: backlog
+  1-5-the-append-only-log-and-the-transactional-write-path: backlog
+  1-6-one-destination-list-gated-by-phase-and-role: backlog
+  1-7-import-thirty-team-roster-files: backlog
+  1-8-import-the-free-agent-pool: backlog
+  1-9-per-team-preview-and-atomic-promotion: backlog
+  1-10-set-minor-league-eligibility-by-hand: backlog
+  1-11-open-the-auction: backlog
+  epic-1-retrospective: optional
+
+  epic-2: backlog
+  2-1-nominate-a-free-agent: backlog
+  2-2-nomination-refusals-and-concurrency: backlog
+  2-3-nomination-slot-lifecycle-and-dead-nomination-visibility: backlog
+  2-4-the-auction-page-and-its-bid-control: backlog
+  2-5-place-a-bid-increment-granularity-and-the-24-hour-clock: backlog
+  2-6-the-money-gate-and-the-refusal-panel: backlog
+  2-7-the-slots-gate-roster-capacity-and-both-gates-always-reporte: backlog
+  2-8-minors-exposure-unbounded-eligible-bidding-bounded-by-overfl: backlog
+  epic-2-retrospective: optional
+
+  epic-3: backlog
+  3-1-expiry-is-authoritative-for-validation: backlog
+  3-2-enter-and-join-a-minimum-bid-contention: backlog
+  3-3-dissolve-a-minimum-bid-contention: backlog
+  3-4-close-an-auction-and-place-the-player: backlog
+  3-5-the-tick-one-cron-one-function-sweep-then-drain: backlog
+  3-6-draw-a-minimum-bid-contention-winner: backlog
+  3-7-the-league-clock-and-the-end-of-the-auction-phase: backlog
+  epic-3-retrospective: optional
+
+  epic-4: backlog
+  4-1-live-updates-and-the-freshness-contract: backlog
+  4-2-the-persistent-strip: backlog
+  4-3-view-the-bid-board: backlog
+  4-4-your-positions-the-landing: backlog
+  4-5-view-any-team: backlog
+  4-6-the-teams-index-and-the-league-median: backlog
+  epic-4-retrospective: optional
+
+  epic-5: backlog
+  5-1-the-transactional-outbox-and-its-dispatcher: backlog
+  5-2-broadcast-auction-events-to-the-league-channel: backlog
+  5-3-notify-managers-by-discord-mention: backlog
+  5-4-notification-settings-three-mutable-categories-and-only-thre: backlog
+  epic-5-retrospective: optional
+
+  epic-6: backlog
+  6-1-assign-contract-lengths-against-the-year-allotment: backlog
+  6-2-track-completion-and-a-deadline-that-resolves-nothing: backlog
+  6-3-review-and-export-the-auction-contracts: backlog
+  6-4-export-full-post-auction-rosters: backlog
+  6-5-archive-the-auction: backlog
+  epic-6-retrospective: optional
+
+  epic-7: backlog
+  7-1-the-commissioner-control-class-and-the-reason-sheet: backlog
+  7-2-void-a-bid-and-restore-the-auction: backlog
+  7-3-the-remaining-overrides: backlog
+  7-4-pause-and-resume-the-auction: backlog
+  7-5-the-league-visible-audit-log: backlog
+  epic-7-retrospective: optional
+
+  epic-8: backlog
+  8-1-replay-the-auction-against-a-synthetic-clock: backlog
+  8-2-detect-that-the-tick-has-stopped: backlog
+  8-3-reconstruct-the-auction-from-outside-supabase: backlog
+  8-4-the-outage-recovery-procedure-and-the-go-live-gate: backlog
+  epic-8-retrospective: optional

@@ -1,0 +1,127 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    body { margin: 0; }
+    * { box-sizing: border-box; }
+    a { color: #6FD3A0; } a:hover { color: #94E2BB; }
+  </style>
+</helmet>
+<div style="width: 375px; min-height: 1240px; background: #0D1712; color: #E8F0E9; font-family: system-ui, 'Segoe UI', sans-serif; padding: 18px 14px 26px; display: flex; flex-direction: column; gap: 24px;">
+
+  <div style="display: flex; flex-direction: column; gap: 6px;">
+    <span style="font-family: Georgia, 'Palatino Linotype', serif; font-size: 17px;">The Commissioner control class</span>
+    <span style="font-size: 12px; color: #93A69A; line-height: 1.6;">You are the Commissioner, the builder, and a competing manager. The referee control and the player control must never be confusable by muscle memory. They are separated by <strong style="color: #E8F0E9; font-weight: 600;">form</strong>, not colour &#8212; colour alone would fail exactly the person it needs to protect.</span>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 8px;">
+    <div style="font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: #7F9187;">1 &#183; What every Manager sees</div>
+    <div style="background: #15211B; border: 1px solid #24332A; border-radius: 3px; padding: 12px; display: flex; flex-direction: column; gap: 7px;">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 10px;">
+        <span style="font-family: Georgia, 'Palatino Linotype', serif; font-size: 18px;">Jalen Duren</span>
+        <span style="font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #93A69A;">Open</span>
+      </div>
+      <div style="font-size: 12px; color: #93A69A; font-variant-numeric: tabular-nums;">DET &#183; C &#183; $12.0M &#183; 2yr</div>
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 2px;">
+        <span style="font-size: 26px; line-height: 1; letter-spacing: -0.025em; font-variant-numeric: tabular-nums;">$14.5M</span>
+      </div>
+      <div style="display: flex; justify-content: space-between; font-size: 12px; color: #93A69A; font-variant-numeric: tabular-nums;"><span>Lakers &#8212; Meakel</span><span>4h 12m left</span></div>
+      <div style="display: flex; gap: 8px; padding-top: 4px;">
+        <div style="flex-grow: 1; height: 46px; border: 1px solid #24332A; background: #101B15; color: #E8F0E9; border-radius: 3px; display: flex; align-items: center; padding: 0 12px; font-size: 15px; font-variant-numeric: tabular-nums;">$15.0M</div>
+        <div style="height: 46px; min-width: 104px; border: 1px solid #5E7568; background: #223028; color: #E8F0E9; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 13px;">Place bid</div>
+      </div>
+      <div style="font-size: 11px; color: #7F9187;">Solid fill, square corners, full width. This is the Manager control shape.</div>
+    </div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 8px;">
+    <div style="font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: #7F9187;">2 &#183; What only you see, on the same card</div>
+    <div style="background: #15211B; border: 1px solid #24332A; border-radius: 3px; padding: 12px 12px 0; display: flex; flex-direction: column; gap: 7px;">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 10px;">
+        <span style="font-family: Georgia, 'Palatino Linotype', serif; font-size: 18px;">Jalen Duren</span>
+        <span style="font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #93A69A;">Open</span>
+      </div>
+      <div style="font-size: 12px; color: #93A69A; font-variant-numeric: tabular-nums;">DET &#183; C &#183; $12.0M &#183; 2yr</div>
+      <div style="font-size: 26px; line-height: 1; letter-spacing: -0.025em; font-variant-numeric: tabular-nums; padding-top: 2px;">$14.5M</div>
+      <div style="display: flex; justify-content: space-between; font-size: 12px; color: #93A69A; font-variant-numeric: tabular-nums;"><span>Lakers &#8212; Meakel</span><span>4h 12m left</span></div>
+
+      <div style="margin: 6px -12px 0; border-top: 1px dashed #6E8592; background: #131C1C; padding: 11px 12px 13px; display: flex; flex-direction: column; gap: 9px;">
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8FA6B2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 4v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V7z"></path></svg>
+          <span style="font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #8FA6B2;">Commissioner &#183; visible only to you</span>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; gap: 7px;">
+          <span style="border: 1px dashed #6E8592; color: #B6C6CE; border-radius: 3px; padding: 9px 12px; font-size: 12px; min-height: 44px; display: inline-flex; align-items: center;">Void leading bid</span>
+          <span style="border: 1px dashed #6E8592; color: #B6C6CE; border-radius: 3px; padding: 9px 12px; font-size: 12px; min-height: 44px; display: inline-flex; align-items: center;">Terminate Auction</span>
+          <span style="border: 1px dashed #6E8592; color: #B6C6CE; border-radius: 3px; padding: 9px 12px; font-size: 12px; min-height: 44px; display: inline-flex; align-items: center;">Adjust clock</span>
+        </div>
+        <div style="font-size: 11px; color: #7E939D; line-height: 1.55;">Dashed outline, never filled. Set on its own recessed ground. Every one opens a reason sheet before it commits &#8212; nothing here is a single tap.</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 8px;">
+    <div style="font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: #7F9187;">3 &#183; The reason sheet, before anything commits</div>
+    <div style="background: #131C1C; border: 1px dashed #6E8592; border-radius: 3px; padding: 14px 12px; display: flex; flex-direction: column; gap: 12px;">
+      <div style="display: flex; align-items: center; gap: 6px;">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8FA6B2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 4v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V7z"></path></svg>
+        <span style="font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: #8FA6B2;">Commissioner override</span>
+      </div>
+
+      <div style="font-family: Georgia, 'Palatino Linotype', serif; font-size: 18px; line-height: 1.3;">Void the leading bid on Jalen Duren.</div>
+
+      <div style="display: flex; flex-direction: column; gap: 7px; font-size: 12px; font-variant-numeric: tabular-nums;">
+        <div style="font-size: 10.5px; letter-spacing: 0.04em; color: #7E939D;">Before &#8594; after</div>
+        <div style="display: flex; justify-content: space-between;"><span style="color: #93A69A;">Leading bid</span><span>$14.5M &#8594; $14.0M</span></div>
+        <div style="display: flex; justify-content: space-between;"><span style="color: #93A69A;">Leading bidder</span><span>Lakers &#8594; Bucks</span></div>
+        <div style="display: flex; justify-content: space-between;"><span style="color: #93A69A;">Auction Clock</span><span>4h 12m &#8594; 11h 47m</span></div>
+        <div style="display: flex; justify-content: space-between; border-top: 1px solid #2C3A3A; padding-top: 7px;"><span style="color: #93A69A;">League Clock</span><span>39h 02m &#8594; 33h 15m</span></div>
+      </div>
+
+      <div style="display: flex; align-items: flex-start; gap: 8px; background: #1A1710; border-left: 3px solid #E8B366; padding: 9px 10px;">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#E8B366" stroke-width="2.4" stroke-linecap="round" style="margin-top: 1px; flex-shrink: 0;"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v6"></path><path d="M12 16.5v.01"></path></svg>
+        <span style="font-size: 11.5px; color: #E3D5BC; line-height: 1.55;">This removes the bid&#8217;s League Clock reset. The Auction Phase will end 5h 47m sooner. Nothing already accepted is invalidated.</span>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <span style="font-size: 11px; color: #8FA6B2;">Reason &#8212; required, permanent, readable by every Manager</span>
+        <div style="min-height: 62px; border: 1px solid #2C3A3A; background: #0F1616; border-radius: 3px; padding: 10px; font-size: 12.5px; color: #C3D0C6; line-height: 1.55;">Bid placed from the wrong account during co-manager handover; confirmed in #bbsl-general at 2:19 AM.</div>
+      </div>
+
+      <div style="display: flex; gap: 8px;">
+        <div style="flex-grow: 1; height: 46px; border: 1px solid #24332A; color: #93A69A; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 13px;">Cancel</div>
+        <div style="flex-grow: 1; height: 46px; border: 1px dashed #8FA6B2; color: #DCE7EC; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 13px;">Void the bid</div>
+      </div>
+      <div style="font-size: 11px; color: #7E939D; line-height: 1.55;">Written to the Audit Log with your name, the timestamp, both states and this reason. It cannot be edited or deleted afterwards, by you or anyone.</div>
+    </div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 8px;">
+    <div style="font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: #7F9187;">4 &#183; Paused &#8212; what the league sees</div>
+    <div style="background: #1A1710; border: 1px solid #E8B366; border-radius: 3px; padding: 12px; display: flex; flex-direction: column; gap: 8px;">
+      <div style="display: flex; align-items: center; gap: 7px;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#E8B366" stroke-width="2.2" stroke-linecap="round"><path d="M9 5v14"></path><path d="M15 5v14"></path></svg>
+        <span style="font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: #E8B366;">Auction paused</span>
+      </div>
+      <div style="font-size: 12.5px; color: #E3D5BC; line-height: 1.6;">Every Clock is stopped. Bids and Nominations are refused while paused. On resume each Clock continues with exactly the time it held.</div>
+      <div style="font-size: 11px; color: #B39B72; line-height: 1.55; font-variant-numeric: tabular-nums;">Paused 1:07 AM Wed by Commissioner &#8212; &#8220;Supabase outage, restoring.&#8221; Announced in Discord.</div>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+<script data-dc-script data-props='{"$preview":{"width":375,"height":1240}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

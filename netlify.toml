@@ -1,0 +1,46 @@
+# Netlify build and environment contract.
+#
+# The branch-to-environment mapping is committed here rather than set in the
+# Netlify dashboard so that it is reviewable and cannot drift silently:
+#
+#   production      -> the production Supabase project (never touched by hand)
+#   deploy-preview   -> the dev Supabase project (wipeable)
+#   branch-deploy    -> the dev Supabase project (wipeable)
+#
+# Only `production` may ever point at prod. Deploy previews and branch deploys
+# cost 0 Netlify credits, so iteration is free and only promotion is metered.
+#
+# The actual secret values are set per-context in the Netlify UI. Nothing here
+# is a secret, and no secret may take a PUBLIC_ prefix — see .env.example.
+
+[build]
+  command = "npm run build"
+  publish = "build"
+
+[build.environment]
+  NODE_VERSION = "24"
+  NPM_FLAGS = "--include=dev"
+
+[functions]
+  node_bundler = "esbuild"
+
+[context.production]
+  command = "npm run build"
+
+[context.production.environment]
+  APP_ENV = "production"
+  SUPABASE_ENVIRONMENT = "prod"
+
+[context.deploy-preview]
+  command = "npm run build"
+
+[context.deploy-preview.environment]
+  APP_ENV = "preview"
+  SUPABASE_ENVIRONMENT = "dev"
+
+[context.branch-deploy]
+  command = "npm run build"
+
+[context.branch-deploy.environment]
+  APP_ENV = "branch"
+  SUPABASE_ENVIRONMENT = "dev"
