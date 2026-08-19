@@ -15,3 +15,20 @@
 # files alone without needing them enumerated here.
 
 * text=auto eol=lf
+
+
+# --- What counts as this project's source -----------------------------------
+
+# The UX mockups are design artifacts, not application source, and they are
+# large: 16 files and ~2.5 MB, against ~58 KB of TypeScript. Left unmarked they
+# make GitHub report a SvelteKit project as ~96% HTML.
+#
+# Scoped to _bmad-output/ so src/app.html — which is real source — still counts.
+# Scoped to *.html rather than *.dc.html so the direction study is covered too.
+_bmad-output/**/*.html linguist-documentation
+
+# Machine-written, reviewed by the tests rather than by eye. Marking it collapses
+# it in pull request diffs and drops it from the language statistics. It stays
+# committed and stays installed from — `npm ci` in CI is what makes the pin
+# contract hold below the top level.
+package-lock.json linguist-generated=true
