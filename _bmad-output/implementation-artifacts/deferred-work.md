@@ -7,10 +7,12 @@
 - source_spec: none
   summary: Create the Netlify site, run a production deploy reachable over HTTPS, configure deploy previews and branch deploys against dev Supabase with the production branch against prod, and record the credit cost of the configuration.
   evidence: Story 1.1 AC 5 requires a live deploy. Netlify site creation, branch-deploy configuration and deploy authorization all require the Commissioner's own account. Story 1.1 delivers netlify.toml, the pinned adapter configuration and the branch-to-environment mapping in committed form; the account-side setup and the first real deploy are done by hand.
+  partial: 2026-08-20 — the site exists and is deployed. `https://bbslapp.netlify.app` answers HTTP 200 serving the built app, and deploy-preview, header-rule and redirect-rule checks run on pull requests. Still outstanding: confirming the branch-to-environment mapping is actually configured account-side against two Supabase projects that do not yet demonstrably exist, and recording the credit cost. Also note the site is now publicly reachable with no authentication in front of it.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-deployable-skeleton-on-the-pinned-stack.md`
   summary: Add a CI workflow that runs the test suite and svelte-check on every push and pull request.
   evidence: Story 1.1's build path is `check-pins && vite build`; nothing invokes `vitest` or `svelte-check`. A reviewer demonstrated that all 113 tests can be red — or the drift gate removed from the build script entirely — while a Netlify deploy still succeeds. The four suites guarding the AR-2 tree, token parity, the pin contract and the Commissioner distinction can rot indefinitely without a runner.
+  resolved: 2026-08-20 in `.github/workflows/ci.yml` (PR #2, merged as 86b58fd). Runs `npm ci`, `npm test` and `npm run check` on every push to `main` and every pull request; actions pinned to commit SHAs rather than tags. Verified green on main at 38373fc — 183 tests pass, svelte-check reports 0 errors. Note this covers the GitHub Actions builder only; the separate `npm ci` entry below concerns the Netlify build command and is untouched by this.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-deployable-skeleton-on-the-pinned-stack.md`
   summary: Add `supabase/config.toml` and document the migration and Edge Function deploy commands.
@@ -23,6 +25,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-deployable-skeleton-on-the-pinned-stack.md`
   summary: Establish CSP, frame-ancestors, Referrer-Policy and a noindex posture for the private league.
   evidence: netlify.toml declares no headers block and svelte.config.js sets no kit.csp. An app carrying a Discord OAuth redirect and a secret-based Commissioner sign-in should establish its security headers before the first auth surface lands in Story 1.3.
+  escalated: 2026-08-20 — no longer theoretical. The site is live and publicly reachable at `https://bbslapp.netlify.app`, and `curl -I` confirms no Content-Security-Policy, X-Frame-Options, Referrer-Policy or X-Robots-Tag is served. The noindex half now matters immediately rather than at Story 1.3: a private league's app is currently indexable.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-deployable-skeleton-on-the-pinned-stack.md`
   summary: Record the design rationale, rate limiting, rotation policy and audit logging for COMMISSIONER_RECOVERY_SECRET.
@@ -51,6 +54,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-deployable-skeleton-on-the-pinned-stack.md`
   summary: Verify tsconfig.json actually type-checks scripts/ and tests/, and add an explicit include if it does not.
   evidence: tsconfig inherits `include` from the generated .svelte-kit/tsconfig.json, which covers src/** and not sibling top-level directories — so allowJs/checkJs may never check scripts/check-pins.js, and npm run check may give no coverage of the test suite that imports it. Confirm with `npx tsc --showConfig`.
+  verified: 2026-08-20 at 38373fc — the suspicion is confirmed and the remedy is still outstanding. `npx tsc --showConfig` resolves `include` to `.svelte-kit/ambient.d.ts`, `.svelte-kit/env.d.ts`, `.svelte-kit/non-ambient.d.ts`, `.svelte-kit/types/**/$types.d.ts`, `vite.config.{js,ts}`, `src/**/*.{js,ts,svelte}`, `test/**/*.{js,ts,svelte}` and `tests/**/*.{js,ts,svelte}`. So `tests/` IS covered, `scripts/` is NOT, and `checkJs` is true — `scripts/check-pins.js` is never type-checked despite being the build's first gate. Only the verification half of this entry is discharged; the explicit `include` has not been added.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-deployable-skeleton-on-the-pinned-stack.md`
   summary: Reconcile whether the design intends `#1D2922` as the corrected Manager control fill in DESIGN.md itself.

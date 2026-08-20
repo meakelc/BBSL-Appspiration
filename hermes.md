@@ -261,17 +261,21 @@ and do not build a deferred item unprompted** — most are deliberately assigned
   current reasoning lives in `.gitkeep` comments that get deleted the moment those directories
   receive real files.
 
-Two items in `deferred-work.md` are now resolved and should be struck when that file is next
-touched by its owning skill:
+`deferred-work.md` is **append-only by skill design** — `bmad-build` and `bmad-code-review` both
+say "append one new entry… do not modify existing entries," and no skill in the suite prunes or
+resolves anything. So entries there are never struck; status is recorded as an annotation line
+(`resolved:` / `partial:` / `verified:` / `escalated:`) beneath the original, which is left intact.
+Current annotations, all dated 2026-08-20:
 
-- **CI exists** (`.github/workflows/ci.yml`), closing the "all 113 tests can be red while a deploy
-  succeeds" gap. It installs with `npm ci`, which also closes the separate lockfile item — that
-  half applied to the Netlify build command, which still uses `npm run build` via `npm install`,
-  so confirm the Netlify side before striking it entirely.
-- **`scripts/` is confirmed outside the type-check.** The deferred item asked someone to verify
-  this with `npx tsc --showConfig`; done on 2026-08-20. The resolved `include` is `.svelte-kit/`,
-  `src/**`, `test/**`, `tests/**` — `scripts/check-pins.js` is never type-checked despite
-  `checkJs: true`. The finding stands; only the verification is discharged.
+- **CI — `resolved`.** `.github/workflows/ci.yml` closed it.
+- **Netlify — `partial`.** The site is live; account-side environment mapping and credit cost are
+  still unconfirmed.
+- **tsconfig / `scripts/` — `verified`.** The suspicion is confirmed (`tests/` covered, `scripts/`
+  not), but the remedy — an explicit `include` — is still outstanding.
+- **Security headers — `escalated`.** Confirmed absent on the live public site.
+
+The `npm ci` entry is **not** resolved: it concerns the *Netlify* build command, which still runs
+`npm run build`. The `npm ci` in CI is a different builder.
 
 ---
 
