@@ -1,5 +1,5 @@
 <!-- bmad:context -->
-<!-- Verified 2026-08-18 against f6f7be4. Managed by bmad-project-context; edits inside this block are replaced on refresh. Keep anything you want preserved outside the markers. -->
+<!-- Verified 2026-08-20 against a21dacb. Managed by bmad-project-context; edits inside this block are replaced on refresh. Keep anything you want preserved outside the markers. -->
 
 ## BBSL-Appspiration
 
@@ -29,8 +29,9 @@ event-sourced auction domain. The architecture spine is the rulebook; this file 
 
 ## Running and verifying
 
-- Nothing runs the tests automatically. `npm run build` is `check-pins && vite build`, and there is
-  no CI — run `npm test` and `npm run check` yourself before calling a change done.
+- CI (`.github/workflows/ci.yml`) runs `npm test` and `npm run check` on every push to `main` and
+  every pull request. `npm run build` runs neither, so a green local build proves nothing about the
+  suite — run both before calling a change done.
 - `npm run check` does not cover `scripts/`. The resolved tsconfig `include` is `src/**` and
   `tests/**` only, so `scripts/check-pins.js` is never type-checked despite `checkJs`.
 - Vitest collects `tests/**/*.test.ts` only, in the `node` environment. A test placed beside its
