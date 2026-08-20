@@ -67,3 +67,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-deployable-skeleton-on-the-pinned-stack.md`
   summary: Use `npm ci` rather than `npm install` in the Netlify build command once the lockfile is committed.
   evidence: Direct dependencies are pinned exactly, but transitive versions resolve fresh on every build unless the lockfile is both committed and installed from. `npm ci` is the flag that makes the pin contract hold below the top level.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-1-deployable-skeleton-on-the-pinned-stack.md`
+  summary: Make `check-pins.js`'s CLI entry-point detection case-insensitive on Windows drive letters.
+  evidence: bmad-code-review (2026-08-20) on `f6f7be4`, Edge Case Hunter layer. The guard `import.meta.url === pathToFileURL(invokedPath).href` compares two URL strings whose drive-letter casing can legitimately differ on Windows (`C:` vs `c:`) depending on how the process was invoked. When they disagree the CLI branch never runs, so `node scripts/check-pins.js` silently does nothing — no drift check, no error, no exit code — on a local Windows dev machine, this repository's actual environment. CI is unaffected (`ubuntu-latest`), and `npm run build`'s own invocation was verified to still trip the check correctly in the current tree, so this is a latent gap rather than an observed regression. Fix is a case-insensitive comparison of the two URL strings before deciding whether to run.

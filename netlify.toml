@@ -19,6 +19,10 @@
 
 [build.environment]
   NODE_VERSION = "24"
+  # Load-bearing, not cleanup fodder: Netlify's own default NODE_VERSION
+  # install runs with NODE_ENV=production, which strips devDependencies —
+  # including Vite and svelte-kit, the packages that actually build this app.
+  # Removing this flag breaks every deploy silently until the next build.
   NPM_FLAGS = "--include=dev"
 
 [functions]
