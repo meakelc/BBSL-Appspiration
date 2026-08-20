@@ -1,0 +1,34 @@
+# Line endings are LF in the repository and LF in every working tree.
+#
+# This repository is edited on Windows and run on Linux in three places: the
+# Netlify build and its Node functions, the GitHub Actions runner, and the Deno
+# edge runtime that will load src/lib/core/** unchanged under AD-2. A file that
+# picks up CRLF on the way through a Windows checkout is a file whose diff
+# depends on who committed it.
+#
+# `core.autocrlf=true` is what introduces that: it writes CRLF into working
+# copies on checkout. Every tracked file is already LF in the index, so this
+# file changes no repository content — it settles the working tree and keeps
+# future commits from drifting.
+#
+# Git decides text vs binary by content, so `text=auto` leaves genuinely binary
+# files alone without needing them enumerated here.
+
+* text=auto eol=lf
+
+
+# --- What counts as this project's source -----------------------------------
+
+# The UX mockups are design artifacts, not application source, and they are
+# large: 16 files and ~2.5 MB, against ~58 KB of TypeScript. Left unmarked they
+# make GitHub report a SvelteKit project as ~96% HTML.
+#
+# Scoped to _bmad-output/ so src/app.html — which is real source — still counts.
+# Scoped to *.html rather than *.dc.html so the direction study is covered too.
+_bmad-output/**/*.html linguist-documentation
+
+# Machine-written, reviewed by the tests rather than by eye. Marking it collapses
+# it in pull request diffs and drops it from the language statistics. It stays
+# committed and stays installed from — `npm ci` in CI is what makes the pin
+# contract hold below the top level.
+package-lock.json linguist-generated=true
