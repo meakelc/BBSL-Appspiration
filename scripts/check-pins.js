@@ -60,6 +60,10 @@ const SUPABASE_ENVIRONMENTS = Object.freeze(['prod', 'dev']);
  * "24", "24.x", "24.11.0", "v24.11.0". Deliberately NOT a range — ">=24",
  * "^24", "18 || 24" and ">=24 <27" are all rejected, because a gate that reads
  * "18 || 24" as major 18 (or as major 24) is worse than no gate at all.
+ *
+ * The captured major is later normalised through `Number()` so a zero-padded
+ * literal like "024" still compares equal to the pinned "24" — a leading zero
+ * is not a drift.
  */
 const PLAIN_VERSION = /^v?(\d+)(?:\.(?:\d+|[xX*]))*$/;
 
@@ -90,7 +94,11 @@ export function readSimpleToml(source) {
 			continue;
 		}
 
-		const pair = /^([A-Za-z0-9_.-]+)\s*=\s*(.+)$/.exec(line);
+		// `(.*)$` (not `(.+)$`) so a bare `KEY =` with nothing after it still
+		// matches and surfaces as an empty string, rather than being silently
+		// dropped as an unparsed line — a blank pin value is a finding, not
+		// nothing to report.
+		const pair = /^([A-Za-z0-9_.-]+)\s*=\s*(.*)$/.exec(line);
 		if (!pair) continue;
 		const key = pair[1] ?? '';
 		let value = stripInlineComment((pair[2] ?? '').trim()).trim();
@@ -372,7 +380,11 @@ function describe(value) {
  */
 export function majorOf(value) {
 	const match = PLAIN_VERSION.exec(value.trim());
-	return match?.[1];
+	if (match?.[1] === undefined) return undefined;
+	// Normalise a zero-padded major ("024") to its numeric form ("24") so it
+	// compares equal to the pin. A malformed capture (e.g. all zeros) still
+	// round-trips through Number(), so this never masks a real mismatch.
+	return String(Number(match[1]));
 }
 
 /** Read the three real files from the repository root. @returns {PinInputs} */
