@@ -2,6 +2,11 @@
 	"extends": "./.svelte-kit/tsconfig.json",
 	"compilerOptions": {
 		"allowJs": true,
+		// AD-2: the core writes `from './constants.ts'` so Deno resolves the
+		// same files Node does. TypeScript rejects an explicit .ts specifier
+		// without this, and the option is only legal because the generated
+		// config sets noEmit — nothing here emits JavaScript.
+		"allowImportingTsExtensions": true,
 		"checkJs": true,
 		"esModuleInterop": true,
 		"forceConsistentCasingInFileNames": true,

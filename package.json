@@ -9,11 +9,12 @@
   },
   "scripts": {
     "dev": "vite dev",
-    "build": "node scripts/check-pins.js && vite build",
+    "build": "node scripts/check-pins.js && node scripts/check-core-purity.js && vite build",
     "preview": "vite preview",
     "prepare": "svelte-kit sync",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:pins": "node scripts/check-pins.js",
+    "check:purity": "node scripts/check-core-purity.js",
     "test": "vitest run"
   },
   "devDependencies": {
