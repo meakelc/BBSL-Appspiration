@@ -57,3 +57,24 @@ jobs:
       # does not typecheck.
       - name: Typecheck
         run: npm run check
+
+      # AD-2: the rules core is loaded by two runtimes and must never be copied
+      # per runtime. The static purity gate above proves the core reaches for
+      # nothing forbidden; only Deno proves it actually resolves and
+      # type-checks under the runtime the tick Edge Function runs in. Deno is
+      # not installed on a developer machine, so this is the only place the
+      # second half of that guarantee is checked.
+      - name: Set up Deno
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: v2.9.5
+
+      # --no-config so a stray deno.json cannot change what is being proved;
+      # --node-modules-dir=none so the repository's package.json cannot pull the
+      # core into npm resolution, which is the other half of "resolves under
+      # Deno on its own"; --no-lock because nothing here resolves a remote
+      # dependency at all — a core file that needs one is already a purity-gate
+      # failure. `find` rather than a `*.ts` glob so nested rules/ and
+      # projection/ files are covered as the purity walk covers them.
+      - name: Type-check the core under Deno
+        run: find src/lib/core -name '*.ts' -print0 | xargs -0 --no-run-if-empty deno check --no-config --no-lock --node-modules-dir=none

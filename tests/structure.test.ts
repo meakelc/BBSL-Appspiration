@@ -62,16 +62,10 @@ describe('the AR-2 source tree', () => {
 	});
 });
 
-describe('the pure core boundary is not pre-broken', () => {
-	it.each(AR2_FILES)('%s takes no framework or aliased import', (path: string) => {
-		const source = readFileSync(at(...path.split('/')), 'utf8');
-		expect(source, `${path} must not import through $lib`).not.toMatch(/from\s+['"]\$/);
-		expect(source, `${path} must not import a node builtin`).not.toMatch(/from\s+['"]node:/);
-		expect(source, `${path} must use relative .ts imports only`).not.toMatch(
-			/from\s+['"](?!\.)[^'"]+['"]/
-		);
-	});
-});
+// The pure-core boundary was checked here against a hardcoded three-file list,
+// and its stated ".ts imports only" rule did not hold — `from './money'` passed
+// it and fails to load under Deno. Story 1.2 replaced it with a recursive walk;
+// see scripts/check-core-purity.js and tests/purity.test.ts.
 
 describe('the stack configuration', () => {
 	it('runs the Netlify adapter with edge: false', () => {
