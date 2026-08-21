@@ -26,7 +26,12 @@ export const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
  */
 export const PINNED_PACKAGES = Object.freeze({
 	'@sveltejs/kit': '2.70.2',
-	'@sveltejs/adapter-netlify': '6.0.4'
+	'@sveltejs/adapter-netlify': '6.0.4',
+	// The auth clients. An unpinned auth client is the reason this gate exists:
+	// a minor bump to the library that mints and refreshes sessions arrives
+	// silently on the next `npm install` and lands in a deploy unreviewed.
+	'@supabase/supabase-js': '2.112.3',
+	'@supabase/ssr': '0.12.4'
 });
 
 /** The required Node major version. Netlify Functions' documented default. */

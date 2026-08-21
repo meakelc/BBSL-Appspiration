@@ -49,10 +49,12 @@ describe('the repository as committed', () => {
 		expect(result.ok).toBe(true);
 	});
 
-	it('pins SvelteKit and the Netlify adapter to their exact architected versions', () => {
+	it('pins SvelteKit, the Netlify adapter and the auth clients to their exact architected versions', () => {
 		expect(PINNED_PACKAGES).toEqual({
 			'@sveltejs/kit': '2.70.2',
-			'@sveltejs/adapter-netlify': '6.0.4'
+			'@sveltejs/adapter-netlify': '6.0.4',
+			'@supabase/supabase-js': '2.112.3',
+			'@supabase/ssr': '0.12.4'
 		});
 		const pkg = JSON.parse(actual.packageJson) as {
 			devDependencies?: Record<string, string>;
@@ -116,6 +118,46 @@ describe('drift detection', () => {
 		expect(message).toContain('@sveltejs/adapter-netlify');
 		expect(message).toContain('6.0.4');
 		expect(message).toContain('7.0.0');
+	});
+
+	// The auth clients live under `dependencies`, not `devDependencies`. The gate
+	// reads both, but nothing proved it until a pin actually sat in the other
+	// block — so these two cover the field as much as the packages.
+	it.each([
+		['@supabase/supabase-js', '2.112.3', '2.113.0'],
+		['@supabase/ssr', '0.12.4', '0.13.0']
+	])('fails and names %s when the runtime dependency drifts off its pin', (
+		name: string,
+		pinned: string,
+		drifted: string
+	) => {
+		const result = checkPins(withDrift({ packageJson: repin(name, drifted) }));
+		expect(result.ok).toBe(false);
+		const message = result.errors.join('\n');
+		expect(message).toContain(name);
+		expect(message).toContain(pinned);
+		expect(message).toContain(drifted);
+	});
+
+	it.each(['@supabase/supabase-js', '@supabase/ssr'])(
+		'fails when %s is written as a caret range',
+		(name: string) => {
+			const pinned = PINNED_PACKAGES[name as keyof typeof PINNED_PACKAGES];
+			const result = checkPins(withDrift({ packageJson: repin(name, `^${pinned}`) }));
+			expect(result.ok).toBe(false);
+			expect(result.errors.join('\n')).toContain('an exact version is required');
+		}
+	);
+
+	it('fails when a pinned runtime dependency is removed entirely', () => {
+		const stripped = JSON.parse(actual.packageJson) as {
+			dependencies?: Record<string, string>;
+		};
+		delete stripped.dependencies?.['@supabase/ssr'];
+		const result = checkPins(withDrift({ packageJson: JSON.stringify(stripped) }));
+		expect(result.ok).toBe(false);
+		expect(result.errors.join('\n')).toContain('@supabase/ssr');
+		expect(result.errors.join('\n')).toContain('missing');
 	});
 
 	it('fails and states that an exact version is required when a range appears', () => {
