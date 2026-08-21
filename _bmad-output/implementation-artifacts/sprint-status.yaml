@@ -38,7 +38,7 @@ development_status:
   epic-1: in-progress
   1-1-deployable-skeleton-on-the-pinned-stack: done
   1-2-the-pure-core-boundary-and-integer-money: done
-  1-3-sign-in-with-discord: review
+  1-3-sign-in-with-discord: done
   1-4-teams-managers-and-the-commissioner-role: backlog
   1-5-the-append-only-log-and-the-transactional-write-path: backlog
   1-6-one-destination-list-gated-by-phase-and-role: backlog
