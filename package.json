@@ -17,6 +17,10 @@
     "check:purity": "node scripts/check-core-purity.js",
     "test": "vitest run"
   },
+  "dependencies": {
+    "@supabase/ssr": "0.12.4",
+    "@supabase/supabase-js": "2.112.3"
+  },
   "devDependencies": {
     "@sveltejs/adapter-netlify": "6.0.4",
     "@sveltejs/kit": "2.70.2",

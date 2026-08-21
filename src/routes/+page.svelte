@@ -1,10 +1,17 @@
 <script lang="ts">
-	// The skeleton's only page. It exists to prove the stack serves a
-	// server-rendered document on the design tokens, and to give the Commissioner
-	// control class one place to be looked at before Story 1.7 consumes it.
+	// The skeleton's page. It exists to prove the stack serves a server-rendered
+	// document on the design tokens, and to give the Commissioner control class
+	// one place to be looked at before Story 1.7 consumes it.
 	//
 	// No auction surface, no data, no client write path. Those arrive with their
 	// own stories.
+	//
+	// The Phase sentence is NOT typed here. It comes from `locals.phase`, the
+	// same server-resolved source the sign-in surface states it from — two
+	// copies of that sentence would be two sources, and they would drift.
+	import type { PageData } from './$types';
+
+	let { data }: { data: PageData } = $props();
 </script>
 
 <svelte:head>
@@ -20,10 +27,7 @@
 
 	<section class="panel">
 		<p class="section-label">Phase</p>
-		<p class="prose">
-			Setup. The league's data is not yet imported and the auction is not open. Phase is folded
-			from the event log, and with no events it folds to Setup.
-		</p>
+		<p class="prose">{data.phase.sentence}</p>
 	</section>
 
 	<!--

@@ -28,6 +28,82 @@
 [functions]
   node_bundler = "esbuild"
 
+# -----------------------------------------------------------------------------
+# Security headers.
+#
+# The site is live at bbslapp.netlify.app and, until this block existed, served
+# no Content-Security-Policy, X-Frame-Options, Referrer-Policy or X-Robots-Tag
+# at all — so a private thirty-manager league's app was indexable, framable and
+# leaking its full URLs as referrers. This block is the whole discharge of the
+# security-headers entry in deferred-work.md.
+#
+# `for = "/*"` is intended to match every response, static asset and SSR
+# function alike. That it actually does so on a real deploy is NOT verified
+# here and is not something the repository can verify: the test suite proves
+# this file declares the headers, not that Netlify serves them. The `curl -I`
+# manual check in the story's verification section is what closes that gap, and
+# it is still outstanding.
+#
+# Nothing here is a secret and nothing here is per-context.
+# -----------------------------------------------------------------------------
+
+[[headers]]
+  for = "/*"
+
+  [headers.values]
+    # The league is private (PRD §6: no public or spectator access). Nothing in
+    # this app should ever appear in a search result, including the
+    # unadvertised Commissioner recovery path.
+    X-Robots-Tag = "noindex, nofollow, noarchive, nosnippet"
+
+    # Full URLs carry auction state and the recovery path. Same-origin gets the
+    # path, cross-origin gets the origin and nothing more.
+    Referrer-Policy = "strict-origin-when-cross-origin"
+
+    # Clickjacking, twice: the modern control is frame-ancestors in the CSP
+    # below; this is the legacy header for anything that predates it. They must
+    # agree, and they do — nothing may frame this app.
+    X-Frame-Options = "DENY"
+
+    # No MIME sniffing, and no cross-origin window handle onto this document.
+    X-Content-Type-Options = "nosniff"
+    Cross-Origin-Opener-Policy = "same-origin"
+
+    # No browser feature this app does not use.
+    Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()"
+
+    # The Content-Security-Policy.
+    #
+    # Every host is named literally. There is no wildcard host anywhere in it,
+    # deliberately: `https://*.netlify.app` or `https://*.supabase.co` would
+    # admit every other tenant on those platforms, which is wider than anything
+    # this app requires.
+    #
+    #   form-action  — 'self' plus discord.com, because sign-in POSTs to this
+    #                  origin and the OAuth handshake then navigates to Discord.
+    #   connect-src  — 'self' only for now. When the two Supabase projects are
+    #                  provisioned (see the open entry in deferred-work.md), the
+    #                  Realtime socket is admitted by adding that project's
+    #                  literal host — `https://<ref>.supabase.co` and
+    #                  `wss://<ref>.supabase.co` — never `*.supabase.co`. This
+    #                  story ships no Realtime client, so admitting one now
+    #                  would be widening the policy ahead of the need.
+    #   script-src   — 'self' plus 'unsafe-inline'. SvelteKit emits an inline
+    #                  bootstrap <script> in every SSR'd document. The stronger
+    #                  form is a per-response nonce or hash, which only
+    #                  SvelteKit itself can compute (kit.csp) — and a policy
+    #                  emitted there would be a SECOND policy alongside this
+    #                  one, enforced as the intersection, which blocks the very
+    #                  script it exists to allow. One policy, served here, is
+    #                  the coherent choice; the inline allowance is the price
+    #                  and it is stated rather than hidden. Note CSP3 browsers
+    #                  ignore 'unsafe-inline' the moment a nonce or hash is
+    #                  present, so this cannot silently weaken a future
+    #                  nonce-based policy.
+    #   style-src    — 'unsafe-inline' for the same reason: Svelte emits
+    #                  scoped inline style attributes.
+    Content-Security-Policy = "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; frame-src 'none'; form-action 'self' https://discord.com; connect-src 'self'; img-src 'self' data:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; manifest-src 'self'; worker-src 'self'; upgrade-insecure-requests"
+
 [context.production]
   command = "npm run build"
 
