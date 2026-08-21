@@ -120,7 +120,7 @@ context:
 - `npm run build` with a violating file under `src/lib/core/rules/` -- expected: exit 1 before Vite runs, naming the nested file; the walk reaches where no file list did
 
 **Manual checks (if no CLI):**
-- Deno is not installed locally, so its step cannot run here. Confirm it green on the pull request before calling this story done.
+- Deno is not installed locally, so its step cannot run here. **Discharged 2026-08-21** on PR #7 (run 32453802906, commit `a467980`): `setup-deno` installed 2.9.5 and `deno check --no-config --no-lock --node-modules-dir=none` reported `Check` for all three of `constants.ts`, `money.ts` and `types.ts`. The core resolves and type-checks under the second runtime with no `deno.json` and no node_modules resolution, which is the last clause of AC 3.
 
 ## Suggested Review Order
 
