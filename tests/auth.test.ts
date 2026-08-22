@@ -39,7 +39,10 @@ import {
 const ALICE: RegisteredManager = {
 	id: '00000000-0000-4000-8000-000000000001',
 	discordUserId: '111111111111111111',
-	displayName: 'Alice'
+	displayName: 'Alice',
+	teamId: null,
+	teamName: null,
+	isCommissioner: false
 };
 
 /** A registry holding exactly one Manager. */
@@ -210,6 +213,114 @@ describe('resolveSessionState', () => {
 				}
 			}
 		}
+	});
+});
+
+// --- The Team binding and the Commissioner flag (Story 1.4) -----------------
+
+describe('RegisteredManager carries the Team binding and the Commissioner flag', () => {
+	it('a Manager bound to a Team resolves teamId and teamName from the registry', async () => {
+		const bound: RegisteredManager = {
+			id: '00000000-0000-4000-8000-000000000002',
+			discordUserId: '222222222222222220',
+			displayName: 'Bob',
+			teamId: '00000000-0000-4000-8000-0000000000aa',
+			teamName: 'Lakers',
+			isCommissioner: false
+		};
+		const state = resolveSessionState(
+			input({
+				cookie: 'present',
+				refresh: 'renewed',
+				identity: { discordUserId: bound.discordUserId },
+				registration: bound
+			})
+		);
+		expect(state).toEqual({ kind: 'registered', manager: bound });
+		expect(state.kind === 'registered' && state.manager.teamId).toBe(bound.teamId);
+		expect(state.kind === 'registered' && state.manager.teamName).toBe('Lakers');
+	});
+
+	it('a Manager with no Team yet resolves both teamId and teamName to null, without crashing', () => {
+		const state = resolveSessionState(
+			input({
+				cookie: 'present',
+				refresh: 'renewed',
+				identity: { discordUserId: ALICE.discordUserId },
+				registration: ALICE
+			})
+		);
+		expect(state.kind === 'registered' && state.manager.teamId).toBeNull();
+		expect(state.kind === 'registered' && state.manager.teamName).toBeNull();
+	});
+
+	it('two co-managed Manager rows sharing one team_id resolve identical teamId and teamName', () => {
+		const sharedTeamId = '00000000-0000-4000-8000-0000000000bb';
+		const first: RegisteredManager = {
+			id: '00000000-0000-4000-8000-000000000003',
+			discordUserId: '333333333333333330',
+			displayName: 'Cara',
+			teamId: sharedTeamId,
+			teamName: 'Celtics',
+			isCommissioner: false
+		};
+		const second: RegisteredManager = {
+			id: '00000000-0000-4000-8000-000000000004',
+			discordUserId: '444444444444444440',
+			displayName: 'Dana',
+			teamId: sharedTeamId,
+			teamName: 'Celtics',
+			isCommissioner: false
+		};
+
+		const firstState = resolveSessionState(
+			input({
+				cookie: 'present',
+				refresh: 'renewed',
+				identity: { discordUserId: first.discordUserId },
+				registration: first
+			})
+		);
+		const secondState = resolveSessionState(
+			input({
+				cookie: 'present',
+				refresh: 'renewed',
+				identity: { discordUserId: second.discordUserId },
+				registration: second
+			})
+		);
+
+		expect(firstState.kind === 'registered' && firstState.manager.teamId).toBe(
+			secondState.kind === 'registered' && secondState.manager.teamId
+		);
+		expect(firstState.kind === 'registered' && firstState.manager.teamName).toBe(
+			secondState.kind === 'registered' && secondState.manager.teamName
+		);
+	});
+
+	it('carries isCommissioner through to the resolved session, true and false alike', () => {
+		const commissioner: RegisteredManager = { ...ALICE, isCommissioner: true };
+		const state = resolveSessionState(
+			input({
+				cookie: 'present',
+				refresh: 'renewed',
+				identity: { discordUserId: commissioner.discordUserId },
+				registration: commissioner
+			})
+		);
+		expect(state.kind === 'registered' && state.manager.isCommissioner).toBe(true);
+
+		const nonCommissioner = resolveSessionState(
+			input({
+				cookie: 'present',
+				refresh: 'renewed',
+				identity: { discordUserId: ALICE.discordUserId },
+				registration: ALICE
+			})
+		);
+		expect(nonCommissioner.kind === 'registered' && nonCommissioner.manager.isCommissioner).toBe(
+			false
+		);
 	});
 });
 

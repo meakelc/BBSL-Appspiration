@@ -4,9 +4,12 @@
 // `src/hooks.server.ts`. No surface resolves identity for itself.
 //
 // Story 1.3 establishes the session state, the break-glass marker and the
-// server-resolved phase. Story 1.4 adds the Team binding and the Commissioner
-// flag — both of which resolve from application tables the Commissioner alone
-// writes, never from auth metadata or any client-influenceable claim (AD-15).
+// server-resolved phase. Story 1.4 discharges this file's own promise: the
+// Team binding and the Commissioner flag now resolve from application tables
+// the Commissioner alone writes, never from auth metadata or any
+// client-influenceable claim (AD-15). No `Locals` shape change was needed —
+// `SessionState.registered.manager` already carries both, via
+// `RegisteredManager.teamId`/`teamName`/`isCommissioner`.
 
 import type { SessionState } from './lib/server/auth.ts';
 import type { ResolvedPhase } from './lib/server/phase.ts';

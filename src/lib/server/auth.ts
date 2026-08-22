@@ -20,14 +20,23 @@
 // --- What a registered Manager is ------------------------------------------
 
 /**
- * A row of the `managers` registry, as this story writes it: identity only.
- * Team binding, the Commissioner flag and co-management are Story 1.4 and are
- * deliberately absent — a field here would be a promise 1.4 has not made yet.
+ * A row of the `managers` registry, joined against `teams`.
+ *
+ * `teamId`/`teamName` and `isCommissioner` are Story 1.4's binding, read only
+ * from `managers.team_id` / `managers.is_commissioner` (and the `teams` row
+ * that `team_id` points at) via the registry port below — never from
+ * `user_metadata`, `app_metadata`, or any other client-influenceable claim
+ * (AD-15). A Manager with no Team yet resolves both `teamId` and `teamName`
+ * to `null`; two co-managed Manager rows sharing one `team_id` resolve to the
+ * identical `teamId`/`teamName` pair, by construction of the join.
  */
 export type RegisteredManager = {
 	readonly id: string;
 	readonly discordUserId: string;
 	readonly displayName: string;
+	readonly teamId: string | null;
+	readonly teamName: string | null;
+	readonly isCommissioner: boolean;
 };
 
 // --- The five outcomes ------------------------------------------------------

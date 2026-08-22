@@ -36,7 +36,10 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const ALICE: RegisteredManager = {
 	id: '00000000-0000-4000-8000-000000000001',
 	discordUserId: '111111111111111111',
-	displayName: 'Alice'
+	displayName: 'Alice',
+	teamId: '00000000-0000-4000-8000-0000000000aa',
+	teamName: 'Lakers',
+	isCommissioner: false
 };
 
 /** An unregistered Discord account — the attacker's own. */
@@ -85,10 +88,24 @@ describe('a client-forged metadata claim changes nothing', () => {
 	 *
 	 * `identities` is written by the auth server from the provider's token
 	 * response and `updateUser` cannot reach it. It says Mallory.
+	 *
+	 * Story 1.4 widens the same attack: `updateUser` can just as easily write
+	 * `user_metadata.team_id` or `user_metadata.is_commissioner`, so the forged
+	 * object below also claims Alice's Team and the Commissioner flag — neither
+	 * of which the `managers` row backing this session actually grants.
 	 */
 	const forged = {
-		user_metadata: { provider_id: ALICE.discordUserId, sub: ALICE.discordUserId },
-		app_metadata: { provider_id: ALICE.discordUserId },
+		user_metadata: {
+			provider_id: ALICE.discordUserId,
+			sub: ALICE.discordUserId,
+			team_id: ALICE.teamId,
+			is_commissioner: true
+		},
+		app_metadata: {
+			provider_id: ALICE.discordUserId,
+			team_id: ALICE.teamId,
+			is_commissioner: true
+		},
 		identities: [{ provider: DISCORD_PROVIDER, id: MALLORY_DISCORD_ID }]
 	} as unknown as AuthenticatedUser;
 
@@ -112,12 +129,53 @@ describe('a client-forged metadata claim changes nothing', () => {
 		const mallory: RegisteredManager = {
 			id: '00000000-0000-4000-8000-00000000000f',
 			discordUserId: MALLORY_DISCORD_ID,
-			displayName: 'Mallory'
+			displayName: 'Mallory',
+			teamId: null,
+			teamName: null,
+			isCommissioner: false
 		};
 		const state = resolveSessionState(
 			await gatherSessionFacts(withSessionCookie(), gateway(forged, [ALICE, mallory]))
 		);
 		expect(state).toEqual({ kind: 'registered', manager: mallory });
+
+		// The claim this test exists for: `forged` sets user_metadata.team_id to
+		// Alice's Team and user_metadata.is_commissioner to true, and Mallory's
+		// OWN registry row grants neither. The resolved binding must match her
+		// row, not the claim she wrote on herself.
+		expect(state.kind === 'registered' && state.manager.teamId).toBeNull();
+		expect(state.kind === 'registered' && state.manager.teamName).toBeNull();
+		expect(state.kind === 'registered' && state.manager.isCommissioner).toBe(false);
+	});
+
+	it('a forged Commissioner claim on a genuinely registered account changes nothing', async () => {
+		// The tightest version of the claim: Mallory IS registered, and her real
+		// row grants no Team and no Commissioner flag. Her forged user_metadata
+		// claims both anyway. The resolved session must still read straight off
+		// her `managers` row.
+		const mallory: RegisteredManager = {
+			id: '00000000-0000-4000-8000-00000000000f',
+			discordUserId: MALLORY_DISCORD_ID,
+			displayName: 'Mallory',
+			teamId: null,
+			teamName: null,
+			isCommissioner: false
+		};
+		const mallorysOwnForgedMetadata = {
+			user_metadata: { team_id: ALICE.teamId, is_commissioner: true },
+			app_metadata: { team_id: ALICE.teamId, is_commissioner: true },
+			identities: [{ provider: DISCORD_PROVIDER, id: MALLORY_DISCORD_ID }]
+		} as unknown as AuthenticatedUser;
+
+		const state = resolveSessionState(
+			await gatherSessionFacts(
+				withSessionCookie(),
+				gateway(mallorysOwnForgedMetadata, [ALICE, mallory])
+			)
+		);
+		expect(state).toEqual({ kind: 'registered', manager: mallory });
+		expect(state.kind === 'registered' && state.manager.isCommissioner).toBe(false);
+		expect(state.kind === 'registered' && state.manager.teamId).toBeNull();
 	});
 
 	it('never reads user_metadata or app_metadata, in any identity path', () => {
@@ -129,6 +187,7 @@ describe('a client-forged metadata claim changes nothing', () => {
 			'src/lib/server/auth.ts',
 			'src/lib/server/session.ts',
 			'src/lib/server/supabase.ts',
+			'src/lib/server/commissioner-guard.ts',
 			'src/hooks.server.ts'
 		]) {
 			const source = readFileSync(join(ROOT, relative), 'utf8');
