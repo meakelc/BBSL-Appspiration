@@ -1,0 +1,80 @@
+# Local Supabase CLI project configuration.
+#
+# Discharges the deferred-work.md entry that has blocked `supabase start` /
+# `supabase db push` locally since Story 1.1: "Belongs with Story 1.5, which
+# first writes schema." This is that story. Full reference:
+# https://supabase.com/docs/guides/local-development/cli/config
+#
+# Every field below is a deliberate choice, not the CLI's `init` default.
+# Everything omitted falls back to the CLI's own built-in default, which is
+# safe to do — this file only needs to say where it differs.
+#
+#   - `db.major_version = 15` matches ARCHITECTURE-SPINE.md's stack pin
+#     ("Postgres | Supabase-managed, >=15.1.1.61 — required for sub-minute
+#     Supabase Cron"), not the CLI's newer default of 17.
+#   - Storage, Realtime, Analytics, the local SMTP test server and the Edge
+#     Runtime are switched off. None is exercised by any story yet — this
+#     product sends no email for any purpose, ever (PRD "no email field
+#     exists anywhere"), and the Edge Function that will need the runtime is
+#     Epic 3's tick, which does not exist yet (this story's "Never" list is
+#     explicit: no Deno-side shell). Every disabled service is one fewer
+#     container `supabase start` has to pull and hold up in CI.
+project_id = "bbsl-appspiration"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 15
+
+[db.pooler]
+enabled = false
+
+[db.migrations]
+enabled = true
+
+[db.seed]
+# No seed.sql exists — nothing here is seeded data. Story 1.7-1.9 own the
+# Fantrax import, which is an application-level upload, not a fixture.
+enabled = false
+
+[realtime]
+enabled = false
+
+[studio]
+enabled = true
+port = 54323
+api_url = "http://127.0.0.1"
+
+[local_smtp]
+enabled = false
+
+[storage]
+enabled = false
+
+[storage.s3_protocol]
+enabled = false
+
+[auth]
+enabled = true
+site_url = "http://127.0.0.1:3000"
+additional_redirect_urls = ["https://127.0.0.1:3000"]
+# No self-service registration exists in this product (AD-15) — pre-registered
+# Discord accounts only, added by the Commissioner directly in `managers`.
+enable_signup = false
+
+[auth.email]
+enable_signup = false
+enable_confirmations = false
+
+[edge_runtime]
+enabled = false
+
+[analytics]
+enabled = false

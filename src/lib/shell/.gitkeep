@@ -1,2 +1,0 @@
-# The imperative shell: lock -> load -> decide -> persist -> enqueue.
-# now comes from the database clock at transaction start. Filled by Story 1.5.
