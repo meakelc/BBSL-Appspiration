@@ -103,16 +103,18 @@ export function requestClient(cookies: Cookies, responseHeaders?: Headers): Supa
 /**
  * The registry, backed by the `managers` table through the service role.
  *
- * The lookup is by `discord_user_id` and returns identity only. It reads no
- * auth metadata: AD-15's whole point is that a self-writable claim cannot be
- * the binding, so the answer comes from a table the Commissioner alone writes.
+ * The lookup is by `discord_user_id` and returns identity plus Story 1.4's
+ * Team binding and Commissioner flag, read through one join to `teams`. It
+ * reads no auth metadata: AD-15's whole point is that a self-writable claim
+ * cannot be the binding, so the answer comes from tables the Commissioner
+ * alone writes.
  */
 export function managerRegistry(client: SupabaseClient = serviceRoleClient()): ManagerRegistry {
 	return {
 		async findByDiscordUserId(discordUserId: string): Promise<RegisteredManager | null> {
 			const { data, error } = await client
 				.from('managers')
-				.select('id, discord_user_id, display_name')
+				.select('id, discord_user_id, display_name, team_id, is_commissioner, teams(name)')
 				.eq('discord_user_id', discordUserId)
 				.maybeSingle();
 
@@ -123,11 +125,26 @@ export function managerRegistry(client: SupabaseClient = serviceRoleClient()): M
 			}
 			if (data === null) return null;
 
-			const row = data as { id: string; discord_user_id: string; display_name: string };
+			const row = data as {
+				id: string;
+				discord_user_id: string;
+				display_name: string;
+				team_id: string | null;
+				is_commissioner: boolean;
+				// A many-to-one embed (`managers.team_id` -> `teams.id`) resolves to a
+				// single object or null, never an array — but nothing enforces that
+				// shape at the type level, so a defensive array case is handled below.
+				teams: { name: string } | { name: string }[] | null;
+			};
+			const team = Array.isArray(row.teams) ? (row.teams[0] ?? null) : row.teams;
+
 			return {
 				id: row.id,
 				discordUserId: row.discord_user_id,
-				displayName: row.display_name
+				displayName: row.display_name,
+				teamId: row.team_id,
+				teamName: team?.name ?? null,
+				isCommissioner: row.is_commissioner
 			};
 		}
 	};
