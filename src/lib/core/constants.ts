@@ -82,6 +82,27 @@ export const YEAR_ALLOTMENT = Object.freeze({
 });
 
 /**
+ * The schema version stamped onto every `auction_events` row (AD-20).
+ *
+ * Bumped whenever the shape of a row changes. An insert-only log cannot be
+ * backfilled, so a fold can only tell which shape produced an older event by
+ * reading this column — never by inferring it from what happens to be
+ * present.
+ */
+export const EVENT_SCHEMA_VERSION = 1;
+
+/**
+ * The rules-core version that produced an event (AD-20).
+ *
+ * Bumped whenever `core/rules` changes in a way that could alter an outcome.
+ * The Node and Deno deployments must carry the same version or the tick
+ * refuses to run and alerts rather than proceeding — because AD-4 forbids
+ * deleting events, a bad rules deploy cannot be rolled back by reverting
+ * code alone.
+ */
+export const CORE_VERSION = 1;
+
+/**
  * The single global write lock (AD-6). Every mutating transaction takes this
  * before reading any state.
  *

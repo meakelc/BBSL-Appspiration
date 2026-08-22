@@ -47,6 +47,22 @@ describe('every league constant is a named value in the core', () => {
 	});
 });
 
+describe('the AD-20 event versions', () => {
+	it('are small integers, not strings or floats', () => {
+		expect(constants.EVENT_SCHEMA_VERSION).toBe(1);
+		expect(constants.CORE_VERSION).toBe(1);
+		expect(Number.isInteger(constants.EVENT_SCHEMA_VERSION)).toBe(true);
+		expect(Number.isInteger(constants.CORE_VERSION)).toBe(true);
+	});
+
+	it('are declared exactly once each', () => {
+		for (const name of ['EVENT_SCHEMA_VERSION', 'CORE_VERSION']) {
+			const declarations = CONSTANTS_SOURCE.match(new RegExp(`^export const ${name}\\b`, 'gm')) ?? [];
+			expect(declarations, `${name} is declared ${declarations.length} times`).toHaveLength(1);
+		}
+	});
+});
+
 describe('the AD-6 advisory lock key', () => {
 	it('is a single bigint, so every caller uses the one-argument form', () => {
 		// pg_advisory_xact_lock(bigint) and pg_advisory_xact_lock(int, int)

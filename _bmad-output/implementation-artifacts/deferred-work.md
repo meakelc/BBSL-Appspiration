@@ -1,5 +1,9 @@
 # Deferred Work
 
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-5-the-append-only-log-and-the-transactional-write-path.md`
+  summary: Decide whether `pg_advisory_xact_lock` in the transactional shell needs a `lock_timeout`/`statement_timeout`, and if so what value.
+  evidence: bmad-build review (2026-08-21), Blind Hunter layer. `src/lib/shell/write.ts` takes the AD-6 global write lock with no timeout configured, so a stuck or slow transaction blocks every other writer indefinitely with no documented recourse. The architecture spine's own AD-6 reasoning ("at 31 users global serialization costs nothing") argues against a timeout — the concurrency AC explicitly wants a second writer to *wait* for the first, not fail — so this is a product/ops decision (what value, if any) rather than a code defect, and is left to whichever story first operates the write path under real load.
+
 - source_spec: none
   summary: Provision the two Supabase projects (wipeable dev, never-hand-touched prod) and wire their connection details as server-only environment variables.
   evidence: Story 1.1 AC 3 requires both projects to exist before a migration can be applied dev-first. Creating Supabase projects requires the Commissioner's own account and credentials, which the build agent cannot hold. Story 1.1 delivers the migrations directory, the env-var contract and the dev-first workflow; the projects themselves are provisioned by hand.

@@ -47,11 +47,37 @@ jobs:
       - name: Install
         run: npm ci
 
+      # Story 1.5's two integration tests (tests/integration/auction-events.test.ts)
+      # are the only automated proof of AC1 (no role, including service_role,
+      # holds UPDATE/DELETE) and the lock-serialization AC against a real
+      # Postgres — every DB-touching test before this story stubbed the
+      # client. `supabase start` applies supabase/migrations/ on a fresh local
+      # Postgres, the same way `db push` would against a real project.
+      - name: Set up Supabase CLI
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520 # v3.0.0
+        with:
+          version: 2.115.0
+
+      - name: Start local Supabase
+        run: supabase start
+
       # Also covers the drift gate against the real repository: pins.test.ts
       # drives checkPins(readRepositoryInputs()), so a separate check:pins step
-      # would assert the same thing twice.
+      # would assert the same thing twice. SUPABASE_DB_URL matches the local
+      # Postgres port supabase/config.toml declares (db.port = 54322) — the
+      # same default tests/integration/auction-events.test.ts's reachability
+      # probe falls back to when the variable is unset, stated explicitly here
+      # so CI does not depend on that fallback silently agreeing with it.
       - name: Test
         run: npm test
+        env:
+          SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+
+      # Runs even if Test failed, so a failed run does not leave the runner's
+      # Docker daemon holding the local stack.
+      - name: Stop local Supabase
+        if: always()
+        run: supabase stop
 
       # svelte-kit sync && svelte-check. Nothing else runs this — the build
       # does not typecheck.

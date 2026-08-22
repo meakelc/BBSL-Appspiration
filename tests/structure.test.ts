@@ -29,7 +29,10 @@ const AR2_DIRECTORIES: Array<[path: string, purpose: string]> = [
 const AR2_FILES: Array<[path: string, purpose: string]> = [
 	['src/lib/core/money.ts', 'branded integer-dollar type and parsers (AD-8)'],
 	['src/lib/core/constants.ts', 'league constants AND the AD-6 lock key'],
-	['src/lib/core/types.ts', 'commands, events, rejections, state']
+	['src/lib/core/types.ts', 'commands, events, rejections, state'],
+	['src/lib/core/projection/fold.ts', 'the generic fold/rebuild reducer, ordered by seq (AD-5)'],
+	['src/lib/shell/db.ts', 'the pooled direct-Postgres connection (AD-6)'],
+	['src/lib/shell/write.ts', 'lock -> load -> decide -> persist -> enqueue (AD-4, AD-6)']
 ];
 
 describe('the AR-2 source tree', () => {
@@ -44,10 +47,13 @@ describe('the AR-2 source tree', () => {
 	});
 
 	it('keeps every otherwise-empty AR-2 directory in git', () => {
+		// src/lib/core/projection and src/lib/shell moved to the real-file
+		// assertion below — this story is the first to write into either, and a
+		// .gitkeep the directory no longer needs is what deferred-work.md's own
+		// entry flagged: "each marker should be deleted the moment a real file
+		// lands there."
 		const wouldBeEmpty = [
 			'src/lib/core/rules',
-			'src/lib/core/projection',
-			'src/lib/shell',
 			'src/lib/adapters/fantrax',
 			'src/lib/adapters/discord',
 			'src/lib/server',
@@ -58,6 +64,15 @@ describe('the AR-2 source tree', () => {
 		for (const path of wouldBeEmpty) {
 			const marker = at(...path.split('/'), '.gitkeep');
 			expect(existsSync(marker), `${path}/.gitkeep is missing — git will not track it`).toBe(true);
+		}
+	});
+
+	it('deletes the .gitkeep from every directory that now holds a real file', () => {
+		for (const path of ['src/lib/core/projection', 'src/lib/shell']) {
+			const marker = at(...path.split('/'), '.gitkeep');
+			expect(existsSync(marker), `${path}/.gitkeep should be gone now that it holds real files`).toBe(
+				false
+			);
 		}
 	});
 });
@@ -152,6 +167,7 @@ describe('secrets', () => {
 		for (const name of [
 			'SUPABASE_URL',
 			'SUPABASE_SERVICE_ROLE_KEY',
+			'SUPABASE_DB_URL',
 			'DISCORD_CLIENT_ID',
 			'DISCORD_CLIENT_SECRET',
 			'DISCORD_WEBHOOK_URL',

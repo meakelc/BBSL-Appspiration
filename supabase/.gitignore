@@ -1,0 +1,8 @@
+# Supabase CLI runtime scratch state — never project configuration.
+.branches
+.temp
+
+# dotenvx
+.env.keys
+.env.local
+.env.*.local
