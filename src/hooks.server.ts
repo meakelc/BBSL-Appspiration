@@ -33,12 +33,17 @@ import {
 	isBreakGlassSession,
 	verifyBreakGlassCookie
 } from '$lib/server/commissioner-recovery.ts';
-import { resolveLeaguePhase } from '$lib/server/phase.ts';
+import { resolveLeaguePhaseOrDefault } from '$lib/server/phase.ts';
 import { gatherSessionFacts, type SessionGateway } from '$lib/server/session.ts';
 import { managerRegistry, requestClient } from '$lib/server/supabase.ts';
 
 export const handle: Handle = async ({ event, resolve }) => {
-	event.locals.phase = resolveLeaguePhase();
+	// The fail-closed behaviour (any read failure resolves to Setup rather
+	// than 500ing the request) lives inside resolveLeaguePhaseOrDefault
+	// itself, not here — this file reads $env/dynamic/private at import time
+	// and the test suite cannot load it, so a try/catch written inline here
+	// could never be exercised by a test.
+	event.locals.phase = await resolveLeaguePhaseOrDefault();
 
 	event.locals.breakGlass = isBreakGlassSession(
 		verifyBreakGlassCookie({

@@ -2,15 +2,23 @@
  * The League phase, resolved server-side. Server-only.
  *
  * AD-24: phase is a projection folded from the event log, never a hand-set
- * flag, and with no events it folds to Setup. The log and the fold are Story
- * 1.5; this module is the *one place* the current phase and its sentence come
- * from until that story replaces the body of `resolveLeaguePhase`.
+ * flag, and with no events it folds to Setup. `resolveLeaguePhase` folds
+ * `INITIAL_PHASE` over the *entire* `auction_events` log, ordered by `seq`
+ * (AD-5), via the pure `phaseReducer` — the log and the fold are Story 1.5's
+ * machinery, this module is what wires them to "the current phase".
  *
  * It exists as a module rather than as a sentence typed into two `.svelte`
  * files because every sign-in surface must state the phase from the same
  * server-resolved source as every other surface. Two copies of a sentence are
  * two sources, and they drift the first time one is edited.
  */
+
+import type { SupabaseClient } from '@supabase/supabase-js';
+
+import { fold } from '../core/projection/fold.ts';
+import { INITIAL_PHASE, phaseReducer } from '../core/projection/phase.ts';
+import { loadAppendedEvents } from './event-log.ts';
+import { serviceRoleClient } from './supabase.ts';
 
 /** The four phases, verbatim from the glossary. A synonym is a defect. */
 export type LeaguePhase = 'Setup' | 'Auction' | 'Contract Assignment' | 'Archived';
@@ -33,19 +41,62 @@ export type ResolvedPhase = {
 	readonly sentence: string;
 };
 
-/**
- * Resolve the current phase.
- *
- * Story 1.5 replaces the body with a fold over the event log by `seq`. The
- * return type does not change, so no caller has to. Until then, no events
- * exist, and no events folds to Setup — which is the correct answer, not a
- * placeholder.
- */
-export function resolveLeaguePhase(): ResolvedPhase {
-	return phaseOf('Setup');
-}
-
 /** Pair a phase with its sentence. */
 export function phaseOf(name: LeaguePhase): ResolvedPhase {
 	return { name, sentence: PHASE_SENTENCES[name] };
+}
+
+/**
+ * Resolve the current phase from the full event log.
+ *
+ * Throws on a read failure — this is the raw, undefaulted half of the pair.
+ * `hooks.server.ts` never calls this directly; it calls
+ * `resolveLeaguePhaseOrDefault` below, which fails closed. This function
+ * stays exported, throwing, for any caller — a test, or a future admin
+ * surface — that wants the raw failure rather than a defaulted answer.
+ *
+ * `client` is injectable, same shape as `managerRegistry(client =
+ * serviceRoleClient())`, so a test drives it against a fake without a live
+ * database.
+ */
+export async function resolveLeaguePhase(
+	client: SupabaseClient = serviceRoleClient()
+): Promise<ResolvedPhase> {
+	const events = await loadAppendedEvents(client);
+	const phase = fold(INITIAL_PHASE, events, phaseReducer);
+	return phaseOf(phase);
+}
+
+/**
+ * Resolve the current phase, failing closed to Setup on any read failure.
+ *
+ * `Setup` is the same value an empty log already produces, so failing
+ * closed to it on a read error is not a new behaviour to reason about — it
+ * is the existing "no confirmed phase progression" answer, applied
+ * uniformly whether the log is genuinely empty or merely unreachable right
+ * now. `hooks.server.ts` calls this and never sees the throw, which keeps
+ * Sign-in and the Commissioner break-glass path reachable through a
+ * transient database outage rather than 500ing every request.
+ *
+ * This is split out from `hooks.server.ts` specifically so it is testable:
+ * that file reads `$env/dynamic/private` at import time, which the test
+ * suite cannot load (see its own module header), so a `try`/`catch` written
+ * inline there could never be exercised by a test.
+ *
+ * `client` takes no default value on the parameter itself — a default
+ * parameter expression runs before this function's own body, so a throwing
+ * `serviceRoleClient()` there would reject before the `try` below ever ran,
+ * defeating the whole point of this wrapper. Building the client inside the
+ * `try`, via `??`, is what actually covers a missing or misconfigured
+ * required server-only variable — the single most likely real failure this
+ * function exists to catch, not just a network blip.
+ */
+export async function resolveLeaguePhaseOrDefault(
+	client?: SupabaseClient
+): Promise<ResolvedPhase> {
+	try {
+		return await resolveLeaguePhase(client ?? serviceRoleClient());
+	} catch {
+		return phaseOf('Setup');
+	}
 }

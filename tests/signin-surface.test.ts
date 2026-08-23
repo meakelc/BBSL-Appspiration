@@ -2,8 +2,23 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { PHASE_SENTENCES, resolveLeaguePhase } from '../src/lib/server/phase.ts';
+
+/**
+ * A fake client backing an empty `auction_events` log, for the one place
+ * this file needs to prove "no events folds to Setup" against the real
+ * DB-backed `resolveLeaguePhase` rather than merely reading its source.
+ */
+function emptyEventsClient(): SupabaseClient {
+	const query = {
+		select: () => query,
+		order: () => query,
+		range: async () => ({ data: [], error: null })
+	};
+	return { from: () => query } as unknown as SupabaseClient;
+}
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const at = (...parts: string[]): string => join(ROOT, ...parts);
@@ -104,16 +119,17 @@ describe('the sign-in surface', () => {
 		expect(SIGNIN_SERVER).toContain('locals.phase');
 	});
 
-	it('names the phase the same page the rest of the app does', () => {
+	it('names the phase the same page the rest of the app does', async () => {
 		const home = readFileSync(at('src', 'routes', '+page.svelte'), 'utf8');
 		const homeServer = readFileSync(at('src', 'routes', '+page.server.ts'), 'utf8');
 		expect(home).toContain('data.phase.sentence');
 		expect(homeServer).toContain('locals.phase');
 		// And that one source currently folds to Setup, because there are no
 		// events yet and no events folds to Setup.
-		expect(resolveLeaguePhase().name).toBe('Setup');
-		expect(resolveLeaguePhase().sentence).toBe(PHASE_SENTENCES.Setup);
-		expect(resolveLeaguePhase().sentence).toContain('Setup');
+		const resolved = await resolveLeaguePhase(emptyEventsClient());
+		expect(resolved.name).toBe('Setup');
+		expect(resolved.sentence).toBe(PHASE_SENTENCES.Setup);
+		expect(resolved.sentence).toContain('Setup');
 	});
 
 	it('offers exactly one action, and it is Discord', () => {
@@ -185,13 +201,24 @@ describe('every control sits in the block its class belongs to', () => {
 	// test green: commissioner.test.ts reads the stylesheet, not the markup. The
 	// same trap applies to every surface this story adds, so the check moves
 	// from one page to all of them.
+	//
+	// Extended for Story 1.6: `src/lib/components/DestinationsList.svelte` is
+	// the first role-visible markup in the repo that wraps a block in `<div>`
+	// rather than `<section>` — the original regex, `<section ...>`, could not
+	// see it at all, the exact class of regression this suite exists to catch,
+	// reaching a file it had never walked. The tag is now captured and
+	// backreferenced so a `<div>` block only ever matches its own `</div>`,
+	// never a `<section>`'s close tag or vice versa. (This markup-structure
+	// guard cannot, by itself, prove the *filter deciding which entry lands in
+	// which block* is correct — `tests/destinations-view.test.ts` proves that
+	// half, by calling `classifyDestinations` directly.)
 	function blocksOf(source: string, className: string): string[] {
 		return [
-			...source.matchAll(new RegExp(`<section class="${className}"[\\s\\S]*?</section>`, 'g'))
+			...source.matchAll(new RegExp(`<(section|div) class="${className}"[\\s\\S]*?</\\1>`, 'g'))
 		].map((match) => match[0]);
 	}
 
-	it.each(ROUTE_SVELTE.map((file) => [relative(ROOT, file), file] as const))(
+	it.each(SRC_SVELTE.map((file) => [relative(ROOT, file), file] as const))(
 		'%s keeps referee and player controls apart',
 		(_where: string, file: string) => {
 			const source = readFileSync(file, 'utf8');
