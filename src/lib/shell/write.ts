@@ -141,8 +141,17 @@ const INSERT_EVENT_SQL = `
 		event_type, payload, device_class, dispatch_outcome, delivery_outcome
 `;
 
-/** Map one `auction_events` row, as `pg` (or a fake) shapes it, to `AppendedEvent`. */
-function toAppendedEvent(row: QueryResultRow): AppendedEvent {
+/**
+ * Map one `auction_events` row, as `pg` (or a fake) shapes it, to
+ * `AppendedEvent`.
+ *
+ * Exported so `server/event-log.ts`'s full-log reader reuses this exact
+ * row-mapping discipline — via the Supabase/PostgREST client rather than
+ * `pg` — instead of a second, potentially drifting copy. `QueryResultRow`'s
+ * `Record<string, unknown>` shape covers a Postgrest row equally well: both
+ * clients hand back the same snake_case columns.
+ */
+export function toAppendedEvent(row: QueryResultRow): AppendedEvent {
 	const occurredAt = row['occurred_at'];
 	return {
 		seq: String(row['seq']),

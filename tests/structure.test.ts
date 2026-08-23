@@ -102,6 +102,28 @@ describe('the stack configuration', () => {
 		expect(vite).toContain('tests/**/*.test.ts');
 	});
 
+	it('has src/lib/components — a natural SvelteKit addition, not in the original AR-2 tree', () => {
+		// Story 1.6 is the first to render a Svelte component reused across
+		// surfaces (DestinationsList, HeaderMenu). AR-2's tree, fixed before any
+		// UI component existed, names no directory for it; this is not a spine
+		// violation, just the tree growing the way a SvelteKit app does.
+		const full = at('src', 'lib', 'components');
+		expect(existsSync(full), 'src/lib/components is missing').toBe(true);
+		expect(statSync(full).isDirectory(), 'src/lib/components is not a directory').toBe(true);
+	});
+
+	it('states rather than hides an empty destination list — AC7', () => {
+		// The behaviour itself (`hasNothingLive`) is proven directly in
+		// tests/destinations-view.test.ts; no .svelte file can be rendered
+		// under this suite's vite.config (see tests/signin-surface.test.ts's
+		// own note), so this proves the component actually renders the
+		// sentence for that state the same way tests/signin-surface.test.ts
+		// proves other markup claims — by reading source text.
+		const list = readFileSync(at('src', 'lib', 'components', 'DestinationsList.svelte'), 'utf8');
+		expect(list).toContain('classified.hasNothingLive');
+		expect(list).toContain('Nothing is live for you right now.');
+	});
+
 	it('serves a real page from a layout that loads the design tokens', () => {
 		expect(existsSync(at('src', 'app.html'))).toBe(true);
 		expect(existsSync(at('src', 'app.d.ts'))).toBe(true);
