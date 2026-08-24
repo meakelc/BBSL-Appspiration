@@ -18,9 +18,18 @@
  * type, and decide(), which calls evaluate() rather than re-deriving its
  * outcomes.
  *
+ * Story 1.7 adds `RosterSlotKind`/`ParsedRosterRow` — the domain shape the
+ * Fantrax adapter (`adapters/fantrax/roster-file.ts`) emits and
+ * `core/rules/roster-import.ts` consumes. Neither a file, a Team, nor a
+ * Fantrax Team ID appears here: the adapter resolves or validates those
+ * before a row becomes one of these (AD-24 — "the core receives domain
+ * types with no notion of a file").
+ *
  * This module is part of the PURE core: no I/O, no clock, no randomness, stdlib
  * only, relative .ts imports only so Deno can load it (AD-2).
  */
+
+import type { Money } from './money.ts';
 
 /**
  * What a caller's `decide()` hands the transactional shell to append.
@@ -76,4 +85,33 @@ export type AppendedEvent = {
 	readonly deviceClass: string | null;
 	readonly dispatchOutcome: string | null;
 	readonly deliveryOutcome: string | null;
+};
+
+// --- Story 1.7: the Fantrax roster import's domain shape -------------------
+
+/**
+ * The three roster slot kinds a Fantrax roster export's "Roster Slot" column
+ * maps to (addendum.md B: "Active/Bench, IR, Minor League"). Written
+ * snake_case, verbatim, to match `import_staged_rosters.roster_slot_kind`'s
+ * database check constraint — the adapter and the database agree on the same
+ * three literal strings rather than translating between two vocabularies.
+ */
+export type RosterSlotKind = 'active_bench' | 'injury_reserve' | 'minor_league';
+
+/**
+ * One roster row exactly as the Fantrax adapter emits it (AD-24) — the only
+ * shape `core/rules/roster-import.ts` and `server/roster-import.ts` see.
+ *
+ * `capHit` is already `Money`: the adapter parses the CSV cell through
+ * `core/money.ts`'s `parseMoney` before a row reaches this shape, so nothing
+ * downstream ever re-parses a raw CSV string. A Minor League row's `capHit`
+ * carries exactly what the file stated — `core/rules/roster-import.ts`'s
+ * `computeCapSpace` is what treats it as $0 against the Cap, not the adapter.
+ */
+export type ParsedRosterRow = {
+	readonly fantraxPlayerId: string;
+	readonly playerName: string;
+	readonly capHit: Money;
+	readonly rosterSlotKind: RosterSlotKind;
+	readonly contractYearsRemaining: number;
 };

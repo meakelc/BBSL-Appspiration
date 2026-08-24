@@ -48,13 +48,12 @@ describe('the AR-2 source tree', () => {
 
 	it('keeps every otherwise-empty AR-2 directory in git', () => {
 		// src/lib/core/projection and src/lib/shell moved to the real-file
-		// assertion below — this story is the first to write into either, and a
-		// .gitkeep the directory no longer needs is what deferred-work.md's own
-		// entry flagged: "each marker should be deleted the moment a real file
-		// lands there."
+		// assertion below in Story 1.5; src/lib/core/rules and
+		// src/lib/adapters/fantrax move there too in Story 1.7, which is the
+		// first to write into either — a .gitkeep the directory no longer needs
+		// is what deferred-work.md's own entry flagged: "each marker should be
+		// deleted the moment a real file lands there."
 		const wouldBeEmpty = [
-			'src/lib/core/rules',
-			'src/lib/adapters/fantrax',
 			'src/lib/adapters/discord',
 			'src/lib/server',
 			'supabase/migrations',
@@ -68,7 +67,12 @@ describe('the AR-2 source tree', () => {
 	});
 
 	it('deletes the .gitkeep from every directory that now holds a real file', () => {
-		for (const path of ['src/lib/core/projection', 'src/lib/shell']) {
+		for (const path of [
+			'src/lib/core/projection',
+			'src/lib/shell',
+			'src/lib/core/rules',
+			'src/lib/adapters/fantrax'
+		]) {
 			const marker = at(...path.split('/'), '.gitkeep');
 			expect(existsSync(marker), `${path}/.gitkeep should be gone now that it holds real files`).toBe(
 				false
