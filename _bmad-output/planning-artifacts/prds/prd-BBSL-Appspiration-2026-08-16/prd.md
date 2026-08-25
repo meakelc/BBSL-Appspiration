@@ -441,7 +441,8 @@ At Auction Clock expiry, the system closes the Auction and awards the Player.
 The system ends the Auction Phase when the League Clock expires.
 
 **Consequences (testable):**
-- The League Clock is reset to 48 hours by any Nomination or any valid Bid, and by nothing else.
+- The League Clock **starts** at 48 hours when the auction opens (FR-3) and is **reset** to 48 hours by any Nomination or any valid Bid, and by nothing else.
+- Starting and resetting are distinct: a Bid voided under FR-32 removes that Bid's reset, but nothing removes the start, so the Clock never recomputes to earlier than 48 hours after the auction opened.
 - The League Clock is **derived from the surviving reset events**, not carried as a stored countdown. A Bid voided under FR-32 stops counting as a reset, and the Clock is recomputed without it — prospectively, per FR-32.
 - On expiry, Nomination and bidding are disabled league-wide and the League transitions to Contract Assignment Phase.
 - Any Auction still in **Awaiting Opening Bid** at expiry is terminated with no winner and its Player returns to the Free Agent pool unclaimed.
