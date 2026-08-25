@@ -183,7 +183,10 @@ export async function loadPoolStatus(
 /**
  * Every source not yet staged, named — Teams first, then the Free Agent pool
  * (epic-1-context.md: "anything outstanding is named, never counted"). This
- * is the one list 1.11's auction-open gate reads; `outstandingTeamNames`
+ * answers STAGED-ness, which is NOT the question 1.11's auction-open gate
+ * asks — that gate folds promoted-ness from the `ImportPromoted` event
+ * (`core/projection/promotion.ts`), because a fully staged League that was
+ * never promoted has no live rosters at all. Do not collapse the two; `outstandingTeamNames`
  * stays as the Team-only view, and this function calls it rather than
  * re-deriving the rule.
  */

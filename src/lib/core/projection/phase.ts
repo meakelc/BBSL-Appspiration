@@ -6,11 +6,16 @@
  * the reducer at all and simply returns `INITIAL_PHASE` unchanged, which is
  * how "no events yet folds to Setup" holds without a special case anywhere.
  *
- * Its `switch` has no real case yet: every event type falls through to
- * `default` and returns `state` unchanged. This is the exact extension point
- * Story 1.11's `AuctionOpened` (and later phase-transition events) fill in —
- * the reducer's shape does not change when they do, only the number of
+ * Its `switch` has exactly one case: `AuctionOpened`, added by Story 1.11,
+ * which folds the phase to Auction. Every other event type falls through to
+ * `default` and returns `state` unchanged. That is the extension point later
+ * phase-transition events (`ContractAssignmentOpened`, `LeagueArchived`) fill
+ * in — the reducer's shape does not change when they do, only the number of
  * `case`s in this `switch`.
+ *
+ * The transition is one-way and has no un-open: there is no case that returns
+ * the phase to Setup, because AD-4 forbids deleting an event and no
+ * compensating event for the open exists or is intended.
  *
  * `LeaguePhase` is declared again here, structurally identical to
  * `server/phase.ts`'s type of the same name, rather than imported from it.
@@ -33,15 +38,29 @@ export type LeaguePhase = 'Setup' | 'Auction' | 'Contract Assignment' | 'Archive
 export const INITIAL_PHASE: LeaguePhase = 'Setup';
 
 /**
+ * The event type that opens the auction. Appended exactly once, by the
+ * Commissioner-only gate at `/auction-open` (Story 1.11), and the only thing
+ * in the codebase that moves the League out of Setup.
+ *
+ * Declared here rather than beside the transaction that appends it because
+ * this is the reducer that gives it meaning: the phase IS the fold, and no
+ * flag is stored anywhere.
+ */
+export const AUCTION_OPENED_EVENT = 'AuctionOpened';
+
+/**
  * Fold one event onto the current phase.
  *
- * No domain event type exists yet that changes the phase, so every `type`
- * reaches `default` and the phase is returned unchanged — true today, and
- * the correct behaviour for any event type this reducer has not been taught
- * to recognise, not merely a placeholder.
+ * `AuctionOpened` folds to Auction unconditionally — including from Auction
+ * itself, which is idempotent, so replaying the log twice converges. Every
+ * other `type` reaches `default` and the phase is returned unchanged, which
+ * is the correct behaviour for any event type this reducer has not been
+ * taught to recognise, not merely a placeholder.
  */
 export const phaseReducer: Reducer<LeaguePhase> = (state, event) => {
 	switch (event.type) {
+		case AUCTION_OPENED_EVENT:
+			return 'Auction';
 		default:
 			return state;
 	}
