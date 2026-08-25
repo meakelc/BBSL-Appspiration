@@ -43,7 +43,7 @@ development_status:
   1-5-the-append-only-log-and-the-transactional-write-path: done
   1-6-one-destination-list-gated-by-phase-and-role: done
   1-7-import-thirty-team-roster-files: done
-  1-8-import-the-free-agent-pool: review
+  1-8-import-the-free-agent-pool: done
   1-9-per-team-preview-and-atomic-promotion: backlog
   1-10-set-minor-league-eligibility-by-hand: backlog
   1-11-open-the-auction: backlog
