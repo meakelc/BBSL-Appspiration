@@ -98,9 +98,22 @@ export async function loadAppendedEvents(client: SupabaseClient): Promise<Append
  * No pagination here: `pg` enforces no PostgREST-style per-response row cap,
  * which is the only reason `loadAppendedEvents` above loops at all. It does
  * NOT stream — `query()` buffers the whole result set into memory — so this
- * read grows with the log. That is acceptable precisely here and nowhere
- * else: promotion runs only in Setup, where the log is empty or nearly so.
- * A caller folding the log in a later phase wants a bounded read instead.
+ * read grows with the log.
+ *
+ * Two call sites today, both bounded by the phase they run in rather than by
+ * anything this function does:
+ *
+ *   - `import-promotion.ts`'s `promoteImport`, which runs only in Setup and
+ *     at most a handful of times.
+ *   - `eligibility.ts`'s `setEligibility` (Story 1.10), which also runs only
+ *     in Setup but MAY run many times — one transaction per submit, each
+ *     appending up to one event per changed Player. Setup's whole log is
+ *     those events plus a few promotions, so the read stays small; it is not
+ *     small because the caller is rare.
+ *
+ * Both bounds are properties of Setup, not of this reader. A caller folding
+ * the log in a later phase — where the log is every bid ever placed — wants a
+ * bounded read instead, and adding one here is the work that unblocks that.
  * `order by seq` is the fold order AD-5 requires — never `occurred_at`,
  * because a transaction queued on the lock commits later while holding an
  * earlier timestamp.

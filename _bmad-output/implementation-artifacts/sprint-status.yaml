@@ -45,7 +45,7 @@ development_status:
   1-7-import-thirty-team-roster-files: done
   1-8-import-the-free-agent-pool: done
   1-9-per-team-preview-and-atomic-promotion: done
-  1-10-set-minor-league-eligibility-by-hand: backlog
+  1-10-set-minor-league-eligibility-by-hand: done
   1-11-open-the-auction: backlog
   epic-1-retrospective: optional
 

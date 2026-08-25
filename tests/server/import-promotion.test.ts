@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { ACTIVE_BENCH_SLOTS } from '../../src/lib/core/constants.ts';
+import { MINOR_LEAGUE_ELIGIBILITY_SET } from '../../src/lib/core/projection/eligibility.ts';
 import { promotionRefusalDetail } from '../../src/lib/core/rules/import-preview.ts';
 import { POOL_SOURCE_LABEL } from '../../src/lib/core/rules/pool-import.ts';
 import {
@@ -42,7 +43,7 @@ function fakeGateway(options: {
 	teams?: Team[];
 	rosters?: StagedRoster[];
 	poolStatus?: string | null;
-	pool?: Array<{ id: string; name?: string; positions?: string; nbaTeam?: string; eligible?: boolean }>;
+	pool?: Array<{ id: string; name?: string; positions?: string; nbaTeam?: string }>;
 	events?: QueryResultRow[];
 	/** When set, the first statement matching this pattern throws. */
 	throwOn?: RegExp;
@@ -116,8 +117,7 @@ function fakeGateway(options: {
 						fantrax_player_id: player.id,
 						player_name: player.name ?? 'Bob',
 						positions: player.positions ?? 'PG',
-						nba_team: player.nbaTeam ?? 'LAL',
-						minor_league_eligible: player.eligible ?? false
+						nba_team: player.nbaTeam ?? 'LAL'
 					}))
 				};
 			}
@@ -172,8 +172,20 @@ function fakeGateway(options: {
 					player_name: params[1],
 					positions: params[2],
 					nba_team: params[3],
-					minor_league_eligible: params[4]
+					// The column's own `false` default: promotion does not set this
+					// at insert. `applyEligibilityProjection` below is the one
+					// writer, and it runs inside this same transaction (Story 1.10).
+					minor_league_eligible: false
 				});
+				return { rows: [] };
+			}
+			if (/^update free_agent_players/i.test(sql)) {
+				order.push('apply-eligibility-projection');
+				const eligible = new Set((params[0] ?? []) as string[]);
+				live.freeAgents = live.freeAgents.map((row) => ({
+					...row,
+					minor_league_eligible: eligible.has(String(row['fantrax_player_id']))
+				}));
 				return { rows: [] };
 			}
 			if (/^commit/i.test(sql)) {
@@ -231,6 +243,25 @@ function rosterFor(teams: Team[], rowsPerTeam = 2): StagedRoster[] {
 			fantraxPlayerId: `${team.id}-p${index}`
 		}))
 	);
+}
+
+/** One `MinorLeagueEligibilitySet` row, as the log hands it back. */
+function eligibilityEvent(
+	seq: number,
+	fantraxPlayerId: string,
+	before: boolean,
+	after: boolean
+): QueryResultRow {
+	return {
+		seq,
+		occurred_at: new Date('2026-08-25T08:00:00.000Z'),
+		schema_version: 1,
+		core_version: 1,
+		manager_id: 'm-1',
+		team_id: 't-commissioner',
+		event_type: MINOR_LEAGUE_ELIGIBILITY_SET,
+		payload: { fantraxPlayerId, playerName: fantraxPlayerId, before, after }
+	};
 }
 
 function rejectionOf(outcome: { kind: string; reason?: unknown }): PromotionRejection {
@@ -297,24 +328,43 @@ describe('promoteImport — the happy path', () => {
 		expect(harness.order.filter((step) => step === 'commit')).toHaveLength(1);
 	});
 
-	it('carries the staged Minor League Eligibility across untouched, never deriving it', async () => {
+	it('promotes the pool with Minor League Eligibility as the LOG folds it, not the staged default', async () => {
+		// Story 1.10: without this, a re-import during Setup silently reverts
+		// every flag the Commissioner set while the log still says otherwise.
+		// The staged rows carry no eligibility at all — it is app-owned and
+		// absent from the Fantrax export (AR-33) — so the only source of the
+		// value is the fold of `MinorLeagueEligibilitySet` events.
 		const teams = thirtyTeams();
 		const harness = fakeGateway({
 			teams,
 			rosters: rosterFor(teams, 1),
 			poolStatus: 'staged',
-			pool: [
-				{ id: 'fa-1', eligible: false },
-				{ id: 'fa-2', eligible: true }
+			pool: [{ id: 'fa-1' }, { id: 'fa-2' }, { id: 'fa-3' }],
+			events: [
+				eligibilityEvent(1, 'fa-2', false, true),
+				// Set then unset: the fold, not the first event, is what promotion
+				// must carry across.
+				eligibilityEvent(2, 'fa-3', false, true),
+				eligibilityEvent(3, 'fa-3', true, false)
 			]
 		});
 
 		await promoteImport(harness.gateway, ACTOR);
 
-		expect(harness.live.freeAgents.map((row) => row['minor_league_eligible'])).toEqual([
-			false,
-			true
+		expect(
+			harness.live.freeAgents.map((row) => [row['fantrax_player_id'], row['minor_league_eligible']])
+		).toEqual([
+			['fa-1', false],
+			['fa-2', true],
+			['fa-3', false]
 		]);
+		// The column is written by the one projection writer, inside the same
+		// transaction as the inserts and the event.
+		const commitIndex = harness.order.indexOf('commit');
+		expect(harness.order.indexOf('apply-eligibility-projection')).toBeGreaterThan(
+			harness.order.lastIndexOf('insert-live-free-agent')
+		);
+		expect(harness.order.indexOf('apply-eligibility-projection')).toBeLessThan(commitIndex);
 	});
 
 	it('replaces live state entirely on a re-import during Setup', async () => {
@@ -468,6 +518,7 @@ describe('promoteImport — the refusals, every one re-derived inside the transa
 		const { refusePromotion } = await import('../../src/lib/server/import-promotion.ts');
 		const refusal = refusePromotion({
 			phase: 'Auction',
+			eligible: new Set<string>(),
 			teams: [{ teamId: 't-1', teamName: 'Lakers', status: null, rows: [] }],
 			poolStatus: null,
 			poolPlayers: []

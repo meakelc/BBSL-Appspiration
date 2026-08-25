@@ -24,6 +24,17 @@
  * site: there is none, and no rebuild of these tables from the log exists or
  * is intended.
  *
+ * **One exception, added by Story 1.10:
+ * `free_agent_players.minor_league_eligible` IS an event-sourced projection.**
+ * It is the single app-owned column in either live table — every other column
+ * is imported reference data — and it is the fold of
+ * `MinorLeagueEligibilitySet` events, rebuildable from the log at any point.
+ * Promotion therefore folds it here and writes it through
+ * `applyEligibilityProjection`, the one writer that owns it. Neither half
+ * generalises to the other: do not infer a rebuild contract for the rest of
+ * these tables from that column, nor a mutable-reference-data licence for
+ * that column from the rest.
+ *
  * **Every gate is re-derived here, server-side, inside the transaction.** The
  * confirm checkbox on the page is never the check, and neither is
  * `locals.phase` — that was folded when the page loaded and says nothing
@@ -36,11 +47,14 @@ import { previewTeam, promotionRefusalDetail } from '../core/rules/import-previe
 import type { PromotionRefusal, TeamSlotBreach } from '../core/rules/import-preview.ts';
 import { POOL_SOURCE_LABEL } from '../core/rules/pool-import.ts';
 import { fold } from '../core/projection/fold.ts';
+import { INITIAL_ELIGIBILITY, eligibilityReducer } from '../core/projection/eligibility.ts';
+import type { EligibilitySet } from '../core/projection/eligibility.ts';
 import { INITIAL_PHASE, phaseReducer } from '../core/projection/phase.ts';
 import { parseMoney } from '../core/money.ts';
 import type { EventEnvelope, ParsedRosterRow } from '../core/types.ts';
 import { runTransactionalWrite } from '../shell/write.ts';
 import type { ConnectionGateway, TransactionalClient, WriteOutcome } from '../shell/write.ts';
+import { applyEligibilityProjection } from './eligibility.ts';
 import { loadEventsViaClient } from './event-log.ts';
 import { toParsedRosterRow } from './staged-roster-row.ts';
 
@@ -61,18 +75,32 @@ type LoadedTeam = {
 	readonly rows: readonly ParsedRosterRow[];
 };
 
-/** One staged pool Player as promotion loaded it. */
+/**
+ * One staged pool Player as promotion loaded it.
+ *
+ * No eligibility field: Minor League Eligibility is NOT imported and is not
+ * carried from staging (AR-33 — it is app-owned and absent from the Fantrax
+ * file). Since Story 1.10 the live column is the fold of
+ * `MinorLeagueEligibilitySet` events, applied below by the one writer that
+ * owns that column.
+ */
 type LoadedPoolPlayer = {
 	readonly fantraxPlayerId: string;
 	readonly playerName: string;
 	readonly positions: string;
 	readonly nbaTeam: string;
-	readonly minorLeagueEligible: boolean;
 };
 
 /** Everything `decide` needs, read under the lock in one transaction. */
 export type PromotionState = {
 	readonly phase: string;
+	/**
+	 * Minor League Eligibility as the log folds to it, right now, inside this
+	 * transaction (Story 1.10). Promotion replaces the pool wholesale, so
+	 * without this a re-import during Setup would silently revert every flag
+	 * the Commissioner had set while the log still said otherwise.
+	 */
+	readonly eligible: EligibilitySet;
 	readonly teams: readonly LoadedTeam[];
 	readonly poolStatus: string | null;
 	readonly poolPlayers: readonly LoadedPoolPlayer[];
@@ -89,6 +117,10 @@ export type PromotionState = {
 async function loadPromotionState(client: TransactionalClient): Promise<PromotionState> {
 	const events = await loadEventsViaClient(client);
 	const phase = fold(INITIAL_PHASE, events, phaseReducer);
+	// The same single read of the log, folded a second way. Both projections
+	// come from one read inside one transaction, so they cannot disagree about
+	// which events they saw.
+	const eligible = fold(INITIAL_ELIGIBILITY, events, eligibilityReducer);
 
 	const teamsResult = await client.query(
 		`select t.id, t.name, s.status
@@ -127,23 +159,20 @@ async function loadPromotionState(client: TransactionalClient): Promise<Promotio
 	const rawPoolStatus = poolSourceResult.rows[0]?.['status'];
 
 	const poolResult = await client.query(
-		`select fantrax_player_id, player_name, positions, nba_team, minor_league_eligible
+		`select fantrax_player_id, player_name, positions, nba_team
 		from import_staged_pool_players`
 	);
 
 	return {
 		phase,
+		eligible,
 		teams,
 		poolStatus: rawPoolStatus === null || rawPoolStatus === undefined ? null : String(rawPoolStatus),
 		poolPlayers: poolResult.rows.map((row) => ({
 			fantraxPlayerId: String(row['fantrax_player_id']),
 			playerName: String(row['player_name']),
 			positions: String(row['positions']),
-			nbaTeam: String(row['nba_team']),
-			// Carried across exactly as staged — promotion never sets, derives or
-			// edits Minor League Eligibility (1.10 owns that). The staged value is
-			// the column's `false` default until 1.10 exists to change it.
-			minorLeagueEligible: row['minor_league_eligible'] === true
+			nbaTeam: String(row['nba_team'])
 		}))
 	};
 }
@@ -317,16 +346,19 @@ async function writeLiveTables(client: TransactionalClient, state: PromotionStat
 	for (const player of state.poolPlayers) {
 		await client.query(
 			`insert into free_agent_players
-				(fantrax_player_id, player_name, positions, nba_team, minor_league_eligible)
-			values ($1, $2, $3, $4, $5)`,
-			[
-				player.fantraxPlayerId,
-				player.playerName,
-				player.positions,
-				player.nbaTeam,
-				// Carried across, never derived: 1.10 owns changing this.
-				player.minorLeagueEligible
-			]
+				(fantrax_player_id, player_name, positions, nba_team)
+			values ($1, $2, $3, $4)`,
+			[player.fantraxPlayerId, player.playerName, player.positions, player.nbaTeam]
 		);
 	}
+
+	// Minor League Eligibility, folded from the log and written by the ONE
+	// writer that owns this column (Story 1.10). The inserts above leave the
+	// column at its `false` default deliberately: this column is an
+	// event-sourced projection while every other column of the same table is
+	// imported reference data that is never rebuilt from the log, and a second
+	// place setting it is exactly how the two halves would come to disagree.
+	// Inside the same transaction as the inserts, so a re-import during Setup
+	// commits the pool and its folded eligibility together or not at all.
+	await applyEligibilityProjection(client, state.eligible);
 }
