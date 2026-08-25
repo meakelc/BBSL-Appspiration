@@ -130,3 +130,11 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-7-import-thirty-team-roster-files.md`
   summary: Add a per-Team advisory lock (or `select ... for update`) around `stageRosterFile`'s staging transaction, an actor/audit column on `import_team_sources`, a batch file-size/count guard, and re-checking `requireLiveDestination` mid-batch rather than only once before the loop.
   evidence: bmad-build review (2026-08-24), Blind Hunter and Edge Case Hunter layers on Story 1.7 review-loop-iteration 1. All four are real but low-probability-or-impact for this app's single-Commissioner, one-league-at-a-time usage: two concurrent uploads for the same Team resolve via `on conflict (team_id) do update` (last write wins, no corruption, just no detection); staging writes intentionally skip `auction_events` (Design Notes) so audit logging arrives with promotion in 1.9, not here; upload payloads are Commissioner-only and small (CSV rosters); a phase transition mid-batch would require the Commissioner to open the auction (Story 1.11, a deliberate one-time action) while their own import is still running.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-8-import-the-free-agent-pool.md`
+  summary: The pool/roster cross-source conflict check is not safe against two concurrent /import requests.
+  evidence: findPoolConflicts and findRosterConflicts are plain SELECTs in independently committed per-file transactions with no lock, so two simultaneous uploads can each pass their check before the other commits, landing a Player in both the pool and a roster. Same class as 1.7's already-deferred per-Team concurrency gap; staging deliberately skips the global write lock (AD-28).
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-8-import-the-free-agent-pool.md`
+  summary: Nothing detects the same Fantrax player ID appearing on two different Teams' staged rosters.
+  evidence: import_staged_rosters carries no uniqueness on fantrax_player_id across Teams, and 1.7 built no cross-Team check. Surfaced by 1.8's review, not caused by it — 1.8 only added pool-vs-roster conflict detection. Belongs with 1.9's promotion, where all thirty-one sources are validated as one set.

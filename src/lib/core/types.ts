@@ -25,6 +25,12 @@
  * before a row becomes one of these (AD-24 — "the core receives domain
  * types with no notion of a file").
  *
+ * Story 1.8 adds `ParsedPoolRow` — the Free Agent pool's domain shape, the
+ * pool adapter's (`adapters/fantrax/pool-file.ts`) sole output. Deliberately
+ * carries no eligibility flag: Minor League Eligibility is app-owned and
+ * defaults to not-eligible as a database column default, never read from the
+ * file.
+ *
  * This module is part of the PURE core: no I/O, no clock, no randomness, stdlib
  * only, relative .ts imports only so Deno can load it (AD-2).
  */
@@ -114,4 +120,40 @@ export type ParsedRosterRow = {
 	readonly capHit: Money;
 	readonly rosterSlotKind: RosterSlotKind;
 	readonly contractYearsRemaining: number;
+};
+
+// --- Story 1.8: the Free Agent pool's domain shape -------------------------
+
+/**
+ * One Free Agent pool row exactly as the pool adapter
+ * (`adapters/fantrax/pool-file.ts`) emits it (AD-24) — the only shape the
+ * server layer sees.
+ *
+ * Four fields, and nothing else (addendum.md B): Fantrax player id, name,
+ * position(s), NBA team. No `Money` and no roster slot kind — a pool Player
+ * has no contract, so Cap Space and slot-ceiling arithmetic simply do not
+ * apply to one. **No eligibility field either**: Minor League Eligibility is
+ * app-owned, not imported, and defaults to *not* eligible as a database
+ * column default on the staged row (`import_staged_pool_players
+ * .minor_league_eligible`). The adapter never derives, infers, or fails on
+ * it, so there is nothing here for it to put.
+ *
+ * `positions` is the export's own text, verbatim, however it separates
+ * several positions; nothing in this story parses them apart. `nbaTeam`
+ * carries the export's own cell verbatim — expected to be the three-letter
+ * capitalised abbreviation, which per the glossary always and only means a
+ * Player's real-life NBA team, never a fantasy Team.
+ *
+ * **That expectation is not enforced, deliberately.** The pool column shape
+ * is an unconfirmed placeholder until a real export lands (1.9/AR-33), so a
+ * parser that refused anything but three capitals would refuse the real file
+ * on the strength of a guess. The adapter checks only that the cell is
+ * present and non-blank; tighten this to a validated format once the export
+ * is confirmed, not before.
+ */
+export type ParsedPoolRow = {
+	readonly fantraxPlayerId: string;
+	readonly playerName: string;
+	readonly positions: string;
+	readonly nbaTeam: string;
 };
