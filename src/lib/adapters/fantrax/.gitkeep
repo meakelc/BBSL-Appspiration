@@ -1,2 +1,0 @@
-# The ONLY module that knows CSV column names. 31-file import:
-# pool + one per Team (AD-24, AD-28). Filled by Stories 1.7-1.9.

@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 08-18-2026 13:11
-last_updated: 08-22-2026
+last_updated: 08-24-2026
 project: BBSL-Appspiration
 project_key: NOKEY
 tracking_system: file-system
@@ -42,7 +42,7 @@ development_status:
   1-4-teams-managers-and-the-commissioner-role: done
   1-5-the-append-only-log-and-the-transactional-write-path: done
   1-6-one-destination-list-gated-by-phase-and-role: done
-  1-7-import-thirty-team-roster-files: backlog
+  1-7-import-thirty-team-roster-files: done
   1-8-import-the-free-agent-pool: backlog
   1-9-per-team-preview-and-atomic-promotion: backlog
   1-10-set-minor-league-eligibility-by-hand: backlog
