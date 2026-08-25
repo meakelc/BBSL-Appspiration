@@ -137,6 +137,27 @@ export function compareMoney(a: Money, b: Money): -1 | 0 | 1 {
 }
 
 /**
+ * Whether `amount` sits on the `MINIMUM_INCREMENT` grid — exactly the
+ * predicate `formatMoney` throws on.
+ *
+ * Exported so a caller can ASK before rendering rather than catch a
+ * `RangeError` to find out. An imported Cap Hit is a real-world salary
+ * figure with no guarantee it sits on the app's own $500,000 grid, so the
+ * import preview must decide between the abbreviated rendering and exact
+ * integer dollars before it calls either. Control flow through an exception
+ * would also make "off the grid" indistinguishable from a genuine bug, which
+ * is what `RangeError` means everywhere else in this module (AD-1).
+ *
+ * The magnitude is taken first so a negative amount answers the same as its
+ * positive twin — `formatMoney` tests the magnitude too, and the two must
+ * not disagree about any value.
+ */
+export function isOnMoneyGrid(amount: Money): boolean {
+	const magnitude = amount < 0 ? -amount : amount;
+	return magnitude % MINIMUM_INCREMENT === 0;
+}
+
+/**
  * Render for display: `$14.5M`, always exactly one decimal, never dropped.
  *
  * Lossless rather than rounded, and only because every BBSL figure sits on the
@@ -149,7 +170,10 @@ export function formatMoney(amount: Money): DisplayMoney {
 	const negative = amount < 0;
 	const magnitude = negative ? -amount : amount;
 
-	if (magnitude % MINIMUM_INCREMENT !== 0) {
+	// The grid test is `isOnMoneyGrid`'s, called rather than repeated: two
+	// copies of this predicate could disagree, and a caller that asked first
+	// and then rendered would get a `RangeError` it had already ruled out.
+	if (!isOnMoneyGrid(amount)) {
 		throw new RangeError(
 			`${String(amount)} is not on the $${String(MINIMUM_INCREMENT)} grid and cannot be rendered at one decimal place`
 		);

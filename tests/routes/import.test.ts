@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { isHttpError } from '@sveltejs/kit';
 
+import { promotionRefusalDetail } from '../../src/lib/core/rules/import-preview.ts';
 import { COMMISSIONER_ONLY_STATUS } from '../../src/lib/server/commissioner-guard.ts';
 import { LIVE_DESTINATION_REFUSAL_STATUS } from '../../src/lib/server/destinations.ts';
 import type { RegisteredManager, SessionState } from '../../src/lib/server/auth.ts';
@@ -28,7 +29,10 @@ const stub = vi.hoisted(() => ({
 	poolOutcomes: [] as unknown[],
 	/** When set, the call for this exact file name throws instead of resolving. */
 	throwOnFileName: null as string | null,
-	throwMessage: 'stageRosterFile failed'
+	throwMessage: 'stageRosterFile failed',
+	preview: { teams: [] as unknown[], poolSize: 0 } as Record<string, unknown>,
+	/** What the faked `promoteImport` answers. */
+	promotionOutcome: { kind: 'accepted', events: [] as unknown[] } as Record<string, unknown>
 }));
 
 vi.mock('$lib/server/import-status.ts', () => ({
@@ -45,6 +49,19 @@ vi.mock('$lib/server/import-status.ts', () => ({
 
 const stageCalls = vi.hoisted(() => [] as Array<{ fileName: string; csvText: string }>);
 const poolCalls = vi.hoisted(() => [] as Array<{ fileName: string; csvText: string }>);
+
+vi.mock('$lib/server/import-preview.ts', () => ({
+	loadImportPreview: async () => stub.preview
+}));
+
+const promoteCalls = vi.hoisted(() => [] as Array<{ managerId: string; teamId: string }>);
+
+vi.mock('$lib/server/import-promotion.ts', () => ({
+	promoteImport: vi.fn(async (_gateway: unknown, actor: { managerId: string; teamId: string }) => {
+		promoteCalls.push(actor);
+		return stub.promotionOutcome;
+	})
+}));
 
 // `isPoolFileName` is NOT mocked — the route's routing decision is the thing
 // under test here, so it runs against the real rule.
@@ -140,6 +157,9 @@ beforeEach(() => {
 	stub.throwOnFileName = null;
 	stub.throwMessage = 'stageRosterFile failed';
 	stageCalls.length = 0;
+	stub.preview = { teams: [], poolSize: 0 };
+	stub.promotionOutcome = { kind: 'accepted', events: [] };
+	promoteCalls.length = 0;
 });
 
 describe('load — Commissioner-only, gated on both the guard and the destination', () => {
@@ -172,12 +192,23 @@ describe('load — Commissioner-only, gated on both the guard and the destinatio
 			{ teamId: 't-1', teamName: 'Lakers', status: 'outstanding' },
 			{ teamId: 't-2', teamName: 'Celtics', status: 'staged' }
 		];
+		stub.preview = {
+			teams: [{ teamId: 't-1', teamName: 'Lakers', rosterCount: 2, capSpace: 1, capHitTotal: 1, breaches: [] }],
+			poolSize: 7
+		};
 		const result = (await route.load({
 			locals: locals({ kind: 'registered', manager: COMMISSIONER })
-		} as never)) as { statuses: unknown[]; pool: Record<string, unknown>; outstanding: string[] };
+		} as never)) as {
+			statuses: unknown[];
+			pool: Record<string, unknown>;
+			preview: Record<string, unknown>;
+			outstanding: string[];
+		};
 
 		expect(result.statuses).toEqual(stub.statuses);
 		expect(result.pool).toEqual(stub.pool);
+		// The preview travels with the status list — one `load`, one render.
+		expect(result.preview).toEqual(stub.preview);
 		// One list, thirty-one sources: outstanding Teams plus the pool.
 		expect(result.outstanding).toEqual(['Lakers', 'Free Agent pool']);
 	});
@@ -394,5 +425,114 @@ describe('actions.upload — pool routing (Story 1.8)', () => {
 			},
 			teamOutcome
 		]);
+	});
+});
+
+
+describe('actions.promote — Story 1.9', () => {
+	const promoteAction = route.actions.promote as unknown as (event: unknown) => unknown;
+
+	function promoteEvent(
+		fields: Record<string, string>,
+		session: SessionState = { kind: 'registered', manager: COMMISSIONER },
+		phase: ResolvedPhase = SETUP_PHASE
+	) {
+		const form = new FormData();
+		for (const [key, value] of Object.entries(fields)) form.append(key, value);
+		return {
+			request: new Request('https://app.example/import', { method: 'POST', body: form }),
+			locals: locals(session, phase)
+		};
+	}
+
+	it('refuses a non-Commissioner session with 403, before promoting anything', async () => {
+		await expectRefusal(
+			() => promoteAction(promoteEvent({ confirm: 'yes' }, { kind: 'registered', manager: MANAGER })),
+			COMMISSIONER_ONLY_STATUS
+		);
+		expect(promoteCalls).toEqual([]);
+	});
+
+	it('refuses a signed-out session with 403', async () => {
+		await expectRefusal(
+			() => promoteAction(promoteEvent({ confirm: 'yes' }, { kind: 'signed-out' })),
+			COMMISSIONER_ONLY_STATUS
+		);
+		expect(promoteCalls).toEqual([]);
+	});
+
+	it('refuses outside Setup — the destination guard runs on this action too', async () => {
+		await expectRefusal(
+			() =>
+				promoteAction(
+					promoteEvent({ confirm: 'yes' }, { kind: 'registered', manager: COMMISSIONER }, AUCTION_PHASE)
+				),
+			LIVE_DESTINATION_REFUSAL_STATUS
+		);
+		expect(promoteCalls).toEqual([]);
+	});
+
+	it('refuses with 400 and writes nothing when the confirm field is missing', async () => {
+		const result = (await promoteAction(promoteEvent({}))) as {
+			status: number;
+			data: { promoteNotice: string };
+		};
+		expect(result.status).toBe(400);
+		expect(result.data.promoteNotice).toContain('not confirmed');
+		expect(promoteCalls).toEqual([]);
+	});
+
+	it('refuses with 400 when the confirm field carries anything but the expected value', async () => {
+		const result = (await promoteAction(promoteEvent({ confirm: 'no' }))) as { status: number };
+		expect(result.status).toBe(400);
+		expect(promoteCalls).toEqual([]);
+	});
+
+	it('refuses with 400 when the acting Commissioner is bound to no Team', async () => {
+		// `auction_events.manager_id` and `team_id` are both NOT NULL (AD-4),
+		// so an unbound actor has no event to append. It must be refused before
+		// the transaction opens, not by a constraint violation inside it — and
+		// the sentence comes from the pure core like every other refusal here.
+		const unbound: RegisteredManager = { ...COMMISSIONER, teamId: null };
+		const result = (await promoteAction(
+			promoteEvent({ confirm: 'yes' }, { kind: 'registered', manager: unbound })
+		)) as { status: number; data: { promoteNotice: string } };
+
+		expect(result.status).toBe(400);
+		expect(result.data.promoteNotice).toBe(promotionRefusalDetail({ kind: 'unbound_actor' }));
+		expect(result.data.promoteNotice).toContain('not bound to a Team');
+		expect(promoteCalls).toEqual([]);
+	});
+
+	it('promotes with the actor resolved server-side from the session, never from the form', async () => {
+		stub.promotionOutcome = {
+			kind: 'accepted',
+			events: [{ seq: '11', occurredAt: '2026-08-25T09:00:00.000Z' }]
+		};
+		const result = (await promoteAction(
+			promoteEvent({ confirm: 'yes', managerId: 'not-me', teamId: 'not-mine' })
+		)) as { promoted: { seq: string | null }; promoteNotice: string };
+
+		expect(promoteCalls).toEqual([{ managerId: COMMISSIONER.id, teamId: COMMISSIONER.teamId }]);
+		expect(result.promoted.seq).toBe('11');
+		expect(result.promoteNotice).toContain('Promoted');
+	});
+
+	it('renders the refusal sentence the transaction produced, without rewording it', async () => {
+		stub.promotionOutcome = {
+			kind: 'rejected',
+			reason: {
+				refusal: { kind: 'outstanding', sourceNames: ['Lakers'] },
+				detail: 'Promotion was refused: every one of the thirty-one sources must be staged first. Outstanding: Lakers.'
+			}
+		};
+		const result = (await promoteAction(promoteEvent({ confirm: 'yes' }))) as {
+			status: number;
+			data: { promoteNotice: string };
+		};
+		expect(result.status).toBe(409);
+		expect(result.data.promoteNotice).toBe(
+			'Promotion was refused: every one of the thirty-one sources must be staged first. Outstanding: Lakers.'
+		);
 	});
 });

@@ -23,6 +23,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import type { AppendedEvent } from '../core/types.ts';
 import { toAppendedEvent } from '../shell/write.ts';
+import type { TransactionalClient } from '../shell/write.ts';
 
 /**
  * The width of each `.range()` request. Not assumed to equal the server's
@@ -80,4 +81,33 @@ export async function loadAppendedEvents(client: SupabaseClient): Promise<Append
 	}
 
 	return rows;
+}
+
+/**
+ * The same full-log read, over an open `pg` transaction instead of
+ * PostgREST. Story 1.9.
+ *
+ * Promotion must fold the phase from the log INSIDE its own transaction —
+ * `locals.phase` was resolved when the page loaded and says nothing about
+ * what the log holds now, so trusting it would let "re-import is refused
+ * once the auction has opened" be raced past by a tab that loaded during
+ * Setup. `runTransactionalWrite` takes the global advisory lock before
+ * `load` runs (AD-6), so a read through this function sees a log no
+ * concurrent write can change underneath it.
+ *
+ * No pagination here: `pg` enforces no PostgREST-style per-response row cap,
+ * which is the only reason `loadAppendedEvents` above loops at all. It does
+ * NOT stream — `query()` buffers the whole result set into memory — so this
+ * read grows with the log. That is acceptable precisely here and nowhere
+ * else: promotion runs only in Setup, where the log is empty or nearly so.
+ * A caller folding the log in a later phase wants a bounded read instead.
+ * `order by seq` is the fold order AD-5 requires — never `occurred_at`,
+ * because a transaction queued on the lock commits later while holding an
+ * earlier timestamp.
+ *
+ * `toAppendedEvent` is reused, as above: one row mapping, two clients.
+ */
+export async function loadEventsViaClient(client: TransactionalClient): Promise<AppendedEvent[]> {
+	const result = await client.query('select * from auction_events order by seq asc');
+	return result.rows.map((row) => toAppendedEvent(row));
 }

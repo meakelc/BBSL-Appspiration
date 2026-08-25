@@ -24,6 +24,32 @@
 		readonly playerCount: number;
 	};
 
+	/**
+	 * One Team's preview row — Roster Count and Cap Space from staging alone,
+	 * with the Cap Space already rendered server-side so the money rule keeps
+	 * one definition (`core/rules/import-preview.ts`).
+	 */
+	type TeamPreviewRow = {
+		readonly teamId: string;
+		readonly teamName: string;
+		readonly rosterCount: number;
+		readonly capSpace: number;
+		readonly capSpaceText: string;
+		readonly offGridDetail: string | null;
+		readonly breachDetail: string | null;
+		readonly capHitTotal: number;
+		readonly breaches: ReadonlyArray<{
+			readonly slotKind: string;
+			readonly count: number;
+			readonly ceiling: number;
+		}>;
+	};
+
+	type ImportPreview = {
+		readonly teams: readonly TeamPreviewRow[];
+		readonly poolSize: number;
+	};
+
 	type TeamImportStatus = {
 		readonly teamId: string;
 		readonly teamName: string;
@@ -80,7 +106,14 @@
 				readonly fileName: string;
 				readonly detail: string;
 		  };
-	type UploadForm = { readonly notice?: string; readonly results?: readonly UploadResult[] };
+	type UploadForm = {
+		readonly notice?: string;
+		readonly results?: readonly UploadResult[];
+		/** `promote`'s success shape — the one appended `ImportPromoted` event. */
+		readonly promoted?: { readonly seq: string | null; readonly occurredAt: string | null };
+		/** `promote`'s own sentence, separate from `upload`'s so neither renders under the other's control. */
+		readonly promoteNotice?: string;
+	};
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
@@ -99,6 +132,7 @@
 
 	const statuses = $derived((data.statuses as readonly TeamImportStatus[]) ?? []);
 	const outstanding = $derived((data.outstanding as readonly string[]) ?? []);
+	const everySourceStaged = $derived(outstanding.length === 0);
 	const pool = $derived(data.pool as PoolImportStatus);
 	// `form`'s generated type is a union of every action's return shape, so
 	// neither field is on every member — read it through one cast, here,
@@ -106,6 +140,23 @@
 	const uploadForm = $derived(form as UploadForm | undefined);
 	const notice = $derived(uploadForm?.notice);
 	const results = $derived(uploadForm?.results ?? []);
+	const promoted = $derived(uploadForm?.promoted);
+	const promoteNotice = $derived(uploadForm?.promoteNotice);
+	const preview = $derived(data.preview as ImportPreview);
+
+	/**
+	 * The preview arrives with its Cap Space ALREADY RENDERED
+	 * (`server/import-preview.ts`'s `TeamPreviewRow.capSpaceText`), and with
+	 * the off-grid sentence already worded. Nothing here re-implements the
+	 * money rule: `renderCapSpace` has exactly one definition, in the pure
+	 * core, and a second copy on this page would be free to drift from it.
+	 */
+	const previewTeams = $derived(preview?.teams ?? []);
+	const offGridSentences = $derived(
+		previewTeams
+			.map((team) => team.offGridDetail)
+			.filter((detail): detail is string => detail !== null)
+	);
 </script>
 
 <svelte:head>
@@ -220,6 +271,130 @@
 			{/each}
 		</ul>
 	</section>
+
+	<!-- The per-Team preview: Roster Count and Cap Space for all thirty Teams,
+	     read from staging alone. A stacked list at 375px — every field carries
+	     its own word, so nothing depends on a column header being visible —
+	     becoming a real <table> with scope="col" headers at the first
+	     min-width media query in this codebase. Both render the same data from
+	     the same markup source; only one is in the accessibility tree at a
+	     time, so a screen reader never hears the figures twice. -->
+	<section class="panel">
+		<p class="section-label">Preview</p>
+		<p class="prose">
+			Roster Count and Cap Space for all thirty Teams, computed from the staged rows. The Free
+			Agent pool holds {preview?.poolSize ?? 0} players. Nothing here reads a live table: this is
+			what promotion would commit.
+		</p>
+
+		<ul class="preview-list">
+			{#each previewTeams as team (team.teamId)}
+				<li class="status-row">
+					<span class="status-team">{team.teamName}</span>
+					<span class="prose">Roster Count: {team.rosterCount}</span>
+					<span class="money">Cap Space: {team.capSpaceText}</span>
+					{#if team.breachDetail}
+						<span class="prose preview-breach">Slot ceiling breached — {team.breachDetail}</span>
+					{/if}
+				</li>
+			{/each}
+		</ul>
+
+		<table class="preview-table">
+			<caption class="section-label">Per-Team preview</caption>
+			<thead>
+				<tr>
+					<th scope="col">Team</th>
+					<th scope="col">Roster Count</th>
+					<th scope="col">Cap Space</th>
+					<th scope="col">Slot ceilings</th>
+				</tr>
+			</thead>
+			<tbody>
+				{#each previewTeams as team (team.teamId)}
+					<tr>
+						<th scope="row">{team.teamName}</th>
+						<td class="money">{team.rosterCount}</td>
+						<td class="money">{team.capSpaceText}</td>
+						<td>
+							{#if team.breachDetail}
+								{team.breachDetail}
+							{:else}
+								Within every ceiling.
+							{/if}
+						</td>
+					</tr>
+				{/each}
+			</tbody>
+		</table>
+
+		<!-- An off-grid Cap Space is stated exactly, named by Team, and does
+		     NOT block the commit. It is information about the export, not a
+		     rule violation. -->
+		{#each offGridSentences as sentence, index (index)}
+			<p class="prose">{sentence}</p>
+		{/each}
+	</section>
+
+	<section class="commissioner-block">
+		<p class="commissioner-label">Promote to the live tables</p>
+		<p class="prose">
+			Promotion commits all thirty-one sources in one transaction or none. Re-importing during
+			Setup replaces the live rosters and Free Agent pool entirely. Once the auction has opened,
+			promotion is refused.
+		</p>
+
+		<!-- A disabled control always states its reason (accessibility floor).
+		     The reason is ALWAYS in the DOM and always carries this id, so the
+		     `aria-describedby` below is static and can never dangle: when a
+		     source is outstanding it names them, and when none is it says the
+		     promotion is available. Both controls take `disabled` from the same
+		     `everySourceStaged`, so the affordance matches the sentence
+		     (review-loop-iteration 1: the sentence rendered while the control
+		     stayed live). The server refuses regardless — disabling a control is
+		     never the check. -->
+		<p class="prose" id="promote-availability">
+			{#if everySourceStaged}
+				Every one of the thirty-one sources is staged. Promotion is available.
+			{:else}
+				Promotion is unavailable while a source is outstanding: {outstanding.join(', ')}.
+			{/if}
+		</p>
+
+		<form method="POST" action="?/promote">
+			<label class="confirm-line" for="promote-confirm">
+				<input
+					id="promote-confirm"
+					name="confirm"
+					type="checkbox"
+					value="yes"
+					required
+					disabled={!everySourceStaged}
+					aria-describedby="promote-availability"
+				/>
+				<span class="prose">
+					Confirm: replace the live rosters and Free Agent pool with the staged data.
+				</span>
+			</label>
+			<button
+				class="control-commissioner control-promote"
+				type="submit"
+				disabled={!everySourceStaged}
+				aria-describedby="promote-availability"
+			>
+				Promote all thirty-one sources
+			</button>
+		</form>
+
+		{#if promoteNotice}
+			<p class="prose" id="promote-notice">{promoteNotice}</p>
+		{/if}
+		{#if promoted}
+			<p class="prose">
+				One ImportPromoted event was appended{promoted.seq ? ` at sequence ${promoted.seq}` : ''}.
+			</p>
+		{/if}
+	</section>
 </main>
 
 <style>
@@ -324,6 +499,100 @@
 		color: var(--color-text);
 		font-family: var(--font-ui);
 		font-size: var(--size-15);
+	}
+
+	.preview-list {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-row-gap);
+	}
+
+	.preview-breach {
+		border-left: var(--accent-bar-width) dotted var(--color-border-interactive);
+		padding-left: var(--space-row-gap);
+	}
+
+	/*
+	 * 375px is the design width and the smallest supported; 640px is where
+	 * the table takes over, and it is the first min-width breakpoint in this
+	 * codebase. Below it the preview is the stacked list above and the table
+	 * is not rendered at all. `display: none` on the inactive one removes it
+	 * from the accessibility tree too, so the figures are announced once, not
+	 * twice.
+	 *
+	 * Nothing scrolls laterally, and no scroll container is needed to make
+	 * that true: below the breakpoint the table simply does not exist, and
+	 * above it there is width for four columns. If a column is ever added,
+	 * this is the comment that stops being true first.
+	 */
+	.preview-table {
+		display: none;
+	}
+
+	@media (min-width: 640px) {
+		.preview-list {
+			display: none;
+		}
+
+		.preview-table {
+			display: table;
+			width: 100%;
+			border-collapse: collapse;
+		}
+
+		.preview-table caption {
+			text-align: left;
+			padding-bottom: var(--space-row-gap);
+		}
+
+		.preview-table th,
+		.preview-table td {
+			text-align: left;
+			padding: var(--space-row-gap) var(--space-row-gap) var(--space-row-gap) 0;
+			border-top: var(--border-width) solid var(--color-border);
+			font-size: var(--size-12-5);
+			color: var(--color-text-prose);
+		}
+
+		.preview-table thead th {
+			color: var(--color-text-tertiary);
+			font-size: var(--size-10);
+			text-transform: uppercase;
+			letter-spacing: 0.16em;
+		}
+
+		.preview-table tbody th {
+			color: var(--color-text);
+			font-size: var(--size-13);
+			font-weight: 400;
+		}
+	}
+
+	/*
+	 * The promote control differs from the upload control without colour: it
+	 * sits behind an explicit confirmation checkbox (a second, stated step no
+	 * other control on this page has), it is wider-spaced with a doubled
+	 * border, and its label names the whole set it commits. `.control-commissioner`
+	 * already supplies the four non-colour Commissioner properties.
+	 */
+	.confirm-line {
+		display: flex;
+		align-items: flex-start;
+		gap: var(--space-row-gap);
+		min-height: var(--touch-min);
+	}
+
+	.confirm-line input[type='checkbox'] {
+		width: 22px;
+		height: 22px;
+		margin-top: 2px;
+		accent-color: var(--color-border-interactive);
+	}
+
+	.control-promote {
+		border-style: double;
+		border-width: var(--accent-bar-width);
+		letter-spacing: 0.04em;
 	}
 
 	.status-label {
