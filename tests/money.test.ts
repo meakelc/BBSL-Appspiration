@@ -9,6 +9,7 @@ import {
 	addMoney,
 	compareMoney,
 	formatMoney,
+	isOnMoneyGrid,
 	multiplyMoney,
 	parseMoney,
 	subtractMoney,
@@ -161,6 +162,30 @@ describe('the renderer is lossless or it is loud', () => {
 			expect(() => formatMoney(parseMoney(amount))).toThrow(/grid/);
 		}
 	);
+});
+
+describe('isOnMoneyGrid — the predicate formatMoney throws on, asked instead of caught', () => {
+	it.each([0, 500_000, 1_000_000, 14_500_000, -4_000_000, -500_000])(
+		'answers true for %d, which formatMoney renders',
+		(amount: number) => {
+			expect(isOnMoneyGrid(parseMoney(amount))).toBe(true);
+			expect(() => formatMoney(parseMoney(amount))).not.toThrow();
+		}
+	);
+
+	it.each([1, 250_000, 4_250_000, -1_250_000, -499_999, -500_001])(
+		'answers false for %d, which is exactly what formatMoney refuses',
+		(amount: number) => {
+			expect(isOnMoneyGrid(parseMoney(amount))).toBe(false);
+			expect(() => formatMoney(parseMoney(amount))).toThrow(/grid/);
+		}
+	);
+
+	it('answers the same for an amount and its negation — the magnitude is what is tested', () => {
+		for (const amount of [1, 250_000, 500_000, 14_500_000]) {
+			expect(isOnMoneyGrid(parseMoney(amount))).toBe(isOnMoneyGrid(parseMoney(-amount)));
+		}
+	});
 });
 
 describe('the export path emits integers, never a rendering', () => {
