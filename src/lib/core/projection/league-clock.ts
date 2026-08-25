@@ -8,8 +8,8 @@
  * core never learns what time it is — the shell adds `LEAGUE_CLOCK` to this
  * origin when it needs an absolute expiry.
  *
- * **An origin is not a reset.** AD-22 fixes the League Clock's reset set at
- * exactly two event types and says a new type defaults to not resetting; this
+ * **An origin is not a reset.** AD-22 names `AuctionOpened` as the League
+ * Clock's origin and fixes the reset set at exactly two event types; this
  * reducer does not widen that set and deliberately has no case for either.
  * A reset can be unwound by a compensating `BidVoided`, whereas the open can
  * never be unwound, so the origin is folded separately rather than being
