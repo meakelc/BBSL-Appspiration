@@ -50,6 +50,7 @@ import { fold } from '../core/projection/fold.ts';
 import { INITIAL_ELIGIBILITY, eligibilityReducer } from '../core/projection/eligibility.ts';
 import type { EligibilitySet } from '../core/projection/eligibility.ts';
 import { INITIAL_PHASE, phaseReducer } from '../core/projection/phase.ts';
+import { IMPORT_PROMOTED_EVENT } from '../core/projection/promotion.ts';
 import { parseMoney } from '../core/money.ts';
 import type { EventEnvelope, ParsedRosterRow } from '../core/types.ts';
 import { runTransactionalWrite } from '../shell/write.ts';
@@ -58,8 +59,18 @@ import { applyEligibilityProjection } from './eligibility.ts';
 import { loadEventsViaClient } from './event-log.ts';
 import { toParsedRosterRow } from './staged-roster-row.ts';
 
-/** The event type appended on a successful promotion. Exactly one per promotion. */
-export const IMPORT_PROMOTED_EVENT = 'ImportPromoted';
+/**
+ * The event type appended on a successful promotion. Exactly one per promotion.
+ *
+ * Re-exported from the core projection that folds it rather than declared
+ * again here. Two independent literals of the same name is how the writer and
+ * the auction-open fold (`core/projection/promotion.ts`) silently drift apart:
+ * rename one and every promotion appends an event the gate does not recognise,
+ * so a fully promoted League refuses forever with "no import has been
+ * promoted" — with a green suite, because each side asserts against its own
+ * constant. One declaration makes that unrepresentable.
+ */
+export { IMPORT_PROMOTED_EVENT } from '../core/projection/promotion.ts';
 
 /** Who acted, resolved server-side from application tables (AD-4). */
 export type PromotionActor = {

@@ -351,12 +351,42 @@ describe('setEligibility — the refusals, re-derived inside the transaction', (
 		expect(harness.order).not.toContain('apply-projection');
 	});
 
+	it('refuses end to end once the log holds an AuctionOpened event', async () => {
+		// End to end since Story 1.11: `phaseReducer` now folds `AuctionOpened`
+		// to Auction, so this goes through the real transaction rather than
+		// through the exported gate — the case 1.10 logged as unreachable.
+		const harness = fakeGateway({
+			pool: poolOf(2),
+			events: [
+				{
+					seq: 1,
+					occurred_at: new Date('2026-08-25T08:00:00.000Z'),
+					schema_version: 1,
+					core_version: 1,
+					manager_id: 'm-1',
+					team_id: 't-commissioner',
+					event_type: 'AuctionOpened',
+					payload: { teams: [] }
+				}
+			]
+		});
+
+		const result = await setEligibility(harness.gateway, ACTOR, ['p-00'], true);
+
+		const rejection = rejectionOf(result.outcome);
+		expect(rejection.refusal.kind).toBe('phase');
+		if (rejection.refusal.kind !== 'phase') return;
+		expect(rejection.refusal.phase).toBe('Auction');
+		expect(rejection.detail).toBe(eligibilityRefusalDetail(rejection.refusal));
+		expect(harness.order).not.toContain('append-event');
+		expect(harness.order).not.toContain('apply-projection');
+		expect(harness.order).toContain('rollback');
+		expect(harness.state.column).toEqual([]);
+	});
+
 	it('refuses once the phase folds to Auction, naming the phase and the override', async () => {
-		// `phaseReducer` has no case for any event yet (1.11 teaches it
-		// `AuctionOpened`), so the phase is driven here through the exported
-		// gate rather than through a log the reducer cannot yet move. The
-		// transaction-level proof that the phase comes from the log at all is
-		// the `read-log` ordering assertion above.
+		// The pure gate, driven directly, so the WORDING is asserted
+		// independently of a log that can reach it.
 		const refusal = refuseEligibilityChange(
 			{ phase: 'Auction', pool: [], eligible: new Set<string>() },
 			['p-00'],

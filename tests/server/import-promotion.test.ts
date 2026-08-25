@@ -476,14 +476,26 @@ describe('promoteImport — the refusals, every one re-derived inside the transa
 			]
 		});
 
-		// The phase reducer has no AuctionOpened case yet (Story 1.11 adds it),
-		// so this log still folds to Setup — the assertion that matters here is
-		// that the log IS read inside the transaction, before anything is
-		// decided, rather than `locals.phase` being trusted.
-		await promoteImport(harness.gateway, ACTOR);
+		// End to end since Story 1.11: `phaseReducer` now has an `AuctionOpened`
+		// case, so this log folds to Auction inside the transaction and the
+		// promotion is refused with the phase named. Before 1.11 this could
+		// only assert the ordering — the case 1.9 logged as unreachable is now
+		// reached.
+		const outcome = await promoteImport(harness.gateway, ACTOR);
+
 		expect(harness.order.indexOf('read-log')).toBeLessThan(
 			harness.order.indexOf('read-team-sources')
 		);
+		const rejection = rejectionOf(outcome);
+		expect(rejection.refusal.kind).toBe('phase');
+		if (rejection.refusal.kind !== 'phase') return;
+		expect(rejection.refusal.phase).toBe('Auction');
+		expect(rejection.detail).toContain('Auction');
+		expect(rejection.detail).toBe(promotionRefusalDetail(rejection.refusal));
+		// Everything staged is untouched: the phase refusal wrote nothing.
+		expect(harness.order).not.toContain('append-event');
+		expect(harness.order).not.toContain('delete-live-rosters');
+		expect(harness.order).toContain('rollback');
 	});
 
 	it('writes no live row and appends no event on any rejection', async () => {

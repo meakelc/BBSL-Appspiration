@@ -33,9 +33,10 @@ describe('phaseReducer', () => {
 	});
 
 	it('leaves the phase unchanged for an event type it does not recognise (the default case)', () => {
-		// True today: no domain event type exists yet that transitions the
-		// phase, so every type reaches `default` — this is the reducer's
-		// correct behaviour, not an unfinished switch.
+		// Since Story 1.11 the reducer has one real case, `AuctionOpened`.
+		// Every other type still reaches `default` — this is the reducer's
+		// correct behaviour, not an unfinished switch. `tests/core/auction-open
+		// .test.ts` covers the case itself.
 		const events = [event('1', 'SomeUnrelatedEvent'), event('2', 'AnotherOne')];
 		expect(fold(INITIAL_PHASE, events, phaseReducer)).toBe('Setup');
 	});
