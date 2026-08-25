@@ -13,14 +13,45 @@
  * `'staged'`, resolves to `'outstanding'` here — the one place "staged vs.
  * outstanding" is decided, so a caller never re-derives it from a raw status
  * string.
+ *
+ * **Story 1.8 folds the Free Agent pool in as a thirty-first source.**
+ * `loadPoolStatus` reads the singleton `import_pool_source` row (plus the
+ * staged pool's size, which the surface states for explicit confirmation),
+ * and `outstandingSourceNames` names the pool alongside any outstanding
+ * Teams so 1.11's gate reads ONE list rather than joining two. The existing
+ * `outstandingTeamNames` is untouched and `outstandingSourceNames` is
+ * written in terms of it — the "staged vs. outstanding" rule is still
+ * decided in exactly one place (1.7 change-log item 8).
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { POOL_SOURCE_LABEL } from '../core/rules/pool-import.ts';
 import { serviceRoleClient } from './supabase.ts';
 
 /** A Team's import status, as this surface names it. */
 export type ImportStatus = 'staged' | 'refused_file' | 'refused_content' | 'outstanding';
+
+/**
+ * The same four values at runtime, so a status string read back from the
+ * database can be checked rather than cast. A bare `as ImportStatus` on a
+ * database string asserts something TypeScript cannot know.
+ */
+const KNOWN_IMPORT_STATUSES: readonly ImportStatus[] = Object.freeze([
+	'staged',
+	'refused_file',
+	'refused_content',
+	'outstanding'
+]);
+
+/** One row of `import_pool_status` — the pool's status and size in one snapshot. */
+type PoolStatusRow = {
+	readonly file_name: string;
+	readonly status: string;
+	readonly refusal_detail: string | null;
+	readonly updated_at: string;
+	readonly player_count: number;
+};
 
 /** One Team's row on the import status list. */
 export type TeamImportStatus = {
@@ -81,4 +112,86 @@ export async function loadImportStatus(
 /** Team names whose status is not `'staged'` — the "named, never counted" list. */
 export function outstandingTeamNames(statuses: readonly TeamImportStatus[]): readonly string[] {
 	return statuses.filter((entry) => entry.status !== 'staged').map((entry) => entry.teamName);
+}
+
+
+// --- Story 1.8: the Free Agent pool as the thirty-first source ------------
+
+/**
+ * The Free Agent pool's row on the import status list. Shaped like
+ * `TeamImportStatus` minus the Team identity (the pool is one source, keyed
+ * by pool — AD-28) plus `playerCount`, the pool size the surface states for
+ * explicit confirmation.
+ */
+export type PoolImportStatus = {
+	readonly status: ImportStatus;
+	readonly fileName: string | null;
+	readonly refusalDetail: string | null;
+	readonly updatedAt: string | null;
+	readonly playerCount: number;
+};
+
+/**
+ * The pool's status and its staged size. Two reads rather than an embed:
+ * `import_staged_pool_players` has no foreign key to `import_pool_source`
+ * (the pool is a singleton, not a parent row), so PostgREST has no
+ * relationship to embed across. The count is requested `head: true` — the
+ * rows themselves are never wanted here, only how many there are.
+ *
+ * A missing status row means the pool has never been supplied:
+ * `'outstanding'`, with every field null and a count of zero.
+ */
+export async function loadPoolStatus(
+	client: SupabaseClient = serviceRoleClient()
+): Promise<PoolImportStatus> {
+	// ONE statement, so status and size come from one snapshot. Read as two
+	// queries these could disagree — a re-stage committing between them
+	// returns a size belonging to a different stage than the status beside
+	// it, and that size is precisely the figure the Commissioner confirms.
+	// `import_pool_status` is the view that collapses them; see its comment
+	// in the migration.
+	const { data, error } = await client
+		.from('import_pool_status')
+		.select('file_name, status, refusal_detail, updated_at, player_count')
+		.maybeSingle();
+
+	if (error !== null) {
+		throw new Error(`pool import status read failed: ${error.message}`);
+	}
+
+	const source = (data ?? null) as PoolStatusRow | null;
+
+	// A status string outside the known set is a defect somewhere upstream,
+	// not a new state to render: fall back to 'outstanding', which under-
+	// claims rather than over-claims — the pool reads as not yet supplied and
+	// stays named on the outstanding list, instead of silently passing a gate.
+	const rawStatus = source?.status;
+	const status: ImportStatus =
+		rawStatus !== undefined && KNOWN_IMPORT_STATUSES.includes(rawStatus as ImportStatus)
+			? (rawStatus as ImportStatus)
+			: 'outstanding';
+
+	return {
+		status,
+		fileName: source?.file_name ?? null,
+		refusalDetail: source?.refusal_detail ?? null,
+		updatedAt: source?.updated_at ?? null,
+		playerCount: source?.player_count ?? 0
+	};
+}
+
+/**
+ * Every source not yet staged, named — Teams first, then the Free Agent pool
+ * (epic-1-context.md: "anything outstanding is named, never counted"). This
+ * is the one list 1.11's auction-open gate reads; `outstandingTeamNames`
+ * stays as the Team-only view, and this function calls it rather than
+ * re-deriving the rule.
+ */
+export function outstandingSourceNames(
+	statuses: readonly TeamImportStatus[],
+	poolStatus: PoolImportStatus
+): readonly string[] {
+	const names = [...outstandingTeamNames(statuses)];
+	if (poolStatus.status !== 'staged') names.push(POOL_SOURCE_LABEL);
+	return names;
 }

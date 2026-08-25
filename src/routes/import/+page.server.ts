@@ -1,6 +1,7 @@
 /**
  * The Commissioner-only `/import` route: gated `load`, and the `upload`
- * action that stages up to thirty Team roster files as one drop.
+ * action that stages a thirty-one-file drop — thirty Team roster files plus the one
+ * Free Agent pool file — as one batch.
  *
  * Two server-side gates, in order — `requireCommissioner` (a Commissioner
  * only, whichever session kind) and `requireLiveDestination` (this
@@ -19,7 +20,13 @@ import { fail } from '@sveltejs/kit';
 
 import { requireCommissioner } from '$lib/server/commissioner-guard.ts';
 import { requireLiveDestination } from '$lib/server/destinations.ts';
-import { loadImportStatus, outstandingTeamNames } from '$lib/server/import-status.ts';
+import {
+	loadImportStatus,
+	loadPoolStatus,
+	outstandingSourceNames
+} from '$lib/server/import-status.ts';
+import { stagePoolFile } from '$lib/server/pool-import.ts';
+import { isPoolFileName } from '$lib/server/pool-registry.ts';
 import { stageRosterFile } from '$lib/server/roster-import.ts';
 import type { StageOutcome } from '$lib/server/roster-import.ts';
 import { writeGateway } from '$lib/shell/db.ts';
@@ -32,12 +39,15 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requireCommissioner(locals.session);
 	requireLiveDestination(locals.session, locals.phase.name, IMPORT_DESTINATION_ID);
 
-	const statuses = await loadImportStatus();
+	const [statuses, pool] = await Promise.all([loadImportStatus(), loadPoolStatus()]);
 
 	return {
 		phase: locals.phase,
 		statuses,
-		outstanding: outstandingTeamNames(statuses)
+		pool,
+		// One list, thirty-one sources — the Teams still outstanding plus the
+		// Free Agent pool when it is not staged (Story 1.8).
+		outstanding: outstandingSourceNames(statuses, pool)
 	};
 };
 
@@ -59,21 +69,38 @@ export const actions: Actions = {
 		}
 
 		const gateway = writeGateway();
+		// One shared batch state across BOTH routers: `claimedInBatch` for the
+		// thirty Team sources, `poolClaimed` for the one pool source. A drop is
+		// thirty-one files, and each source may be claimed once within it.
 		const claimedInBatch = new Set<string>();
+		const poolClaimed = { claimed: false };
 		const results: StageOutcome[] = [];
 		for (const file of files) {
 			// Each file is staged independently (this story's Intent). A thrown
 			// error here — a genuine bug or an infrastructure failure inside
-			// `stageRosterFile` — must not abort every file still queued behind
-			// it in the batch, so it is caught per file and converted into that
-			// file's own result rather than propagating out of the action
-			// (amended at review-loop-iteration 1).
+			// `stageRosterFile`/`stagePoolFile` — must not abort every file still
+			// queued behind it in the batch, so it is caught per file and
+			// converted into that file's own result rather than propagating out
+			// of the action (amended at 1.7's review-loop-iteration 1).
 			try {
 				const csvText = await file.text();
-				results.push(await stageRosterFile(gateway, file.name, csvText, claimedInBatch));
+
+				// Pool routing runs BEFORE Team resolution (Story 1.8): the pool
+				// file is not a roster and must never be put through
+				// `resolveTeamByFileName`. `stagePoolFile` does the
+				// refuse-not-guess check for a name that would resolve BOTH ways,
+				// inside its own transaction and against the same Team list
+				// `stageRosterFile` reads — silently staging a Team's roster as
+				// the pool, or the reverse, is a data-loss shape, not a mismatch.
+				results.push(
+					isPoolFileName(file.name)
+						? await stagePoolFile(gateway, file.name, csvText, poolClaimed)
+						: await stageRosterFile(gateway, file.name, csvText, claimedInBatch)
+				);
 			} catch (error) {
 				results.push({
 					kind: 'error',
+					source: 'unknown',
 					fileName: file.name,
 					detail: error instanceof Error ? error.message : String(error)
 				});

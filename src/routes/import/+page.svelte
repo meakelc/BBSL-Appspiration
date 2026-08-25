@@ -16,6 +16,14 @@
 
 	type ImportStatus = 'staged' | 'refused_file' | 'refused_content' | 'outstanding';
 
+	type PoolImportStatus = {
+		readonly status: ImportStatus;
+		readonly fileName: string | null;
+		readonly refusalDetail: string | null;
+		readonly updatedAt: string | null;
+		readonly playerCount: number;
+	};
+
 	type TeamImportStatus = {
 		readonly teamId: string;
 		readonly teamName: string;
@@ -29,24 +37,46 @@
 	type UploadResult =
 		| {
 				readonly kind: 'staged';
+				readonly source: 'team';
 				readonly teamId: string;
 				readonly teamName: string;
 				readonly fileName: string;
 				readonly rowCount: number;
 		  }
-		| { readonly kind: 'refused_file'; readonly fileName: string; readonly detail: string }
+		| {
+				// The Free Agent pool staged. `rowCount` is the pool size, stated
+				// back for explicit confirmation (Story 1.8).
+				readonly kind: 'staged';
+				readonly source: 'pool';
+				readonly fileName: string;
+				readonly rowCount: number;
+		  }
+		| {
+				readonly kind: 'refused_file';
+				readonly source: 'unknown';
+				readonly fileName: string;
+				readonly detail: string;
+		  }
 		| {
 				readonly kind: 'refused_content';
+				readonly source: 'team';
 				readonly teamId: string;
 				readonly teamName: string;
 				readonly fileName: string;
 				readonly detail: string;
 		  }
 		| {
-				// One file's `stageRosterFile` call threw — the route caught it and
-				// converted it into this file's own result rather than aborting the
-				// rest of the batch (review-loop-iteration 1).
+				readonly kind: 'refused_content';
+				readonly source: 'pool';
+				readonly fileName: string;
+				readonly detail: string;
+		  }
+		| {
+				// One file's staging call threw — the route caught it and converted
+				// it into this file's own result rather than aborting the rest of
+				// the batch (1.7's review-loop-iteration 1).
 				readonly kind: 'error';
+				readonly source: 'unknown';
 				readonly fileName: string;
 				readonly detail: string;
 		  };
@@ -69,6 +99,7 @@
 
 	const statuses = $derived((data.statuses as readonly TeamImportStatus[]) ?? []);
 	const outstanding = $derived((data.outstanding as readonly string[]) ?? []);
+	const pool = $derived(data.pool as PoolImportStatus);
 	// `form`'s generated type is a union of every action's return shape, so
 	// neither field is on every member — read it through one cast, here,
 	// rather than at each template access site.
@@ -95,9 +126,9 @@
 	<section class="commissioner-block">
 		<p class="commissioner-label">Roster import</p>
 		<p class="prose">
-			Drop up to thirty Team roster files as one batch. Each file resolves to one Team by its
-			file name and stages independently — a Team already staged may be re-supplied, which
-			replaces only that Team's rows.
+			Drop all thirty-one files as one batch: one roster file per Team, plus the Free Agent
+			pool file. Each file resolves to one source by its file name and stages independently —
+			a source already staged may be re-supplied, which replaces only that source's rows.
 		</p>
 
 		<form method="POST" action="?/upload" enctype="multipart/form-data">
@@ -114,13 +145,21 @@
 			<div class="upload-results">
 				<p class="section-label">This batch</p>
 				{#each results as result, index (result.fileName + '-' + index)}
-					{#if result.kind === 'staged'}
+					{#if result.kind === 'staged' && result.source === 'pool'}
+						<p class="prose result result-staged">
+							Staged — Free Agent pool ("{result.fileName}"): {result.rowCount} players.
+						</p>
+					{:else if result.kind === 'staged'}
 						<p class="prose result result-staged">
 							Staged — {result.teamName} ("{result.fileName}"): {result.rowCount} rows.
 						</p>
 					{:else if result.kind === 'refused_file'}
 						<p class="prose result result-refused-file">
 							File refusal — "{result.fileName}": {result.detail}
+						</p>
+					{:else if result.kind === 'refused_content' && result.source === 'pool'}
+						<p class="prose result result-refused-content">
+							Content refusal — Free Agent pool ("{result.fileName}"): {result.detail}
 						</p>
 					{:else if result.kind === 'refused_content'}
 						<p class="prose result result-refused-content">
@@ -141,8 +180,30 @@
 		{#if outstanding.length > 0}
 			<p class="prose">Outstanding: {outstanding.join(', ')}.</p>
 		{:else}
-			<p class="prose">Every Team has staged.</p>
+			<p class="prose">Every source has staged.</p>
 		{/if}
+
+		<!-- The Free Agent pool is the thirty-first source, and reads as its own
+		     kind of row rather than a thirty-first Team: it carries a source
+		     label ("Source: Free Agent pool" vs a bare Team name), states a
+		     player count no Team row states, and sits above the Team list behind
+		     its own rule. Every one of those is a non-colour difference, so a
+		     greyscale screenshot still tells the two apart. -->
+		<ul class="status-list">
+			<li class="status-row status-pool status-{pool.status}">
+				<span class="status-source-label">Source: Free Agent pool</span>
+				<span class="status-label">{statusLabel(pool.status)}</span>
+				{#if pool.status === 'staged'}
+					<span class="prose status-detail">{pool.playerCount} players.</span>
+				{/if}
+				{#if pool.fileName}
+					<span class="prose status-file">"{pool.fileName}"</span>
+				{/if}
+				{#if pool.refusalDetail}
+					<span class="prose status-detail">{pool.refusalDetail}</span>
+				{/if}
+			</li>
+		</ul>
 
 		<ul class="status-list">
 			{#each statuses as team (team.teamId)}
@@ -241,6 +302,22 @@
 
 	.status-row:first-child {
 		border-top: none;
+	}
+
+	/* The pool row's non-colour distinctions from a Team row: an underline
+	   rule beneath it, and a source label rendered as small caps rather than
+	   a plain name. */
+	.status-pool {
+		padding-bottom: var(--space-row-gap);
+		border-bottom: var(--border-width) solid var(--color-border);
+	}
+
+	.status-source-label {
+		color: var(--color-text);
+		font-family: var(--font-ui);
+		font-size: var(--size-13);
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
 	}
 
 	.status-team {

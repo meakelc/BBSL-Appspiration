@@ -17,7 +17,15 @@ import type { ResolvedPhase } from '../../src/lib/server/phase.ts';
 
 const stub = vi.hoisted(() => ({
 	statuses: [] as unknown[],
+	pool: {
+		status: 'outstanding',
+		fileName: null,
+		refusalDetail: null,
+		updatedAt: null,
+		playerCount: 0
+	} as Record<string, unknown>,
 	outcomes: [] as unknown[],
+	poolOutcomes: [] as unknown[],
 	/** When set, the call for this exact file name throws instead of resolving. */
 	throwOnFileName: null as string | null,
 	throwMessage: 'stageRosterFile failed'
@@ -25,11 +33,37 @@ const stub = vi.hoisted(() => ({
 
 vi.mock('$lib/server/import-status.ts', () => ({
 	loadImportStatus: async () => stub.statuses,
-	outstandingTeamNames: (statuses: Array<{ status: string; teamName: string }>) =>
-		statuses.filter((s) => s.status !== 'staged').map((s) => s.teamName)
+	loadPoolStatus: async () => stub.pool,
+	outstandingSourceNames: (
+		statuses: Array<{ status: string; teamName: string }>,
+		pool: { status: string }
+	) => [
+		...statuses.filter((s) => s.status !== 'staged').map((s) => s.teamName),
+		...(pool.status === 'staged' ? [] : ['Free Agent pool'])
+	]
 }));
 
 const stageCalls = vi.hoisted(() => [] as Array<{ fileName: string; csvText: string }>);
+const poolCalls = vi.hoisted(() => [] as Array<{ fileName: string; csvText: string }>);
+
+// `isPoolFileName` is NOT mocked — the route's routing decision is the thing
+// under test here, so it runs against the real rule.
+vi.mock('$lib/server/pool-import.ts', () => ({
+	stagePoolFile: vi.fn(
+		async (
+			_gateway: unknown,
+			fileName: string,
+			csvText: string,
+			_claimed: { claimed: boolean }
+		) => {
+			poolCalls.push({ fileName, csvText });
+			if (stub.throwOnFileName !== null && fileName === stub.throwOnFileName) {
+				throw new Error(stub.throwMessage);
+			}
+			return stub.poolOutcomes.shift();
+		}
+	)
+}));
 
 vi.mock('$lib/server/roster-import.ts', () => ({
 	stageRosterFile: vi.fn(
@@ -93,7 +127,16 @@ async function expectRefusal(run: () => unknown, status: number): Promise<void> 
 
 beforeEach(() => {
 	stub.statuses = [];
+	stub.pool = {
+		status: 'outstanding',
+		fileName: null,
+		refusalDetail: null,
+		updatedAt: null,
+		playerCount: 0
+	};
 	stub.outcomes = [];
+	stub.poolOutcomes = [];
+	poolCalls.length = 0;
 	stub.throwOnFileName = null;
 	stub.throwMessage = 'stageRosterFile failed';
 	stageCalls.length = 0;
@@ -131,10 +174,12 @@ describe('load — Commissioner-only, gated on both the guard and the destinatio
 		];
 		const result = (await route.load({
 			locals: locals({ kind: 'registered', manager: COMMISSIONER })
-		} as never)) as { statuses: unknown[]; outstanding: string[] };
+		} as never)) as { statuses: unknown[]; pool: Record<string, unknown>; outstanding: string[] };
 
 		expect(result.statuses).toEqual(stub.statuses);
-		expect(result.outstanding).toEqual(['Lakers']);
+		expect(result.pool).toEqual(stub.pool);
+		// One list, thirty-one sources: outstanding Teams plus the pool.
+		expect(result.outstanding).toEqual(['Lakers', 'Free Agent pool']);
 	});
 });
 
@@ -250,8 +295,104 @@ describe('actions.upload — Commissioner-only, gated the same way as load', () 
 		expect(stageCalls.map((c) => c.fileName)).toEqual(['Lakers.csv', 'Celtics.csv', 'Warriors.csv']);
 		expect(result.results).toEqual([
 			lakersOutcome,
-			{ kind: 'error', fileName: 'Celtics.csv', detail: 'connection refused' },
+			{ kind: 'error', source: 'unknown', fileName: 'Celtics.csv', detail: 'connection refused' },
 			warriorsOutcome
+		]);
+	});
+});
+
+describe('actions.upload — pool routing (Story 1.8)', () => {
+	function uploadEvent(files: File[]) {
+		const form = new FormData();
+		for (const file of files) form.append('files', file);
+		return {
+			request: new Request('https://app.example/import', { method: 'POST', body: form }),
+			locals: locals({ kind: 'registered', manager: COMMISSIONER })
+		};
+	}
+
+	const uploadAction = route.actions.upload as unknown as (event: unknown) => unknown;
+
+	it('routes the pool file to stagePoolFile and every other file to stageRosterFile', async () => {
+		const poolOutcome = {
+			kind: 'staged',
+			source: 'pool',
+			fileName: 'free-agents.csv',
+			rowCount: 214
+		};
+		const teamOutcome = {
+			kind: 'staged',
+			source: 'team',
+			teamId: 't-1',
+			teamName: 'Lakers',
+			fileName: 'Lakers.csv',
+			rowCount: 15
+		};
+		stub.poolOutcomes = [poolOutcome];
+		stub.outcomes = [teamOutcome];
+
+		const result = (await uploadAction(
+			uploadEvent([
+				new File(['x'], 'free-agents.csv', { type: 'text/csv' }),
+				new File(['x'], 'Lakers.csv', { type: 'text/csv' })
+			])
+		)) as { results: unknown[] };
+
+		expect(poolCalls.map((c) => c.fileName)).toEqual(['free-agents.csv']);
+		expect(stageCalls.map((c) => c.fileName)).toEqual(['Lakers.csv']);
+		expect(result.results).toEqual([poolOutcome, teamOutcome]);
+	});
+
+	it('shares one pool batch claim across the drop, so a second pool file sees it', async () => {
+		stub.poolOutcomes = [
+			{ kind: 'staged', source: 'pool', fileName: 'pool.csv', rowCount: 3 },
+			{
+				kind: 'refused_file',
+				source: 'unknown',
+				fileName: 'free-agents-copy.csv',
+				detail: 'already supplied'
+			}
+		];
+
+		await uploadAction(
+			uploadEvent([
+				new File(['x'], 'pool.csv', { type: 'text/csv' }),
+				new File(['x'], 'free-agents-copy.csv', { type: 'text/csv' })
+			])
+		);
+
+		expect(poolCalls.map((c) => c.fileName)).toEqual(['pool.csv', 'free-agents-copy.csv']);
+		expect(stageCalls).toEqual([]);
+	});
+
+	it('a throw from stagePoolFile becomes that file result, not an aborted batch', async () => {
+		const teamOutcome = {
+			kind: 'staged',
+			source: 'team',
+			teamId: 't-1',
+			teamName: 'Lakers',
+			fileName: 'Lakers.csv',
+			rowCount: 1
+		};
+		stub.outcomes = [teamOutcome];
+		stub.throwOnFileName = 'free-agents.csv';
+		stub.throwMessage = 'pool connection reset';
+
+		const result = (await uploadAction(
+			uploadEvent([
+				new File(['x'], 'free-agents.csv', { type: 'text/csv' }),
+				new File(['x'], 'Lakers.csv', { type: 'text/csv' })
+			])
+		)) as { results: unknown[] };
+
+		expect(result.results).toEqual([
+			{
+				kind: 'error',
+				source: 'unknown',
+				fileName: 'free-agents.csv',
+				detail: 'pool connection reset'
+			},
+			teamOutcome
 		]);
 	});
 });

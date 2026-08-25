@@ -40,42 +40,79 @@ import {
 	computeCapSpace,
 	slotCeilingRefusalDetail
 } from '../core/rules/roster-import.ts';
+import { poolConflictRefusalDetail } from '../core/rules/pool-import.ts';
+import type { PoolRosterConflict } from '../core/rules/pool-import.ts';
 import type { ParsedRosterRow } from '../core/types.ts';
 import { parseRosterCsv } from '../adapters/fantrax/roster-file.ts';
 import { resolveTeamByFileName } from './team-registry.ts';
 import type { TeamRecord } from './team-registry.ts';
 
-/** What staging one file produced. */
+/**
+ * What staging one file produced — Team-keyed or pool-keyed.
+ *
+ * **Story 1.8 widened this union to span both sources.** `source` is the
+ * discriminator: `'team'` members carry `teamId`/`teamName`, `'pool'`
+ * members carry neither (the pool is one source, keyed by pool — AD-28), and
+ * `'unknown'` covers the two outcomes that belong to a file rather than a
+ * resolved source (a file-altitude refusal, and the route's per-file
+ * `error`). A `source` field on every member, rather than a nullable
+ * `teamId`, is what lets a caller — the `/import` page above all — narrow
+ * the union without a presence check.
+ *
+ * The union lives here rather than in a third module because
+ * `server/pool-import.ts` is this module's sibling and imports the type from
+ * it; the `/import` route's `results` array is typed `StageOutcome[]` and
+ * needs every shape it can hold to be part of the one type.
+ */
 export type StageOutcome =
 	| {
 			readonly kind: 'staged';
+			readonly source: 'team';
 			readonly teamId: string;
 			readonly teamName: string;
 			readonly fileName: string;
 			readonly rowCount: number;
 	  }
-	| { readonly kind: 'refused_file'; readonly fileName: string; readonly detail: string }
+	| {
+			/** The Free Agent pool staged. `rowCount` is the pool size, reported for explicit confirmation. */
+			readonly kind: 'staged';
+			readonly source: 'pool';
+			readonly fileName: string;
+			readonly rowCount: number;
+	  }
+	| {
+			readonly kind: 'refused_file';
+			readonly source: 'unknown';
+			readonly fileName: string;
+			readonly detail: string;
+	  }
 	| {
 			readonly kind: 'refused_content';
+			readonly source: 'team';
 			readonly teamId: string;
 			readonly teamName: string;
 			readonly fileName: string;
 			readonly detail: string;
 	  }
 	| {
+			readonly kind: 'refused_content';
+			readonly source: 'pool';
+			readonly fileName: string;
+			readonly detail: string;
+	  }
+	| {
 			/**
-			 * Not returned by `stageRosterFile` itself — `stageRosterFile` only
-			 * ever returns one of the three kinds above, or throws (a genuine bug
-			 * or infrastructure failure, per this module's own try/catch/rethrow).
-			 * The `/import` route's `upload` action catches that throw per file
-			 * and converts it into this shape so one file's failure becomes that
-			 * file's own result rather than aborting the rest of the batch
-			 * (Boundaries & Constraints, amended at review-loop-iteration 1). It
-			 * lives on this union, rather than as a route-local type, because the
-			 * route's `results` array is typed `StageOutcome[]` and needs every
-			 * shape it can hold to be part of the one type.
+			 * Not returned by `stageRosterFile`/`stagePoolFile` themselves —
+			 * either only ever returns one of the kinds above, or throws (a
+			 * genuine bug or infrastructure failure, per each module's own
+			 * try/catch/rethrow). The `/import` route's `upload` action catches
+			 * that throw per file and converts it into this shape so one file's
+			 * failure becomes that file's own result rather than aborting the
+			 * rest of the batch (Boundaries & Constraints, amended at
+			 * review-loop-iteration 1).
 			 */
 			readonly kind: 'error';
+			readonly source: 'unknown';
 			readonly fileName: string;
 			readonly detail: string;
 	  };
@@ -126,6 +163,7 @@ export async function stageRosterFile(
 			await client.query('rollback');
 			return {
 				kind: 'refused_file',
+				source: 'unknown',
 				fileName,
 				detail:
 					match.kind === 'ambiguous' ? fileAmbiguousDetail(fileName) : fileNoMatchDetail(fileName)
@@ -136,7 +174,12 @@ export async function stageRosterFile(
 
 		if (claimedInBatch.has(team.id)) {
 			await client.query('rollback');
-			return { kind: 'refused_file', fileName, detail: fileAlreadySuppliedDetail(fileName, team.name) };
+			return {
+				kind: 'refused_file',
+				source: 'unknown',
+				fileName,
+				detail: fileAlreadySuppliedDetail(fileName, team.name)
+			};
 		}
 		claimedInBatch.add(team.id);
 
@@ -147,6 +190,7 @@ export async function stageRosterFile(
 			await client.query('commit');
 			return {
 				kind: 'refused_content',
+				source: 'team',
 				teamId: team.id,
 				teamName: team.name,
 				fileName,
@@ -159,7 +203,14 @@ export async function stageRosterFile(
 			const detail = capSpaceRefusalDetail(capResult);
 			await writeOutcome(client, team.id, fileName, 'refused_content', detail, []);
 			await client.query('commit');
-			return { kind: 'refused_content', teamId: team.id, teamName: team.name, fileName, detail };
+			return {
+				kind: 'refused_content',
+				source: 'team',
+				teamId: team.id,
+				teamName: team.name,
+				fileName,
+				detail
+			};
 		}
 
 		const breaches = checkSlotCeilings(parsed.rows);
@@ -167,12 +218,49 @@ export async function stageRosterFile(
 			const detail = slotCeilingRefusalDetail(breaches);
 			await writeOutcome(client, team.id, fileName, 'refused_content', detail, []);
 			await client.query('commit');
-			return { kind: 'refused_content', teamId: team.id, teamName: team.name, fileName, detail };
+			return {
+				kind: 'refused_content',
+				source: 'team',
+				teamId: team.id,
+				teamName: team.name,
+				fileName,
+				detail
+			};
+		}
+
+		// The pool/roster conflict, roster direction (Story 1.8). The other
+		// direction lives in `server/pool-import.ts`, which checks a pool file
+		// against already-staged rosters. Both are needed because a
+		// thirty-one-file drop arrives in arbitrary browser order: whichever
+		// file is staged second is the one refused, and a one-directional check
+		// would make acceptance depend on that order (this story's Design
+		// Notes). Both word the refusal through the same pure function, so the
+		// Commissioner reads the same sentence either way.
+		const poolConflicts = await findPoolConflicts(client, team.name, parsed.rows);
+		if (poolConflicts.length > 0) {
+			const detail = poolConflictRefusalDetail(poolConflicts);
+			await writeOutcome(client, team.id, fileName, 'refused_content', detail, []);
+			await client.query('commit');
+			return {
+				kind: 'refused_content',
+				source: 'team',
+				teamId: team.id,
+				teamName: team.name,
+				fileName,
+				detail
+			};
 		}
 
 		await writeOutcome(client, team.id, fileName, 'staged', null, parsed.rows);
 		await client.query('commit');
-		return { kind: 'staged', teamId: team.id, teamName: team.name, fileName, rowCount: parsed.rows.length };
+		return {
+			kind: 'staged',
+			source: 'team',
+			teamId: team.id,
+			teamName: team.name,
+			fileName,
+			rowCount: parsed.rows.length
+		};
 	} catch (error) {
 		await client.query('rollback').catch(() => {
 			/* the original error is what the caller needs to see */
@@ -237,4 +325,28 @@ async function writeOutcome(
 			updated_at = excluded.updated_at`,
 		[teamId, fileName, status, refusalDetail]
 	);
+}
+
+/**
+ * Every Player in this roster file who is already in the staged Free Agent
+ * pool, named by Player and by this file's Team (Story 1.8).
+ *
+ * Joins on the Fantrax player id (AD-24), never on name; the pool row's own
+ * name is what the refusal states, so the two directions of this check name
+ * the Player identically even if the two files spell it differently. The
+ * Team name comes from the already-resolved Team rather than a second query.
+ */
+async function findPoolConflicts(
+	client: TransactionalClient,
+	teamName: string,
+	rows: readonly ParsedRosterRow[]
+): Promise<readonly PoolRosterConflict[]> {
+	if (rows.length === 0) return [];
+
+	const result = await client.query(
+		'select player_name from import_staged_pool_players where fantrax_player_id = any($1)',
+		[rows.map((row) => row.fantraxPlayerId)]
+	);
+
+	return result.rows.map((row) => ({ playerName: String(row['player_name']), teamName }));
 }

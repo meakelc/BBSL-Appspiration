@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { SALARY_CAP } from '../../src/lib/core/constants.ts';
 import { ROSTER_COLUMNS } from '../../src/lib/adapters/fantrax/roster-file.ts';
+import { poolConflictRefusalDetail } from '../../src/lib/core/rules/pool-import.ts';
 import {
 	fileAlreadySuppliedDetail,
 	fileAmbiguousDetail,
@@ -32,7 +33,9 @@ const HEADER = Object.values(ROSTER_COLUMNS).join(',');
  */
 function fakeGateway(
 	teams: ReadonlyArray<{ id: string; name: string }>,
-	initialSources: Record<string, { status: string }> = {}
+	initialSources: Record<string, { status: string }> = {},
+	/** Staged pool Players, keyed by Fantrax Player ID -> Player name (Story 1.8). */
+	stagedPoolPlayers: Record<string, string> = {}
 ): {
 	gateway: ConnectionGateway;
 	order: string[];
@@ -71,6 +74,15 @@ function fakeGateway(
 			if (/^select id, name from teams/i.test(sql)) {
 				order.push('select-teams');
 				return { rows: teams.map((t) => ({ id: t.id, name: t.name })) };
+			}
+			if (/^select player_name from import_staged_pool_players/i.test(sql)) {
+				order.push('select-pool-conflicts');
+				const ids = (params[0] as string[]) ?? [];
+				return {
+					rows: ids
+						.filter((id) => id in stagedPoolPlayers)
+						.map((id) => ({ player_name: stagedPoolPlayers[id] }))
+				};
 			}
 			if (/^select status from import_team_sources/i.test(sql)) {
 				order.push('select-status');
@@ -144,6 +156,7 @@ describe('stageRosterFile — the happy path', () => {
 
 		expect(outcome).toEqual({
 			kind: 'staged',
+			source: 'team',
 			teamId: LAKERS.id,
 			teamName: LAKERS.name,
 			fileName: 'Lakers.csv',
@@ -152,6 +165,7 @@ describe('stageRosterFile — the happy path', () => {
 		expect(order).toEqual([
 			'begin',
 			'select-teams',
+			'select-pool-conflicts',
 			'delete-rows',
 			'insert-row',
 			'insert-row',
@@ -183,6 +197,7 @@ describe('stageRosterFile — file-altitude refusals: nothing is written, nothin
 
 		expect(outcome).toEqual({
 			kind: 'refused_file',
+			source: 'unknown',
 			fileName: 'Grizzlies.csv',
 			detail: fileNoMatchDetail('Grizzlies.csv')
 		});
@@ -206,6 +221,7 @@ describe('stageRosterFile — file-altitude refusals: nothing is written, nothin
 
 		expect(outcome).toEqual({
 			kind: 'refused_file',
+			source: 'unknown',
 			fileName: 'KingsWizards.csv',
 			detail: fileAmbiguousDetail('KingsWizards.csv')
 		});
@@ -220,6 +236,7 @@ describe('stageRosterFile — file-altitude refusals: nothing is written, nothin
 
 		expect(outcome).toEqual({
 			kind: 'refused_file',
+			source: 'unknown',
 			fileName: 'Lakers-2.csv',
 			detail: fileAlreadySuppliedDetail('Lakers-2.csv', LAKERS.name)
 		});
@@ -247,7 +264,9 @@ describe('stageRosterFile — content-altitude refusals over a Team with nothing
 		const outcome = await stageRosterFile(gateway, 'Lakers.csv', badCsv);
 
 		expect(outcome.kind).toBe('refused_content');
-		if (outcome.kind !== 'refused_content') return;
+		expect(outcome.kind).toBe('refused_content');
+		expect(outcome).toMatchObject({ source: 'team' });
+		if (outcome.kind !== 'refused_content' || outcome.source !== 'team') return;
 		expect(outcome.teamId).toBe(LAKERS.id);
 		expect(outcome.detail).toContain('Cap Hit');
 		// The refusal path always reads current status first now — here it
@@ -280,7 +299,9 @@ describe('stageRosterFile — content-altitude refusals over a Team with nothing
 		const outcome = await stageRosterFile(gateway, 'Lakers.csv', bigCsv);
 
 		expect(outcome.kind).toBe('refused_content');
-		if (outcome.kind !== 'refused_content') return;
+		expect(outcome.kind).toBe('refused_content');
+		expect(outcome).toMatchObject({ source: 'team' });
+		if (outcome.kind !== 'refused_content' || outcome.source !== 'team') return;
 		expect(outcome.detail).toContain(String(SALARY_CAP));
 		// U+2212 MINUS SIGN, not a hyphen.
 		expect(outcome.detail).toContain('−$1000000');
@@ -298,7 +319,9 @@ describe('stageRosterFile — content-altitude refusals over a Team with nothing
 		const outcome = await stageRosterFile(gateway, 'Lakers.csv', overCsv);
 
 		expect(outcome.kind).toBe('refused_content');
-		if (outcome.kind !== 'refused_content') return;
+		expect(outcome.kind).toBe('refused_content');
+		expect(outcome).toMatchObject({ source: 'team' });
+		if (outcome.kind !== 'refused_content' || outcome.source !== 'team') return;
 		expect(outcome.detail).toContain('Active/Bench');
 		expect(outcome.detail).toContain('13');
 		expect(outcome.detail).toContain('12');
@@ -339,7 +362,9 @@ describe('stageRosterFile — a refused re-supply over an already-staged Team le
 
 		// The refusal is still reported to the caller...
 		expect(outcome.kind).toBe('refused_content');
-		if (outcome.kind !== 'refused_content') return;
+		expect(outcome.kind).toBe('refused_content');
+		expect(outcome).toMatchObject({ source: 'team' });
+		if (outcome.kind !== 'refused_content' || outcome.source !== 'team') return;
 		expect(outcome.teamId).toBe(LAKERS.id);
 		expect(outcome.detail).toContain('Cap Hit');
 
@@ -369,5 +394,76 @@ describe('stageRosterFile — a refused re-supply over an already-staged Team le
 			'commit'
 		]);
 		expect(upsertedSources).toHaveLength(1);
+	});
+});
+
+describe('stageRosterFile — the pool/roster conflict, roster-last direction (Story 1.8)', () => {
+	it('refuses a roster whose Player is already in the staged pool, naming the Player and the Team', async () => {
+		const { gateway, order, insertedRows, upsertedSources } = fakeGateway(
+			[LAKERS],
+			{},
+			{ P2: 'Bob' }
+		);
+
+		const outcome = await stageRosterFile(gateway, 'Lakers.csv', HAPPY_CSV);
+
+		expect(outcome.kind).toBe('refused_content');
+		expect(outcome.kind).toBe('refused_content');
+		expect(outcome).toMatchObject({ source: 'team' });
+		if (outcome.kind !== 'refused_content' || outcome.source !== 'team') return;
+		expect(outcome.teamName).toBe(LAKERS.name);
+		// The SAME sentence the pool direction produces — both call the one
+		// pure function, so the two paths cannot word it differently.
+		expect(outcome.detail).toBe(
+			poolConflictRefusalDetail([{ playerName: 'Bob', teamName: LAKERS.name }])
+		);
+		expect(outcome.detail).toContain('Bob');
+		expect(outcome.detail).toContain('Lakers');
+		expect(order).toEqual([
+			'begin',
+			'select-teams',
+			'select-pool-conflicts',
+			'select-status',
+			'delete-rows',
+			'upsert-status',
+			'commit'
+		]);
+		expect(insertedRows).toEqual([]);
+		expect(upsertedSources).toHaveLength(1);
+	});
+
+	it('names the pool row Player name, so both directions name the Player identically', async () => {
+		const { gateway } = fakeGateway([LAKERS], {}, { P1: 'Alice' });
+		const outcome = await stageRosterFile(gateway, 'Lakers.csv', HAPPY_CSV);
+		expect(outcome.kind).toBe('refused_content');
+		if (outcome.kind !== 'refused_content') return;
+		expect(outcome.detail).toContain('Alice');
+	});
+
+	it('stages normally when the staged pool holds none of these Players', async () => {
+		const { gateway } = fakeGateway([LAKERS], {}, { P99: 'Someone Else' });
+		const outcome = await stageRosterFile(gateway, 'Lakers.csv', HAPPY_CSV);
+		expect(outcome.kind).toBe('staged');
+	});
+
+	it('a conflict over an already-staged Team leaves that Team untouched', async () => {
+		const { gateway, order, deletedTeamIds, upsertedSources } = fakeGateway(
+			[LAKERS],
+			{ [LAKERS.id]: { status: 'staged' } },
+			{ P2: 'Bob' }
+		);
+
+		const outcome = await stageRosterFile(gateway, 'Lakers-bad.csv', HAPPY_CSV);
+
+		expect(outcome.kind).toBe('refused_content');
+		expect(order).toEqual([
+			'begin',
+			'select-teams',
+			'select-pool-conflicts',
+			'select-status',
+			'commit'
+		]);
+		expect(deletedTeamIds).toEqual([]);
+		expect(upsertedSources).toEqual([]);
 	});
 });
