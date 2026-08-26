@@ -1,0 +1,360 @@
+/**
+ * The nomination gate: the read behind the page, and the one transaction
+ * that places a nomination. Server-only (Story 2.1).
+ *
+ * **Nothing here is stored.** There is no migration in this story and no
+ * `nomination_slots` table: board occupancy, Nomination Slot status and the
+ * League Clock are all folds of `auction_events`. Story 1.11's own note
+ * anticipated a projection table here; the answer on arriving is that
+ * nothing needs one, because the log already carries every fact the gate
+ * asks about — hence no `projections` hook on the write below. Story 2.3's
+ * acceptance criteria require Slot status to be a fold rather than a stored
+ * flag, so a table created here would only have to be undone.
+ *
+ * **The gate re-derives every check under the lock, whatever the page
+ * rendered.** `loadNominationState` runs inside `runTransactionalWrite`'s
+ * transaction, after `pg_advisory_xact_lock` (AD-6), so a page rendered
+ * before someone else nominated the same Player cannot race a second
+ * nomination past the board. The page calls `loadNominatablePool` through
+ * its own connection purely to render the list; that render is never the
+ * check.
+ *
+ * **The two live tables answer two different questions.** `free_agent_players`
+ * says whether the Player exists in the pool at all; `team_rosters` says
+ * whether they are under contract. Both are mutable reference data, not
+ * event-sourced (`20260824020000_live_reference_tables.sql`), and both are
+ * read on the locked transaction's own client rather than trusted from the
+ * render.
+ *
+ * **Device class rides the envelope, never the payload.** It is a
+ * measurement column (`shell/write.ts:226`), not domain data — no reducer
+ * and no gate reads it, or an NFR §5 measurement would quietly become a rule
+ * input. The route classifies the header and passes the result in; the core
+ * never sees a header.
+ *
+ * A refusal is a returned value, never a throw (AD-1). A throw out of the
+ * transaction rolls it back, leaving no event and no clock reset.
+ */
+
+import { fold } from '../core/projection/fold.ts';
+import {
+	INITIAL_NOMINATIONS,
+	NOMINATION_PLACED_EVENT,
+	nominationsReducer
+} from '../core/projection/nominations.ts';
+import { INITIAL_PHASE, phaseReducer } from '../core/projection/phase.ts';
+import {
+	nominationConsequenceSentence,
+	nominationRefusalDetail,
+	refuseNomination
+} from '../core/rules/nomination.ts';
+import type { NominationRefusal, NominationState } from '../core/rules/nomination.ts';
+import type { EventEnvelope } from '../core/types.ts';
+import { runTransactionalWrite } from '../shell/write.ts';
+import type { ConnectionGateway, TransactionalClient, WriteOutcome } from '../shell/write.ts';
+import { loadEventsViaClient } from './event-log.ts';
+
+const FREE_AGENT_PLAYERS_TABLE = 'free_agent_players';
+
+/** Who acted, resolved server-side from application tables (AD-4). */
+export type NominationActor = {
+	readonly managerId: string;
+	readonly teamId: string;
+	/** The acting Team's name — carried into the payload so a refusal can name it. */
+	readonly teamName: string;
+};
+
+/**
+ * The `NominationPlaced` payload: who nominated whom.
+ *
+ * The actor's manager id, team id, timestamp, `schemaVersion`,
+ * `coreVersion` and `deviceClass` are columns `runTransactionalWrite` fills
+ * from the envelope, the database clock and the pinned constants — never
+ * restated here. `teamId` IS restated, because `nominationsReducer` folds
+ * the payload and must not have to reach for an envelope column to know
+ * whose Slot was spent.
+ *
+ * The names are carried so every refusal downstream can name the Player and
+ * the Team without re-reading a table that may have changed by then — the
+ * same reason `AuctionOpenedPayload` carries Team names.
+ */
+export type NominationPlacedPayload = {
+	readonly fantraxPlayerId: string;
+	readonly playerName: string;
+	readonly teamId: string;
+	readonly teamName: string;
+	readonly managerId: string;
+};
+
+/**
+ * Read the phase, the open nominations, the named pool Player and any
+ * contract holder — all from ONE read of the log plus two point lookups, on
+ * the given client.
+ *
+ * Two folds over a single `loadEventsViaClient` read: the two projections
+ * cannot disagree about which events they saw, because they saw the same
+ * array. The two table reads are both keyed on `fantrax_player_id`, which is
+ * `unique` on both tables, so each returns at most one row.
+ */
+export async function loadNominationState(
+	client: TransactionalClient,
+	fantraxPlayerId: string
+): Promise<NominationState> {
+	const events = await loadEventsViaClient(client);
+	const phase = fold(INITIAL_PHASE, events, phaseReducer);
+	const nominations = fold(INITIAL_NOMINATIONS, events, nominationsReducer);
+
+	const poolResult = await client.query(
+		`select fantrax_player_id, player_name
+		from ${FREE_AGENT_PLAYERS_TABLE}
+		where fantrax_player_id = $1`,
+		[fantraxPlayerId]
+	);
+	const poolRow = poolResult.rows[0];
+	const poolPlayer =
+		poolRow === undefined
+			? null
+			: {
+					fantraxPlayerId: String(poolRow['fantrax_player_id']),
+					playerName: String(poolRow['player_name'])
+				};
+
+	// A Player who was promoted into a roster is under contract even if a
+	// stale pool row still names them — so this is asked regardless of what
+	// the pool said, and answered by the live table rather than by absence
+	// from the pool.
+	const contractResult = await client.query(
+		`select t.name
+		from team_rosters r
+		join teams t on t.id = r.team_id
+		where r.fantrax_player_id = $1`,
+		[fantraxPlayerId]
+	);
+	const contractRow = contractResult.rows[0];
+	const contractHolderTeamName = contractRow === undefined ? null : String(contractRow['name']);
+
+	return { phase, nominations, poolPlayer, contractHolderTeamName };
+}
+
+/** One Player as the nomination surface prints them. */
+export type NominatablePoolRow = {
+	readonly fantraxPlayerId: string;
+	readonly playerName: string;
+	readonly positions: string;
+	readonly nbaTeam: string;
+	/** Whether this Player is selectable right now, as the render saw it. */
+	readonly available: boolean;
+	/**
+	 * Why this Player is unavailable, worded by the pure core, or `null` when
+	 * they are available. Never re-worded by the surface.
+	 */
+	readonly unavailableDetail: string | null;
+};
+
+/** Everything the nomination page renders, all worded by the core. */
+export type NominatablePool = {
+	readonly players: readonly NominatablePoolRow[];
+	/** Whether the acting Team's Slot is free, as the render saw it. */
+	readonly slotAvailable: boolean;
+	/**
+	 * The refusal sentence the gate would give this Team right now regardless
+	 * of which Player they pick — the held Slot, or the wrong phase — or
+	 * `null` when the Team may nominate.
+	 */
+	readonly slotDetail: string | null;
+	/** `NOMINATION_CONSEQUENCE` as a finished sentence, for beside the confirm. */
+	readonly consequence: string;
+};
+
+type PoolRow = {
+	readonly fantrax_player_id: string;
+	readonly player_name: string;
+	readonly positions: string;
+	readonly nba_team: string;
+	readonly contract_team_name: string | null;
+};
+
+/**
+ * The nominatable pool, read through the gateway for the page.
+ *
+ * It opens a transaction because `loadEventsViaClient` and the pool join
+ * both need one client, and then always rolls back, because rendering a list
+ * is not a write. It deliberately takes NO advisory lock: the render is
+ * never the check, and `placeNomination` re-derives every gate under the
+ * lock on submit. A list torn across a concurrent nomination is therefore
+ * possible and harmless — it can only ever be stale, never authoritative.
+ * `runTransactionalWrite` is deliberately NOT used, for
+ * `readAuctionOpenReport`'s reason: it exists to append events, and a
+ * `decide` that always rejects in order to read would be a second write path
+ * in everything but name.
+ *
+ * Every sentence it returns comes from the pure core. The server renders;
+ * the surface prints.
+ */
+export async function loadNominatablePool(
+	gateway: ConnectionGateway,
+	actorTeamId: string | null
+): Promise<NominatablePool> {
+	const client = await gateway.connect();
+	try {
+		await client.query('begin');
+
+		const events = await loadEventsViaClient(client);
+		const phase = fold(INITIAL_PHASE, events, phaseReducer);
+		const nominations = fold(INITIAL_NOMINATIONS, events, nominationsReducer);
+
+		// One statement, left joined, rather than one query per Player: the
+		// contract holder is part of what makes a row unavailable, and asking
+		// per row would be a query per pool Player on every page view.
+		const poolResult = await client.query(
+			`select p.fantrax_player_id, p.player_name, p.positions, p.nba_team,
+				t.name as contract_team_name
+			from ${FREE_AGENT_PLAYERS_TABLE} p
+			left join team_rosters r on r.fantrax_player_id = p.fantrax_player_id
+			left join teams t on t.id = r.team_id
+			order by p.player_name asc`
+		);
+
+		await client.query('rollback');
+
+		const players = (poolResult.rows as unknown as PoolRow[]).map((row) => {
+			const fantraxPlayerId = String(row.fantrax_player_id);
+			const playerName = String(row.player_name);
+
+			// The SAME `refuseNomination` the transaction calls, per row, so
+			// the page can never offer a Player the gate would refuse. A
+			// per-row state is built rather than a second availability rule
+			// being written here — there is one definition of unavailable.
+			const refusal = refuseNomination(
+				{
+					phase,
+					nominations,
+					poolPlayer: { fantraxPlayerId, playerName },
+					contractHolderTeamName:
+						row.contract_team_name === null || row.contract_team_name === undefined
+							? null
+							: String(row.contract_team_name)
+				},
+				// The empty string is not a Team id, so a signed-in Manager
+				// bound to no Team sees each Player's own availability rather
+				// than every row collapsing to a Slot refusal.
+				actorTeamId ?? ''
+			);
+
+			// A held Slot is not a property of a Player and must not grey out
+			// the whole list as though every Player were unavailable: it is
+			// reported once, as `slotDetail` below.
+			const playerRefusal = refusal?.kind === 'slot_in_use' ? null : refusal;
+
+			return {
+				fantraxPlayerId,
+				playerName,
+				positions: String(row.positions),
+				nbaTeam: String(row.nba_team),
+				available: playerRefusal === null,
+				unavailableDetail: playerRefusal === null ? null : nominationRefusalDetail(playerRefusal)
+			};
+		});
+
+		// Whether this Team may nominate AT ALL, asked with a Player that
+		// passes every Player-shaped gate, so the only refusals that can come
+		// back are the phase and the Team's own Slot.
+		const teamRefusal =
+			actorTeamId === null
+				? ({ kind: 'unbound_actor' } as NominationRefusal)
+				: refuseNomination(
+						{
+							phase,
+							nominations,
+							poolPlayer: { fantraxPlayerId: '', playerName: '' },
+							contractHolderTeamName: null
+						},
+						actorTeamId
+					);
+
+		return {
+			players,
+			slotAvailable: teamRefusal === null,
+			slotDetail: teamRefusal === null ? null : nominationRefusalDetail(teamRefusal),
+			consequence: nominationConsequenceSentence(null)
+		};
+	} catch (error) {
+		await client.query('rollback').catch(() => {
+			/* the original error is what the caller needs to see */
+		});
+		throw error;
+	} finally {
+		client.release();
+	}
+}
+
+/** What a rejection carries back to the route: the refusal and its one sentence. */
+export type NominationRejection = {
+	readonly refusal: NominationRefusal;
+	readonly detail: string;
+};
+
+/**
+ * Place a nomination: one transaction appending exactly one
+ * `NominationPlaced` event, or nothing at all.
+ *
+ * The confirmation is checked by the route before this is called and is NOT
+ * a rules gate — it establishes only that the request meant to nominate.
+ * Everything that could make a nomination wrong is re-derived here, under
+ * the lock, from the log and the live tables.
+ *
+ * Returns the pipeline's own `WriteOutcome`: `accepted` with the single
+ * appended event, or `rejected` carrying a `NominationRejection`. No
+ * projection is registered — nothing about this event is persisted anywhere
+ * but the log. The Slot, the board and the League Clock reset are all folds
+ * of it.
+ */
+export async function placeNomination(
+	gateway: ConnectionGateway,
+	actor: NominationActor,
+	fantraxPlayerId: string,
+	deviceClass: string
+): Promise<WriteOutcome> {
+	return runTransactionalWrite<NominationState>({
+		gateway,
+		load: (client) => loadNominationState(client, fantraxPlayerId),
+		decide: ({ state }) => {
+			const refusal = refuseNomination(state, actor.teamId);
+			if (refusal !== null) {
+				const rejection: NominationRejection = {
+					refusal,
+					detail: nominationRefusalDetail(refusal)
+				};
+				return { kind: 'rejected', reason: rejection };
+			}
+
+			// Non-null by construction: `refuseNomination` returns
+			// `unknown_player` for a null `poolPlayer`, so reaching here means
+			// the pool row was read. The guard exists to give TypeScript the
+			// narrowing rather than to handle a reachable state.
+			const player = state.poolPlayer;
+			if (player === null) {
+				throw new Error('placeNomination: the gate passed with no pool Player loaded');
+			}
+
+			const payload: NominationPlacedPayload = {
+				fantraxPlayerId: player.fantraxPlayerId,
+				playerName: player.playerName,
+				teamId: actor.teamId,
+				teamName: actor.teamName,
+				managerId: actor.managerId
+			};
+
+			const event: EventEnvelope = {
+				type: NOMINATION_PLACED_EVENT,
+				payload,
+				managerId: actor.managerId,
+				teamId: actor.teamId,
+				// The measurement column, populated from the first event of this
+				// type onward: an insert-only log cannot be backfilled.
+				deviceClass
+			};
+			return { kind: 'accepted', events: [event] };
+		}
+	});
+}
