@@ -112,8 +112,6 @@ loop is now:
 
 - **Never hand-edit `_bmad-output/`.** The `bmad-*` skills own that tree. Run the owning skill.
   The one exception is `epic-1-context.md`, which is explicitly marked "edit freely."
-- **All BMAD phases stay on Claude models.** Local-LLM delegation is only ever a mechanical step
-  inside a story, never a substitute for a phase.
 - **Never commit to `main`** — branch, then PR.
 - Story order inside Epic 1 is not arbitrary: 1.1 and 1.2 are foundational, 1.5's log and
   projection machinery underpins 1.6, 1.10 and 1.11; 1.7–1.9 are the import chain. Cross-story
