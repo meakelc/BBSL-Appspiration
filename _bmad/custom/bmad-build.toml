@@ -1,0 +1,210 @@
+# bmad-build.toml — TEAM-SCOPED overrides for the bmad-build skill.
+#
+# Deliberately NOT `.user.toml`. `_bmad/custom/.gitignore` excludes `*.user.toml`
+# because personal preferences should not follow a clone — but the pins below are
+# not preferences. They are the project's cost architecture, each with its
+# reasoning attached, and they must survive a clone or a rebuilt machine. The
+# matching agent definitions in `.claude/agents/` are un-ignored in the root
+# `.gitignore` for the same reason. If either half goes untracked, every subagent
+# silently reverts to the session model and the only symptom is the bill.
+#
+# PURPOSE: take the review swarm off the orchestrator's model tier.
+#
+# BMAD's shipped step-04 carries the rule "All review subagents must run at the
+# same model capability as the current session." That rule exists because the
+# default `instruction` is just "launch a subagent" and Claude Code subagents
+# inherit the parent session's model — so under Opus every reviewer is an Opus
+# reviewer. The `instruction` field is documented as "the layer's whole
+# execution recipe", explicitly allowing an override to run a layer any other
+# way, so each override below names a model-pinned agent and states that the
+# pin is the intended capability for that layer. That is a deliberate,
+# per-layer capability decision, not an accident of inheritance.
+#
+# Merge rules (from customize.toml): arrays of tables merge by `id` — a matching
+# `id` REPLACES the shipped entry, a new `id` appends. Every id below matches a
+# shipped layer, so this file replaces rather than adds.
+
+[workflow]
+
+# --- Step-02 investigation subagents: pinned to sonnet ---
+#
+# Step-02 says "isolate deep exploration in synchronous subagents/tasks where
+# available", but names no agent — so an unpinned investigator inherits the
+# orchestrator's tier, and 2-3 of them run per planning step. There is no
+# dedicated customization key for the step-02 dispatch the way there is for
+# `implementation_handoff` and `review_layers`, so the pin is applied here, as a
+# standing instruction the orchestrator carries for the whole run.
+#
+# The tier argument is the same one that justified sonnet for the recall review
+# layers, only stronger: step-02's own brief forbids the investigator from
+# recommending anything. It answers a scoped question list, anchors every claim
+# to path:line, and returns facts. The orchestrator decides what they mean.
+activation_steps_append = [
+  """
+When step 02 isolates codebase exploration in subagents, launch each one as the
+`bmad-investigator` agent rather than a general-purpose subagent. That agent is
+pinned to a mid-tier model, and the pin is the intended capability for
+investigation — a recall task under an explicit question list, whose output is
+drained into the spec's Code Map and interpreted by you, not by it.
+
+Give each investigator a tightly-scoped question list, a word cap, and an
+`output_schema` with a single `report` string field. Instruct it to modify
+nothing and to anchor every claim to `path:line`; an unanchored claim is
+unusable in a Code Map.
+
+Two exceptions stay on the session tier: an investigation whose question is
+itself a rules-correctness question about `src/lib/core/**`, and any
+investigation feeding a story listed under Tier A in `BMAD-EFFORT-TRIAGE.md`.
+""",
+]
+
+[[workflow.review_layers]]
+id = "blind-hunter"
+name = "Blind Hunter (sonnet)"
+instruction = """
+Launch the `bmad-reviewer-broad` subagent with no prior conversation context,
+with this prompt:
+
+Conduct a review of CONTENT.
+Look for what's missing, not only what's wrong.
+Find at least ten issues to fix or improve.
+Output a Markdown list of findings only — no severity, priority, or ranking.
+If the content is empty, stop and say so.
+If you have zero findings, re-check and keep thinking; do not stop with an empty list.
+
+CONTENT:
+{diff_output}
+
+Do not invoke any skill. Return only the review result.
+
+This layer runs at the capability pinned in the `bmad-reviewer-broad` agent
+definition. That pin is this layer's intended capability and is not a
+degradation of the session — broad-recall review is a recall task, and the
+orchestrator re-derives severity in the Classify step regardless.
+"""
+
+[[workflow.review_layers]]
+id = "edge-case-hunter"
+name = "Edge Case Hunter (sonnet)"
+instruction = """
+Launch the `bmad-reviewer-edge` subagent with no prior conversation context,
+with this prompt:
+
+Read `{skill-root}/review-prompts/edge-case-hunter.md` completely and follow it as your review instructions.
+
+Review content:
+
+{diff_output}
+
+Do not invoke any skill. If the instruction file is unreadable, report that exact failure and stop. Return only the review result.
+
+This layer runs at the capability pinned in the `bmad-reviewer-edge` agent
+definition. That pin is this layer's intended capability.
+"""
+
+[[workflow.review_layers]]
+id = "verification-gap"
+name = "Verification Gap Reviewer (sonnet)"
+instruction = """
+Launch the `bmad-reviewer-verification` subagent with no prior conversation
+context, with this prompt:
+
+Read `{skill-root}/review-prompts/verification-gap.md` completely and follow it as your review instructions.
+
+Review content:
+
+{diff_output}
+
+Do not invoke any skill. If the instruction file is unreadable, report that exact failure and stop. Return only the review result.
+
+This layer runs at the capability pinned in the `bmad-reviewer-verification`
+agent definition. That pin is this layer's intended capability.
+"""
+
+# New layer (id not present in the shipped defaults, so this APPENDS).
+# bmad-build ships no acceptance auditor even though it always has a spec file;
+# only bmad-code-review does. Adding it here is what makes the separate
+# bmad-code-review pass redundant for single-story work.
+#
+# TIER IS CHOSEN PER STORY, not fixed. Spec-versus-code conformance is the one
+# genuinely judgement-bound review dimension, so it stays on opus wherever a miss
+# is expensive — but paying opus to audit refusal copy or a presentation-only
+# story is the clearest overspend in this setup. The orchestrator picks the agent
+# from the story's row in BMAD-EFFORT-TRIAGE.md, and the default when in doubt is
+# opus.
+[[workflow.review_layers]]
+id = "acceptance-auditor"
+name = "Acceptance Auditor (opus / sonnet by story tier)"
+instruction = """
+Choose the acceptance-auditor agent by the story's tier, then launch it.
+
+Look the story up in `{project-root}/BMAD-EFFORT-TRIAGE.md`.
+
+- Listed under **Tier A** or **Tier B**, OR the diff touches `src/lib/core/**`,
+  OR any acceptance criterion is phrased as a negative invariant ("never
+  cached", "neither short-circuits the other", "prospectively only", "no code
+  path can") → use `bmad-reviewer-acceptance` (opus).
+- Listed under **Safe for low-effort** and none of the above applies → use
+  `bmad-reviewer-acceptance-lite` (sonnet).
+- Not listed, or you are unsure → use `bmad-reviewer-acceptance` (opus). The
+  triage is dated and pinned to a commit; a story added since it was written is
+  an unknown, and an unknown is not a safe story.
+
+Do not apply this downgrade on a story where the orchestrator is also running at
+reduced reasoning effort — that thins judgement at both ends of the same review.
+State in the review summary which agent you used and why.
+
+Launch the chosen agent with this prompt:
+
+You are an Acceptance Auditor. Review the provided diff against `{spec_file}` and any loaded context docs. Check for: violations of acceptance criteria, deviations from spec intent, missing implementation of specified behavior, contradictions between spec constraints and actual code. Output findings as a Markdown list. Each finding: one-line title, which AC/constraint it violates, and evidence from the diff.
+
+Diff:
+
+{diff_output}
+"""
+
+# The one-shot route gets the same treatment.
+[[workflow.oneshot_review_layers]]
+id = "blind-hunter"
+name = "Blind Hunter (sonnet)"
+instruction = """
+Launch the `bmad-reviewer-broad` subagent with no prior conversation context,
+with this prompt:
+
+Conduct a review of CONTENT.
+Look for what's missing, not only what's wrong.
+Find at least ten issues to fix or improve.
+Output a Markdown list of findings only — no severity, priority, or ranking.
+If the content is empty, stop and say so.
+If you have zero findings, re-check and keep thinking; do not stop with an empty list.
+
+CONTENT:
+The changed files in the current worktree. Inspect them directly before reviewing.
+
+Do not invoke any skill. Return only the review result.
+
+This layer runs at the capability pinned in the `bmad-reviewer-broad` agent
+definition. That pin is this layer's intended capability.
+"""
+
+# --- implementation_handoff: left at the shipped default on purpose ---
+#
+# The implementer is the one role where a cheaper model reliably costs more than
+# it saves: its output is large, its mistakes propagate into every review layer,
+# and a bad implementation triggers a loopback that re-runs steps 2–4 at full
+# price. Do not pin it down a tier without measuring loopback rate first.
+#
+# If you do want to measure it, the override shape is:
+#
+# implementation_handoff = """
+# Launch the `bmad-implementer` subagent with no prior conversation context, with this prompt:
+#
+# > Read {spec_file} fully and implement it — the spec is the sole source of truth. Load every file listed in its frontmatter `context:` before you start.
+# >
+# > When done, report what you changed, how you verified it, and anything left incomplete or risky.
+# """
+#
+# and you would add a matching .claude/agents/bmad-implementer.md with
+# `model: sonnet` and `tools: Read, Write, Edit, Bash, Grep, Glob`.
+# Track `review_loop_iteration` in spec frontmatter across a dozen stories
+# before and after; if it rises, the pin is costing you money, not saving it.

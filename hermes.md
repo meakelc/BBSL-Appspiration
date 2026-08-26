@@ -117,6 +117,42 @@ loop is now:
   projection machinery underpins 1.6, 1.10 and 1.11; 1.7–1.9 are the import chain. Cross-story
   dependencies are spelled out at the bottom of `epic-1-context.md`.
 
+### Subagent model tiers — where they live and why they must stay tracked
+
+Every BMAD subagent this project spawns runs at a deliberately chosen model tier, not the
+session's. Two halves, and **both are required** — if either goes untracked, every subagent
+silently reverts to the session model and the only symptom is the bill:
+
+- `.claude/agents/*.md` — one file per role, `model:` in the frontmatter, reasoning in the
+  body. Un-ignored explicitly in `.gitignore` (note it excludes `.claude/*`, not `.claude/`,
+  because git will not descend into an excluded *directory* to honour a `!` re-include).
+- `_bmad/custom/bmad-*.toml` — **team-scoped, not `.user.toml`.** `_bmad/custom/.gitignore`
+  excludes `*.user.toml` for personal preference; these are cost architecture and are named
+  without the `.user` segment so they survive a clone.
+
+Current tiers: recall layers (Blind Hunter, Edge Case Hunter, Verification Gap) sonnet;
+step-02 investigators sonnet; validation-gate recall lenses sonnet; Intent Alignment opus;
+Acceptance Auditor **chosen per story** from `BMAD-EFFORT-TRIAGE.md` — Safe rows get sonnet,
+Tier A/B and anything unlisted get opus. The implementer stays on the session tier on
+purpose (see that file's closing section for the loopback argument).
+
+Verify a change to any of this with the resolver — never assume the merge did what you
+expected, since `id` matching **replaces the whole table rather than deep-merging keys**:
+
+```
+uv run --no-cache _bmad/scripts/resolve_customization.py --skill .claude/skills/bmad-build --key workflow
+```
+
+Then re-render, because a rendered snapshot is frozen at activation and a running session
+keeps the generation it started with:
+
+```
+uv run --no-cache _bmad/scripts/render_skill.py --project-root . --skill .claude/skills/bmad-build
+```
+
+`BMAD-EFFORT-TRIAGE.md` is now load-bearing configuration rather than advice — re-running
+the triage at an epic boundary changes what reviews cost.
+
 ---
 
 ## 5. Commands

@@ -1,0 +1,185 @@
+# bmad-build-auto.toml — TEAM-SCOPED overrides for the bmad-build-auto skill.
+#
+# Deliberately NOT `.user.toml` — see the header of bmad-build.toml. These pins
+# are cost architecture, not personal preference, and must survive a clone.
+#
+# Mirrors bmad-build.toml, with ONE deliberate divergence: build-auto
+# ships a fifth layer, `intent-alignment`, that bmad-build does not have. It
+# already covers 'does the diff do what was asked', so appending an Acceptance
+# Auditor on top of it would buy a fifth agent invocation for a fourth-layer
+# answer. Instead the shipped intent-alignment layer is re-pinned to opus and
+# no acceptance-auditor is added.
+#
+# PURPOSE: take the review swarm off the orchestrator's model tier.
+#
+# BMAD's shipped step-04 carries the rule "All review subagents must run at the
+# same model capability as the current session." That rule exists because the
+# default `instruction` is just "launch a subagent" and Claude Code subagents
+# inherit the parent session's model — so under Opus every reviewer is an Opus
+# reviewer. The `instruction` field is documented as "the layer's whole
+# execution recipe", explicitly allowing an override to run a layer any other
+# way, so each override below names a model-pinned agent and states that the
+# pin is the intended capability for that layer. That is a deliberate,
+# per-layer capability decision, not an accident of inheritance.
+#
+# Merge rules (from customize.toml): arrays of tables merge by `id` — a matching
+# `id` REPLACES the shipped entry, a new `id` appends. Every id below matches a
+# shipped layer, so this file replaces rather than adds.
+
+[workflow]
+
+# --- Step-02 investigation subagents: pinned to sonnet ---
+# Same rationale as bmad-build.toml; see that file's comment. No dedicated
+# customization key exists for the step-02 dispatch, so the pin rides as a
+# standing instruction for the whole run.
+activation_steps_append = [
+  """
+When step 02 isolates codebase exploration in subagents, launch each one as the
+`bmad-investigator` agent rather than a general-purpose subagent. That agent is
+pinned to a mid-tier model, and the pin is the intended capability for
+investigation — a recall task under an explicit question list, whose output is
+drained into the spec's Code Map and interpreted by you, not by it.
+
+Give each investigator a tightly-scoped question list, a word cap, and an
+`output_schema` with a single `report` string field. Instruct it to modify
+nothing and to anchor every claim to `path:line`; an unanchored claim is
+unusable in a Code Map.
+
+Two exceptions stay on the session tier: an investigation whose question is
+itself a rules-correctness question about `src/lib/core/**`, and any
+investigation feeding a story listed under Tier A in `BMAD-EFFORT-TRIAGE.md`.
+""",
+]
+
+[[workflow.review_layers]]
+id = "blind-hunter"
+name = "Blind Hunter (sonnet)"
+instruction = """
+Launch the `bmad-reviewer-broad` subagent with no prior conversation context,
+with this prompt:
+
+Conduct a review of CONTENT.
+Look for what's missing, not only what's wrong.
+Find at least ten issues to fix or improve.
+Output a Markdown list of findings only — no severity, priority, or ranking.
+If the content is empty, stop and say so.
+If you have zero findings, re-check and keep thinking; do not stop with an empty list.
+
+CONTENT:
+{diff_output}
+
+Do not invoke any skill. Return only the review result.
+
+This layer runs at the capability pinned in the `bmad-reviewer-broad` agent
+definition. That pin is this layer's intended capability and is not a
+degradation of the session — broad-recall review is a recall task, and the
+orchestrator re-derives severity in the Classify step regardless.
+"""
+
+[[workflow.review_layers]]
+id = "edge-case-hunter"
+name = "Edge Case Hunter (sonnet)"
+instruction = """
+Launch the `bmad-reviewer-edge` subagent with no prior conversation context,
+with this prompt:
+
+Read `{skill-root}/review-prompts/edge-case-hunter.md` completely and follow it as your review instructions.
+
+Review content:
+
+{diff_output}
+
+Do not invoke any skill. If the instruction file is unreadable, report that exact failure and stop. Return only the review result.
+
+This layer runs at the capability pinned in the `bmad-reviewer-edge` agent
+definition. That pin is this layer's intended capability.
+"""
+
+[[workflow.review_layers]]
+id = "verification-gap"
+name = "Verification Gap Reviewer (sonnet)"
+instruction = """
+Launch the `bmad-reviewer-verification` subagent with no prior conversation
+context, with this prompt:
+
+Read `{skill-root}/review-prompts/verification-gap.md` completely and follow it as your review instructions.
+
+Review content:
+
+{diff_output}
+
+Do not invoke any skill. If the instruction file is unreadable, report that exact failure and stop. Return only the review result.
+
+This layer runs at the capability pinned in the `bmad-reviewer-verification`
+agent definition. That pin is this layer's intended capability.
+"""
+
+# Re-pin of a layer build-auto ALREADY ships. `id` matching replaces the whole
+# table (verified against resolve_customization.py — it does not deep-merge
+# keys), so every field is restated here, and `{verbatim_intent}` must survive
+# verbatim or the layer loses its input.
+[[workflow.review_layers]]
+id = "intent-alignment"
+name = "Intent Alignment Auditor (opus)"
+instruction = """
+Launch the `bmad-reviewer-intent` subagent with this prompt:
+
+You are an intent-alignment auditor. You have no other context about how this change was produced. Here is the verbatim intent this work started from:
+
+{verbatim_intent}
+
+Here is the diff:
+
+{diff_output}
+
+Your task is strictly descriptive — do not prescribe additional work. Report: (1) the defensible readings of the intent, enumerated; (2) which reading this diff implements; (3) where the readings and the diff diverge — specifically, which surface the intent's expectations live at versus which surface the diff's changes and its tests exercise.
+"""
+
+# NOTE: no acceptance-auditor layer here, unlike bmad-build.user.toml. See the
+# header. If you ever remove the intent-alignment layer, add one back.
+
+# The one-shot route gets the same treatment.
+[[workflow.oneshot_review_layers]]
+id = "blind-hunter"
+name = "Blind Hunter (sonnet)"
+instruction = """
+Launch the `bmad-reviewer-broad` subagent with no prior conversation context,
+with this prompt:
+
+Conduct a review of CONTENT.
+Look for what's missing, not only what's wrong.
+Find at least ten issues to fix or improve.
+Output a Markdown list of findings only — no severity, priority, or ranking.
+If the content is empty, stop and say so.
+If you have zero findings, re-check and keep thinking; do not stop with an empty list.
+
+CONTENT:
+The changed files in the current worktree. Inspect them directly before reviewing.
+
+Do not invoke any skill. Return only the review result.
+
+This layer runs at the capability pinned in the `bmad-reviewer-broad` agent
+definition. That pin is this layer's intended capability.
+"""
+
+# --- implementation_handoff: left at the shipped default on purpose ---
+#
+# The implementer is the one role where a cheaper model reliably costs more than
+# it saves: its output is large, its mistakes propagate into every review layer,
+# and a bad implementation triggers a loopback that re-runs steps 2–4 at full
+# price. Do not pin it down a tier without measuring loopback rate first.
+#
+# If you do want to measure it, the override shape is:
+#
+# implementation_handoff = """
+# Launch the `bmad-implementer` subagent with no prior conversation context, with this prompt:
+#
+# > Read {spec_file} fully and implement it — the spec is the sole source of truth. Load every file listed in its frontmatter `context:` before you start.
+# >
+# > When done, report what you changed, how you verified it, and anything left incomplete or risky.
+# """
+#
+# and you would add a matching .claude/agents/bmad-implementer.md with
+# `model: sonnet` and `tools: Read, Write, Edit, Bash, Grep, Glob`.
+# Track `review_loop_iteration` in spec frontmatter across a dozen stories
+# before and after; if it rises, the pin is costing you money, not saving it.
