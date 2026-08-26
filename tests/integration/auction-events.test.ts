@@ -566,6 +566,25 @@ describe.skipIf(!reachable)(SUITE_TITLE, () => {
 				await client.end();
 			}
 		});
+
+		it('leaves anon and authenticated with ZERO privileges on open_nominations', async () => {
+			// The migration's "belt as well as braces" revoke was asserted only
+			// in a comment. The security property is that the client-facing
+			// roles hold nothing at all — not merely that RLS would hide the
+			// rows if they did.
+			const client = new Client({ connectionString: LOCAL_DB_URL });
+			await client.connect();
+			try {
+				const grants = await client.query<{ grantee: string; privilege_type: string }>(
+					`select grantee, privilege_type from information_schema.role_table_grants
+					 where table_schema = 'public' and table_name = 'open_nominations'
+					   and grantee in ('anon', 'authenticated')`
+				);
+				expect(grants.rows).toEqual([]);
+			} finally {
+				await client.end();
+			}
+		});
 	});
 
 	// Every other proof in this file drives raw `pg.Client` calls against

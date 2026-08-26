@@ -2,7 +2,7 @@
 title: 'Story 2.2: Nomination refusals and concurrency'
 type: 'feature'
 created: '2026-08-25'
-status: 'in-review'
+status: 'done'
 review_loop_iteration: 0
 baseline_commit: '9dcb9e2067ca58dd5fe86ed93c9599f9b02516f2'
 context: []
@@ -66,6 +66,17 @@ Read Story 2.1's spec, Code Map and Design Notes first — the transactional she
 - Given a nomination is refused by a constraint, when the outcome reaches the route, then it is a returned rejection carrying a sentence the pure core already words, never a thrown error and never a new wording.
 - Given a nomination is attempted outside the Auction Phase, when the request lands, then the route refuses server-side under the destination guard independently of the rule, and no transaction is opened.
 - Given the claim table exists, when the codebase is inspected, then no gate, projection or surface reads it — the Slot, the board and the League Clock remain folds of `auction_events`.
+
+### Review Findings
+
+bmad-code-review, 2026-08-26. Four layers ran against the `9dcb9e2..31d94f0` diff (Blind Hunter, Edge Case Hunter, Verification Gap, Acceptance Auditor). The Acceptance Auditor found no AC, Boundary or I/O-matrix violation.
+
+- [x] [Review][Patch] `nameTheHolder`'s catch is a regression gap — no test makes the naming re-read itself FAIL [tests/server/nomination.test.ts] — the existing `unrecorded` tests all succeed at reading and merely find nothing, so removing the `catch` at `src/lib/server/nomination.ts:415` would break nothing. Fixed: the fake gateway now supports `failNamingReRead`, making the second `connect()` throw, and a new test asserts `placeNomination` still resolves `rejected`/`unrecorded`.
+- [x] [Review][Patch] The migration's `anon`/`authenticated` revoke was asserted only in a comment [tests/integration/auction-events.test.ts] — the grant test covered `service_role` only. Fixed: a new integration test asserts both client-facing roles hold zero privileges on `open_nominations`.
+- [x] [Review][Defer] `open_nominations` has no deletion path until Story 2.3 — deferred, deployment hazard logged in `deferred-work.md`.
+- [x] [Review][Defer] `nameTheHolder` swallows every failure with no logging and no timeout — deferred, awaits a server-logging convention; logged in `deferred-work.md`.
+
+Dismissed as noise: the `seq`/`occurred_at` "dead columns" reading (both are audit provenance, and `seq` is the FK that ties the claim to its event); the `try` scoped wider than the claim insert (no other statement in that transaction touches `open_nominations`, so no other statement can raise its constraint names); the `on delete` behaviour note (`NO ACTION` on a Team reference is correct — a Team is never deleted); the double-conflict ordering case (Postgres reports one, and both refusals are true); the `claimNomination` multi-event loop (defensive shape over a single-event caller); the `rolledBack` fake-harness latent trap (no test issues two calls); the duplicated `pgError` test helper (two lines, two files); and the two round-trips in `nameTheHolder`'s explicit `begin`/`rollback` (deliberate — every read in this repo runs in a transaction it rolls back).
 
 ## Spec Change Log
 

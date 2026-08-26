@@ -62,12 +62,21 @@ function fakeGateway(options: {
 	throwPg?: { on: RegExp; code: string; constraint?: string };
 	/** The log the SECOND connection sees — the loser's post-rollback naming re-read. */
 	eventsAfterRollback?: QueryResultRow[];
+	/**
+	 * Make the SECOND `connect()` throw, so the post-rollback naming re-read
+	 * fails outright rather than merely finding nothing. This is the only way
+	 * to reach `nameTheHolder`'s outer `catch`: a `throwOn` regex matching the
+	 * log read would fire on the FIRST, gate-side read too and never reach the
+	 * claim insert at all.
+	 */
+	failNamingReRead?: boolean;
 }) {
 	const order: string[] = [];
 	const params: unknown[][] = [];
 	const appendedEvents: QueryResultRow[] = [];
 	let seq = 40;
 	let released = 0;
+	let connects = 0;
 	let committed = false;
 	let rolledBack = false;
 
@@ -187,7 +196,15 @@ function fakeGateway(options: {
 		}
 	};
 
-	const gateway: ConnectionGateway = { connect: async () => client };
+	const gateway: ConnectionGateway = {
+		connect: async () => {
+			connects += 1;
+			if (options.failNamingReRead === true && connects > 1) {
+				throw new Error('the pool refused a connection for the naming re-read');
+			}
+			return client;
+		}
+	};
 	return {
 		gateway,
 		client,
@@ -591,6 +608,28 @@ describe('placeNomination — a claim-table conflict', () => {
 				constraint: 'open_nominations_pkey'
 			},
 			eventsAfterRollback: [opened()]
+		});
+
+		const rejection = rejectionOf(await placeNomination(harness.gateway, ACTOR, 'p-1', DEVICE_CLASS));
+
+		expect(rejection.refusal.kind).toBe('unrecorded');
+		expect(rejection.detail).toBe(nominationRefusalDetail({ kind: 'unrecorded' }));
+	});
+
+	it('falls back to unrecorded when the naming re-read itself FAILS, rather than throwing', async () => {
+		// Distinct from the test above: there the re-read succeeded and simply
+		// found no winner. Here the re-read cannot even open a connection. The
+		// refusal was already decided by the constraint, so a courtesy re-read
+		// that fails must not turn a true refusal into a 500.
+		const harness = fakeGateway({
+			pool: [JALEN],
+			events: [opened()],
+			throwPg: {
+				on: /^insert into open_nominations/i,
+				code: '23505',
+				constraint: 'open_nominations_pkey'
+			},
+			failNamingReRead: true
 		});
 
 		const rejection = rejectionOf(await placeNomination(harness.gateway, ACTOR, 'p-1', DEVICE_CLASS));

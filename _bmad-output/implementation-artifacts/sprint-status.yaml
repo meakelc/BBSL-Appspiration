@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 08-18-2026 13:11
-last_updated: 08-25-2026
+last_updated: 08-26-2026
 project: BBSL-Appspiration
 project_key: NOKEY
 tracking_system: file-system
@@ -51,7 +51,7 @@ development_status:
 
   epic-2: in-progress
   2-1-nominate-a-free-agent: done
-  2-2-nomination-refusals-and-concurrency: review
+  2-2-nomination-refusals-and-concurrency: done
   2-3-nomination-slot-lifecycle-and-dead-nomination-visibility: backlog
   2-4-the-auction-page-and-its-bid-control: backlog
   2-5-place-a-bid-increment-granularity-and-the-24-hour-clock: backlog
