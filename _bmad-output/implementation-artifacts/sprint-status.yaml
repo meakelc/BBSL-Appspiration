@@ -49,8 +49,8 @@ development_status:
   1-11-open-the-auction: done
   epic-1-retrospective: optional
 
-  epic-2: backlog
-  2-1-nominate-a-free-agent: backlog
+  epic-2: in-progress
+  2-1-nominate-a-free-agent: in-progress
   2-2-nomination-refusals-and-concurrency: backlog
   2-3-nomination-slot-lifecycle-and-dead-nomination-visibility: backlog
   2-4-the-auction-page-and-its-bid-control: backlog

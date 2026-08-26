@@ -1,0 +1,538 @@
+/**
+ * The nomination fold, the nomination gate's wording, and the device-class
+ * classifier. All pure (Story 2.1).
+ */
+
+import { describe, expect, it } from 'vitest';
+
+import { DEVICE_CLASSES, classifyDeviceClass } from '../../src/lib/core/device-class.ts';
+import { fold } from '../../src/lib/core/projection/fold.ts';
+import {
+	INITIAL_NOMINATIONS,
+	NOMINATION_PLACED_EVENT,
+	nominationForPlayer,
+	nominationForTeam,
+	nominationsReducer,
+	openNominations
+} from '../../src/lib/core/projection/nominations.ts';
+import { AUCTION_OPENED_EVENT } from '../../src/lib/core/projection/phase.ts';
+import {
+	NOMINATION_CONSEQUENCE,
+	nominationConsequenceSentence,
+	nominationRefusalDetail,
+	refuseNomination
+} from '../../src/lib/core/rules/nomination.ts';
+import type { NominationRefusal, NominationState } from '../../src/lib/core/rules/nomination.ts';
+import type { AppendedEvent } from '../../src/lib/core/types.ts';
+
+function event(
+	seq: number,
+	type: string,
+	payload: unknown = {},
+	occurredAt = '2026-08-25T12:00:00.000Z'
+): AppendedEvent {
+	return {
+		seq: String(seq),
+		occurredAt,
+		schemaVersion: 1,
+		coreVersion: 1,
+		type,
+		payload,
+		managerId: 'm-1',
+		teamId: 't-1',
+		deviceClass: null,
+		dispatchOutcome: null,
+		deliveryOutcome: null
+	};
+}
+
+function nomination(
+	seq: number,
+	fantraxPlayerId: string,
+	playerName: string,
+	teamId: string,
+	teamName: string,
+	occurredAt = '2026-08-25T12:00:00.000Z'
+): AppendedEvent {
+	return event(
+		seq,
+		NOMINATION_PLACED_EVENT,
+		{ fantraxPlayerId, playerName, teamId, teamName, managerId: 'm-1' },
+		occurredAt
+	);
+}
+
+// --- The fold ---------------------------------------------------------------
+
+describe('nominationsReducer', () => {
+	it('starts with an empty board and an empty Slot register', () => {
+		expect(openNominations(INITIAL_NOMINATIONS)).toEqual([]);
+		expect(nominationForPlayer(INITIAL_NOMINATIONS, 'p-1')).toBeNull();
+		expect(nominationForTeam(INITIAL_NOMINATIONS, 't-1')).toBeNull();
+	});
+
+	it('ignores every event type it has not been taught', () => {
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[event(1, AUCTION_OPENED_EVENT), event(2, 'ImportPromoted'), event(3, 'BidPlaced')],
+			nominationsReducer
+		);
+		expect(state).toEqual(INITIAL_NOMINATIONS);
+	});
+
+	it('indexes one nomination by Player AND by Team, carrying both names', () => {
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', '2026-08-25T19:00:00.000Z')],
+			nominationsReducer
+		);
+
+		expect(nominationForPlayer(state, 'p-1')).toEqual({
+			fantraxPlayerId: 'p-1',
+			playerName: 'Jalen Green',
+			teamId: 't-1',
+			teamName: 'Lakers',
+			occurredAt: '2026-08-25T19:00:00.000Z'
+		});
+		expect(nominationForTeam(state, 't-1')).toEqual(nominationForPlayer(state, 'p-1'));
+	});
+
+	it('folds several nominations by several Teams', () => {
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[
+				nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'),
+				nomination(2, 'p-2', 'Alperen Sengun', 't-2', 'Celtics'),
+				nomination(3, 'p-3', 'Amen Thompson', 't-3', 'Bulls')
+			],
+			nominationsReducer
+		);
+		expect(openNominations(state)).toHaveLength(3);
+		expect(nominationForTeam(state, 't-2')?.playerName).toBe('Alperen Sengun');
+	});
+
+	it('converges on a double replay — the whole of "replay is idempotent"', () => {
+		const log = [
+			nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'),
+			nomination(2, 'p-2', 'Alperen Sengun', 't-2', 'Celtics')
+		];
+		const once = fold(INITIAL_NOMINATIONS, log, nominationsReducer);
+		const twice = fold(once, log, nominationsReducer);
+		expect(twice).toEqual(once);
+		// And a full rebuild from empty state agrees with the incremental fold.
+		expect(fold(INITIAL_NOMINATIONS, [...log].reverse(), nominationsReducer)).toEqual(once);
+	});
+
+	it('keeps the FIRST nomination of a Player, so a duplicate never rewrites the board', () => {
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[
+				nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'),
+				nomination(2, 'p-1', 'Jalen Green', 't-2', 'Celtics')
+			],
+			nominationsReducer
+		);
+		expect(nominationForPlayer(state, 'p-1')?.teamName).toBe('Lakers');
+		// And the second Team's Slot was NOT spent by a nomination that never held.
+		expect(nominationForTeam(state, 't-2')).toBeNull();
+	});
+
+	it('keeps a Team’s FIRST nomination, so a second never frees or moves the Slot', () => {
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[
+				nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'),
+				nomination(2, 'p-2', 'Alperen Sengun', 't-1', 'Lakers')
+			],
+			nominationsReducer
+		);
+		expect(nominationForTeam(state, 't-1')?.playerName).toBe('Jalen Green');
+		expect(nominationForPlayer(state, 'p-2')).toBeNull();
+	});
+
+	it('folds in seq order, not in array order', () => {
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[
+				nomination(9, 'p-1', 'Late', 't-1', 'Lakers'),
+				nomination(2, 'p-1', 'Early', 't-2', 'Celtics')
+			],
+			nominationsReducer
+		);
+		expect(nominationForPlayer(state, 'p-1')?.playerName).toBe('Early');
+	});
+
+	it.each([
+		['not an object', 'nonsense'],
+		['null', null],
+		['no fantraxPlayerId', { teamId: 't-1' }],
+		['a blank fantraxPlayerId', { fantraxPlayerId: '', teamId: 't-1' }],
+		['no teamId', { fantraxPlayerId: 'p-1' }],
+		['a non-string teamId', { fantraxPlayerId: 'p-1', teamId: 7 }]
+	])('skips a malformed payload rather than throwing: %s', (_label, payload) => {
+		// An insert-only log cannot be corrected in place, so a malformed
+		// historical row must never crash the fold — and must never hold a
+		// real Team's Slot hostage.
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[event(1, NOMINATION_PLACED_EVENT, payload)],
+			nominationsReducer
+		);
+		expect(state).toEqual(INITIAL_NOMINATIONS);
+	});
+
+	it('falls back to the ids when the names are missing, rather than dropping the Slot', () => {
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[event(1, NOMINATION_PLACED_EVENT, { fantraxPlayerId: 'p-1', teamId: 't-1' })],
+			nominationsReducer
+		);
+		expect(nominationForPlayer(state, 'p-1')?.playerName).toBe('p-1');
+		expect(nominationForTeam(state, 't-1')?.teamName).toBe('t-1');
+	});
+
+	it.each(['constructor', 'toString', '__proto__', 'hasOwnProperty'])(
+		'treats %s as an ordinary id, not as an inherited property',
+		(hostileId: string) => {
+			// The keys of both indexes are data. Probed with `in` or with a bare
+			// truthiness check, every Team would appear to hold a Slot.
+			expect(nominationForPlayer(INITIAL_NOMINATIONS, hostileId)).toBeNull();
+			expect(nominationForTeam(INITIAL_NOMINATIONS, hostileId)).toBeNull();
+
+			const state = fold(
+				INITIAL_NOMINATIONS,
+				[nomination(1, hostileId, 'Odd Name', hostileId, 'Odd Team')],
+				nominationsReducer
+			);
+			expect(nominationForPlayer(state, hostileId)?.playerName).toBe('Odd Name');
+			expect(nominationForPlayer(state, 'p-other')).toBeNull();
+		}
+	);
+
+	it('never mutates the state it was handed', () => {
+		const first = fold(
+			INITIAL_NOMINATIONS,
+			[nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers')],
+			nominationsReducer
+		);
+		const second = fold(first, [nomination(2, 'p-2', 'Sengun', 't-2', 'Celtics')], nominationsReducer);
+		expect(openNominations(first)).toHaveLength(1);
+		expect(openNominations(second)).toHaveLength(2);
+	});
+});
+
+// --- The gate ---------------------------------------------------------------
+
+function boardOf(...events: AppendedEvent[]) {
+	return fold(INITIAL_NOMINATIONS, events, nominationsReducer);
+}
+
+function readyState(overrides: Partial<NominationState> = {}): NominationState {
+	return {
+		phase: 'Auction',
+		nominations: INITIAL_NOMINATIONS,
+		poolPlayer: { fantraxPlayerId: 'p-1', playerName: 'Jalen Green' },
+		contractHolderTeamName: null,
+		...overrides
+	};
+}
+
+describe('refuseNomination — the gates, in order', () => {
+	it('allows a nomination when every gate holds', () => {
+		expect(refuseNomination(readyState(), 't-1')).toBeNull();
+	});
+
+	it.each(['Setup', 'Contract Assignment', 'Archived'] as const)(
+		'refuses in the %s phase, naming the folded phase',
+		(phase) => {
+			const refusal = refuseNomination(readyState({ phase }), 't-1');
+			expect(refusal?.kind).toBe('phase');
+			if (refusal?.kind !== 'phase') return;
+			expect(refusal.phase).toBe(phase);
+			expect(nominationRefusalDetail(refusal)).toContain(phase);
+		}
+	);
+
+	it('refuses a Player the pool has never heard of', () => {
+		const refusal = refuseNomination(readyState({ poolPlayer: null }), 't-1');
+		expect(refusal?.kind).toBe('unknown_player');
+	});
+
+	it('refuses a Player under contract, NAMING the Team that holds them', () => {
+		const refusal = refuseNomination(readyState({ contractHolderTeamName: 'Celtics' }), 't-1');
+		expect(refusal?.kind).toBe('under_contract');
+		if (refusal?.kind !== 'under_contract') return;
+		expect(refusal.teamName).toBe('Celtics');
+		expect(refusal.playerName).toBe('Jalen Green');
+		const detail = nominationRefusalDetail(refusal);
+		expect(detail).toContain('Celtics');
+		expect(detail).toContain('Jalen Green');
+	});
+
+	it('refuses a Player already on the board, NAMING the nominating Team', () => {
+		const refusal = refuseNomination(
+			readyState({
+				nominations: boardOf(nomination(1, 'p-1', 'Jalen Green', 't-9', 'Celtics'))
+			}),
+			't-1'
+		);
+		expect(refusal?.kind).toBe('already_nominated');
+		if (refusal?.kind !== 'already_nominated') return;
+		expect(refusal.teamName).toBe('Celtics');
+		expect(nominationRefusalDetail(refusal)).toContain('Celtics');
+	});
+
+	it('refuses when the actor’s Slot is in use, NAMING the Player holding it', () => {
+		const refusal = refuseNomination(
+			readyState({
+				nominations: boardOf(nomination(1, 'p-9', 'Amen Thompson', 't-1', 'Lakers'))
+			}),
+			't-1'
+		);
+		expect(refusal?.kind).toBe('slot_in_use');
+		if (refusal?.kind !== 'slot_in_use') return;
+		expect(refusal.playerName).toBe('Amen Thompson');
+		const detail = nominationRefusalDetail(refusal);
+		expect(detail).toContain('Amen Thompson');
+		// Named, not counted.
+		expect(detail).not.toMatch(/\b1 nomination\b/);
+	});
+
+	it('lets another Team nominate while this Team’s Slot is held', () => {
+		const nominations = boardOf(nomination(1, 'p-9', 'Amen Thompson', 't-1', 'Lakers'));
+		expect(refuseNomination(readyState({ nominations }), 't-2')).toBeNull();
+	});
+
+	it('names the Player’s problem before the actor’s own held Slot', () => {
+		// A standing condition the Manager can already see loses to news.
+		const refusal = refuseNomination(
+			readyState({
+				contractHolderTeamName: 'Celtics',
+				nominations: boardOf(nomination(1, 'p-9', 'Amen Thompson', 't-1', 'Lakers'))
+			}),
+			't-1'
+		);
+		expect(refusal?.kind).toBe('under_contract');
+	});
+
+	it('names the phase before anything else', () => {
+		const refusal = refuseNomination(
+			readyState({ phase: 'Setup', poolPlayer: null, contractHolderTeamName: 'Celtics' }),
+			't-1'
+		);
+		expect(refusal?.kind).toBe('phase');
+	});
+
+	it('names the unknown Player before their contract', () => {
+		const refusal = refuseNomination(
+			readyState({ poolPlayer: null, contractHolderTeamName: 'Celtics' }),
+			't-1'
+		);
+		expect(refusal?.kind).toBe('unknown_player');
+	});
+
+	it('names the contract before the board', () => {
+		const refusal = refuseNomination(
+			readyState({
+				contractHolderTeamName: 'Celtics',
+				nominations: boardOf(nomination(1, 'p-1', 'Jalen Green', 't-9', 'Bulls'))
+			}),
+			't-1'
+		);
+		expect(refusal?.kind).toBe('under_contract');
+	});
+
+	it('reads no clock, no database and no random source — the state IS the argument', () => {
+		// Called twice with the identical argument, it answers identically;
+		// there is nothing else it could be reading.
+		const state = readyState();
+		expect(refuseNomination(state, 't-1')).toEqual(refuseNomination(state, 't-1'));
+		expect(refuseNomination(state, 't-1')).toBeNull();
+	});
+
+	it('nominates normally for a Team with no cap space — nothing here is arithmetic', () => {
+		// There is no Money anywhere in `NominationState`, which is the
+		// structural version of "a nomination commits nothing".
+		expect(Object.keys(readyState())).toEqual([
+			'phase',
+			'nominations',
+			'poolPlayer',
+			'contractHolderTeamName'
+		]);
+	});
+});
+
+// --- Every refusal has exactly one sentence ---------------------------------
+
+describe('nominationRefusalDetail', () => {
+	const EVERY_REFUSAL: readonly NominationRefusal[] = [
+		{ kind: 'phase', phase: 'Setup' },
+		{ kind: 'unknown_player' },
+		{ kind: 'under_contract', playerName: 'Jalen Green', teamName: 'Celtics' },
+		{ kind: 'already_nominated', playerName: 'Jalen Green', teamName: 'Celtics' },
+		{ kind: 'slot_in_use', playerName: 'Amen Thompson' },
+		{ kind: 'unconfirmed', playerName: 'Jalen Green' },
+		{ kind: 'unbound_actor' },
+		{ kind: 'unrecorded' }
+	];
+
+	it('words every refusal kind, exhaustively', () => {
+		const kinds = EVERY_REFUSAL.map((refusal) => refusal.kind);
+		expect(new Set(kinds).size).toBe(EVERY_REFUSAL.length);
+	});
+
+	it.each(EVERY_REFUSAL.map((refusal) => [refusal.kind, refusal] as const))(
+		'%s closes by saying nothing was written',
+		(_kind: string, refusal: NominationRefusal) => {
+			const detail = nominationRefusalDetail(refusal);
+			expect(detail.endsWith('Nothing was written.')).toBe(true);
+		}
+	);
+
+	it.each(EVERY_REFUSAL.map((refusal) => [refusal.kind, refusal] as const))(
+		'%s states the fact without apology or exclamation',
+		(_kind: string, refusal: NominationRefusal) => {
+			const detail = nominationRefusalDetail(refusal);
+			expect(detail).not.toMatch(/!/);
+			expect(detail.toLowerCase()).not.toMatch(/sorry|oops|whoops|unfortunately/);
+			expect(detail.startsWith('No nomination was placed:')).toBe(true);
+		}
+	);
+
+	it('gives each refusal a DISTINCT sentence — no two refusals read alike', () => {
+		const sentences = EVERY_REFUSAL.map((refusal) => nominationRefusalDetail(refusal));
+		expect(new Set(sentences).size).toBe(sentences.length);
+	});
+
+	it('never counts what it could name', () => {
+		for (const refusal of EVERY_REFUSAL) {
+			expect(nominationRefusalDetail(refusal)).not.toMatch(/\d+ (Player|Team|nomination)s?/);
+		}
+	});
+
+	it('says nothing about an "already won" state, which is unreachable until Story 2.3', () => {
+		const kinds = EVERY_REFUSAL.map((refusal) => refusal.kind);
+		expect(kinds).not.toContain('already_won');
+	});
+});
+
+describe('NOMINATION_CONSEQUENCE', () => {
+	it('states the Slot, which is the only thing a nomination commits', () => {
+		expect(NOMINATION_CONSEQUENCE).toContain('Nomination Slot');
+		expect(NOMINATION_CONSEQUENCE).toContain('Auction closes');
+	});
+
+	it('states plainly that nothing else is committed', () => {
+		expect(NOMINATION_CONSEQUENCE).toContain('No cap space is committed');
+		expect(NOMINATION_CONSEQUENCE).toContain('Leading Bidder');
+	});
+
+	it('names the Player when there is one, and stays general when there is not', () => {
+		expect(nominationConsequenceSentence('Jalen Green')).toContain('Nominating Jalen Green');
+		expect(nominationConsequenceSentence(null)).toContain('A nomination');
+		expect(nominationConsequenceSentence('')).toContain('A nomination');
+	});
+
+	it('is the ONE definition every sentence is built from', () => {
+		expect(nominationConsequenceSentence('Jalen Green')).toContain(NOMINATION_CONSEQUENCE);
+		expect(nominationConsequenceSentence(null)).toContain(NOMINATION_CONSEQUENCE);
+	});
+});
+
+// --- The classifier ---------------------------------------------------------
+
+describe('classifyDeviceClass', () => {
+	it.each([
+		[null, 'unknown'],
+		[undefined, 'unknown'],
+		['', 'unknown'],
+		['   ', 'unknown'],
+		['some-crawler/1.0', 'unknown']
+	])('classifies %s as %s — never null, never a throw', (agent, expected) => {
+		expect(classifyDeviceClass(agent as string | null)).toBe(expected);
+	});
+
+	it.each([
+		[
+			'iPhone Safari',
+			'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+			'mobile'
+		],
+		[
+			'Android phone Chrome',
+			'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+			'mobile'
+		],
+		['Windows Phone', 'Mozilla/5.0 (Windows Phone 10.0; Android 6.0.1) IEMobile/11.0', 'mobile'],
+		['Opera Mini', 'Opera/9.80 (J2ME/MIDP; Opera Mini/9.80) Presto/2.5.25', 'mobile'],
+		[
+			'iPad',
+			'Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+			'tablet'
+		],
+		[
+			'Android tablet — an Android string WITHOUT "Mobile"',
+			'Mozilla/5.0 (Linux; Android 13; SM-X700) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+			'tablet'
+		],
+		['Kindle', 'Mozilla/5.0 (Linux; U; Android 4.4.3; KFTHWI Build/KTU84M) Silk/3.68', 'tablet'],
+		[
+			'Windows desktop',
+			'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+			'desktop'
+		],
+		[
+			'macOS desktop',
+			'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+			'desktop'
+		],
+		[
+			'Linux desktop',
+			'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+			'desktop'
+		],
+		[
+			'ChromeOS',
+			'Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+			'desktop'
+		]
+	])('classifies %s as %s', (_label: string, agent: string, expected: string) => {
+		expect(classifyDeviceClass(agent)).toBe(expected);
+	});
+
+	it('checks tablet BEFORE mobile — an iPad says "Mobile" and is not a phone', () => {
+		const ipad =
+			'Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148';
+		expect(ipad).toContain('Mobile');
+		expect(classifyDeviceClass(ipad)).toBe('tablet');
+	});
+
+	it('is case-insensitive', () => {
+		expect(classifyDeviceClass('IPHONE')).toBe('mobile');
+		expect(classifyDeviceClass('iphone')).toBe('mobile');
+	});
+
+	it('always answers with one of the four classes, for any input', () => {
+		const agents = [
+			'',
+			'x',
+			'\u0000\u0001',
+			'a'.repeat(10_000),
+			'Mobile'.repeat(500),
+			'iPad Android Mobile Windows NT Macintosh'
+		];
+		for (const agent of agents) {
+			expect(DEVICE_CLASSES).toContain(classifyDeviceClass(agent));
+		}
+	});
+
+	it('stays linear on a long hostile string — there is no pattern to backtrack', () => {
+		// Not a timing assertion: the point is that it terminates and answers.
+		expect(classifyDeviceClass(`${'('.repeat(50_000)}iphone`)).toBe('mobile');
+	});
+
+	it('is deterministic — no clock, no randomness', () => {
+		const agent = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Mobile/15E148';
+		expect(classifyDeviceClass(agent)).toBe(classifyDeviceClass(agent));
+	});
+});
