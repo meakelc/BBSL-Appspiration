@@ -11,13 +11,29 @@
  * status to be "a fold over the log … never a stored flag toggled by a
  * handler", so storing it now would only have to be undone.
  *
- * **There is no release case, and that is deliberate.** A nomination is
- * released when that Player's Auction closes, and no close event exists yet
- * — `AuctionClosed` is Story 2.3's. Until it does, every nomination in the
- * log is open, which is exactly right for the phase this story ships into:
- * the first nomination is the first event of the auction, and nothing can
- * have closed. When 2.3 lands, it adds one `case` here and this fold's shape
- * does not change.
+ * **Release is one case, and it keys on the Player** (Story 2.3). A
+ * nomination is released when that Player's Auction closes: an
+ * `AuctionClosed` for a nominated Player frees that Player's board seat and
+ * the nominating Team's Nomination Slot together. The two are one fact read
+ * two ways — `byTeam` indexes the same object `byPlayer` holds — so dropping
+ * the Player's key and the holding Team's key in a single step keeps both
+ * indexes consistent by construction. The Player is the key and nothing
+ * else: the Slot frees whether the nominator won the auction, lost it, or
+ * never bid at all. Keying on a Team would require the close to carry the
+ * nominator, which it has no reason to know, and would free the wrong Slot
+ * if it carried the winner instead.
+ *
+ * **The payload contract, fixed here.** This fold reads exactly
+ * `fantraxPlayerId` off an `AuctionClosed` payload and ignores everything
+ * else — winner, price, Slot Placement, bid history. Deliberate in both
+ * directions: Story 3.4, which owns appending the real close, may shape the
+ * rest of that payload freely without touching this reducer, and this
+ * reducer cannot come to depend on a field 3.4 has not designed yet.
+ *
+ * **Nothing here APPENDS an `AuctionClosed`.** Epic 3 owns closing; no
+ * command, rule, sweep or route in this story produces one, so the case
+ * ships proven against a synthetic event and needs no change when the real
+ * one arrives.
  *
  * **First nomination wins.** The gate refuses a Player already on the board
  * and a Team that already holds an open nomination, so in practice neither
@@ -42,6 +58,19 @@ import type { Reducer } from './fold.ts';
  * occupancy and Slot status ARE this fold.
  */
 export const NOMINATION_PLACED_EVENT = 'NominationPlaced';
+
+/**
+ * The event type that closes a Player's Auction and, with it, releases the
+ * nomination (Epic 3, Story 3.4).
+ *
+ * Declared here, beside the reducer that gives it meaning, for
+ * `NOMINATION_PLACED_EVENT`'s reason — and declared in this story rather
+ * than in 3.4 so that the release case and the event name it reads can
+ * never be two independent literals that drift apart. **Nothing in this
+ * story appends one.** Epic 3 owns closing; this name and the
+ * `fantraxPlayerId` key below are the contract 3.4 inherits.
+ */
+export const AUCTION_CLOSED_EVENT = 'AuctionClosed';
 
 /** One open nomination, as every refusal sentence needs to name it. */
 export type OpenNomination = {
@@ -157,6 +186,52 @@ function readPayload(payload: unknown, event: { readonly occurredAt: string }): 
 }
 
 /**
+ * The Player an `AuctionClosed` payload names, or `null` when it names none.
+ *
+ * `readPayload`'s discipline, narrowed to the one field the release case
+ * reads. A close that names no Player cannot identify a board seat or a
+ * Slot, so it is skipped rather than folded — the reducer stays total over
+ * any log it is handed, and an insert-only log's malformed historical row
+ * can never crash the fold.
+ *
+ * Everything else an `AuctionClosed` may carry — the winner, the price, the
+ * Slot Placement, the bid history — is deliberately not read. Story 3.4
+ * shapes that payload; this fold only needs to know WHICH Player's auction
+ * ended.
+ *
+ * **Exported because the release has two halves that must agree.** The fold
+ * frees the Slot; `server/nomination.ts`'s `releaseNomination` deletes the
+ * claim row. Both read the same field off the same event, so they read it
+ * through this one function rather than through two literals that could
+ * come to disagree about what a malformed close means — a close the fold
+ * skipped but the delete acted on (or the reverse) would leave the log and
+ * the claim table saying different things about the same Slot.
+ */
+export function readClosedPlayerId(payload: unknown): string | null {
+	if (typeof payload !== 'object' || payload === null) return null;
+	const record = payload as Record<string, unknown>;
+	const fantraxPlayerId = record['fantraxPlayerId'];
+	if (typeof fantraxPlayerId !== 'string' || fantraxPlayerId === '') return null;
+	return fantraxPlayerId;
+}
+
+/**
+ * Every entry of a record except the named key.
+ *
+ * Built through `Object.entries`/`Object.fromEntries` rather than by
+ * assignment, for `hasOwn`'s reason: the keys are data, and
+ * `record[key] = value` on a key of `__proto__` would set a prototype
+ * instead of an entry. `fromEntries` defines own properties and cannot be
+ * subverted that way.
+ */
+function omitKey(
+	record: Readonly<Record<string, OpenNomination>>,
+	key: string
+): Readonly<Record<string, OpenNomination>> {
+	return Object.fromEntries(Object.entries(record).filter(([existing]) => existing !== key));
+}
+
+/**
  * Fold one event onto the open nominations.
  *
  * The `default: return state` discipline is `phase.ts`'s, for the same
@@ -165,7 +240,10 @@ function readPayload(payload: unknown, event: { readonly occurredAt: string }): 
  *
  * A nomination whose Player is already on the board, or whose Team already
  * holds an open nomination, leaves the state untouched — which is what makes
- * folding the same log twice converge on the identical result.
+ * folding the same log twice converge on the identical result. A close for a
+ * Player nobody nominated leaves it untouched for the same reason, which is
+ * also what makes the release converge on a double replay: the second fold
+ * of a close is a no-op on an absent key.
  */
 export const nominationsReducer: Reducer<OpenNominations> = (state, event) => {
 	switch (event.type) {
@@ -177,6 +255,23 @@ export const nominationsReducer: Reducer<OpenNominations> = (state, event) => {
 			return {
 				byPlayer: { ...state.byPlayer, [nomination.fantraxPlayerId]: nomination },
 				byTeam: { ...state.byTeam, [nomination.teamId]: nomination }
+			};
+		}
+		case AUCTION_CLOSED_EVENT: {
+			const fantraxPlayerId = readClosedPlayerId(event.payload);
+			if (fantraxPlayerId === null) return state;
+			// A close for a Player who holds no board seat — one that arrived
+			// before any nomination, or a second fold of one already applied —
+			// changes nothing. That is what makes replay converge.
+			if (!hasOwn(state.byPlayer, fantraxPlayerId)) return state;
+			const released = state.byPlayer[fantraxPlayerId];
+			if (released === undefined) return state;
+			// Both indexes drop together, keyed off the ONE nomination object
+			// they share: the board seat and the nominating Team's Slot are two
+			// readings of a single fact, so they can never be released apart.
+			return {
+				byPlayer: omitKey(state.byPlayer, fantraxPlayerId),
+				byTeam: omitKey(state.byTeam, released.teamId)
 			};
 		}
 		default:

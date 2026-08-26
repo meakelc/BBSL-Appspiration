@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { DEVICE_CLASSES, classifyDeviceClass } from '../../src/lib/core/device-class.ts';
 import { fold } from '../../src/lib/core/projection/fold.ts';
 import {
+	AUCTION_CLOSED_EVENT,
 	INITIAL_NOMINATIONS,
 	NOMINATION_PLACED_EVENT,
 	nominationForPlayer,
@@ -60,6 +61,23 @@ function nomination(
 		{ fantraxPlayerId, playerName, teamId, teamName, managerId: 'm-1' },
 		occurredAt
 	);
+}
+
+/**
+ * A SYNTHETIC `AuctionClosed`. Epic 3 owns appending the real one; this
+ * story proves the fold releases on it, so the test builds it by hand.
+ *
+ * The extra keys are the point of the second parameter: a real close will
+ * carry a winner, a price and more, and this fold must read `fantraxPlayerId`
+ * and nothing else.
+ */
+function closed(
+	seq: number,
+	fantraxPlayerId: string,
+	extra: Record<string, unknown> = {},
+	occurredAt = '2026-08-25T18:00:00.000Z'
+): AppendedEvent {
+	return event(seq, AUCTION_CLOSED_EVENT, { fantraxPlayerId, ...extra }, occurredAt);
 }
 
 // --- The fold ---------------------------------------------------------------
@@ -218,6 +236,185 @@ describe('nominationsReducer', () => {
 		const second = fold(first, [nomination(2, 'p-2', 'Sengun', 't-2', 'Celtics')], nominationsReducer);
 		expect(openNominations(first)).toHaveLength(1);
 		expect(openNominations(second)).toHaveLength(2);
+	});
+});
+
+// --- The release, on a synthetic close (Story 2.3) --------------------------
+
+describe('nominationsReducer — AuctionClosed releases the nomination', () => {
+	it('frees the board seat AND the nominating Team’s Slot together — AC1', () => {
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'), closed(2, 'p-1')],
+			nominationsReducer
+		);
+		expect(nominationForPlayer(state, 'p-1')).toBeNull();
+		expect(nominationForTeam(state, 't-1')).toBeNull();
+		expect(openNominations(state)).toEqual([]);
+	});
+
+	it.each([
+		['names another Team as the winner', { winningTeamId: 't-2', winningTeamName: 'Celtics' }],
+		['names the nominator as the winner', { winningTeamId: 't-1', winningTeamName: 'Lakers' }],
+		['names no winner at all', { winningTeamId: null }],
+		['carries a price and a Slot Placement', { price: 42, slotPlacement: 'active_bench' }],
+		['carries a whole bid history', { bids: [{ teamId: 't-2', amount: 3 }] }]
+	])('frees the Slot identically when the close %s — the fold reads only the Player', (
+		_label,
+		extra: Record<string, unknown>
+	) => {
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'), closed(2, 'p-1', extra)],
+			nominationsReducer
+		);
+		expect(nominationForTeam(state, 't-1')).toBeNull();
+		expect(nominationForPlayer(state, 'p-1')).toBeNull();
+	});
+
+	it('frees the Slot of a nominator who never bid — the close names nobody it needs to', () => {
+		// No bid event exists in this log at all, which is the strongest form
+		// of "the nominator never bid": there is nothing for the reducer to
+		// have consulted even if it wanted to.
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'), closed(2, 'p-1')],
+			nominationsReducer
+		);
+		expect(nominationForTeam(state, 't-1')).toBeNull();
+	});
+
+	it('leaves the state untouched when the close precedes any nomination — the reducer is total', () => {
+		expect(() =>
+			fold(INITIAL_NOMINATIONS, [closed(1, 'p-1')], nominationsReducer)
+		).not.toThrow();
+		expect(fold(INITIAL_NOMINATIONS, [closed(1, 'p-1')], nominationsReducer)).toEqual(
+			INITIAL_NOMINATIONS
+		);
+	});
+
+	it('releases only the closed Player — another Team’s Slot stays held', () => {
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[
+				nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'),
+				nomination(2, 'p-2', 'Alperen Sengun', 't-2', 'Celtics'),
+				closed(3, 'p-2')
+			],
+			nominationsReducer
+		);
+		expect(nominationForPlayer(state, 'p-1')?.teamName).toBe('Lakers');
+		expect(nominationForTeam(state, 't-1')?.playerName).toBe('Jalen Green');
+		expect(nominationForPlayer(state, 'p-2')).toBeNull();
+		expect(nominationForTeam(state, 't-2')).toBeNull();
+	});
+
+	it('leaves a held nomination alone when a DIFFERENT Player closes', () => {
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'), closed(2, 'p-9')],
+			nominationsReducer
+		);
+		expect(nominationForPlayer(state, 'p-1')?.teamName).toBe('Lakers');
+		expect(nominationForTeam(state, 't-1')?.playerName).toBe('Jalen Green');
+	});
+
+	it('converges when the whole log is folded twice, and in scrambled order', () => {
+		const log = [nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'), closed(2, 'p-1')];
+		const once = fold(INITIAL_NOMINATIONS, log, nominationsReducer);
+		const twice = fold(once, log, nominationsReducer);
+		expect(twice).toEqual(once);
+		// And a rebuild from empty, in scrambled array order, agrees: fold()
+		// orders by seq, so the close can never be applied before the open.
+		expect(fold(INITIAL_NOMINATIONS, [...log].reverse(), nominationsReducer)).toEqual(once);
+	});
+
+	it('lets the Team nominate again after its Player closes — the whole point of the Slot', () => {
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[
+				nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'),
+				closed(2, 'p-1'),
+				nomination(3, 'p-2', 'Alperen Sengun', 't-1', 'Lakers')
+			],
+			nominationsReducer
+		);
+		expect(nominationForTeam(state, 't-1')?.playerName).toBe('Alperen Sengun');
+		expect(nominationForPlayer(state, 'p-2')?.teamName).toBe('Lakers');
+		// The closed Player's entry is GONE, not overwritten by the new one.
+		expect(nominationForPlayer(state, 'p-1')).toBeNull();
+		expect(openNominations(state)).toHaveLength(1);
+	});
+
+	it('makes the closed Player nominatable again, by another Team', () => {
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[
+				nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'),
+				closed(2, 'p-1'),
+				nomination(3, 'p-1', 'Jalen Green', 't-2', 'Celtics')
+			],
+			nominationsReducer
+		);
+		expect(nominationForPlayer(state, 'p-1')?.teamName).toBe('Celtics');
+		expect(nominationForTeam(state, 't-1')).toBeNull();
+	});
+
+	it.each([
+		['not an object', 'nonsense'],
+		['null', null],
+		['a number', 7],
+		['no fantraxPlayerId', { winningTeamId: 't-2' }],
+		['a blank fantraxPlayerId', { fantraxPlayerId: '' }],
+		['a non-string fantraxPlayerId', { fantraxPlayerId: 7 }]
+	])('skips a malformed close rather than throwing: %s', (_label, payload) => {
+		const before = fold(
+			INITIAL_NOMINATIONS,
+			[nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers')],
+			nominationsReducer
+		);
+		const after = fold(before, [event(2, AUCTION_CLOSED_EVENT, payload)], nominationsReducer);
+		// A close nobody can identify frees nothing, and above all does not
+		// crash the fold: an insert-only log cannot be corrected in place.
+		expect(after).toEqual(before);
+		expect(nominationForTeam(after, 't-1')?.playerName).toBe('Jalen Green');
+	});
+
+	it.each(['constructor', 'toString', '__proto__', 'hasOwnProperty'])(
+		'releases a hostile id %s as an ordinary key, without touching a prototype',
+		(hostileId: string) => {
+			const state = fold(
+				INITIAL_NOMINATIONS,
+				[nomination(1, hostileId, 'Odd Name', hostileId, 'Odd Team'), closed(2, hostileId)],
+				nominationsReducer
+			);
+			expect(nominationForPlayer(state, hostileId)).toBeNull();
+			expect(nominationForTeam(state, hostileId)).toBeNull();
+			expect(openNominations(state)).toEqual([]);
+			// Nothing leaked onto Object.prototype along the way.
+			expect(Object.getPrototypeOf(state.byPlayer)).toBe(Object.prototype);
+			expect(({} as Record<string, unknown>)[hostileId]).not.toBe('Odd Name');
+		}
+	);
+
+	it('never mutates the state it was handed', () => {
+		const held = fold(
+			INITIAL_NOMINATIONS,
+			[nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers')],
+			nominationsReducer
+		);
+		const released = fold(held, [closed(2, 'p-1')], nominationsReducer);
+		expect(openNominations(held)).toHaveLength(1);
+		expect(openNominations(released)).toHaveLength(0);
+		expect(nominationForTeam(held, 't-1')?.playerName).toBe('Jalen Green');
+	});
+
+	it('is the ONE name the release case and any future producer share', () => {
+		// Two independent literals is how these drift: a producer appending
+		// 'AuctionClosed ' or 'auctionClosed' would leave every Slot held
+		// forever, with a green suite on both sides.
+		expect(AUCTION_CLOSED_EVENT).toBe('AuctionClosed');
+		expect(AUCTION_CLOSED_EVENT).not.toBe(NOMINATION_PLACED_EVENT);
 	});
 });
 

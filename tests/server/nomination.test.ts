@@ -13,10 +13,19 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { NOMINATION_PLACED_EVENT } from '../../src/lib/core/projection/nominations.ts';
+import {
+	AUCTION_CLOSED_EVENT,
+	NOMINATION_PLACED_EVENT
+} from '../../src/lib/core/projection/nominations.ts';
 import { AUCTION_OPENED_EVENT } from '../../src/lib/core/projection/phase.ts';
 import { nominationRefusalDetail } from '../../src/lib/core/rules/nomination.ts';
-import { loadNominatablePool, loadNominationState, placeNomination } from '../../src/lib/server/nomination.ts';
+import type { AppendedEvent } from '../../src/lib/core/types.ts';
+import {
+	loadNominatablePool,
+	loadNominationState,
+	placeNomination,
+	releaseNomination
+} from '../../src/lib/server/nomination.ts';
 import type {
 	NominationPlacedPayload,
 	NominationRejection
@@ -119,6 +128,15 @@ function fakeGateway(options: {
 			// fail the suite rather than pass unnoticed.
 			if (/^insert into open_nominations/i.test(sql)) {
 				order.push('claim-nomination');
+				params.push([...queryParams]);
+				return { rows: [] };
+			}
+			// The claim row's deleter (Story 2.3). Registered by no production
+			// call site — `releaseNomination` is driven directly by the tests
+			// below — but the fake must recognise the statement, or the very
+			// thing under test would read as "unexpected statement".
+			if (/^delete from open_nominations/i.test(sql)) {
+				order.push('release-nomination');
 				params.push([...queryParams]);
 				return { rows: [] };
 			}
@@ -820,6 +838,193 @@ describe('loadNominatablePool — the render path never writes', () => {
 
 		await expect(loadNominatablePool(harness.gateway, 't-1')).rejects.toThrow();
 		expect(harness.state.released).toBe(1);
+	});
+});
+
+// --- The claim row's deleter, unregistered (Story 2.3) ----------------------
+
+/** One appended event, as `runTransactionalWrite` would hand a projection. */
+function appended(seq: number, type: string, payload: unknown): AppendedEvent {
+	return {
+		seq: String(seq),
+		occurredAt: '2026-08-26T09:00:00.000Z',
+		schemaVersion: 1,
+		coreVersion: 1,
+		type,
+		payload,
+		managerId: 'm-1',
+		teamId: 't-1',
+		deviceClass: null,
+		dispatchOutcome: null,
+		deliveryOutcome: null
+	};
+}
+
+describe('releaseNomination — the claim row is deleted when the Auction closes', () => {
+	it('issues exactly ONE delete for one close, keyed on the Player as a parameter', async () => {
+		const harness = fakeGateway({});
+
+		await releaseNomination(harness.client, [
+			appended(50, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'p-1' })
+		]);
+
+		expect(harness.order).toEqual(['release-nomination']);
+		// The Player id is a bound parameter, never interpolated into the SQL
+		// text — the same discipline every other statement in this module keeps.
+		expect(harness.params).toEqual([['p-1']]);
+	});
+
+	it('keys on the Player ALONE — the Team is never named in the statement', async () => {
+		const harness = fakeGateway({});
+
+		await releaseNomination(harness.client, [
+			appended(50, AUCTION_CLOSED_EVENT, {
+				fantraxPlayerId: 'p-1',
+				winningTeamId: 't-9',
+				price: 42
+			})
+		]);
+
+		// The Slot frees whoever won, so the delete carries one parameter and
+		// it is the Player. A team id here would be the wrong key.
+		expect(harness.params).toEqual([['p-1']]);
+		expect(harness.params[0]).toHaveLength(1);
+	});
+
+	it('issues NO statement for a NominationPlaced — a claim is not released by being written', async () => {
+		const harness = fakeGateway({});
+
+		await releaseNomination(harness.client, [
+			appended(50, NOMINATION_PLACED_EVENT, {
+				fantraxPlayerId: 'p-1',
+				playerName: 'Jalen Green',
+				teamId: 't-1',
+				teamName: 'Lakers',
+				managerId: 'm-1'
+			})
+		]);
+
+		expect(harness.order).toEqual([]);
+		expect(harness.params).toEqual([]);
+	});
+
+	it.each([AUCTION_OPENED_EVENT, 'BidPlaced', 'ImportPromoted'])(
+		'issues no statement for %s either — only a close releases',
+		async (type: string) => {
+			const harness = fakeGateway({});
+			await releaseNomination(harness.client, [appended(50, type, { fantraxPlayerId: 'p-1' })]);
+			expect(harness.order).toEqual([]);
+		}
+	);
+
+	it('issues nothing at all for an empty batch', async () => {
+		const harness = fakeGateway({});
+		await releaseNomination(harness.client, []);
+		expect(harness.order).toEqual([]);
+	});
+
+	it('deletes once per close when a batch carries several', async () => {
+		const harness = fakeGateway({});
+
+		await releaseNomination(harness.client, [
+			appended(50, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'p-1' }),
+			appended(51, NOMINATION_PLACED_EVENT, { fantraxPlayerId: 'p-3', teamId: 't-3' }),
+			appended(52, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'p-2' })
+		]);
+
+		expect(harness.order).toEqual(['release-nomination', 'release-nomination']);
+		expect(harness.params).toEqual([['p-1'], ['p-2']]);
+	});
+
+	// The write half of the release must skip exactly what the fold skips.
+	// Both read the close through the core's `readClosedPlayerId`, so this
+	// table and the fold's malformed-close table in `tests/core/nomination.test.ts`
+	// cannot drift apart: a close the fold tolerates must never abort the
+	// transaction appending it, and one the fold skips must never delete a row.
+	it.each([
+		['not an object', 'nonsense'],
+		['null', null],
+		['a number', 7],
+		['no fantraxPlayerId', { winningTeamId: 't-2' }],
+		['a blank fantraxPlayerId', { fantraxPlayerId: '' }],
+		['a non-string fantraxPlayerId', { fantraxPlayerId: 7 }]
+	])('issues NO statement for a close whose payload is %s', async (_label, payload) => {
+		const harness = fakeGateway({});
+
+		await expect(
+			releaseNomination(harness.client, [appended(50, AUCTION_CLOSED_EVENT, payload)])
+		).resolves.toBeUndefined();
+
+		expect(harness.order).toEqual([]);
+		expect(harness.params).toEqual([]);
+	});
+
+	it('skips a malformed close but still releases a well-formed one in the same batch', async () => {
+		// One unusable row in the batch must not cost the Slot of a Player
+		// whose close IS readable.
+		const harness = fakeGateway({});
+
+		await releaseNomination(harness.client, [
+			appended(50, AUCTION_CLOSED_EVENT, null),
+			appended(51, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'p-2' })
+		]);
+
+		expect(harness.order).toEqual(['release-nomination']);
+		expect(harness.params).toEqual([['p-2']]);
+	});
+
+	it('is idempotent: a Player with no claim row simply affects zero rows, no throw', async () => {
+		// The fake returns `{ rows: [] }` for the delete, which is exactly what
+		// Postgres gives for a delete that matched nothing. Nothing here reads
+		// a row count, and nothing may: a delete that finds nothing has already
+		// achieved what it was asked to achieve.
+		const harness = fakeGateway({});
+
+		await expect(
+			releaseNomination(harness.client, [
+				appended(50, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'never-nominated' })
+			])
+		).resolves.toBeUndefined();
+
+		await expect(
+			releaseNomination(harness.client, [
+				appended(51, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'never-nominated' })
+			])
+		).resolves.toBeUndefined();
+
+		expect(harness.order).toEqual(['release-nomination', 'release-nomination']);
+	});
+
+	it('never SELECTS from the claim table — the Slot stays a fold of the log', async () => {
+		const harness = fakeGateway({});
+		await releaseNomination(harness.client, [
+			appended(50, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'p-1' })
+		]);
+		// The fake has no read branch for `open_nominations` at all and throws
+		// on any statement it does not recognise, so a select would have failed
+		// this test rather than passing unnoticed.
+		expect(harness.order.filter((s) => s === 'release-nomination')).toHaveLength(1);
+		expect(harness.order).not.toContain('read-log');
+	});
+
+	it('is NOT registered on placeNomination — no production path issues the delete', async () => {
+		// AC3: Epic 3 must need no change here, and the delete belongs inside
+		// the transaction that appends the close — 3.4's, not this one's.
+		const harness = fakeGateway({ pool: [JALEN], events: [opened()] });
+
+		await placeNomination(harness.gateway, ACTOR, 'p-1', DEVICE_CLASS);
+
+		expect(harness.order).not.toContain('release-nomination');
+		expect(harness.order).toEqual([
+			'begin',
+			'lock',
+			'read-log',
+			'read-pool-player',
+			'read-contract',
+			'append-event',
+			'claim-nomination',
+			'commit'
+		]);
 	});
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -231,5 +231,68 @@ describe('secrets', () => {
 			);
 		}
 		expect(gitignore).toMatch(/^!\.env\.example$/m);
+	});
+});
+
+/**
+ * Story 2.3's AC2, as a gate rather than a grep.
+ *
+ * The criterion is a NEGATIVE invariant — the Slot's release "is computed by
+ * the fold with no stored flag toggled by a handler, nothing reading
+ * `open_nominations`, and no trigger but a close — not a timer, not being
+ * outbid, not elapsed time". That spec's Verification section proves it by
+ * hand with `rg`, which proves it once, on the day somebody runs it. These
+ * are the same three checks, executed.
+ *
+ * Comments are stripped before matching: prose ABOUT the claim table (the
+ * migration's reasoning, `pg-errors.ts`'s note) is not a read of it.
+ */
+describe('AC2 — the Nomination Slot is released by the fold, never by a stored flag', () => {
+	const SOURCE = /\.(ts|svelte)$/;
+
+	/** Every source file under src/, recursively. */
+	function sources(dir = 'src', found: string[] = []): string[] {
+		for (const entry of readdirSync(at(...dir.split('/')), { withFileTypes: true })) {
+			const path = `${dir}/${entry.name}`;
+			if (entry.isDirectory()) sources(path, found);
+			else if (SOURCE.test(entry.name)) found.push(path);
+		}
+		return found;
+	}
+
+	/** A file's code with every comment removed. */
+	function code(path: string): string {
+		return readFileSync(at(...path.split('/')), 'utf8')
+			.replace(/\/\*[\s\S]*?\*\//g, '')
+			.replace(/^\s*\/\/.*$/gm, '');
+	}
+
+	it('names open_nominations in exactly one module — the claim table has one owner', () => {
+		const naming = sources().filter((path) =>
+			/open_nominations|OPEN_NOMINATIONS_TABLE/.test(code(path))
+		);
+		expect(naming).toEqual(['src/lib/server/nomination.ts']);
+	});
+
+	it('issues exactly one INSERT and one DELETE against it, and never a SELECT', () => {
+		// "Nothing reads `open_nominations` to answer a question" (Story 2.2's
+		// Always, carried into 2.3): it is a write-side constraint, and the
+		// answer to "is this Slot held" is the fold over `auction_events`.
+		const statements = [
+			...code('src/lib/server/nomination.ts').matchAll(
+				/\b(select|insert into|update|delete from)\b[^;`]*?\$\{OPEN_NOMINATIONS_TABLE\}/gi
+			)
+		].map((match) => (match[1] ?? '').toLowerCase());
+
+		expect(statements.sort()).toEqual(['delete from', 'insert into']);
+	});
+
+	it('folds exactly two events — a close releases, and nothing else does', () => {
+		const nominations = code('src/lib/core/projection/nominations.ts');
+		const cases = [...nominations.matchAll(/case\s+([A-Z_]+):/g)].map((match) => match[1]);
+
+		expect(cases).toEqual(['NOMINATION_PLACED_EVENT', 'AUCTION_CLOSED_EVENT']);
+		// No timer, no elapsed time, no wall clock: the trigger is the event.
+		expect(nominations).not.toMatch(/Date\.now|new Date\(|setTimeout|setInterval/);
 	});
 });
