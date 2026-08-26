@@ -68,9 +68,9 @@ export type NominationState = {
 /**
  * Why a nomination was refused.
  *
- * Six of the eight are re-derived INSIDE the transaction, under the lock:
+ * Five of the eight are re-derived INSIDE the transaction, under the lock:
  * `phase`, `unknown_player`, `under_contract`, `already_nominated` and
- * `slot_in_use`. The other two are decided by the route before the
+ * `slot_in_use`. Two more are decided by the route before the
  * transaction opens — `unconfirmed`, because an unconfirmed submit has
  * nothing to decide about, and `unbound_actor`, because
  * `auction_events.manager_id`/`team_id` are NOT NULL (AD-4) so an unbound

@@ -10,17 +10,18 @@
  * product exists for, and the catalog entry's `commissionerOnly: false` is
  * the statement of that. Hiding a form is never the check.
  *
- * **Nothing this file decides is a rules gate.** Two refusals are raised
- * here because neither has anything to decide about inside a transaction:
- * the missing confirmation, because an unconfirmed submit means only that
- * this request did not mean to nominate; and the unbound actor, because
- * `auction_events.manager_id`/`team_id` are NOT NULL (AD-4) so there is no
- * event to append. Both sentences still come from the pure core — this file
- * words no refusal of its own. Every real gate — the phase, the Player's
- * presence in the pool, their contract, the board and the Team's Slot — is
- * re-derived inside `placeNomination`'s transaction under the global lock,
- * so a page that rendered a Player as available cannot race a second
- * nomination past them.
+ * **Nothing this file decides is a rules gate.** Three refusals are raised
+ * here because none has anything to decide about inside a transaction: the
+ * unnamed Player, because a submit that names nobody cannot be gated against
+ * a pool row; the missing confirmation, because an unconfirmed submit means
+ * only that this request did not mean to nominate; and the unbound actor,
+ * because `auction_events.manager_id`/`team_id` are NOT NULL (AD-4) so there
+ * is no event to append. All three sentences still come from the pure core —
+ * this file words no refusal of its own. Every real gate — the phase, the
+ * Player's presence in the pool, their contract, the board and the Team's
+ * Slot — is re-derived inside `placeNomination`'s transaction under the
+ * global lock, so a page that rendered a Player as available cannot race a
+ * second nomination past them.
  *
  * **The device class is read here and only here.** `request.headers` is a
  * transport fact; the pure core classifies the string and never sees the
@@ -85,7 +86,19 @@ export const actions: Actions = {
 		requireLiveDestination(locals.session, locals.phase.name, NOMINATE_DESTINATION_ID);
 
 		const form = await request.formData();
-		const fantraxPlayerId = String(form.get('fantraxPlayerId') ?? '');
+		const fantraxPlayerId = String(form.get('fantraxPlayerId') ?? '').trim();
+
+		if (fantraxPlayerId === '') {
+			// A submit naming no Player has nothing for the gate to decide
+			// about, so it is refused here rather than taking the global
+			// advisory lock and running two lookups to reach the same
+			// answer. This is the `confirm` check's reasoning applied to the
+			// other half of the form: no transaction is opened for a request
+			// that cannot name what it wants. The sentence is still the
+			// core's — `unknown_player` is exactly "the Player named is not
+			// in the pool", and an unnamed Player is not in it either.
+			return fail(400, { notice: nominationRefusalDetail({ kind: 'unknown_player' }) });
+		}
 
 		if (form.get('confirm') !== 'yes') {
 			// A nomination holds the Team's only Slot until that Auction

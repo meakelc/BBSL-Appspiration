@@ -257,6 +257,27 @@ describe('actions.nominate — gated the same way, and never the check itself', 
 		}
 	);
 
+	it.each([
+		['absent', [['confirm', 'yes']]],
+		['empty', [['fantraxPlayerId', ''], ['confirm', 'yes']]],
+		['whitespace', [['fantraxPlayerId', '   '], ['confirm', 'yes']]]
+	] as ReadonlyArray<[string, [string, string][]]>)(
+		'refuses a submit naming no Player (%s) with 400, opening no transaction',
+		async (_label: string, fields: [string, string][]) => {
+			// The point of the check is that it costs nothing: a request that
+			// names nobody must never reach the global advisory lock and the
+			// two lookups only to be told the Player is unknown.
+			const result = (await nominateAction(nominateEvent(fields))) as {
+				status: number;
+				data: { notice: string };
+			};
+
+			expect(result.status).toBe(400);
+			expect(result.data.notice).toBe(nominationRefusalDetail({ kind: 'unknown_player' }));
+			expect(placeCalls).toEqual([]);
+		}
+	);
+
 	it('refuses with 400 when the acting Manager is bound to no Team, opening no transaction', async () => {
 		const unbound: RegisteredManager = { ...MANAGER, teamId: null };
 		const result = (await nominateAction(

@@ -113,10 +113,17 @@ export const leagueClockReducer: Reducer<LeagueClock> = (state, event) => {
  * what stops a compensating void from recomputing the clock back past the
  * open.
  *
- * Total over any state the reducer can produce: an unparseable origin, or a
- * `lastReset` that predates the origin or fails to parse, falls back to the
- * origin rather than throwing. Nothing here asks what time it is now — every
- * input is an instant the log already carries.
+ * Total over any state the reducer can produce, but the two instants are
+ * NOT treated alike, and the asymmetry is deliberate. An unparseable
+ * `origin` returns `null`: the origin is what establishes that a League
+ * Clock exists at all, so without a readable one there is no expiry to
+ * state, and inventing a start would be worse than admitting none. An
+ * unparseable `lastReset` is skipped and the expiry falls back to the
+ * origin: a reset only ever moves the expiry LATER, so discarding an
+ * unreadable one yields the earlier, more conservative deadline — it can
+ * close an auction sooner than the log intended, never later than it
+ * allowed. Neither case throws, and nothing here asks what time it is now:
+ * every input is an instant the log already carries.
  */
 export function leagueClockExpiry(clock: LeagueClock): string | null {
 	if (clock.origin === null) return null;

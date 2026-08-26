@@ -1,0 +1,27 @@
+## Review Findings
+
+- `parseInstant`'s regex (`ISO_UTC_INSTANT`) only accepts a bare `Z` or the exact literal `+00:00` as the UTC marker. If any `occurredAt` value the log ever holds arrives in another valid UTC spelling (a `+00` two-digit offset, a space instead of `T`, sub-millisecond precision), `leagueClockExpiry` silently returns `null` instead of surfacing an error — an auction's expiry would simply vanish with no visible failure.
+
+- `leagueClockExpiry` treats a broken `origin` and a broken `lastReset` inconsistently: an unparseable `origin` makes the whole function return `null`, while an unparseable `lastReset` is silently ignored and the clock is computed as if no reset had ever happened. Nothing explains why a corrupt reset is tolerated but a corrupt origin isn't.
+
+- `leagueClockReducer`'s `NominationPlaced` case unconditionally overwrites `lastReset` on every event folded, relying entirely on `fold()` handing it events in ascending `seq` order. Nothing in this file enforces or asserts that invariant, and no test folds events out of `seq` order to prove the reducer would misbehave (or not) if that assumption were ever violated by a caller.
+
+- `readPayload` in `nominations.ts` validates `fantraxPlayerId`/`teamId` only against `typeof === 'string' && !== ''`, not against whitespace-only content (e.g. `' '`). A payload with a blank-but-nonempty id would be accepted as a real id, permanently occupying a board slot under a key no legitimate lookup can ever match.
+
+- The same file's name fallback (`playerName`/`teamName` default to the id when missing) only guards against the exact empty string, not whitespace-only names, so a stray `'   '` name would be stored and printed verbatim in refusal sentences instead of falling back sensibly.
+
+- `loadNominatablePool`'s "can this Team nominate at all" check works by synthesizing a fake `poolPlayer` with `fantraxPlayerId: ''` and relying on the board index never actually containing the key `''`. That safety depends entirely on `readPayload`'s empty-string rejection holding true forever; if that validation is ever loosened, this synthetic lookup would start returning a bogus `already_nominated` refusal for every Team, and the coupling between the two files is not documented anywhere near the synthetic-id trick itself.
+
+- `openNominations` returns `Object.values(nominations.byPlayer)` with a docstring disclaiming any order guarantee — but JS engines reorder plain-object keys that look like array indices/integers ahead of insertion order. Fantrax player ids are commonly numeric strings, so the actual iteration order could silently diverge from "seq order" or "insertion order" in a way a future reader debugging this code would not expect, and no test exercises numeric-looking ids to check this.
+
+- The `nominate` form action never validates that `fantraxPlayerId` is a non-empty string before calling `placeNomination`. An empty submission is allowed all the way through to acquiring the global advisory lock and running two SQL lookups, only to be refused as `unknown_player` — unlike the `confirm` check, which is rejected for free before any transaction opens.
+
+- `+page.server.ts`'s rejected-outcome handling does a bare type assertion, `outcome.reason as NominationRejection | undefined`, with no runtime shape check. If the write pipeline's generic `reason` field is ever populated with something else, `rejection?.detail` silently evaluates to `undefined` and falls back to the generic "unrecorded" sentence, masking what could be a genuine pipeline bug instead of surfacing it.
+
+- The nomination action's response type (`NominateForm.appended`) threads `deviceClass` all the way from the server to the client form data, but the `+page.svelte` success block only renders `appended.seq`; `deviceClass` is never displayed anywhere in the markup. Either a piece of the UI was meant to show this and was dropped, or classification data is being shipped to the browser for no reason.
+
+- `TABLET_MARKERS` includes short, generic substrings like `'silk'` and `'tablet'` with no test proving the classifier doesn't misfire on an unrelated User-Agent that happens to contain that substring incidentally (a crawler or app name, for instance) — the "no regex" design avoids catastrophic backtracking but doesn't avoid this kind of false-positive substring collision, and none of the test cases probe for it.
+
+- There is no test combining actual event folding (via `fold()`, in `seq` order) with `leagueClockExpiry` for the "reset predates origin" scenario; the only test for that behavior constructs the `LeagueClock` object by hand rather than deriving it from a folded log, so the reducer-to-expiry path for that specific case is asserted only indirectly.
+
+- The classifier and its docstring claim total, no-throw behavior is important because a missing/malformed User-Agent must never break a write — but there is no test for non-ASCII or homoglyph User-Agent strings (e.g., a full-width or Cyrillic look-alike of "iPhone") that a hostile or misbehaving client could send; such a string would fall through to `'unknown'` silently, and since the log is insert-only, a systematic miscategorization here can never be corrected after the fact.
