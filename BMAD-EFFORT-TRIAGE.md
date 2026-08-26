@@ -163,19 +163,51 @@ price of carrying a long context across many turns. Two single sessions in that 
 cost $64 and $77 on their own, at 28.7M and 31.0M cache-read tokens. No model pin touches
 that column. Only two things do.
 
-**1. Do not run `bmad-code-review` after a `bmad-build` story.** They run the same four
-layers over the same diff from byte-identical prompt files. After the build-side override
-added the Acceptance Auditor, a full code-review pass over a diff build already reviewed
-is ~100% duplicated work. This is the single largest saving available, because it removes
-whole invocations rather than making them cheaper. Keep running it for what build never
-covered: code that did not come from a build run, a diff spanning several stories whose
-*interaction* nobody reviewed, or a deliberate second opinion before a risky merge.
+**1. The duplication test is whether a review actually RAN, not whether `bmad-build` ran.**
+`bmad-build` step-04 and `bmad-code-review` step-02 run the same layers over the same diff
+from byte-identical prompt files, so re-reviewing a diff **that build already reviewed** is
+~100% waste. But a `bmad-build` run that was **paused after implementation, before step-04
+executed its layers**, has reviewed nothing — and finishing it in `bmad-code-review` is the
+supported handoff, not duplication.
 
-**2. One story per session.** Given the cache-read share, five stories in one long session
-costs far more than five sessions of one story — every turn re-reads the whole accumulated
-context. Loopbacks compound this: Story 1.6 went three full rounds (implement → four
-reviewers → re-implement, ×3) inside one session, ~12 reviewer invocations and 3
-implementer runs, each turn paying for all the context before it.
+That split is routine here, and usually forced: a large story plus a full four-layer review
+does not always fit inside one 5-hour usage window. Pausing after implementation, committing,
+and running the review in a fresh context is the correct response, and it is **cheaper than
+the in-session review** — the reviewers start on a clean context instead of inheriting the
+whole planning-and-implementation session, which is where the cache-read cost lives.
+
+**Running the split correctly.** `bmad-code-review` step-01 Tier 1 accepts a spec path and
+reads `baseline_commit` from its frontmatter as the diff baseline — that is the designed seam
+between the two skills.
+
+- **Always pass the spec path.** It is what sets `review_mode = "full"`, and the Acceptance
+  Auditor is gated on exactly that (`when = 'Only when {review_mode} = "full".'`). Omit the
+  spec and step-02 silently **drops the auditor** with a one-line notice — you lose the
+  judgement layer, which is the one layer worth the most.
+- **Commit before switching.** This is a real advantage of the split, not just tidiness: the
+  66%-of-the-diff-missing trap exists because `git diff <baseline>` omits untracked files
+  while step-04 forbids `git add`. Once the work is committed there are no untracked files,
+  so the diff is complete by construction.
+- **Check the spec says `in-review` before you pause.** Step-04 sets that as its first
+  action. If you stopped earlier and it still reads `in-progress`, step-01 of a resumed
+  `bmad-build` routes to step-03 and **re-implements the story**.
+- `bmad-code-review` step-04 closes the loop itself — it sets the story to `done` or
+  `in-progress` and syncs `sprint-status.yaml`.
+
+So: skip the second pass when build's step-04 already ran its layers on that diff. Otherwise
+run it — deliberately, with the spec path. Also keep it for what build never covered: code
+that did not come from a build run, a diff spanning several stories whose *interaction*
+nobody reviewed, or a second opinion before a risky merge.
+
+**2. One story per session — and splitting one story across sessions is fine too.** Given
+the cache-read share, five stories in one long session costs far more than five sessions of
+one story: every turn re-reads the whole accumulated context. The same arithmetic means
+pausing a long story at the review gate and finishing it fresh is a *saving*, not a
+compromise — the reviewers stop paying for the planning and implementation context they do
+not need. Loopbacks are where this hurts most: Story 1.6 went three full rounds (implement →
+four reviewers → re-implement, ×3) inside one session, ~12 reviewer invocations and 3
+implementer runs, each turn paying for everything before it. A story already on its second
+loopback is a good candidate to commit and resume fresh.
 
 **The implementer stays on the session tier, deliberately.** Its output is large, its
 mistakes propagate into every review layer, and a bad implementation triggers a loopback

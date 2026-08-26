@@ -108,6 +108,33 @@ loop is now:
 3. `bmad-code-review` — **fresh context, and a different model than the one that implemented it.**
 4. `bmad-sprint-status` / `bmad-retrospective` at epic boundaries.
 
+### The split-session review handoff
+
+`bmad-build` runs plan → implement → review in one session, but a large story plus a full
+four-layer review does not always fit inside one 5-hour usage window. **Pausing after
+implementation and finishing the review in a fresh `bmad-code-review` session is a supported
+handoff, not duplication** — and it is cheaper, because the reviewers start on a clean
+context instead of inheriting the whole planning-and-implementation session, which is where
+the cache-read cost lives.
+
+The duplication to avoid is re-reviewing a diff whose layers **step-04 already ran**. If
+step-04 never executed, nothing has been reviewed yet.
+
+To split cleanly:
+
+- **Let step-04 set `status: in-review` before you stop** — that is its first action. If the
+  spec still reads `in-progress`, step-01 of a resumed `bmad-build` routes to step-03 and
+  **re-implements the story**.
+- **Commit the work.** This is a correctness win, not just tidiness: `git diff <baseline>`
+  omits untracked files and step-04 forbids `git add`, which is how a measured 66% of one
+  story reached no reviewer. Committing removes the trap by construction.
+- **Pass the spec path to `bmad-code-review`.** Its step-01 Tier 1 reads `baseline_commit`
+  from the frontmatter as the diff baseline — the designed seam between the skills — and the
+  spec is what sets `review_mode = "full"`. Omit it and the Acceptance Auditor is silently
+  dropped (it is gated on `review_mode`), costing you the judgement layer.
+- `bmad-code-review` step-04 closes the loop: it sets `done` or `in-progress` and syncs
+  `sprint-status.yaml`.
+
 **Rules:**
 
 - **Never hand-edit `_bmad-output/`.** The `bmad-*` skills own that tree. Run the owning skill.

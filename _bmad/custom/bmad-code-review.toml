@@ -3,30 +3,44 @@
 # Deliberately NOT `.user.toml` — see the header of bmad-build.toml. These pins
 # are cost architecture, not personal preference, and must survive a clone.
 #
-# PURPOSE: stop paying twice for the same review.
+# PURPOSE: stop paying twice for the same review — WITHOUT discouraging the
+# split-session handoff, which is a different thing entirely.
 #
-# bmad-build's step-04 and bmad-code-review's step-02 run the SAME three
-# context-free layers over the SAME diff, from byte-identical prompt files
-# (verified: review-prompts/edge-case-hunter.md and verification-gap.md are
-# identical between the two skills). The only layer bmad-code-review adds is
-# the Acceptance Auditor — and bmad-build.user.toml now runs that inside build.
+# bmad-build's step-04 and bmad-code-review's step-02 run the SAME layers over
+# the SAME diff, from byte-identical prompt files (verified:
+# review-prompts/edge-case-hunter.md and verification-gap.md are identical
+# between the two skills). So re-reviewing a diff that build's step-04 ALREADY
+# REVIEWED is duplicated work.
 #
-# So after the build-side override, a full bmad-code-review pass over a diff
-# bmad-build already reviewed is 100% duplicated work.
+# The test is whether a review actually RAN — not whether bmad-build ran.
 #
-# This file does NOT disable bmad-code-review. It re-tiers it, so that when you
-# DO run it, it is cheap. Keep running it for the cases build never covered:
+# A bmad-build run PAUSED after implementation, before step-04 executed its
+# layers, has reviewed nothing. Finishing it here is the supported handoff and
+# is CHEAPER than the in-session review: the reviewers start on a clean context
+# instead of inheriting the whole planning-and-implementation session, and
+# roughly 80% of spend is cache read. On this project the split is routine and
+# usually forced — a large story plus a full four-layer review does not always
+# fit inside one 5-hour usage window.
 #
+# RUNNING THE SPLIT: pass the spec path. step-01 Tier 1 reads `baseline_commit`
+# from its frontmatter as the diff baseline — the designed seam between the two
+# skills — and the spec is what sets `review_mode = "full"`. The Acceptance
+# Auditor below is gated on exactly that, so omitting the spec silently DROPS
+# the judgement layer with only a one-line notice. Commit before switching:
+# it removes the untracked-files diff trap by construction, since step-04
+# forbids `git add` and `git diff <baseline>` skips untracked files.
+#
+# This file does NOT disable bmad-code-review. It re-tiers it, so that whenever
+# you run it, it is cheap. Run it for:
+#
+#   - the split-session handoff described above (the common case here)
 #   - code that did not come from a bmad-build run at all (hand-written,
 #     imported, another agent's output, a merge)
 #   - a diff spanning several stories, where each story was reviewed in
 #     isolation but their interaction was not
 #   - a deliberate second opinion before a risky merge
 #
-# Do NOT run it reflexively after every bmad-build story. That is the duplicated
-# pass, and dropping it is the single largest saving available here — larger
-# than the model re-tiering, because it removes whole agent invocations rather
-# than making them cheaper.
+# The one case to skip: a diff whose layers build's step-04 already ran.
 
 [workflow]
 
