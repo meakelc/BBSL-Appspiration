@@ -163,6 +163,28 @@ Acceptance Auditor **chosen per story** from `BMAD-EFFORT-TRIAGE.md` — Safe ro
 Tier A/B and anything unlisted get opus. The implementer stays on the session tier on
 purpose (see that file's closing section for the loopback argument).
 
+**Every one of those pins is read by Claude Code and by nothing else.** The `model:`
+frontmatter in `.claude/agents/*.md` takes effect only when Claude Code's own
+`Task`/`Agent` dispatch spawns the subagent. Driving these skills from a Hermes session
+instead — via its `delegate_task` tool — spawns children at the **Hermes session model**,
+because `delegate_task` never reads `.claude/agents/`. Measured 2026-08-26: a story
+planned from Hermes ran all three `bmad-investigator` investigations on opus despite the
+agent file reading `model: sonnet`; all eight agent definitions were inert. Nothing errors
+and nothing warns. **Run BMAD stories through the Claude Code CLI if the tiering is meant
+to apply**, and treat an empty `scripts/bmad-cost-report.py` as proof the run happened
+outside Claude Code rather than proof it was cheap — that script reads
+`~/.claude/projects/**/*.jsonl` and cannot see a Hermes session at all.
+
+Two-tier work from Hermes *is* possible, just not per-role. `hermes config set
+delegation.model claude-sonnet-5` is read **at dispatch time, not session start**
+(measured both directions inside one opus session), so it can be toggled around each
+batch: set it before recall dispatches, `hermes config unset delegation.model` before the
+Acceptance Auditor and Intent Alignment. Three caveats — it is machine-global while set,
+so never use it with two stories running in parallel; the way back to the session tier is
+`unset` rather than naming an opus model; and it is moment-aware rather than role-aware,
+so forgetting to unset silently downgrades the judgement layer the triage says to protect.
+Prefer the Claude Code CLI, which needs no toggling and cannot be left half-applied.
+
 Verify a change to any of this with the resolver — never assume the merge did what you
 expected, since `id` matching **replaces the whole table rather than deep-merging keys**:
 
