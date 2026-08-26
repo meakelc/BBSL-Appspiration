@@ -1,7 +1,9 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { Client } from 'pg';
 
 import { GLOBAL_WRITE_LOCK_KEY } from '../../src/lib/core/constants.ts';
+import { NOMINATION_PLACED_EVENT } from '../../src/lib/core/projection/nominations.ts';
+import { classifyNominationConflict } from '../../src/lib/server/nomination.ts';
 import { writeGateway, writePool } from '../../src/lib/shell/db.ts';
 import { runTransactionalWrite } from '../../src/lib/shell/write.ts';
 import type { Decision } from '../../src/lib/shell/write.ts';
@@ -51,6 +53,8 @@ describe.skipIf(!reachable)(SUITE_TITLE, () => {
 	let owner: Client;
 	let managerId: string;
 	let teamId: string;
+	/** A second Team, so the Slot constraint can be raced by one Team twice. */
+	let otherTeamId: string;
 
 	beforeAll(async () => {
 		owner = new Client({ connectionString: LOCAL_DB_URL });
@@ -77,12 +81,26 @@ describe.skipIf(!reachable)(SUITE_TITLE, () => {
 		teamId = team.rows[0]?.id ?? (() => {
 			throw new Error('fixture team insert returned no row');
 		})();
+
+		const otherTeam = await owner.query<{ id: string }>(
+			`insert into public.teams (name) values ($1) returning id`,
+			[`Story 2.2 Fixture Team ${Date.now()}`]
+		);
+		otherTeamId = otherTeam.rows[0]?.id ?? (() => {
+			throw new Error('fixture second team insert returned no row');
+		})();
 	});
 
 	afterAll(async () => {
+		// Claims first: they reference both auction_events(seq) and teams(id).
+		await owner.query('delete from public.open_nominations where team_id = any($1::uuid[])', [
+			[teamId, otherTeamId]
+		]);
 		await owner.query('delete from public.auction_events where manager_id = $1', [managerId]);
 		await owner.query('delete from public.managers where id = $1', [managerId]);
-		await owner.query('delete from public.teams where id = $1', [teamId]);
+		await owner.query('delete from public.teams where id = any($1::uuid[])', [
+			[teamId, otherTeamId]
+		]);
 		await owner.end();
 	});
 
@@ -352,6 +370,219 @@ describe.skipIf(!reachable)(SUITE_TITLE, () => {
 			} finally {
 				await first.end();
 				await second.end();
+			}
+		});
+	});
+
+	// Story 2.2's AC4: uniqueness is enforced by a CONSTRAINT the second
+	// writer cannot pass, not by the read that preceded it. That cannot be
+	// proven by asserting the DDL exists, so these two tests race two real
+	// writers whose reads BOTH saw a free Player and a free Slot — the
+	// check-then-write gap Story 2.1 deliberately left open — and let the
+	// claim table be the only thing standing between them.
+	//
+	// Each writer replicates the pipeline's own statement sequence
+	// (lock -> read -> insert event -> insert claim -> commit) against raw
+	// `pg.Client`s, for the same reason every other proof in this file does:
+	// two independent connections are needed, and `writeGateway()`'s pool
+	// cannot be made to interleave them deterministically.
+	describe('Story 2.2 AC4 — the claim table separates two writers the gate let through', () => {
+		/** One writer's transaction, up to but not including the claim insert. */
+		async function appendNomination(
+			client: Client,
+			fantraxPlayerId: string,
+			playerName: string,
+			claimingTeamId: string
+		): Promise<{ seq: string; occurredAt: Date }> {
+			await client.query('select pg_advisory_xact_lock($1::bigint)', [
+				GLOBAL_WRITE_LOCK_KEY.toString()
+			]);
+			const inserted = await client.query<{ seq: string; occurred_at: Date }>(
+				`insert into public.auction_events
+					(occurred_at, schema_version, core_version, manager_id, team_id, event_type, payload)
+				 values (now(), 1, 1, $1, $2, $3, $4::jsonb)
+				 returning seq, occurred_at`,
+				[
+					managerId,
+					claimingTeamId,
+					NOMINATION_PLACED_EVENT,
+					JSON.stringify({
+						fantraxPlayerId,
+						playerName,
+						teamId: claimingTeamId,
+						teamName: 'Fixture',
+						managerId
+					})
+				]
+			);
+			const row = inserted.rows[0];
+			if (row === undefined) throw new Error('nomination insert returned no row');
+			return { seq: String(row.seq), occurredAt: row.occurred_at };
+		}
+
+		async function claim(
+			client: Client,
+			fantraxPlayerId: string,
+			claimingTeamId: string,
+			appended: { seq: string; occurredAt: Date }
+		): Promise<void> {
+			await client.query(
+				`insert into public.open_nominations
+					(fantrax_player_id, team_id, seq, occurred_at)
+				 values ($1, $2, $3, $4)`,
+				[fantraxPlayerId, claimingTeamId, appended.seq, appended.occurredAt]
+			);
+		}
+
+		// Each test in this block commits a claim of its own, and the two
+		// constraints under test are exactly what a leftover claim would trip.
+		// Without this, the Slot test dies on the PREVIOUS test's committed
+		// row before reaching the assertion it exists to make — a green-or-red
+		// verdict that depends on execution order rather than on the schema.
+		afterEach(async () => {
+			await owner.query('delete from public.open_nominations where team_id = any($1::uuid[])', [
+				[teamId, otherTeamId]
+			]);
+		});
+
+		it('lets exactly ONE nomination of a Player survive: the loser raises 23505 on the PK', async () => {
+			const playerId = `race-player-${Date.now()}`;
+			const first = new Client({ connectionString: LOCAL_DB_URL });
+			const second = new Client({ connectionString: LOCAL_DB_URL });
+			await first.connect();
+			await second.connect();
+
+			try {
+				// BOTH readers see a Player nobody has nominated — the gate
+				// would pass for each of them. This is the race being staged.
+				await first.query('begin');
+				await second.query('begin');
+				for (const reader of [first, second]) {
+					const board = await reader.query(
+						`select 1 from public.auction_events
+						 where event_type = $1 and payload->>'fantraxPlayerId' = $2`,
+						[NOMINATION_PLACED_EVENT, playerId]
+					);
+					expect(board.rows).toHaveLength(0);
+				}
+
+				const firstAppend = await appendNomination(first, playerId, 'Race Player', teamId);
+				await claim(first, playerId, teamId, firstAppend);
+				await first.query('commit');
+
+				// The second writer now takes the lock the first has released,
+				// appends its own event — and is stopped by the constraint.
+				const secondAppend = await appendNomination(second, playerId, 'Race Player', otherTeamId);
+				let thrown: unknown = null;
+				try {
+					await claim(second, playerId, otherTeamId, secondAppend);
+				} catch (error) {
+					thrown = error;
+				}
+				await second.query('rollback');
+
+				expect(thrown).not.toBeNull();
+				// The real error, classified by the real classifier: this is
+				// what makes the constraint NAME in the migration load-bearing.
+				expect(classifyNominationConflict(thrown)).toBe('already_nominated');
+
+				// Exactly one NominationPlaced row and exactly one claim row.
+				const events = await owner.query(
+					`select seq from public.auction_events
+					 where event_type = $1 and payload->>'fantraxPlayerId' = $2`,
+					[NOMINATION_PLACED_EVENT, playerId]
+				);
+				expect(events.rows).toHaveLength(1);
+				expect(String(events.rows[0]?.['seq'])).toBe(firstAppend.seq);
+
+				const claims = await owner.query(
+					'select team_id, seq from public.open_nominations where fantrax_player_id = $1',
+					[playerId]
+				);
+				expect(claims.rows).toHaveLength(1);
+				expect(claims.rows[0]?.['team_id']).toBe(teamId);
+			} finally {
+				await first.end();
+				await second.end();
+			}
+		});
+
+		it('lets a Team spend its Slot ONCE: a second Player raises 23505 on the team constraint', async () => {
+			const firstPlayer = `slot-race-a-${Date.now()}`;
+			const secondPlayer = `slot-race-b-${Date.now()}`;
+			const client = new Client({ connectionString: LOCAL_DB_URL });
+			await client.connect();
+
+			try {
+				await client.query('begin');
+				const appendedFirst = await appendNomination(client, firstPlayer, 'Slot A', teamId);
+				await claim(client, firstPlayer, teamId, appendedFirst);
+				await client.query('commit');
+
+				await client.query('begin');
+				const appendedSecond = await appendNomination(client, secondPlayer, 'Slot B', teamId);
+				let thrown: unknown = null;
+				try {
+					await claim(client, secondPlayer, teamId, appendedSecond);
+				} catch (error) {
+					thrown = error;
+				}
+				await client.query('rollback');
+
+				expect(thrown).not.toBeNull();
+				expect(classifyNominationConflict(thrown)).toBe('slot_in_use');
+
+				// The rolled-back writer left no event and no claim behind.
+				const events = await owner.query(
+					`select seq from public.auction_events
+					 where event_type = $1 and payload->>'fantraxPlayerId' = $2`,
+					[NOMINATION_PLACED_EVENT, secondPlayer]
+				);
+				expect(events.rows).toHaveLength(0);
+
+				const claims = await owner.query(
+					'select fantrax_player_id from public.open_nominations where team_id = $1',
+					[teamId]
+				);
+				expect(claims.rows).toHaveLength(1);
+				expect(claims.rows[0]?.['fantrax_player_id']).toBe(firstPlayer);
+			} finally {
+				await client.end();
+			}
+		});
+
+		it('grants service_role select/insert/delete on open_nominations, and no update', async () => {
+			const client = new Client({ connectionString: LOCAL_DB_URL });
+			await client.connect();
+			try {
+				const grants = await client.query<{ privilege_type: string }>(
+					`select privilege_type from information_schema.role_table_grants
+					 where table_schema = 'public' and table_name = 'open_nominations'
+					   and grantee = 'service_role'`
+				);
+				const held = grants.rows.map((r) => r.privilege_type).sort();
+				expect(held).toEqual(['DELETE', 'INSERT', 'SELECT']);
+			} finally {
+				await client.end();
+			}
+		});
+
+		it('leaves anon and authenticated with ZERO privileges on open_nominations', async () => {
+			// The migration's "belt as well as braces" revoke was asserted only
+			// in a comment. The security property is that the client-facing
+			// roles hold nothing at all — not merely that RLS would hide the
+			// rows if they did.
+			const client = new Client({ connectionString: LOCAL_DB_URL });
+			await client.connect();
+			try {
+				const grants = await client.query<{ grantee: string; privilege_type: string }>(
+					`select grantee, privilege_type from information_schema.role_table_grants
+					 where table_schema = 'public' and table_name = 'open_nominations'
+					   and grantee in ('anon', 'authenticated')`
+				);
+				expect(grants.rows).toEqual([]);
+			} finally {
+				await client.end();
 			}
 		});
 	});

@@ -7,9 +7,13 @@
  * League Clock are all folds of `auction_events`. Story 1.11's own note
  * anticipated a projection table here; the answer on arriving is that
  * nothing needs one, because the log already carries every fact the gate
- * asks about — hence no `projections` hook on the write below. Story 2.3's
- * acceptance criteria require Slot status to be a fold rather than a stored
- * flag, so a table created here would only have to be undone.
+ * asks about. Story 2.2 adds ONE table, `open_nominations`, and it is not a
+ * projection in the reading sense: nothing selects from it. It is a
+ * write-side constraint, registered through the `projections` hook because
+ * that hook is the one seam that persists inside the appending transaction,
+ * and its only job is to make a second writer's insert fail. Story 2.3's
+ * acceptance criteria require Slot status to be a FOLD rather than a stored
+ * flag that is read, and it still is.
  *
  * **The gate re-derives every check under the lock, whatever the page
  * rendered.** `loadNominationState` runs inside `runTransactionalWrite`'s
@@ -40,6 +44,8 @@ import { fold } from '../core/projection/fold.ts';
 import {
 	INITIAL_NOMINATIONS,
 	NOMINATION_PLACED_EVENT,
+	nominationForPlayer,
+	nominationForTeam,
 	nominationsReducer
 } from '../core/projection/nominations.ts';
 import { INITIAL_PHASE, phaseReducer } from '../core/projection/phase.ts';
@@ -51,8 +57,14 @@ import {
 import type { NominationRefusal, NominationState } from '../core/rules/nomination.ts';
 import type { EventEnvelope } from '../core/types.ts';
 import { runTransactionalWrite } from '../shell/write.ts';
-import type { ConnectionGateway, TransactionalClient, WriteOutcome } from '../shell/write.ts';
+import type {
+	ConnectionGateway,
+	ProjectionUpdater,
+	TransactionalClient,
+	WriteOutcome
+} from '../shell/write.ts';
 import { loadEventsViaClient } from './event-log.ts';
+import { constraintOf, isUniqueViolation } from './pg-errors.ts';
 
 const FREE_AGENT_PLAYERS_TABLE = 'free_agent_players';
 
@@ -294,6 +306,119 @@ export type NominationRejection = {
 	readonly detail: string;
 };
 
+const OPEN_NOMINATIONS_TABLE = 'open_nominations';
+
+/** The PK that makes a Player nominatable once (`20260825000000_open_nominations.sql`). */
+const PLAYER_CLAIM_CONSTRAINT = 'open_nominations_pkey';
+
+/** The unique constraint that makes a Team's Nomination Slot single. */
+const TEAM_CLAIM_CONSTRAINT = 'open_nominations_team_id_key';
+
+/**
+ * Insert the claim row for the nomination just appended, on the appending
+ * transaction's own client.
+ *
+ * This is a WRITE-SIDE CONSTRAINT, never a read: nothing anywhere selects
+ * from `open_nominations`, and the Slot, the board and the League Clock stay
+ * folds of `auction_events`. The row exists solely so that a second writer
+ * collides with it.
+ *
+ * Registered through `runTransactionalWrite`'s `projections` hook because
+ * that is the one seam that persists INSIDE the appending transaction
+ * (AD-5) — so the claim and the event commit together, or neither does.
+ *
+ * Deliberately NOT `on conflict do nothing`: a swallowed collision is a
+ * silent wrong answer. The violation must abort the transaction and be
+ * classified into a refusal that names who won.
+ */
+export const claimNomination: ProjectionUpdater = async (client, appended) => {
+	for (const event of appended) {
+		if (event.type !== NOMINATION_PLACED_EVENT) continue;
+		const payload = event.payload as NominationPlacedPayload;
+		await client.query(
+			`insert into ${OPEN_NOMINATIONS_TABLE}
+				(fantrax_player_id, team_id, seq, occurred_at)
+			values ($1, $2, $3, $4)`,
+			[payload.fantraxPlayerId, payload.teamId, event.seq, event.occurredAt]
+		);
+	}
+};
+
+/**
+ * Which refusal a `23505` on this table means, by constraint name — or
+ * `null` when the error is not one of ours and must be rethrown as a bug
+ * (AD-1).
+ *
+ * The name is the whole signal: the two constraints answer two different
+ * questions ("was this Player already nominated" versus "was this Team's
+ * Slot already spent"), and a refusal that named the wrong one would be a
+ * confidently wrong sentence.
+ */
+export function classifyNominationConflict(
+	error: unknown
+): 'already_nominated' | 'slot_in_use' | null {
+	if (!isUniqueViolation(error)) return null;
+	switch (constraintOf(error)) {
+		case PLAYER_CLAIM_CONSTRAINT:
+			return 'already_nominated';
+		case TEAM_CLAIM_CONSTRAINT:
+			return 'slot_in_use';
+		default:
+			return null;
+	}
+}
+
+/**
+ * Name the holder for a refusal the constraint produced, on a FRESH unlocked
+ * connection after the rollback.
+ *
+ * By the time `23505` arrives the transaction is rolled back and its folded
+ * state is gone, so the winner is not in hand. Naming is not optional —
+ * `rules/nomination.ts`'s first rule is that everything blocking is NAMED,
+ * never counted — so this buys the name from the log, which is still the
+ * only source of truth. It can only be stale in the direction of being MORE
+ * correct, and `unrecorded` is the honest fallback if it finds nothing or
+ * itself fails.
+ *
+ * It reads `auction_events`, never `open_nominations`.
+ */
+async function nameTheHolder(
+	gateway: ConnectionGateway,
+	kind: 'already_nominated' | 'slot_in_use',
+	actorTeamId: string,
+	fantraxPlayerId: string
+): Promise<NominationRefusal> {
+	try {
+		const client = await gateway.connect();
+		try {
+			await client.query('begin');
+			const events = await loadEventsViaClient(client);
+			await client.query('rollback');
+			const nominations = fold(INITIAL_NOMINATIONS, events, nominationsReducer);
+
+			if (kind === 'already_nominated') {
+				const onBoard = nominationForPlayer(nominations, fantraxPlayerId);
+				if (onBoard === null) return { kind: 'unrecorded' };
+				return {
+					kind: 'already_nominated',
+					playerName: onBoard.playerName,
+					teamName: onBoard.teamName
+				};
+			}
+
+			const slotHolder = nominationForTeam(nominations, actorTeamId);
+			if (slotHolder === null) return { kind: 'unrecorded' };
+			return { kind: 'slot_in_use', playerName: slotHolder.playerName };
+		} finally {
+			client.release();
+		}
+	} catch {
+		// The re-read is a courtesy on top of an already-decided refusal; if
+		// it fails, the Manager still gets a true sentence rather than a 500.
+		return { kind: 'unrecorded' };
+	}
+}
+
 /**
  * Place a nomination: one transaction appending exactly one
  * `NominationPlaced` event, or nothing at all.
@@ -304,10 +429,16 @@ export type NominationRejection = {
  * the lock, from the log and the live tables.
  *
  * Returns the pipeline's own `WriteOutcome`: `accepted` with the single
- * appended event, or `rejected` carrying a `NominationRejection`. No
- * projection is registered — nothing about this event is persisted anywhere
- * but the log. The Slot, the board and the League Clock reset are all folds
- * of it.
+ * appended event, or `rejected` carrying a `NominationRejection`. The Slot,
+ * the board and the League Clock reset are all folds of the log; the one
+ * registered projection, `claimNomination`, is a write-side constraint that
+ * nothing ever reads (Story 2.2).
+ *
+ * Two writers that both pass the gate under the lock are separated by that
+ * constraint rather than by the read that preceded it: the loser's claim
+ * insert raises SQLSTATE `23505`, the transaction rolls back, and the
+ * violation is classified into the `already_nominated` or `slot_in_use`
+ * refusal the pure core already words — returned, never thrown.
  */
 export async function placeNomination(
 	gateway: ConnectionGateway,
@@ -315,46 +446,70 @@ export async function placeNomination(
 	fantraxPlayerId: string,
 	deviceClass: string
 ): Promise<WriteOutcome> {
-	return runTransactionalWrite<NominationState>({
-		gateway,
-		load: (client) => loadNominationState(client, fantraxPlayerId),
-		decide: ({ state }) => {
-			const refusal = refuseNomination(state, actor.teamId);
-			if (refusal !== null) {
-				const rejection: NominationRejection = {
-					refusal,
-					detail: nominationRefusalDetail(refusal)
+	try {
+		return await runTransactionalWrite<NominationState>({
+			gateway,
+			load: (client) => loadNominationState(client, fantraxPlayerId),
+			// The claim row, written inside the appending transaction (Story
+			// 2.2). Nothing reads it; it exists so a second writer collides.
+			projections: [claimNomination],
+			decide: ({ state }) => {
+				const refusal = refuseNomination(state, actor.teamId);
+				if (refusal !== null) {
+					const rejection: NominationRejection = {
+						refusal,
+						detail: nominationRefusalDetail(refusal)
+					};
+					return { kind: 'rejected', reason: rejection };
+				}
+
+				// Non-null by construction: `refuseNomination` returns
+				// `unknown_player` for a null `poolPlayer`, so reaching here means
+				// the pool row was read. The guard exists to give TypeScript the
+				// narrowing rather than to handle a reachable state.
+				const player = state.poolPlayer;
+				if (player === null) {
+					throw new Error('placeNomination: the gate passed with no pool Player loaded');
+				}
+
+				const payload: NominationPlacedPayload = {
+					fantraxPlayerId: player.fantraxPlayerId,
+					playerName: player.playerName,
+					teamId: actor.teamId,
+					teamName: actor.teamName,
+					managerId: actor.managerId
 				};
-				return { kind: 'rejected', reason: rejection };
+
+				const event: EventEnvelope = {
+					type: NOMINATION_PLACED_EVENT,
+					payload,
+					managerId: actor.managerId,
+					teamId: actor.teamId,
+					// The measurement column, populated from the first event of this
+					// type onward: an insert-only log cannot be backfilled.
+					deviceClass
+				};
+				return { kind: 'accepted', events: [event] };
 			}
+		});
+	} catch (error) {
+		// A `23505` from the claim insert is the data layer answering the very
+		// question the gate asked a moment earlier, and losing. It is not a
+		// bug: it is a refusal the pure core already words, arriving late.
+		// Anything else is a bug and is rethrown unchanged (AD-1).
+		//
+		// By this point `runTransactionalWrite` has already rolled the
+		// transaction back, so no event and no claim row survive.
+		const kind = classifyNominationConflict(error);
+		if (kind === null) throw error;
 
-			// Non-null by construction: `refuseNomination` returns
-			// `unknown_player` for a null `poolPlayer`, so reaching here means
-			// the pool row was read. The guard exists to give TypeScript the
-			// narrowing rather than to handle a reachable state.
-			const player = state.poolPlayer;
-			if (player === null) {
-				throw new Error('placeNomination: the gate passed with no pool Player loaded');
-			}
-
-			const payload: NominationPlacedPayload = {
-				fantraxPlayerId: player.fantraxPlayerId,
-				playerName: player.playerName,
-				teamId: actor.teamId,
-				teamName: actor.teamName,
-				managerId: actor.managerId
-			};
-
-			const event: EventEnvelope = {
-				type: NOMINATION_PLACED_EVENT,
-				payload,
-				managerId: actor.managerId,
-				teamId: actor.teamId,
-				// The measurement column, populated from the first event of this
-				// type onward: an insert-only log cannot be backfilled.
-				deviceClass
-			};
-			return { kind: 'accepted', events: [event] };
-		}
-	});
+		const refusal = await nameTheHolder(gateway, kind, actor.teamId, fantraxPlayerId);
+		const rejection: NominationRejection = {
+			refusal,
+			detail: nominationRefusalDetail(refusal)
+		};
+		// A rejection is a RETURNED value, never a throw — the same shape the
+		// gate's own refusals take, so `+page.server.ts` needs no new branch.
+		return { kind: 'rejected', reason: rejection };
+	}
 }

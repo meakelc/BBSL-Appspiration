@@ -1,0 +1,13 @@
+## Acceptance Audit — Story 2.2 diff vs. spec-2-2-nomination-refusals-and-concurrency.md
+
+No violations found. The diff was checked line-by-line against every AC, Boundary/Constraint/Ask-First/Never item, and I/O matrix row in the spec, plus the Epic 2 context doc's cross-cutting concurrency requirement. Summary of what was verified:
+
+- **AC1 (data-layer uniqueness / race outcome)** — `open_nominations` migration names the two constraints exactly `open_nominations_pkey` and `open_nominations_team_id_key` as the spec requires (classifier matches on these literal strings); `claimNomination` is inserted via the `projections` hook inside the appending transaction, confirmed by the unit test asserting statement order `[...,'append-event','claim-nomination','commit']` and by the real two-writer integration tests, which assert exactly one `NominationPlaced` row and exactly one `open_nominations` row survive.
+- **AC2 (returned rejection, no throw, no new wording)** — `classifyNominationConflict` only matches SQLSTATE `23505` on the two named constraints; a match is turned into the pure core's existing `already_nominated`/`slot_in_use` refusal via `nominationRefusalDetail` (no new sentence introduced); a non-match or non-`23505` error is rethrown unchanged (AD-1), covered by dedicated tests.
+- **AC3 (route phase gate)** — `+page.server.ts` is untouched, matching the spec's explicit "no change" instruction.
+- **AC4 (claim table never read)** — the only read in the diff (`nameTheHolder`) queries `auction_events` via `loadEventsViaClient`, never `open_nominations`; the fake gateway in the unit tests has no read branch for the claim table, so an accidental select would fail the suite.
+- **Boundaries/Never list** — no `on conflict do nothing`, no release/delete logic added (grants exist for future stories only), no new "already won" refusal, no refusal-panel/UI styling, no retry loop, no change to `refuseNomination`'s check order or `core/rules/nomination.ts`, no widening of `service_role` grants on `auction_events`.
+- **I/O matrix** — every row (accepted, same-player race, same-team race, naming fallback to `unrecorded`, unchanged gate refusal, non-unique DB error rethrown, route phase gate, refusal wording) has a corresponding assertion in `tests/server/nomination.test.ts`, `tests/server/pg-errors.test.ts`, or the real-Postgres race in `tests/integration/auction-events.test.ts`.
+- **Epic-2-context.md** — "Two Managers nominating the same Player concurrently yield exactly one Nomination, enforced at the data layer rather than a check-then-write read" and "an automated nomination-concurrency test" are both satisfied by the integration test additions.
+
+No contradictions between spec constraints and the actual code were found.

@@ -42,17 +42,43 @@ type FakePoolPlayer = {
 	contractTeamName?: string | null;
 };
 
+/**
+ * A synthetic Postgres error, shaped the way `pg` really shapes one: an
+ * Error carrying `code` and `constraint` as plain properties. This is how a
+ * `23505` is produced without a database — the real thing is proven against
+ * real Postgres in tests/integration/auction-events.test.ts.
+ */
+function pgError(code: string, constraint?: string): Error {
+	const error = new Error(`duplicate key value violates unique constraint "${constraint ?? '?'}"`);
+	Object.assign(error, { code, constraint });
+	return error;
+}
+
 function fakeGateway(options: {
 	pool?: FakePoolPlayer[];
 	events?: QueryResultRow[];
 	throwOn?: RegExp;
+	/** Throw a database-shaped error on the matching statement instead of a plain one. */
+	throwPg?: { on: RegExp; code: string; constraint?: string };
+	/** The log the SECOND connection sees — the loser's post-rollback naming re-read. */
+	eventsAfterRollback?: QueryResultRow[];
+	/**
+	 * Make the SECOND `connect()` throw, so the post-rollback naming re-read
+	 * fails outright rather than merely finding nothing. This is the only way
+	 * to reach `nameTheHolder`'s outer `catch`: a `throwOn` regex matching the
+	 * log read would fire on the FIRST, gate-side read too and never reach the
+	 * claim insert at all.
+	 */
+	failNamingReRead?: boolean;
 }) {
 	const order: string[] = [];
 	const params: unknown[][] = [];
 	const appendedEvents: QueryResultRow[] = [];
 	let seq = 40;
 	let released = 0;
+	let connects = 0;
 	let committed = false;
+	let rolledBack = false;
 
 	const pool = options.pool ?? [];
 
@@ -62,6 +88,10 @@ function fakeGateway(options: {
 			if (options.throwOn !== undefined && options.throwOn.test(sql)) {
 				order.push('throw');
 				throw new Error('the insert failed partway');
+			}
+			if (options.throwPg !== undefined && options.throwPg.on.test(sql)) {
+				order.push('throw');
+				throw pgError(options.throwPg.code, options.throwPg.constraint);
 			}
 			if (/^begin/i.test(sql)) {
 				order.push('begin');
@@ -73,7 +103,24 @@ function fakeGateway(options: {
 			}
 			if (/^select \* from auction_events/i.test(sql)) {
 				order.push('read-log');
+				// After the losing transaction rolled back, the naming re-read
+				// runs on a fresh connection and sees the WINNER's committed
+				// event — which this fake models by switching the log it hands
+				// back once a rollback has happened.
+				if (rolledBack && options.eventsAfterRollback !== undefined) {
+					return { rows: options.eventsAfterRollback };
+				}
 				return { rows: options.events ?? [] };
+			}
+			// The claim row, written through the projection seam INSIDE the
+			// appending transaction (Story 2.2). Nothing ever selects from
+			// this table — there is no read branch for it here, and the fake
+			// throws on any statement it does not recognise, so a read would
+			// fail the suite rather than pass unnoticed.
+			if (/^insert into open_nominations/i.test(sql)) {
+				order.push('claim-nomination');
+				params.push([...queryParams]);
+				return { rows: [] };
 			}
 			// The point read behind the gate.
 			if (/^select fantrax_player_id, player_name\s+from free_agent_players/i.test(sql)) {
@@ -136,6 +183,7 @@ function fakeGateway(options: {
 			}
 			if (/^rollback/i.test(sql)) {
 				order.push('rollback');
+				rolledBack = true;
 				// A real ROLLBACK discards every uncommitted write; the fake must
 				// too, or "nothing was written" would be trivially true.
 				appendedEvents.length = 0;
@@ -148,7 +196,15 @@ function fakeGateway(options: {
 		}
 	};
 
-	const gateway: ConnectionGateway = { connect: async () => client };
+	const gateway: ConnectionGateway = {
+		connect: async () => {
+			connects += 1;
+			if (options.failNamingReRead === true && connects > 1) {
+				throw new Error('the pool refused a connection for the naming re-read');
+			}
+			return client;
+		}
+	};
 	return {
 		gateway,
 		client,
@@ -287,14 +343,16 @@ describe('placeNomination — the gate holds', () => {
 		expect(harness.order.indexOf('read-contract')).toBeLessThan(harness.order.indexOf('append-event'));
 	});
 
-	it('registers no projection — nothing about this event is persisted anywhere else', async () => {
+	it('writes the claim row after the event and BEFORE the commit — Story 2.2 AC1', async () => {
 		const harness = fakeGateway({ pool: [JALEN], events: [opened()] });
 
 		await placeNomination(harness.gateway, ACTOR, 'p-1', DEVICE_CLASS);
 
-		// Every statement the transaction issued, and not one of them writes a
-		// slot table, a board table or a clock row. The fake throws on any
-		// statement it does not recognise, which is the other half of this.
+		// Every statement the transaction issued. The claim insert sits
+		// between the event and the commit, so the two commit together or roll
+		// back together — and no slot table, board table or clock row is
+		// written anywhere. The fake throws on any statement it does not
+		// recognise, which is the other half of this.
 		expect(harness.order).toEqual([
 			'begin',
 			'lock',
@@ -302,8 +360,34 @@ describe('placeNomination — the gate holds', () => {
 			'read-pool-player',
 			'read-contract',
 			'append-event',
+			'claim-nomination',
 			'commit'
 		]);
+	});
+
+	it('writes the claim from the appended event — Player, Team, seq and clock', async () => {
+		const harness = fakeGateway({ pool: [JALEN], events: [opened()] });
+
+		const outcome = await placeNomination(harness.gateway, ACTOR, 'p-1', DEVICE_CLASS);
+		expect(outcome.kind).toBe('accepted');
+		if (outcome.kind !== 'accepted') return;
+
+		const claimParams = harness.params.find((p) => p.length === 4);
+		expect(claimParams).toEqual([
+			'p-1',
+			't-1',
+			outcome.events[0]?.seq,
+			outcome.events[0]?.occurredAt
+		]);
+	});
+
+	it('never READS the claim table — the Slot stays a fold of the log', async () => {
+		const harness = fakeGateway({ pool: [JALEN], events: [opened()] });
+		await placeNomination(harness.gateway, ACTOR, 'p-1', DEVICE_CLASS);
+		// The claim table is a write-side constraint. The fake has no read
+		// branch for it at all, so a select would have thrown; this states the
+		// rule the order already proves.
+		expect(harness.order.filter((s) => s === 'claim-nomination')).toHaveLength(1);
 	});
 
 	it('commits no cap space and no Auction Clock — the event is the whole write (AC1)', async () => {
@@ -427,6 +511,163 @@ describe('placeNomination — the refusals', () => {
 		});
 		const rejection = rejectionOf(await placeNomination(second.gateway, ACTOR, 'p-2', DEVICE_CLASS));
 		expect(rejection.refusal.kind).toBe('slot_in_use');
+	});
+});
+
+// --- The constraint refuses what the gate let through (Story 2.2) -----------
+
+describe('placeNomination — a claim-table conflict', () => {
+	it('returns already_nominated, NAMING the Player and the winning Team, on the PK', async () => {
+		// Both writers passed the gate: the log this transaction folded had no
+		// nomination of p-1 in it. The winner committed between the read and
+		// the claim insert, so the constraint — not the read — is what refuses.
+		const harness = fakeGateway({
+			pool: [JALEN],
+			events: [opened()],
+			throwPg: {
+				on: /^insert into open_nominations/i,
+				code: '23505',
+				constraint: 'open_nominations_pkey'
+			},
+			// The naming re-read, on a fresh connection after the rollback,
+			// sees the winner's now-committed event.
+			eventsAfterRollback: [opened(), nominated(2, 'p-1', 'Jalen Green', 't-9', 'Celtics')]
+		});
+
+		const outcome = await placeNomination(harness.gateway, ACTOR, 'p-1', DEVICE_CLASS);
+
+		const rejection = rejectionOf(outcome);
+		expect(rejection.refusal.kind).toBe('already_nominated');
+		if (rejection.refusal.kind !== 'already_nominated') return;
+		expect(rejection.refusal.playerName).toBe('Jalen Green');
+		expect(rejection.refusal.teamName).toBe('Celtics');
+		// The sentence is the pure core's, unchanged — no new wording exists.
+		expect(rejection.detail).toBe(nominationRefusalDetail(rejection.refusal));
+		expect(rejection.detail).toContain('Celtics');
+
+		// Nothing survived: the event and the claim rolled back together.
+		expect(harness.appendedEvents).toEqual([]);
+		expect(harness.state.committed).toBe(false);
+		expect(harness.order).toContain('rollback');
+	});
+
+	it('returns slot_in_use, NAMING the Player that won the Slot, on the team constraint', async () => {
+		const harness = fakeGateway({
+			pool: [JALEN, SENGUN],
+			events: [opened()],
+			throwPg: {
+				on: /^insert into open_nominations/i,
+				code: '23505',
+				constraint: 'open_nominations_team_id_key'
+			},
+			eventsAfterRollback: [opened(), nominated(2, 'p-2', 'Alperen Sengun', 't-1', 'Lakers')]
+		});
+
+		const rejection = rejectionOf(await placeNomination(harness.gateway, ACTOR, 'p-1', DEVICE_CLASS));
+
+		expect(rejection.refusal.kind).toBe('slot_in_use');
+		if (rejection.refusal.kind !== 'slot_in_use') return;
+		expect(rejection.refusal.playerName).toBe('Alperen Sengun');
+		expect(rejection.detail).toBe(nominationRefusalDetail(rejection.refusal));
+		expect(harness.appendedEvents).toEqual([]);
+	});
+
+	it('names the holder on a FRESH read after the rollback, not from the lost state', async () => {
+		const harness = fakeGateway({
+			pool: [JALEN],
+			events: [opened()],
+			throwPg: {
+				on: /^insert into open_nominations/i,
+				code: '23505',
+				constraint: 'open_nominations_pkey'
+			},
+			eventsAfterRollback: [opened(), nominated(2, 'p-1', 'Jalen Green', 't-9', 'Celtics')]
+		});
+
+		await placeNomination(harness.gateway, ACTOR, 'p-1', DEVICE_CLASS);
+
+		// The re-read happened after the rollback, on its own transaction, and
+		// took no lock — the winner already holds nothing this needs to wait
+		// for.
+		const rollbackAt = harness.order.indexOf('rollback');
+		const reReadAt = harness.order.lastIndexOf('read-log');
+		expect(reReadAt).toBeGreaterThan(rollbackAt);
+		expect(harness.order.filter((s) => s === 'lock')).toHaveLength(1);
+		expect(harness.state.released).toBe(2);
+	});
+
+	it('falls back to unrecorded when the naming re-read finds nothing', async () => {
+		// The classified 23505 is still the truth: the refusal stands, only its
+		// name is missing, and `unrecorded` is the honest sentence for that.
+		const harness = fakeGateway({
+			pool: [JALEN],
+			events: [opened()],
+			throwPg: {
+				on: /^insert into open_nominations/i,
+				code: '23505',
+				constraint: 'open_nominations_pkey'
+			},
+			eventsAfterRollback: [opened()]
+		});
+
+		const rejection = rejectionOf(await placeNomination(harness.gateway, ACTOR, 'p-1', DEVICE_CLASS));
+
+		expect(rejection.refusal.kind).toBe('unrecorded');
+		expect(rejection.detail).toBe(nominationRefusalDetail({ kind: 'unrecorded' }));
+	});
+
+	it('falls back to unrecorded when the naming re-read itself FAILS, rather than throwing', async () => {
+		// Distinct from the test above: there the re-read succeeded and simply
+		// found no winner. Here the re-read cannot even open a connection. The
+		// refusal was already decided by the constraint, so a courtesy re-read
+		// that fails must not turn a true refusal into a 500.
+		const harness = fakeGateway({
+			pool: [JALEN],
+			events: [opened()],
+			throwPg: {
+				on: /^insert into open_nominations/i,
+				code: '23505',
+				constraint: 'open_nominations_pkey'
+			},
+			failNamingReRead: true
+		});
+
+		const rejection = rejectionOf(await placeNomination(harness.gateway, ACTOR, 'p-1', DEVICE_CLASS));
+
+		expect(rejection.refusal.kind).toBe('unrecorded');
+		expect(rejection.detail).toBe(nominationRefusalDetail({ kind: 'unrecorded' }));
+	});
+
+	it('rethrows a 23505 on a constraint that is not one of ours — that is a bug', async () => {
+		const harness = fakeGateway({
+			pool: [JALEN],
+			events: [opened()],
+			throwPg: {
+				on: /^insert into open_nominations/i,
+				code: '23505',
+				constraint: 'some_other_table_pkey'
+			}
+		});
+
+		await expect(placeNomination(harness.gateway, ACTOR, 'p-1', DEVICE_CLASS)).rejects.toThrow(
+			/duplicate key/
+		);
+	});
+
+	it('rethrows a NON-23505 database error unchanged — AD-1', async () => {
+		const harness = fakeGateway({
+			pool: [JALEN],
+			events: [opened()],
+			throwPg: {
+				on: /^insert into open_nominations/i,
+				code: '23503',
+				constraint: 'open_nominations_team_id_fkey'
+			}
+		});
+
+		await expect(placeNomination(harness.gateway, ACTOR, 'p-1', DEVICE_CLASS)).rejects.toThrow();
+		expect(harness.appendedEvents).toEqual([]);
+		expect(harness.state.committed).toBe(false);
 	});
 });
 
