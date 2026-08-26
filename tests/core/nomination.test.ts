@@ -319,7 +319,7 @@ describe('nominationsReducer — AuctionClosed releases the nomination', () => {
 		expect(nominationForTeam(state, 't-1')?.playerName).toBe('Jalen Green');
 	});
 
-	it('converges when the same close is folded twice — a no-op on an absent key', () => {
+	it('converges when the whole log is folded twice, and in scrambled order', () => {
 		const log = [nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'), closed(2, 'p-1')];
 		const once = fold(INITIAL_NOMINATIONS, log, nominationsReducer);
 		const twice = fold(once, log, nominationsReducer);

@@ -56,7 +56,8 @@ import {
 	NOMINATION_PLACED_EVENT,
 	nominationForPlayer,
 	nominationForTeam,
-	nominationsReducer
+	nominationsReducer,
+	readClosedPlayerId
 } from '../core/projection/nominations.ts';
 import { INITIAL_PHASE, phaseReducer } from '../core/projection/phase.ts';
 import {
@@ -370,6 +371,19 @@ export const claimNomination: ProjectionUpdater = async (client, appended) => {
  * the nominator won, lost or never bid, and `open_nominations`' primary key
  * IS `fantrax_player_id`, so one statement clears one claim.
  *
+ * **The payload is read through the core's own reader, not cast.** A close
+ * arrives from Story 3.4, not from this module — unlike `claimNomination`,
+ * whose payload `placeNomination` builds three lines earlier and therefore
+ * knows to be well formed. `readClosedPlayerId` is the same function
+ * `nominationsReducer` folds through, so a close naming no Player is skipped
+ * here exactly as it is skipped there. Casting instead would diverge two
+ * ways on a malformed close: a null payload would throw a `TypeError` inside
+ * the appending transaction, rolling back a close the fold would have
+ * tolerated, and a missing id would bind null and silently delete nothing
+ * while the fold freed the Slot anyway — leaving the log and the claim table
+ * disagreeing, so the Team's next nomination would draw a wrong
+ * `slot_in_use` refusal off `open_nominations_team_id_key`.
+ *
  * Idempotent by construction. A close for a Player with no claim row —
  * already released, or never nominated — deletes zero rows and does not
  * raise; there is no `returning`, nothing asserts a row count, and no
@@ -387,11 +401,15 @@ export const claimNomination: ProjectionUpdater = async (client, appended) => {
 export const releaseNomination: ProjectionUpdater = async (client, appended) => {
 	for (const event of appended) {
 		if (event.type !== AUCTION_CLOSED_EVENT) continue;
-		const payload = event.payload as { readonly fantraxPlayerId: string };
+		const fantraxPlayerId = readClosedPlayerId(event.payload);
+		// A close naming no Player identifies no claim row, so there is
+		// nothing to delete and no statement to issue. The fold skips the same
+		// event for the same reason.
+		if (fantraxPlayerId === null) continue;
 		await client.query(
 			`delete from ${OPEN_NOMINATIONS_TABLE}
 			where fantrax_player_id = $1`,
-			[payload.fantraxPlayerId]
+			[fantraxPlayerId]
 		);
 	}
 };

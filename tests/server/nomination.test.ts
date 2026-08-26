@@ -936,6 +936,43 @@ describe('releaseNomination — the claim row is deleted when the Auction closes
 		expect(harness.params).toEqual([['p-1'], ['p-2']]);
 	});
 
+	// The write half of the release must skip exactly what the fold skips.
+	// Both read the close through the core's `readClosedPlayerId`, so this
+	// table and the fold's malformed-close table in `tests/core/nomination.test.ts`
+	// cannot drift apart: a close the fold tolerates must never abort the
+	// transaction appending it, and one the fold skips must never delete a row.
+	it.each([
+		['not an object', 'nonsense'],
+		['null', null],
+		['a number', 7],
+		['no fantraxPlayerId', { winningTeamId: 't-2' }],
+		['a blank fantraxPlayerId', { fantraxPlayerId: '' }],
+		['a non-string fantraxPlayerId', { fantraxPlayerId: 7 }]
+	])('issues NO statement for a close whose payload is %s', async (_label, payload) => {
+		const harness = fakeGateway({});
+
+		await expect(
+			releaseNomination(harness.client, [appended(50, AUCTION_CLOSED_EVENT, payload)])
+		).resolves.toBeUndefined();
+
+		expect(harness.order).toEqual([]);
+		expect(harness.params).toEqual([]);
+	});
+
+	it('skips a malformed close but still releases a well-formed one in the same batch', async () => {
+		// One unusable row in the batch must not cost the Slot of a Player
+		// whose close IS readable.
+		const harness = fakeGateway({});
+
+		await releaseNomination(harness.client, [
+			appended(50, AUCTION_CLOSED_EVENT, null),
+			appended(51, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'p-2' })
+		]);
+
+		expect(harness.order).toEqual(['release-nomination']);
+		expect(harness.params).toEqual([['p-2']]);
+	});
+
 	it('is idempotent: a Player with no claim row simply affects zero rows, no throw', async () => {
 		// The fake returns `{ rows: [] }` for the delete, which is exactly what
 		// Postgres gives for a delete that matched nothing. Nothing here reads

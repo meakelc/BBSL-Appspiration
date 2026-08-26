@@ -198,8 +198,16 @@ function readPayload(payload: unknown, event: { readonly occurredAt: string }): 
  * Slot Placement, the bid history — is deliberately not read. Story 3.4
  * shapes that payload; this fold only needs to know WHICH Player's auction
  * ended.
+ *
+ * **Exported because the release has two halves that must agree.** The fold
+ * frees the Slot; `server/nomination.ts`'s `releaseNomination` deletes the
+ * claim row. Both read the same field off the same event, so they read it
+ * through this one function rather than through two literals that could
+ * come to disagree about what a malformed close means — a close the fold
+ * skipped but the delete acted on (or the reverse) would leave the log and
+ * the claim table saying different things about the same Slot.
  */
-function readClosedPlayerId(payload: unknown): string | null {
+export function readClosedPlayerId(payload: unknown): string | null {
 	if (typeof payload !== 'object' || payload === null) return null;
 	const record = payload as Record<string, unknown>;
 	const fantraxPlayerId = record['fantraxPlayerId'];

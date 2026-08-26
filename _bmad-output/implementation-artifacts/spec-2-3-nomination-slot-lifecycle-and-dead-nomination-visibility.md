@@ -2,7 +2,7 @@
 title: 'Story 2.3: Nomination Slot lifecycle'
 type: 'feature'
 created: '2026-08-26'
-status: 'in-review'
+status: 'done'
 review_loop_iteration: 0
 baseline_commit: '8766c4c4ba9177e7382c15b538f49d2d799fd933'
 context: []
@@ -66,6 +66,23 @@ Read Story 2.1's and 2.2's Code Maps and Design Notes first — the fold discipl
 - Given a `NominationPlaced` then a synthetic `AuctionClosed` for that Player, when the log is folded, then the nominating Team's Slot is free and the board seat empty — regardless of which Team the close names as winner and whether the nominator ever bid.
 - Given the release, when the codebase is inspected, then it is computed by the fold with no stored flag toggled by a handler, nothing reading `open_nominations`, and no trigger but a close — not a timer, not being outbid, not elapsed time.
 - Given Epic 3 later appends a real `AuctionClosed`, when it does, then this fold needs no change and the claim deleter exists, tested, awaiting only registration.
+
+### Review Findings
+
+Code review 2026-08-26 (bmad-code-review). Layers: Blind Hunter, Edge Case Hunter, Verification Gap, Acceptance Auditor (`bmad-reviewer-acceptance`, opus — Story 2.3 is **Tier A** in `BMAD-EFFORT-TRIAGE.md:126` and the diff touches `src/lib/core/`). All four layers returned; none failed. 12 findings normalized, 4 dismissed as noise.
+
+- [x] [Review][Patch] Add `set local role service_role` to the AC3 integration block so the DELETE grant is genuinely exercised, matching the file idiom at `:117`, `:132`, `:147`, `:200` [tests/integration/auction-events.test.ts:605] — resolved from decision-needed 2026-08-26
+- [x] [Review][Patch] `releaseNomination` reads the close payload with an unchecked cast while the fold reads it defensively [src/lib/server/nomination.ts:390]
+- [x] [Review][Patch] The `deferred-work.md:216` deployment hazard is claimed closed but is neither updated nor actually resolved [_bmad-output/implementation-artifacts/deferred-work.md:215-217]
+- [x] [Review][Patch] AC2 has no executed verification — it is proven only by a human running the greps in this spec's Verification section [tests/structure.test.ts]
+- [x] [Review][Patch] The replay-convergence test's name overstates what it proves [tests/core/nomination.test.ts:322]
+- [x] [Review][Patch] The new deferred entry cites epics.md's AC2/AC3 while the shipped tests use this spec's own unrelated AC1/AC2/AC3 scheme [_bmad-output/implementation-artifacts/deferred-work.md:227]
+- [x] [Review][Defer] The escalated DESIGN.md / epics.md conflict over the unbid flag's "word and a shape" is filed as prose with no enforceable follow-up [_bmad-output/implementation-artifacts/deferred-work.md:229] — deferred, pre-existing
+- [x] [Review][Defer] `core/rules/nomination.ts:81-84` now states a premise this story falsifies (low) — it reads "No close event exists yet — `AuctionClosed` is Story 2.3's — so that state is unreachable", while this diff adds `AUCTION_CLOSED_EVENT` and the fold case reading it. The conclusion still holds (nothing appends a close, so the "already won" refusal stays unreachable per the **Never** list), but its stated premise is now false. Blocked from an in-story fix by this spec's own Code Map ("Nothing here touches `core/rules/nomination.ts`") and Verification ("`git diff` touches nothing under `src/lib/core/rules/`"), so it needs a spec amendment or a deferral, not a silent edit. — deferred: Story 3.4 must revisit that exact sentence anyway when a close becomes reachable, and loosening a Tier A story boundary for a comment is a poor trade.
+
+**Dismissed as noise (4):** a duplicate `AuctionClosed` for one Player within a single batch is untested (the loop's second delete matches zero rows — already idempotent by construction, and pinned by the second-run no-op test); `releaseNomination` issues one round-trip per event rather than a batched `= any($1::text[])` (batches are one event in practice); the new deferred entry's `nominations.ts:170-185` citation is stale now that the case sits at `:252-268` (deferred-work evidence fields are dated snapshots by convention throughout the file); `omitKey` is O(n) per release (n ≤ 30 — one Slot per Team).
+
+**Verification run during review:** `npm run check` clean (514 files, 0 errors, 0 warnings). `npm test` 1221 passed, 1 failed — the failure is pre-existing on `main` (`auction-events.test.ts:613`, `SUPABASE_DB_URL is not set`) and is exactly deferred entry `:224-225`, not caused by this story. Local Postgres was reachable, so the suite did **not** skip: all three new AC3 integration tests genuinely executed against real Postgres and passed. The **Never** list holds — no `select` on `open_nominations` anywhere in `src/`, no `AuctionClosed` producer, `league-clock.ts` and `src/lib/core/rules/` untouched, and `releaseNomination` has no call site outside its own definition.
 
 ## Design Notes
 

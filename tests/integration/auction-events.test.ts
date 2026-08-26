@@ -592,11 +592,17 @@ describe.skipIf(!reachable)(SUITE_TITLE, () => {
 	});
 
 	// Story 2.3's AC3: the claim row's DELETE, run by the real
-	// `releaseNomination` against real Postgres. This is the only place
-	// `20260825000000_open_nominations.sql`'s DELETE grant is exercised —
-	// every other proof in this file either inserts or cleans up as the
-	// superuser `postgres` role, which would pass whether the grant existed
-	// or not.
+	// `releaseNomination` against real Postgres.
+	//
+	// Every delete below runs as `service_role`, never as the connection's own
+	// `postgres` role. `postgres` OWNS the table, so it would delete whether
+	// `20260825000000_open_nominations.sql:90`'s grant existed or not — a proof
+	// about ownership, not about the migration. Story 2.2's block asserts that
+	// grant from `information_schema`; this is the only place it is exercised
+	// through real DML, and the only place the table's `force row level
+	// security` is met by a role that is not its owner (`service_role` holds
+	// `bypassrls`, which is exactly why the write path can reach a table with
+	// RLS on and no policy).
 	//
 	// `releaseNomination` has no production call site by design (Epic 3 owns
 	// appending `AuctionClosed`), so this drives it directly with a synthetic
@@ -679,6 +685,7 @@ describe.skipIf(!reachable)(SUITE_TITLE, () => {
 				// The real deleter, on a real client, inside a transaction —
 				// the same shape the projection seam gives it.
 				await client.query('begin');
+				await client.query('set local role service_role');
 				await releaseNomination(client, [closedEvent(playerId)]);
 				await client.query('commit');
 
@@ -709,6 +716,7 @@ describe.skipIf(!reachable)(SUITE_TITLE, () => {
 				await nominateAndClaim(client, playerId);
 
 				await client.query('begin');
+				await client.query('set local role service_role');
 				await releaseNomination(client, [closedEvent(playerId)]);
 				// The SAME close, folded again — which is what a replayed or
 				// duplicated close would do. It must not raise.
@@ -732,6 +740,7 @@ describe.skipIf(!reachable)(SUITE_TITLE, () => {
 			await client.connect();
 			try {
 				await client.query('begin');
+				await client.query('set local role service_role');
 				await expect(
 					releaseNomination(client, [closedEvent(`never-nominated-${Date.now()}`)])
 				).resolves.toBeUndefined();
