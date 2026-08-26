@@ -13,7 +13,19 @@ build
 !.env.example
 
 # Installed agent skills. Reinstalled per machine, not project history.
-.claude/
+# Note the trailing `/*` rather than `/`: git will not descend into an excluded
+# DIRECTORY, so a `!` re-include beneath `.claude/` can never match. Excluding
+# the contents instead is what makes the agents exception below work.
+.claude/*
+
+# ...except the model-pinned subagent definitions. These are not a per-machine
+# install: they are the project's cost architecture, and every one of them
+# carries the reasoning for its tier. Untracked, a clone or a wiped .claude/
+# silently reverts every subagent to the session model, and the only symptom is
+# the bill. Companion to _bmad/custom/bmad-*.toml.
+!.claude/agents/
+.claude/agents/*
+!.claude/agents/*.md
 
 # Editors and OS
 .DS_Store

@@ -1,0 +1,52 @@
+# bmad-architecture.toml — TEAM-SCOPED overrides for the bmad-architecture skill.
+#
+# Deliberately NOT `.user.toml` — see the header of bmad-build.toml. These pins
+# are cost architecture, not personal preference, and must survive a clone.
+#
+# PURPOSE: take the validation-gate lenses off the orchestrator's model tier.
+#
+# The gate at Finalize dispatches every entry in `finalize_reviewers` — plus the
+# built-in rubric walker and any ad-hoc lenses — as parallel subagents against
+# ARCHITECTURE-SPINE.md. None of them name an agent, so each inherits the
+# session's model. MEASURED on this project: one correct-course run spawned five
+# such lenses (research verification, adversarial divergence, rubric walker,
+# rules correctness, operational envelope), all at the top tier.
+#
+# Four of those five are recall tasks against an explicit rubric, which is the
+# same argument that put the bmad-build review layers on sonnet. The exception is
+# the rules-correctness lens, and it is a real exception: this project's worst
+# failure class is a rules bug (NFR1), and PRD §10 examples 1-28 are the
+# executable specification (AD-25), so a lens judging rule correctness keeps the
+# session tier.
+#
+# Nothing here changes WHICH lenses run. `finalize_reviewers` is the configured
+# floor and is never cherry-picked out; this file only sets the capability each
+# one runs at.
+
+[workflow]
+
+activation_steps_append = [
+  """
+When the validation gate dispatches review lenses as parallel subagents, launch
+each RECALL lens as the `bmad-review-lens` agent rather than a general-purpose
+subagent. A recall lens walks an explicit rubric, checklist, or adversarial brief
+and reports where the document fails it — the rubric walker, the research/
+currency verification lens, the adversarial divergence lens, and the operational-
+envelope lens all qualify. That agent is pinned to a mid-tier model, and the pin
+is the intended capability: you fold the reviews, decide what matters, and apply
+the fixes.
+
+Keep on the session tier any lens whose question is the correctness of a domain
+rule, an arithmetic invariant, or a binding architecture decision — a
+rules-correctness lens, or any lens judging `src/lib/core/**` semantics or a PRD
+§10 worked example. Those are judgement-bound and their misses are the expensive
+ones.
+
+Pass every lens the document path, its own review file path under
+`{doc_workspace}/reviews/`, and the lens text. Each writes its full review to
+that file and returns only a compact summary — verdict, top 2-5 findings, file
+path — so you never hold full review text.
+
+State in the gate verdict which lenses ran at which tier.
+""",
+]

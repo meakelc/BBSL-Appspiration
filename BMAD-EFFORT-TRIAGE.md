@@ -9,6 +9,9 @@ Produced 2026-08-25 against `b2848c3`, reading all 2,309 lines of
 Covers the 41 stories still in backlog at that date (1.10 → 8.4); Epic 1 stories 1.1–1.9
 were already `done`.
 
+Amended 2026-08-26: the tables below are now read programmatically by the Acceptance
+Auditor review layer to pick its model tier. See "Two operational notes".
+
 ---
 
 ## What the effort setting actually governs
@@ -113,11 +116,24 @@ point in the log" is the first appearance of the reference-data-as-events patter
 
 ## Two operational notes
 
+**This file is load-bearing configuration, not just advice.** As of 2026-08-26 the
+Acceptance Auditor layer in `_bmad/custom/bmad-build.toml` and
+`_bmad/custom/bmad-code-review.toml` selects its model tier by looking the story up in
+the tables above: a **Safe** row buys `bmad-reviewer-acceptance-lite` (sonnet), a Tier A
+or Tier B row buys `bmad-reviewer-acceptance` (opus). Anything **not listed** falls to
+opus by design — the triage is dated and pinned to a commit, so a story added since is an
+unknown, and an unknown is not a safe story. Two consequences: moving a story between
+tables changes what it costs to review, and **re-running this triage at an epic boundary
+is now a config change**, not a documentation refresh.
+
 **Effort and reviewer tier are independent dials.** The current setup pins Blind Hunter,
-Edge Case Hunter and Verification Gap to sonnet and keeps the Acceptance Auditor on opus.
-Dropping the orchestrator to low does not change that. **Do not lower both on a Tier A
-story** — that thins judgement at the orchestrator and the auditor at the same time, and
-the Acceptance Auditor is the layer that compares code against spec.
+Edge Case Hunter and Verification Gap to sonnet unconditionally, the step-02 investigators
+to sonnet, and the Acceptance Auditor to whichever tier this file's tables imply.
+Dropping the orchestrator to low does not change any of that. **Do not lower both on a
+Tier A story** — that thins judgement at the orchestrator and the auditor at the same
+time, and the Acceptance Auditor is the layer that compares code against spec. On a Safe
+story the auditor is already at sonnet, so running the orchestrator low as well is the
+same double-thinning one tier down: pick one.
 
 **Low effort is worst exactly where the diff-coverage trap bites.** `bmad-tiered-review`
 records a measured case where 66% of a story was never shown to any reviewer, because a
@@ -132,3 +148,72 @@ Before trusting any review, verify coverage:
 grep '^diff --git' <prompt-file>.md | sed 's/.* b\// /'   # what was reviewed
 git status --short                                        # what changed
 ```
+
+---
+
+## The two levers no model pin can reach
+
+Measured on this project over the ten days to 2026-08-26 (`scripts/bmad-cost-report.py
+--hours 240`): **$1,185 total, 88.2% of it opus**, against 2,520 opus turns and 1,321
+sonnet turns. The re-tiering is demonstrably working — the sonnet row exists — but it only
+moved ~12% of spend, because the cost is not really in the generation.
+
+**Cache reads dominate everything.** Roughly 80% of spend is cache read, not output: the
+price of carrying a long context across many turns. Two single sessions in that window
+cost $64 and $77 on their own, at 28.7M and 31.0M cache-read tokens. No model pin touches
+that column. Only two things do.
+
+**1. The duplication test is whether a review actually RAN, not whether `bmad-build` ran.**
+`bmad-build` step-04 and `bmad-code-review` step-02 run the same layers over the same diff
+from byte-identical prompt files, so re-reviewing a diff **that build already reviewed** is
+~100% waste. But a `bmad-build` run that was **paused after implementation, before step-04
+executed its layers**, has reviewed nothing — and finishing it in `bmad-code-review` is the
+supported handoff, not duplication.
+
+That split is routine here, and usually forced: a large story plus a full four-layer review
+does not always fit inside one 5-hour usage window. Pausing after implementation, committing,
+and running the review in a fresh context is the correct response, and it is **cheaper than
+the in-session review** — the reviewers start on a clean context instead of inheriting the
+whole planning-and-implementation session, which is where the cache-read cost lives.
+
+**Running the split correctly.** `bmad-code-review` step-01 Tier 1 accepts a spec path and
+reads `baseline_commit` from its frontmatter as the diff baseline — that is the designed seam
+between the two skills.
+
+- **Always pass the spec path.** It is what sets `review_mode = "full"`, and the Acceptance
+  Auditor is gated on exactly that (`when = 'Only when {review_mode} = "full".'`). Omit the
+  spec and step-02 silently **drops the auditor** with a one-line notice — you lose the
+  judgement layer, which is the one layer worth the most.
+- **Commit before switching.** This is a real advantage of the split, not just tidiness: the
+  66%-of-the-diff-missing trap exists because `git diff <baseline>` omits untracked files
+  while step-04 forbids `git add`. Once the work is committed there are no untracked files,
+  so the diff is complete by construction.
+- **Check the spec says `in-review` before you pause.** Step-04 sets that as its first
+  action. If you stopped earlier and it still reads `in-progress`, step-01 of a resumed
+  `bmad-build` routes to step-03 and **re-implements the story**.
+- `bmad-code-review` step-04 closes the loop itself — it sets the story to `done` or
+  `in-progress` and syncs `sprint-status.yaml`.
+
+So: skip the second pass when build's step-04 already ran its layers on that diff. Otherwise
+run it — deliberately, with the spec path. Also keep it for what build never covered: code
+that did not come from a build run, a diff spanning several stories whose *interaction*
+nobody reviewed, or a second opinion before a risky merge.
+
+**2. One story per session — and splitting one story across sessions is fine too.** Given
+the cache-read share, five stories in one long session costs far more than five sessions of
+one story: every turn re-reads the whole accumulated context. The same arithmetic means
+pausing a long story at the review gate and finishing it fresh is a *saving*, not a
+compromise — the reviewers stop paying for the planning and implementation context they do
+not need. Loopbacks are where this hurts most: Story 1.6 went three full rounds (implement →
+four reviewers → re-implement, ×3) inside one session, ~12 reviewer invocations and 3
+implementer runs, each turn paying for everything before it. A story already on its second
+loopback is a good candidate to commit and resume fresh.
+
+**The implementer stays on the session tier, deliberately.** Its output is large, its
+mistakes propagate into every review layer, and a bad implementation triggers a loopback
+that re-runs steps 2-4 at full price — Story 1.6 is the worked example of exactly that.
+The override shape is written out and commented out at the bottom of
+`_bmad/custom/bmad-build.toml`; do not enable it without first tracking
+`review_loop_iteration` across a dozen stories before and after. A downgrade here can
+easily cost more than it saves.
+

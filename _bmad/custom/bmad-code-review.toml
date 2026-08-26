@@ -1,0 +1,146 @@
+# bmad-code-review.toml — TEAM-SCOPED overrides for the bmad-code-review skill.
+#
+# Deliberately NOT `.user.toml` — see the header of bmad-build.toml. These pins
+# are cost architecture, not personal preference, and must survive a clone.
+#
+# PURPOSE: stop paying twice for the same review — WITHOUT discouraging the
+# split-session handoff, which is a different thing entirely.
+#
+# bmad-build's step-04 and bmad-code-review's step-02 run the SAME layers over
+# the SAME diff, from byte-identical prompt files (verified:
+# review-prompts/edge-case-hunter.md and verification-gap.md are identical
+# between the two skills). So re-reviewing a diff that build's step-04 ALREADY
+# REVIEWED is duplicated work.
+#
+# The test is whether a review actually RAN — not whether bmad-build ran.
+#
+# A bmad-build run PAUSED after implementation, before step-04 executed its
+# layers, has reviewed nothing. Finishing it here is the supported handoff and
+# is CHEAPER than the in-session review: the reviewers start on a clean context
+# instead of inheriting the whole planning-and-implementation session, and
+# roughly 80% of spend is cache read. On this project the split is routine and
+# usually forced — a large story plus a full four-layer review does not always
+# fit inside one 5-hour usage window.
+#
+# RUNNING THE SPLIT: pass the spec path. step-01 Tier 1 reads `baseline_commit`
+# from its frontmatter as the diff baseline — the designed seam between the two
+# skills — and the spec is what sets `review_mode = "full"`. The Acceptance
+# Auditor below is gated on exactly that, so omitting the spec silently DROPS
+# the judgement layer with only a one-line notice. Commit before switching:
+# it removes the untracked-files diff trap by construction, since step-04
+# forbids `git add` and `git diff <baseline>` skips untracked files.
+#
+# This file does NOT disable bmad-code-review. It re-tiers it, so that whenever
+# you run it, it is cheap. Run it for:
+#
+#   - the split-session handoff described above (the common case here)
+#   - code that did not come from a bmad-build run at all (hand-written,
+#     imported, another agent's output, a merge)
+#   - a diff spanning several stories, where each story was reviewed in
+#     isolation but their interaction was not
+#   - a deliberate second opinion before a risky merge
+#
+# The one case to skip: a diff whose layers build's step-04 already ran.
+
+[workflow]
+
+[[workflow.review_layers]]
+id = "blind-hunter"
+name = "Blind Hunter (sonnet)"
+instruction = """
+Launch the `bmad-reviewer-broad` subagent with no prior conversation context,
+with this prompt:
+
+Conduct a review of CONTENT.
+Look for what's missing, not only what's wrong.
+Find at least ten issues to fix or improve.
+Output a Markdown list of findings only — no severity, priority, or ranking.
+If the content is empty, stop and say so.
+If you have zero findings, re-check and keep thinking; do not stop with an empty list.
+
+CONTENT:
+{diff_output}
+
+Do not invoke any skill. Return only the review result.
+
+This layer runs at the capability pinned in the `bmad-reviewer-broad` agent
+definition. That pin is this layer's intended capability, not a degradation of
+the session — the orchestrator re-derives severity during triage regardless.
+"""
+
+[[workflow.review_layers]]
+id = "edge-case-hunter"
+name = "Edge Case Hunter (sonnet)"
+instruction = """
+Launch the `bmad-reviewer-edge` subagent with no prior conversation context,
+with this prompt:
+
+Read `{skill-root}/review-prompts/edge-case-hunter.md` completely and follow it as your review instructions.
+
+Review content:
+
+{diff_output}
+
+Do not invoke any skill. If the instruction file is unreadable, report that exact failure and stop. Return only the review result.
+
+This layer runs at the capability pinned in the `bmad-reviewer-edge` agent
+definition. That pin is this layer's intended capability.
+"""
+
+[[workflow.review_layers]]
+id = "verification-gap"
+name = "Verification Gap Reviewer (sonnet)"
+instruction = """
+Launch the `bmad-reviewer-verification` subagent with no prior conversation
+context, with this prompt:
+
+Read `{skill-root}/review-prompts/verification-gap.md` completely and follow it as your review instructions.
+
+Review content:
+
+{diff_output}
+
+Do not invoke any skill. If the instruction file is unreadable, report that exact failure and stop. Return only the review result.
+
+This layer runs at the capability pinned in the `bmad-reviewer-verification`
+agent definition. That pin is this layer's intended capability.
+"""
+
+# NOTE: `id` matching replaces the WHOLE table — it does not deep-merge keys.
+# Verified against resolve_customization.py: omitting `when` here silently
+# dropped the shipped gate and made this layer run unconditionally. It must be
+# restated verbatim.
+#
+# TIER IS CHOSEN PER STORY — mirrors bmad-build.toml. Note the bias is stronger
+# toward opus here: this skill's remaining legitimate uses are exactly the cases
+# with no triage row (hand-written code, an imported change, a multi-story diff
+# whose interactions nobody reviewed), and those all fall to the opus default.
+[[workflow.review_layers]]
+id = "acceptance-auditor"
+name = "Acceptance Auditor (opus / sonnet by story tier)"
+when = 'Only when {review_mode} = "full".'
+instruction = """
+Choose the acceptance-auditor agent by the story's tier, then launch it.
+
+Look the story up in `{project-root}/BMAD-EFFORT-TRIAGE.md`.
+
+- Listed under **Tier A** or **Tier B**, OR the diff touches `src/lib/core/**`,
+  OR any acceptance criterion is phrased as a negative invariant ("never
+  cached", "neither short-circuits the other", "prospectively only", "no code
+  path can") → use `bmad-reviewer-acceptance` (opus).
+- Listed under **Safe for low-effort** and none of the above applies → use
+  `bmad-reviewer-acceptance-lite` (sonnet).
+- Not listed, no single story owns this diff, or you are unsure → use
+  `bmad-reviewer-acceptance` (opus). A diff spanning several stories, or code
+  that never came from a bmad-build run, has no tier and is not a safe story.
+
+State in the review summary which agent you used and why.
+
+Launch the chosen agent with this prompt:
+
+You are an Acceptance Auditor. Review the provided diff against `{spec_file}` and any loaded context docs. Check for: violations of acceptance criteria, deviations from spec intent, missing implementation of specified behavior, contradictions between spec constraints and actual code. Output findings as a Markdown list. Each finding: one-line title, which AC/constraint it violates, and evidence from the diff.
+
+Diff:
+
+{diff_output}
+"""
