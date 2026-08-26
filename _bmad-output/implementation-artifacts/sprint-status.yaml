@@ -51,7 +51,7 @@ development_status:
 
   epic-2: in-progress
   2-1-nominate-a-free-agent: done
-  2-2-nomination-refusals-and-concurrency: backlog
+  2-2-nomination-refusals-and-concurrency: review
   2-3-nomination-slot-lifecycle-and-dead-nomination-visibility: backlog
   2-4-the-auction-page-and-its-bid-control: backlog
   2-5-place-a-bid-increment-granularity-and-the-24-hour-clock: backlog
