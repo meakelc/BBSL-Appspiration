@@ -2,8 +2,12 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { Client } from 'pg';
 
 import { GLOBAL_WRITE_LOCK_KEY } from '../../src/lib/core/constants.ts';
-import { NOMINATION_PLACED_EVENT } from '../../src/lib/core/projection/nominations.ts';
-import { classifyNominationConflict } from '../../src/lib/server/nomination.ts';
+import {
+	AUCTION_CLOSED_EVENT,
+	NOMINATION_PLACED_EVENT
+} from '../../src/lib/core/projection/nominations.ts';
+import type { AppendedEvent } from '../../src/lib/core/types.ts';
+import { classifyNominationConflict, releaseNomination } from '../../src/lib/server/nomination.ts';
 import { writeGateway, writePool } from '../../src/lib/shell/db.ts';
 import { runTransactionalWrite } from '../../src/lib/shell/write.ts';
 import type { Decision } from '../../src/lib/shell/write.ts';
@@ -581,6 +585,157 @@ describe.skipIf(!reachable)(SUITE_TITLE, () => {
 					   and grantee in ('anon', 'authenticated')`
 				);
 				expect(grants.rows).toEqual([]);
+			} finally {
+				await client.end();
+			}
+		});
+	});
+
+	// Story 2.3's AC3: the claim row's DELETE, run by the real
+	// `releaseNomination` against real Postgres. This is the only place
+	// `20260825000000_open_nominations.sql`'s DELETE grant is exercised —
+	// every other proof in this file either inserts or cleans up as the
+	// superuser `postgres` role, which would pass whether the grant existed
+	// or not.
+	//
+	// `releaseNomination` has no production call site by design (Epic 3 owns
+	// appending `AuctionClosed`), so this drives it directly with a synthetic
+	// close, exactly as `runTransactionalWrite` would through the projection
+	// seam: the real function, the real client, the real table.
+	describe('Story 2.3 AC3 — releaseNomination deletes the claim row for real', () => {
+		afterEach(async () => {
+			await owner.query('delete from public.open_nominations where team_id = any($1::uuid[])', [
+				[teamId, otherTeamId]
+			]);
+		});
+
+		/** One appended event, shaped as `runTransactionalWrite` hands them on. */
+		function closedEvent(fantraxPlayerId: string): AppendedEvent {
+			return {
+				seq: '1',
+				occurredAt: '2026-08-26T09:00:00.000Z',
+				schemaVersion: 1,
+				coreVersion: 1,
+				type: AUCTION_CLOSED_EVENT,
+				payload: { fantraxPlayerId },
+				managerId,
+				teamId,
+				deviceClass: null,
+				dispatchOutcome: null,
+				deliveryOutcome: null
+			};
+		}
+
+		/**
+		 * A committed nomination plus its claim row — the state a release has
+		 * to find something to delete. The claim's `seq` references
+		 * `auction_events(seq)`, so the event must be appended first.
+		 */
+		async function nominateAndClaim(client: Client, fantraxPlayerId: string): Promise<void> {
+			await client.query('begin');
+			const inserted = await client.query<{ seq: string; occurred_at: Date }>(
+				`insert into public.auction_events
+					(occurred_at, schema_version, core_version, manager_id, team_id, event_type, payload)
+				 values (now(), 1, 1, $1, $2, $3, $4::jsonb)
+				 returning seq, occurred_at`,
+				[
+					managerId,
+					teamId,
+					NOMINATION_PLACED_EVENT,
+					JSON.stringify({
+						fantraxPlayerId,
+						playerName: 'Release Fixture',
+						teamId,
+						teamName: 'Fixture',
+						managerId
+					})
+				]
+			);
+			const row = inserted.rows[0];
+			if (row === undefined) throw new Error('nomination insert returned no row');
+			await client.query(
+				`insert into public.open_nominations
+					(fantrax_player_id, team_id, seq, occurred_at)
+				 values ($1, $2, $3, $4)`,
+				[fantraxPlayerId, teamId, String(row.seq), row.occurred_at]
+			);
+			await client.query('commit');
+		}
+
+		it('removes the claim, freeing the Player and the Team’s Slot at the data layer', async () => {
+			const playerId = `release-player-${Date.now()}`;
+			const client = new Client({ connectionString: LOCAL_DB_URL });
+			await client.connect();
+
+			try {
+				await nominateAndClaim(client, playerId);
+
+				const before = await owner.query(
+					'select 1 from public.open_nominations where fantrax_player_id = $1',
+					[playerId]
+				);
+				expect(before.rows).toHaveLength(1);
+
+				// The real deleter, on a real client, inside a transaction —
+				// the same shape the projection seam gives it.
+				await client.query('begin');
+				await releaseNomination(client, [closedEvent(playerId)]);
+				await client.query('commit');
+
+				const after = await owner.query(
+					'select 1 from public.open_nominations where fantrax_player_id = $1',
+					[playerId]
+				);
+				expect(after.rows).toHaveLength(0);
+
+				// The Team's Slot is free at the data layer too: the row that
+				// held it via `open_nominations_team_id_key` is gone.
+				const held = await owner.query(
+					'select 1 from public.open_nominations where team_id = $1',
+					[teamId]
+				);
+				expect(held.rows).toHaveLength(0);
+			} finally {
+				await client.end();
+			}
+		});
+
+		it('is a no-op the second time — deleting an absent claim affects zero rows, no error', async () => {
+			const playerId = `release-twice-${Date.now()}`;
+			const client = new Client({ connectionString: LOCAL_DB_URL });
+			await client.connect();
+
+			try {
+				await nominateAndClaim(client, playerId);
+
+				await client.query('begin');
+				await releaseNomination(client, [closedEvent(playerId)]);
+				// The SAME close, folded again — which is what a replayed or
+				// duplicated close would do. It must not raise.
+				await expect(
+					releaseNomination(client, [closedEvent(playerId)])
+				).resolves.toBeUndefined();
+				await client.query('commit');
+
+				const after = await owner.query(
+					'select 1 from public.open_nominations where fantrax_player_id = $1',
+					[playerId]
+				);
+				expect(after.rows).toHaveLength(0);
+			} finally {
+				await client.end();
+			}
+		});
+
+		it('deletes nothing for a Player who was never nominated', async () => {
+			const client = new Client({ connectionString: LOCAL_DB_URL });
+			await client.connect();
+			try {
+				await client.query('begin');
+				await expect(
+					releaseNomination(client, [closedEvent(`never-nominated-${Date.now()}`)])
+				).resolves.toBeUndefined();
+				await client.query('rollback');
 			} finally {
 				await client.end();
 			}

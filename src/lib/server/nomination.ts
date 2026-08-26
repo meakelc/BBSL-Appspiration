@@ -15,6 +15,15 @@
  * acceptance criteria require Slot status to be a FOLD rather than a stored
  * flag that is read, and it still is.
  *
+ * **The claim row is written once and deleted once.** Story 2.3 adds
+ * `releaseNomination`, the delete that clears a claim when a Player's
+ * Auction closes. It ships tested and DELIBERATELY UNREGISTERED: no
+ * `AuctionClosed` producer exists, Epic 3 owns closing, and the delete
+ * belongs inside the transaction that appends the close (Story 3.4's), not
+ * inside `placeNomination`'s. The Slot's release itself is not this
+ * function's doing either — `nominationsReducer` frees it by folding the
+ * same close event.
+ *
  * **The gate re-derives every check under the lock, whatever the page
  * rendered.** `loadNominationState` runs inside `runTransactionalWrite`'s
  * transaction, after `pg_advisory_xact_lock` (AD-6), so a page rendered
@@ -42,6 +51,7 @@
 
 import { fold } from '../core/projection/fold.ts';
 import {
+	AUCTION_CLOSED_EVENT,
 	INITIAL_NOMINATIONS,
 	NOMINATION_PLACED_EVENT,
 	nominationForPlayer,
@@ -340,6 +350,48 @@ export const claimNomination: ProjectionUpdater = async (client, appended) => {
 				(fantrax_player_id, team_id, seq, occurred_at)
 			values ($1, $2, $3, $4)`,
 			[payload.fantraxPlayerId, payload.teamId, event.seq, event.occurredAt]
+		);
+	}
+};
+
+/**
+ * Delete the claim row for every `AuctionClosed` in the batch just appended,
+ * on the appending transaction's own client (Story 2.3).
+ *
+ * The mirror image of `claimNomination`, and for the same reasons: it is a
+ * WRITE-SIDE statement, never a read, and it goes through the `projections`
+ * hook so the delete commits with the close event or not at all (AD-5).
+ * Removing the row is what returns the Player to the pool and the Team's
+ * Nomination Slot to them at the data layer — the *answer* to "is this Slot
+ * held" stays `nominationsReducer`'s fold over `auction_events`, which
+ * releases on exactly the same event without consulting this table.
+ *
+ * Keyed on the Player alone, exactly as the fold is: the Slot frees whether
+ * the nominator won, lost or never bid, and `open_nominations`' primary key
+ * IS `fantrax_player_id`, so one statement clears one claim.
+ *
+ * Idempotent by construction. A close for a Player with no claim row —
+ * already released, or never nominated — deletes zero rows and does not
+ * raise; there is no `returning`, nothing asserts a row count, and no
+ * refusal can come out of here. That is deliberate: unlike the insert, whose
+ * collision IS the rule, a delete that finds nothing has already achieved
+ * what it was asked to achieve.
+ *
+ * **Deliberately not registered.** No `AuctionClosed` producer exists — Epic
+ * 3 owns closing — and the delete must run inside the transaction that
+ * appends the close, which is Story 3.4's transaction, not `placeNomination`'s.
+ * Adding it to `placeNomination`'s `projections` would issue a delete that
+ * can never match, on a path that never appends a close. Shipping it tested
+ * and unregistered makes 3.4 a one-line registration.
+ */
+export const releaseNomination: ProjectionUpdater = async (client, appended) => {
+	for (const event of appended) {
+		if (event.type !== AUCTION_CLOSED_EVENT) continue;
+		const payload = event.payload as { readonly fantraxPlayerId: string };
+		await client.query(
+			`delete from ${OPEN_NOMINATIONS_TABLE}
+			where fantrax_player_id = $1`,
+			[payload.fantraxPlayerId]
 		);
 	}
 };
