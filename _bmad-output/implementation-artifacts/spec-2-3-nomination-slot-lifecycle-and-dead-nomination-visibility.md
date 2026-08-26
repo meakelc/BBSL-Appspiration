@@ -2,7 +2,7 @@
 title: 'Story 2.3: Nomination Slot lifecycle'
 type: 'feature'
 created: '2026-08-26'
-status: 'in-progress'
+status: 'in-review'
 review_loop_iteration: 0
 baseline_commit: '8766c4c4ba9177e7382c15b538f49d2d799fd933'
 context: []
