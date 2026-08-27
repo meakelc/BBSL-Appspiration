@@ -1,6 +1,6 @@
 /**
  * The League Clock's origin and its resets, folded from the log
- * (Stories 1.11, 2.1).
+ * (Stories 1.11, 2.1, 2.5).
  *
  * The League Clock is 48 hours long (`LEAGUE_CLOCK`, `core/constants.ts`)
  * and its expiry ends the Auction Phase (PRD §3). This reducer answers where
@@ -12,11 +12,20 @@
  *
  * **An origin is not a reset.** AD-22 names `AuctionOpened` as the League
  * Clock's origin and fixes the reset set at exactly two event types. Story
- * 2.1 adds the first of them, `NominationPlaced`; `BidPlaced` is Story 2.2's
- * and its absence here is a decision, not an omission. The set is not
+ * 2.1 added the first of them, `NominationPlaced`; Story 2.5 adds the second
+ * and last, `BidPlaced`, and the set is now complete. (An earlier revision of
+ * this header attributed `BidPlaced` to Story 2.2 — that was stale: 2.2 built
+ * nomination refusals and concurrency and appended no Bid.) The set is not
  * widened past those two, and a reset stays distinguishable from the origin
  * because a reset can be unwound by a compensating `BidVoided` while the
  * open can never be unwound.
+ *
+ * **Exactly two, and no more.** Every other event type — an Auction close, a
+ * randomizer draw, a contention dissolution, a bid void, an override, a
+ * pause or resume — reaches `default` and leaves the clock alone, which is
+ * AD-22's "new event types default to not resetting it" holding by
+ * construction rather than by review. §10 example 13 is the case: an Auction
+ * closing at 12:00 Saturday does not reset the League Clock.
  *
  * **Two fields, not one.** AD-22's amended third bullet fixes expiry at
  * `LEAGUE_CLOCK` after the *later* of the origin and the latest surviving
@@ -50,6 +59,7 @@
 
 import { LEAGUE_CLOCK } from '../constants.ts';
 import { formatInstant, parseInstant } from '../instant.ts';
+import { BID_PLACED_EVENT } from './auctions.ts';
 import type { Reducer } from './fold.ts';
 import { NOMINATION_PLACED_EVENT } from './nominations.ts';
 import { AUCTION_OPENED_EVENT } from './phase.ts';
@@ -85,8 +95,9 @@ export const INITIAL_LEAGUE_CLOCK: LeagueClock = Object.freeze({
  * leaves the already-set origin alone, and re-folding the same
  * `NominationPlaced` sets `lastReset` to the value it already held.
  *
- * A `NominationPlaced` appended before any open — unreachable through the
- * gate, which refuses outside the Auction Phase — still records its reset.
+ * A `NominationPlaced` or `BidPlaced` appended before any open — unreachable
+ * through the gates, which run only inside the Auction Phase — still records
+ * its reset.
  * `leagueClockExpiry` returns `null` without an origin, so a stray reset can
  * never manufacture a clock that never started.
  */
@@ -96,11 +107,17 @@ export const leagueClockReducer: Reducer<LeagueClock> = (state, event) => {
 			if (state.origin !== null) return state;
 			return { ...state, origin: event.occurredAt };
 		}
-		case NOMINATION_PLACED_EVENT: {
+		case NOMINATION_PLACED_EVENT:
+		case BID_PLACED_EVENT: {
 			// The latest reset in `seq` order wins. `fold()` orders by `seq`
 			// (AD-5), so "latest" is simply "the last one folded" — never a
 			// timestamp comparison, which would be wrong under the global lock
 			// where a later commit can hold an earlier `occurred_at`.
+			//
+			// The two cases share one body deliberately: AD-22 fixes the reset
+			// set at exactly these two event types and says nothing that would
+			// distinguish them, so writing two identical bodies would invite a
+			// divergence the AD does not sanction.
 			return { ...state, lastReset: event.occurredAt };
 		}
 		default:
