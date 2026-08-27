@@ -1,7 +1,7 @@
 /**
- * The bidding gate: the two entry points AD-1 fixes, the five gates they
+ * The bidding gate: the two entry points AD-1 fixes, the six gates they
  * decide through, the one sentence each refusal has, and the arithmetic the
- * refusal panel prints. Pure (Stories 2.5, 2.6).
+ * refusal panel prints. Pure (Stories 2.5, 2.6, 2.7).
  *
  * **Two entry points and no others.**
  *
@@ -33,25 +33,39 @@
  * says so outright). Granularity earns its keep where the increment rule does
  * not apply — §10 example 26's `$1,000,001` in a Minimum-Bid Contention.
  *
- * **The gate set grew by one, exactly as designed.** Story 2.5 owned four
- * and said 2.6 would add `cap`, 2.7 `slots` and 3.1 `expiry`. `cap` is here
- * now, and adding it was the single edit to `PLACE_BID_GATES` in
- * `core/types.ts` that the design promised. The other two are not: this
- * module still cannot see roster CAPACITY as a refusal ground and still does
- * not compare `now` to a close instant. A gate this story does not own is
- * not stubbed, not half-written and not named.
+ * **The gate set grew by one gate, twice, exactly as designed.** Story 2.5 owned
+ * four and said 2.6 would add `cap`, 2.7 `slots` and 3.1 `expiry`. Both
+ * `cap` and `slots` are here now, and adding each was the single edit to
+ * `PLACE_BID_GATES` in `core/types.ts` that the design promised. `expiry` is
+ * not: this module still does not compare `now` to a close instant. A gate
+ * this story does not own is not stubbed, not half-written and not named.
  *
- * **What `cap` may see, and what it still may not.** Story 2.6 gives this
- * module a Team's Cap Space, its Roster Count and the open Auctions it
- * leads, because Maximum Bid cannot be derived without them (AD-7). It does
- * NOT give it Free Minor League Slots, Eligible Leading Bids or Overflow
- * Count — Minors Exposure is named in the arithmetic and is structurally
- * zero until Story 2.8 supplies the set it sums over. Roster Count arrives
- * for Roster Reserve alone; refusing on `Roster Count + Projected
- * Active/Bench Additions > 12` is Story 2.7's separate gate, and this module
- * carries no such comparison. Reporting a capacity refusal as a cap refusal
- * is a defect (AD-7), so the two gates share their arithmetic and never
- * their outcome.
+ * **What the two gates may see, and what they still may not.** Story 2.6
+ * gives this module a Team's Cap Space, its Roster Count and the open
+ * Auctions it leads, because Maximum Bid cannot be derived without them
+ * (AD-7). It does NOT give it Free Minor League Slots, Eligible Leading Bids
+ * or Overflow Count — Minors Exposure is named in the arithmetic and is
+ * structurally zero until Story 2.8 supplies the set it sums over.
+ *
+ * **`slots` is the second, independent ground** (Story 2.7, FR-37): it
+ * refuses on `Roster Count + Projected Active/Bench Additions >
+ * ACTIVE_BENCH_SLOTS`, that comparison lives in `evaluateSlots` below, and
+ * it reads NO amount and NO Maximum Bid — so a Team can fail it with
+ * unlimited Cap Space and pass it with none. Neither gate short-circuits,
+ * subsumes or gates the other; `evaluate()` returns both outcomes with their
+ * own arithmetic whether or not the other passed. Reporting a capacity
+ * refusal as a cap refusal is a defect (AD-7), so the two share the
+ * DERIVATION — `projectedAdditionsFor`, one expression — and never the
+ * outcome.
+ *
+ * **The `+ 1` in `projectedAdditionsFor` is unconditional, and that is
+ * 2.8's boundary.** FR-37 lets a Team at Roster Count 12 bid on a Minor
+ * League Eligible Player a Free Minor League Slot would absorb, because that
+ * win adds nothing to Active/Bench. That needs Free Minor League Slots and
+ * the current Player's eligibility, neither of which `TeamMoneyState`
+ * carries. Until Story 2.8 supplies them such a Bid is refused on capacity,
+ * which is the boundary `deferred-work.md` logs rather than a branch this
+ * module half-builds.
  *
  * **No Minimum-Bid Contention is ever produced.** An Opening Bid of exactly
  * `MINIMUM_BID` is refused by the named `opening` gate, because the Contender
@@ -103,7 +117,8 @@ import type {
 	PlaceBidGate,
 	PlaceBidGateResults,
 	Rejected,
-	SelfBidGateOutcome
+	SelfBidGateOutcome,
+	SlotsGateOutcome
 } from '../types.ts';
 
 /**
@@ -160,11 +175,15 @@ export type LeadingBid = {
  * a real supported state on the read path, and unreachable inside
  * `server/bidding.ts`, which cannot assemble a command without a Team.
  *
- * Still deliberately absent: Free Minor League Slots, Eligible Leading Bids
- * and any roster CAPACITY comparison. A gate that cannot see them cannot
- * refuse on them, which is what keeps "the exposure arithmetic is 2.8's" and
- * "the capacity gate is 2.7's" structural facts rather than promises — the
- * same argument `NominationState` makes for the nomination gate.
+ * Roster CAPACITY is now decided from this same shape: Story 2.7's `slots`
+ * gate reads `team.rosterCount` and `team.leading` and nothing else, so the
+ * capacity comparison needed no new field and no new read. What is STILL
+ * deliberately absent is Free Minor League Slots and Eligible Leading Bids.
+ * A gate that cannot see them cannot refuse on them, which is what keeps
+ * "the exposure arithmetic is 2.8's" a structural fact rather than a promise
+ * — the same argument `NominationState` makes for the nomination gate, and
+ * the same argument that made "the capacity gate is 2.7's" true until 2.7
+ * landed.
  */
 export type BidState = {
 	readonly leadingBid: LeadingBid | null;
@@ -497,6 +516,37 @@ function unfilledSlots(rosterCount: number, projectedAdditions: number): number 
 }
 
 /**
+ * Projected Active/Bench Additions — the open Auctions this Team already
+ * leads, plus the one Bid being placed.
+ *
+ * **One expression, two gates**, the discipline `unfilledSlots` above already
+ * sets. `evaluateCap` feeds it to Roster Reserve and `evaluateSlots` compares
+ * it to the ceiling; if either recomputed it the two could disagree about the
+ * count while agreeing they describe the same roster, which is the defect
+ * "reporting a capacity refusal as a cap refusal" (AD-7) arriving from the
+ * other direction.
+ *
+ * **The `+ 1` is the POST-BID basis** and it is not optional: PRD FR-12 and
+ * the §3 glossary both define Projected Active/Bench Additions as counting
+ * the bid being placed, and AD-7 makes evaluating against the pre-bid state
+ * the exact ambiguity that flips §10 example 19.
+ *
+ * **It is unconditional, and that is Story 2.8's boundary, not an oversight.**
+ * FR-37 lets a full Team bid on a Minor League Eligible Player a Free Minor
+ * League Slot would absorb, because that win adds nothing to Active/Bench.
+ * `TeamMoneyState` carries neither the free slots nor the current Player's
+ * eligibility, so there is nothing here to branch on — and a branch written
+ * against figures that do not exist would be a rule nothing enforces.
+ *
+ * `team.leading` is already the non-eligible leads alone: `teamMoneyStateFor`
+ * skips the Auction being bid on, the Auctions another Team leads and the
+ * Minor League Eligible Players, so the count needs no filtering of its own.
+ */
+function projectedAdditionsFor(team: TeamMoneyState): number {
+	return team.leading.length + 1;
+}
+
+/**
  * The operator a subtracted breakdown row carries.
  *
  * The same U+2212 MINUS SIGN `formatMoney` prefixes a negative amount with,
@@ -573,7 +623,7 @@ function evaluateCap(state: BidState, amount: Money): CapGateOutcome {
 	}
 
 	const availableCapSpace = subtractMoney(team.capSpace, committedBids);
-	const projectedAdditions = team.leading.length + 1;
+	const projectedAdditions = projectedAdditionsFor(team);
 	const rosterReserve = multiplyMoney(
 		MINIMUM_OPENING_BID,
 		unfilledSlots(team.rosterCount, projectedAdditions)
@@ -595,6 +645,63 @@ function evaluateCap(state: BidState, amount: Money): CapGateOutcome {
 }
 
 /**
+ * The slots gate: a Bid may not take a Team past Roster Capacity (FR-37).
+ *
+ * **A second, independent ground — structurally, not by convention.** It
+ * takes the `BidState` and NOT the amount, so it cannot read a Bid's size,
+ * cannot read a Maximum Bid, and has no way to be quietly folded into the
+ * money gate. FR-37's "a Team can fail it with unlimited Cap Space and pass
+ * it with none" is then a property of the signature rather than a claim a
+ * reviewer has to verify by reading the body.
+ *
+ *   Roster Count + Projected Active/Bench Additions > 12  →  refused
+ *
+ * on the same POST-BID basis Roster Reserve uses: `projectedAdditionsFor`
+ * counts the Bid being placed, and it is the identical call `evaluateCap`
+ * makes, so the two gates cannot disagree about the count while agreeing
+ * they describe the same roster. What they do NOT share is the outcome:
+ * this returns its own `rosterCount`, its own `projectedAdditions` and its
+ * own `ceiling`, because reporting a capacity refusal as a cap refusal is a
+ * defect (AD-7) and two rows each stating their own arithmetic cannot be
+ * read as one.
+ *
+ * **"At the ceiling" passes.** A Bid that fills the twelfth hole leaves
+ * `12 ≤ 12` and is legal; only one that would take a Team past it is
+ * refused. §10 example 23 is that case and §10 example 24 is the other.
+ *
+ * **No clamp here, deliberately** — `unfilledSlots` keeps its `max(0, …)`
+ * so a Commissioner override (Story 7.x) cannot hand a Team extra spending
+ * power, and this gate is the other half of that pairing: an overridden Team
+ * above the ceiling is REFUSED on capacity rather than rewarded, and the
+ * comparison has to see the true count to say so.
+ *
+ * With no Team there is no roster: both counts are `null` and the gate
+ * passes, exactly as `evaluateCap` nulls its nine. The refusal an unbound
+ * Manager actually sees is `unbound_actor`. `ceiling` is stated even then,
+ * because `ACTIVE_BENCH_SLOTS` is a league constant and is true of a Team
+ * that does not exist.
+ */
+function evaluateSlots(state: BidState): SlotsGateOutcome {
+	const team = state.team;
+	if (team === null) {
+		return {
+			passed: true,
+			rosterCount: null,
+			projectedAdditions: null,
+			ceiling: ACTIVE_BENCH_SLOTS
+		};
+	}
+
+	const projectedAdditions = projectedAdditionsFor(team);
+	return {
+		passed: team.rosterCount + projectedAdditions <= ACTIVE_BENCH_SLOTS,
+		rosterCount: team.rosterCount,
+		projectedAdditions,
+		ceiling: ACTIVE_BENCH_SLOTS
+	};
+}
+
+/**
  * Every gate for a `PlaceBid`, always all of them, whatever the state.
  *
  * Total. It never throws, never short-circuits, and returns exactly the keys
@@ -606,7 +713,7 @@ function evaluateCap(state: BidState, amount: Money): CapGateOutcome {
  * `evaluate(state, command, now)` and because Story 3.1's `expiry` gate is
  * the consumer that will need it: expiry-as-authority compares the injected
  * `now` against the persisted absolute close instant (AD-12), and none of
- * the four gates below asks what time it is. Nothing here reads a clock; if
+ * the six gates below asks what time it is. Nothing here reads a clock; if
  * this parameter were dropped now, 3.1 would have to change a signature both
  * runtimes and the read path already depend on.
  */
@@ -617,7 +724,10 @@ export function evaluate(state: BidState, command: PlaceBid, now: string): Place
 		selfBid: evaluateSelfBid(state, command.teamId),
 		increment: evaluateIncrement(state, command.amount),
 		granularity: evaluateGranularity(command.amount),
-		cap: evaluateCap(state, command.amount)
+		cap: evaluateCap(state, command.amount),
+		// No amount is passed, and that is the whole design: neither gate
+		// short-circuits the other and neither can see the other's ground.
+		slots: evaluateSlots(state)
 	};
 }
 
@@ -654,7 +764,7 @@ export function failedGates(gates: PlaceBidGateResults): readonly PlaceBidGate[]
  * Why a Bid was refused.
  *
  * `gates` is the ordinary case: the pure gate set, refused by one or more of
- * the four. The other four are decided OUTSIDE the gate set, exactly as
+ * the six. The other six are decided OUTSIDE the gate set, exactly as
  * `NominationRefusal`'s `unconfirmed`/`unbound_actor`/`unrecorded` are, and
  * for the same reasons:
  *
@@ -672,7 +782,8 @@ export function failedGates(gates: PlaceBidGateResults): readonly PlaceBidGate[]
  *  - `no_open_auction` — the Player's Auction closed, or never existed,
  *    between the render and the submit. Re-derived under the lock by
  *    `server/bidding.ts`, never by a gate: whether an Auction is OPEN is the
- *    nomination fold's answer, and `PLACE_BID_GATES` is fixed at four.
+ *    nomination fold's answer, and `PLACE_BID_GATES` names no such
+ *    question at any size.
  *  - `unrecorded` — the defensive case for a rejection that arrived stating
  *    no reason.
  *
@@ -758,6 +869,28 @@ function gateSentence(gates: PlaceBidGateResults, gate: PlaceBidGate): string | 
 			return (
 				`${describeAmount(outcome.offered)} exceeds your Maximum Bid of ` +
 				`${describeAmount(outcome.maximumBid)} by ${describeAmount(excess)}.`
+			);
+		}
+		case 'slots': {
+			const outcome = gates.slots;
+			if (
+				outcome.passed ||
+				outcome.rosterCount === null ||
+				outcome.projectedAdditions === null
+			) {
+				return null;
+			}
+			// No money anywhere in it, and that is the point: a capacity
+			// refusal that quoted a cap figure as its ground would be the
+			// defect AD-7 names. The counts are stated, then the sum they
+			// make, then the ceiling it passes — nobody has to add at 4am.
+			const projected = outcome.rosterCount + outcome.projectedAdditions;
+			return (
+				'Your Team has no roster slot for this Player. Roster Count is ' +
+				`${String(outcome.rosterCount)} and Projected Active/Bench Additions is ` +
+				`${String(outcome.projectedAdditions)}, so winning would put your Team at ` +
+				`${String(projected)} against a Roster Capacity of ${String(outcome.ceiling)}. ` +
+				'You may bid again once a Slot frees up.'
 			);
 		}
 	}
@@ -971,6 +1104,19 @@ function gateFigure(gates: PlaceBidGateResults, gate: PlaceBidGate): string {
 				`${describeAmount(outcome.offered)}`
 			);
 		}
+		case 'slots': {
+			const outcome = gates.slots;
+			if (outcome.rosterCount === null || outcome.projectedAdditions === null) {
+				return 'no Team, so no Roster Count';
+			}
+			// `EXPERIENCE.md`'s shape verbatim — `Roster Count would be 10 of
+			// 12` — and ONE branch serving passed and refused alike, because
+			// the row states the arithmetic and the chip beside it states the
+			// outcome. A second branch would be a second place for the two to
+			// disagree.
+			const projected = outcome.rosterCount + outcome.projectedAdditions;
+			return `Roster Count would be ${String(projected)} of ${String(outcome.ceiling)}`;
+		}
 	}
 	// Unreachable: every gate above returns. Present so a gate added to
 	// `PLACE_BID_GATES` without a case here produces a plain row rather than
@@ -1039,7 +1185,8 @@ const GATE_LABELS: Readonly<Record<PlaceBidGate, string>> = Object.freeze({
 	selfBid: 'Self-bid',
 	increment: 'Minimum Increment',
 	granularity: 'Granularity',
-	cap: 'Cap'
+	cap: 'Cap',
+	slots: 'Slots'
 });
 
 /** One gate's row on the refusal panel: the chip, and the figure beside it. */
@@ -1073,14 +1220,14 @@ const CHIP_SEPARATOR = '·';
  * Every gate's row, in `PLACE_BID_GATES` order — the refusing ones and the
  * passing ones alike.
  *
- * **Built by iterating the declared list**, so Story 2.7's `slots` gate
- * appears on this panel the moment it is added to `PLACE_BID_GATES` and
- * nobody has to remember to render it. That is what makes "both gates always
- * reported" a structural property of the panel rather than a thing a
- * component has to be trusted to do — and it is why each row carries its
- * OWN figure: reporting a capacity refusal as a cap refusal is a defect
- * (AD-7), and two rows each stating their own arithmetic cannot be read as
- * one.
+ * **Built by iterating the declared list**, which is how Story 2.7's `slots`
+ * gate reached this panel: adding it to `PLACE_BID_GATES` was the whole
+ * change, and no component or route was edited to make the sixth row appear.
+ * That is what makes "both gates always reported" a structural property of
+ * the panel rather than a thing a component has to be trusted to do — and it
+ * is why each row carries its OWN figure: reporting a capacity refusal as a
+ * cap refusal is a defect (AD-7), and two rows each stating their own
+ * arithmetic cannot be read as one.
  */
 export function bidGateReport(gates: PlaceBidGateResults): readonly BidGateReportRow[] {
 	return PLACE_BID_GATES.map((gate) => {

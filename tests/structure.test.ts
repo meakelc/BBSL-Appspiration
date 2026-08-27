@@ -32,9 +32,9 @@ const AR2_DIRECTORIES: Array<[path: string, purpose: string]> = [
  * AD-25 requires all 28 eventually; the epics assign them story by story, and
  * a directory that merely EXISTS proves nothing about whether the examples in
  * it were written. This list grows as each story lands its own — Story 2.5
- * landed 1, 2, 15 and 26; Story 2.6 adds 3, 4, 5 and 23 — so a file deleted
- * or renamed away fails here rather than silently reducing the executable
- * specification.
+ * landed 1, 2, 15 and 26; Story 2.6 added 3, 4, 5 and 23; Story 2.7 adds 24 —
+ * so a file deleted or renamed away fails here rather than silently reducing
+ * the executable specification.
  */
 const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 	['example-01-ordinary-raise.test.ts', '1 — Ordinary raise'],
@@ -44,6 +44,10 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 	['example-05-outbid-frees-capital.test.ts', '5 — Outbid frees capital immediately'],
 	['example-15-co-manager-race.test.ts', '15 — Co-manager race'],
 	['example-23-ir-does-not-fill-the-twelve.test.ts', '23 — IR does not fill the twelve'],
+	[
+		'example-24-full-roster-ends-non-eligible-bidding.test.ts',
+		'24 — A full roster ends non-eligible bidding, money or not'
+	],
 	['example-26-off-grid-everywhere.test.ts', '26 — Off-grid amounts are refused everywhere']
 ];
 

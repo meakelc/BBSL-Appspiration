@@ -307,10 +307,11 @@ export type GranularityGateOutcome = GateOutcome & {
  * reachable only on the read path.
  *
  * `rosterCount` and `projectedAdditions` are counts, not money, and are the
- * two inputs to `rosterReserve`. Story 2.7's `slots` gate refuses on the
- * same two figures and carries its own copy of them: reporting a capacity
- * refusal as a cap refusal is a defect (AD-7), so the two gates share the
- * arithmetic and never the outcome.
+ * two inputs to `rosterReserve`. Story 2.7's `slots` gate refuses on those
+ * same two figures and carries its OWN copy of them on `SlotsGateOutcome`:
+ * reporting a capacity refusal as a cap refusal is a defect (AD-7), so the
+ * two gates share the derivation — `projectedAdditionsFor` in
+ * `rules/bidding.ts` — and never the outcome.
  */
 export type CapGateOutcome = GateOutcome & {
 	readonly offered: Money;
@@ -325,13 +326,46 @@ export type CapGateOutcome = GateOutcome & {
 };
 
 /**
+ * The slots gate: a Bid may not take a Team past Roster Capacity (Story 2.7,
+ * FR-37).
+ *
+ * A SECOND, INDEPENDENT ground beside `cap`, and independent structurally
+ * rather than by convention: there is no `offered` field and no money figure
+ * on this shape at all, so a gate that cannot see the amount has no way to be
+ * quietly folded into the money one. A Team can fail this with unlimited Cap
+ * Space and pass it with none.
+ *
+ * It refuses exactly when `rosterCount + projectedAdditions > ceiling`, on
+ * the same POST-BID basis Roster Reserve uses — `projectedAdditions` counts
+ * the Bid being placed. The two figures are `CapGateOutcome`'s two counts
+ * over again, deliberately copied rather than pointed at: two rows each
+ * stating their own arithmetic cannot be read as one, and reporting a
+ * capacity refusal as a cap refusal is a defect (AD-7). The shared
+ * DERIVATION is `projectedAdditionsFor` in `rules/bidding.ts`, so the two
+ * gates can never disagree about the count while agreeing they describe the
+ * same roster.
+ *
+ * `rosterCount` and `projectedAdditions` are `null` together, and only for
+ * an actor bound to no Team — exactly as `CapGateOutcome`'s nine are, and
+ * for the same reason: stating `0` would be an invented figure a refusal
+ * panel would then print. The gate PASSES in that case, because the real
+ * refusal is `unbound_actor`. `ceiling` is never null: `ACTIVE_BENCH_SLOTS`
+ * is a league constant, true of a Team that does not exist.
+ */
+export type SlotsGateOutcome = GateOutcome & {
+	readonly rosterCount: number | null;
+	readonly projectedAdditions: number | null;
+	readonly ceiling: number;
+};
+
+/**
  * The gate set for `PlaceBid`, **fixed per command type** (AD-1).
  *
  * Declared here, in one place, so a later story adds a gate with a single
  * edit and every caller is a compile error until it handles the new one.
  * "Fixed" means fixed at any given commit, not frozen forever: Story 2.6
- * added `cap` — this is that single edit, and it is what made every
- * consumer stop compiling until it handled the new gate — 2.7 adds `slots`,
+ * added `cap` and Story 2.7 added `slots` — each was that one edit, and each
+ * is what made every consumer stop compiling until it handled the new gate.
  * 3.1 adds `expiry`.
  *
  * Frozen at runtime as well as `as const`, because this list is what
@@ -343,10 +377,11 @@ export const PLACE_BID_GATES = Object.freeze([
 	'selfBid',
 	'increment',
 	'granularity',
-	'cap'
+	'cap',
+	'slots'
 ] as const);
 
-/** One of the five gate names above. */
+/** One of the six gate names above. */
 export type PlaceBidGate = (typeof PLACE_BID_GATES)[number];
 
 /**
@@ -363,6 +398,7 @@ export type PlaceBidGateResults = {
 	readonly increment: IncrementGateOutcome;
 	readonly granularity: GranularityGateOutcome;
 	readonly cap: CapGateOutcome;
+	readonly slots: SlotsGateOutcome;
 };
 
 /**

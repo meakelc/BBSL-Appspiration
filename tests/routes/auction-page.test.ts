@@ -25,7 +25,16 @@ import { join } from 'node:path';
 import { isHttpError } from '@sveltejs/kit';
 
 import { classifyDeviceClass } from '../../src/lib/core/device-class.ts';
-import { BID_READY, bidPlacedNotice, bidRefusalDetail } from '../../src/lib/core/rules/bidding.ts';
+import { parseMoney } from '../../src/lib/core/money.ts';
+import {
+	BID_READY,
+	bidGateReport,
+	bidPlacedNotice,
+	bidRefusalDetail,
+	bidStateFor,
+	evaluate
+} from '../../src/lib/core/rules/bidding.ts';
+import { PLACE_BID_GATES } from '../../src/lib/core/types.ts';
 import { LIVE_DESTINATION_REFUSAL_STATUS } from '../../src/lib/server/destinations.ts';
 import type { RegisteredManager, SessionState } from '../../src/lib/server/auth.ts';
 import type { ResolvedPhase } from '../../src/lib/server/phase.ts';
@@ -407,7 +416,12 @@ describe('the Auction page — what it never renders', () => {
 		}
 	});
 
-	it('names no money gate and no capacity gate — those are Stories 2.6 and 2.7', () => {
+	it('words no gate itself — the page renders what the core hands it', () => {
+		// Stories 2.6 and 2.7 built the money gate and the capacity gate, and
+		// neither needed an edit here: the page prints `bidGateReport`'s rows
+		// and `bidControlState`'s sentence. So the vocabulary below is still
+		// absent from this file — not because the rules do not exist, but
+		// because this file states none of them.
 		for (const forbidden of [
 			/maximumBid/i,
 			/committedBids/i,
@@ -416,7 +430,13 @@ describe('the Auction page — what it never renders', () => {
 			/roster count/i,
 			/no money/i,
 			/roster slot/i,
-			/cap space/i
+			/cap space/i,
+			// The `slots` gate's own internals, guarded the same way `cap`'s
+			// have been since 2.6. The page never names a gate's fields — it
+			// prints `bidGateReport`'s finished rows — and the sixth gate is
+			// entitled to the same regression guard as the fifth.
+			/projectedAdditions/i,
+			/\bceiling\b/i
 		]) {
 			expect(PAGE_CODE, String(forbidden)).not.toMatch(forbidden);
 		}
@@ -449,9 +469,13 @@ describe('the Auction page — what it never renders', () => {
 		// Story 2.6 built the gate, so `Maximum Bid` is now rendered — from
 		// `capBreakdown()`, whose labels and figures are the core's.
 		//
-		// What remains forbidden is what remains unbuilt: the CAPACITY gate's
-		// wording (2.7) and the exposure branch (2.8). A page that said "no
-		// roster slot" or "no cap limit" today would state a rule nothing in
+		// Story 2.7 built the capacity gate, so "Roster Capacity" and "no
+		// roster slot" are now real wordings — but they are the CORE's, and
+		// this check is about what these two route files say for themselves.
+		// The sixth chip reached the panel by `PLACE_BID_GATES` growing, with
+		// no markup change here, which is exactly what these assertions prove
+		// by still holding. What remains unbuilt is the exposure branch (2.8);
+		// a page that said "no cap limit" today would state a rule nothing in
 		// the codebase enforces, which is the precise failure the refusal
 		// design exists to prevent.
 		// `Overflow Count`, not bare "overflow": the CSS property is not the
@@ -917,6 +941,48 @@ describe('the refusal panel — the only surface with a dedicated anatomy', () =
 		expect(PANEL_CODE).not.toMatch(/\b(red|crimson|#ff0000|rgb\()/i);
 	});
 
+	it('grew a sixth row for the capacity gate with no markup change (Story 2.7)', () => {
+		// The claim the Code Map made and this test is here to PROVE rather
+		// than assert: the panel `{#each}`es whatever `bidGateReport` returns,
+		// and that function maps `PLACE_BID_GATES` — so declaring `slots`
+		// was the whole change and no component or route was edited.
+		expect(PANEL_CODE).toContain('{#each gates as row (row.gate)}');
+		expect(PANEL_CODE).not.toContain("'cap'");
+		expect(PANEL_CODE).not.toContain("'slots'");
+
+		// A Team at Roster Count 12 with $40.0M spare — refused on capacity,
+		// passed on money — rendered as the rows the panel would receive.
+		const rows = bidGateReport(
+			evaluate(
+				bidStateFor(null, {
+					capSpace: parseMoney(40_000_000),
+					rosterCount: 12,
+					leading: []
+				}),
+				{
+					kind: 'PlaceBid',
+					fantraxPlayerId: 'p-1',
+					teamId: 't-r',
+					teamName: 'Team R',
+					managerId: 'm-r',
+					amount: parseMoney(5_000_000)
+				},
+				'2026-08-27T09:00:00.000Z'
+			)
+		);
+
+		expect(rows).toHaveLength(PLACE_BID_GATES.length);
+		expect(rows).toHaveLength(6);
+		expect(rows.map((row) => row.gate)).toEqual([...PLACE_BID_GATES]);
+		// The refusing row is filled — `class:refused={!row.passed}` — and
+		// every other row is outlined and carries its own figure.
+		expect(rows.filter((row) => !row.passed).map((row) => row.gate)).toEqual(['slots']);
+		for (const row of rows) {
+			expect(row.figure.length, row.gate).toBeGreaterThan(0);
+			expect(row.chip, row.gate).toContain('·');
+		}
+	});
+
 	it('words nothing of its own — every sentence comes from the core', () => {
 		expect(PANEL).toContain("from '$lib/core/rules/bidding.ts'");
 		expect(PANEL).toContain('REFUSAL_HEADLINE');
@@ -1002,7 +1068,11 @@ describe('the bid action — a refusal carries the figures it was judged against
 			projectedAdditions: 1,
 			rosterReserve: 2_000_000,
 			maximumBid: 10_000_000
-		}
+		},
+		// The capacity gate passes and reports anyway (Story 2.7): the money
+		// is the only obstacle, and the panel says so rather than leaving a
+		// reader to wonder what else was not checked.
+		slots: { passed: true, rosterCount: 9, projectedAdditions: 1, ceiling: 12 }
 	};
 
 	const TRANSACTION_CLOCK = '2026-08-27T02:14:00.000Z';

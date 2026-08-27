@@ -32,15 +32,20 @@
  * amount is re-derived server-side under the lock, and the wording it comes
  * back with is `bidRefusalDetail`'s, the same one used here.
  *
- * **The viewer's cap figures, but no capacity figure.** Story 2.6 adds the
- * money half: one read of `team_rosters` for the viewer's Team, narrowed
- * through the core's own `teamMoneyStateFor` and serialised as FACTS — Cap
- * Space, Roster Count and the Auctions that Team leads. Maximum Bid,
- * Committed Bids, Available Cap Space and Roster Reserve are NOT serialised,
- * because AD-7 forbids a derived money figure being cached client-side for
- * validation and the surface is a client; it re-derives them through the same
- * `evaluate()` this module calls. Roster occupancy as a REFUSAL ground is
- * still Story 2.7's, and no wording here names one.
+ * **The viewer's cap figures — and the capacity gate rides the same read.**
+ * Story 2.6 added the money half: one read of `team_rosters` for the viewer's
+ * Team, narrowed through the core's own `teamMoneyStateFor` and serialised as
+ * FACTS — Cap Space, Roster Count and the Auctions that Team leads. Maximum
+ * Bid, Committed Bids, Available Cap Space and Roster Reserve are NOT
+ * serialised, because AD-7 forbids a derived money figure being cached
+ * client-side for validation and the surface is a client; it re-derives them
+ * through the same `evaluate()` this module calls. Story 2.7's `slots` gate
+ * needed NO change here at all: it decides from `rosterCount` and the leads
+ * this read already carries, so a Team at Roster Capacity arrives on the
+ * board with its control already disabled and the reason already worded —
+ * and, like every other, the wording is `core/rules/bidding.ts`'s and never
+ * this module's. Roster Count is a serialised FACT, never a derived figure
+ * the surface compares against instead of re-deriving.
  *
  * **Reference fields come from `free_agent_players` and nothing else** — no
  * salary or contract-length column exists on that table
