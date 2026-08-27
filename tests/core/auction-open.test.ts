@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 import { fold } from '../../src/lib/core/projection/fold.ts';
 import { AUCTION_OPENED_EVENT, INITIAL_PHASE, phaseReducer } from '../../src/lib/core/projection/phase.ts';
@@ -12,6 +14,7 @@ import {
 	leagueClockExpiry,
 	leagueClockReducer
 } from '../../src/lib/core/projection/league-clock.ts';
+import { BID_PLACED_EVENT } from '../../src/lib/core/projection/auctions.ts';
 import { NOMINATION_PLACED_EVENT } from '../../src/lib/core/projection/nominations.ts';
 import { LEAGUE_CLOCK } from '../../src/lib/core/constants.ts';
 import { POOL_SOURCE_LABEL } from '../../src/lib/core/rules/pool-import.ts';
@@ -259,16 +262,106 @@ describe('leagueClockReducer', () => {
 		);
 		const later = fold(
 			opened,
-			// `BidPlaced` is AD-22's OTHER reset type and is Story 2.2's build —
-			// its absence here is a decision, not an omission. `PlayerNominated`
-			// is deliberately the WRONG spelling of this story's event type: a
-			// reducer that reset on it would be matching a string nothing
-			// appends.
-			[event(2, 'BidPlaced'), event(3, 'PlayerNominated'), event(4, 'ImportPromoted')],
+			// The reset set is now complete at exactly two — `NominationPlaced`
+			// (Story 2.1) and `BidPlaced` (Story 2.5). Everything below is
+			// outside it. `PlayerNominated` and `PlacedBid` are deliberately the
+			// WRONG spellings of the two real types: a reducer that reset on one
+			// would be matching a string nothing appends. `AuctionClosed` is §10
+			// example 13's case — a close does NOT reset the League Clock.
+			[
+				event(2, 'PlacedBid'),
+				event(3, 'PlayerNominated'),
+				event(4, 'ImportPromoted'),
+				event(5, 'AuctionClosed'),
+				event(6, 'BidVoided')
+			],
 			leagueClockReducer
 		);
 		expect(later).toEqual(opened);
 		expect(later.lastReset).toBeNull();
+	});
+
+	it('folds exactly two reset cases and no more — AD-22, read off the source', () => {
+		// The set is fixed at two by an AD, so "how many event types reset it"
+		// is asserted structurally as well as behaviourally: a third `case`
+		// added to the reducer would widen the set silently otherwise.
+		// Comments are stripped BOTH ways — block and line — for the reason
+		// `tests/structure.test.ts` and `tests/routes/auction-page.test.ts`
+		// both state: prose about a case is not a case. Stripping only block
+		// comments left a `// case FOO:` in a note able to corrupt the count.
+		const source = readFileSync(
+			fileURLToPath(new URL('../../src/lib/core/projection/league-clock.ts', import.meta.url)),
+			'utf8'
+		)
+			.replace(/\/\*[\s\S]*?\*\//g, '')
+			.replace(/^\s*\/\/.*$/gm, '');
+		const cases = [...source.matchAll(/case\s+([A-Z_]+):/g)].map((match) => match[1]);
+		expect(cases).toEqual([
+			'AUCTION_OPENED_EVENT',
+			'NOMINATION_PLACED_EVENT',
+			'BID_PLACED_EVENT'
+		]);
+	});
+});
+
+// --- the second and last reset: BidPlaced (Story 2.5, AD-22) ----------------
+
+/** One `BidPlaced`, which is a reset — never an origin. */
+function bidAt(seq: number, occurredAt: string) {
+	return event(
+		seq,
+		BID_PLACED_EVENT,
+		{ fantraxPlayerId: 'p-1', teamId: 't-1', managerId: 'm-1', amount: 8_500_000 },
+		occurredAt
+	);
+}
+
+describe('leagueClockReducer — the BidPlaced reset', () => {
+	it('records a Bid’s own instant as the last reset — AC5', () => {
+		const state = fold(
+			INITIAL_LEAGUE_CLOCK,
+			[
+				event(1, AUCTION_OPENED_EVENT, {}, '2026-08-25T19:00:00.000Z'),
+				bidAt(2, '2026-08-26T12:00:00.000Z')
+			],
+			leagueClockReducer
+		);
+		expect(state.origin).toBe('2026-08-25T19:00:00.000Z');
+		expect(state.lastReset).toBe('2026-08-26T12:00:00.000Z');
+	});
+
+	it('moves the expiry to 48 hours after the Bid, not after the nomination', () => {
+		const state = fold(
+			INITIAL_LEAGUE_CLOCK,
+			[
+				event(1, AUCTION_OPENED_EVENT, {}, '2026-08-25T19:00:00.000Z'),
+				nominationAt(2, '2026-08-26T09:00:00.000Z'),
+				bidAt(3, '2026-08-26T12:00:00.000Z')
+			],
+			leagueClockReducer
+		);
+		expect(leagueClockExpiry(state)).toBe('2026-08-28T12:00:00.000Z');
+	});
+
+	it('leaves the origin exactly where it was — a reset is not an origin', () => {
+		const state = fold(
+			INITIAL_LEAGUE_CLOCK,
+			[
+				event(1, AUCTION_OPENED_EVENT, {}, '2026-08-25T19:00:00.000Z'),
+				bidAt(2, '2026-08-26T12:00:00.000Z')
+			],
+			leagueClockReducer
+		);
+		expect(state.origin).toBe('2026-08-25T19:00:00.000Z');
+	});
+
+	it('converges on a double replay', () => {
+		const log = [
+			event(1, AUCTION_OPENED_EVENT, {}, '2026-08-25T19:00:00.000Z'),
+			bidAt(2, '2026-08-26T12:00:00.000Z')
+		];
+		const once = fold(INITIAL_LEAGUE_CLOCK, log, leagueClockReducer);
+		expect(fold(once, log, leagueClockReducer)).toEqual(once);
 	});
 });
 

@@ -1,28 +1,81 @@
 <script lang="ts">
-	// The read-only Auction page (Story 2.4).
+	// The Auction page (Stories 2.4, 2.5).
 	//
-	// Sourced entirely from the nomination fold and `free_agent_players`: it
-	// renders what is real now — Player identity, the nominating Team, an
-	// honest "no bids yet" price and an empty history region — and
-	// structurally reserves nothing for later. There is no bidding control
-	// here at all: `core/rules/bidding` does not exist, so a pre-filled
-	// figure for the smallest allowed offer would be invented. That half
-	// belongs to a later story.
+	// Story 2.4 built the read-only half — Player identity, the nominating
+	// Team, an honest "no bids yet" price and an empty history region — and
+	// deliberately shipped no bidding control, because `core/rules/bidding`
+	// did not exist and a pre-filled figure for the smallest allowed offer
+	// would have been invented. Story 2.5 built those rules, so the control,
+	// the price, the Leading Bidder and the chronological history land here
+	// now, every figure and every sentence coming from the core.
 	//
-	// This page offers no way to withdraw, amend or reduce an accepted
-	// offer — nothing of the sort is present, not merely turned off,
-	// because there is no offer to act on yet either.
+	// **Bidding is a TWO-PART act.** Entering an amount is not bidding it.
+	// The field states, the confirm says what it costs, the submit acts. A
+	// Bid cannot be undone once placed, so a mis-tap must not place one.
+	//
+	// **No control to undo, revise or reduce an accepted Bid exists here at
+	// all** — absent, not disabled. There is nothing of the sort in this
+	// markup to turn off.
+	//
+	// **No suggested amount and no urgency.** The field is pre-filled with
+	// the smallest LEGAL Bid — which is a rule, not advice — and nothing on
+	// this page recommends an amount, ranks anything, or styles the Auction
+	// Clock to create pressure. The clock is one plain sentence.
+	//
+	// **No rule and no refusal is worded here.** Every refusal, the
+	// consequence, the disabled reason, the contention state and the
+	// statement of what was appended arrive already worded by the pure core,
+	// so each has exactly one definition in the codebase. What this file does
+	// write is the field's own label and the panel headings — the surface's
+	// own furniture, as on `/nominate`.
+	//
+	// **The control is disabled against the amount actually TYPED**, by
+	// calling the core's own `bidControlState()` — the same function the read
+	// path calls for the pre-fill, reaching the same `evaluate()` the locked
+	// transaction calls. No gate arithmetic is re-implemented here and none
+	// could be: this file has the two facts `BidState` carries and nothing
+	// else. AD-9 sanctions exactly this and no more — client-side validation
+	// exists to disable controls and pre-fill amounts, and is never the
+	// check. The server re-derives everything under the global lock.
 	//
 	// Types are declared structurally rather than imported from a server-only
 	// module — the rule `nominate/+page.svelte:25-27` states and this page
-	// follows identically.
+	// follows identically. `$lib/core` is a different matter: it is the pure
+	// core, it is what AD-2 says both runtimes load, and the helpers below
+	// are the same ones the server calls.
+	import { closesInPhrase } from '$lib/core/projection/auctions.ts';
 	import { relativePhrase } from '$lib/core/instant.ts';
+	import { parseMoney } from '$lib/core/money.ts';
+	import {
+		bidAppendedSentence,
+		bidConsequenceSentence,
+		bidControlState,
+		readBidAmount
+	} from '$lib/core/rules/bidding.ts';
+	import type { BidState } from '$lib/core/rules/bidding.ts';
 
-	import type { PageData } from './$types';
+	import type { ActionData, PageData } from './$types';
 
 	type AuctionMetadata = {
 		readonly positions: string;
 		readonly nbaTeam: string;
+	};
+
+	type AuctionBid = {
+		readonly seq: string;
+		readonly bidder: string;
+		readonly amount: string;
+		readonly occurredAt: string;
+	};
+
+	type BidControl = {
+		readonly available: boolean;
+		readonly detail: string;
+		readonly minimumLegal: number;
+		readonly minimumLegalSentence: string | null;
+		readonly leadingAmount: number | null;
+		readonly leadingTeamId: string | null;
+		readonly viewerTeamId: string | null;
 	};
 
 	type Auction = {
@@ -31,47 +84,150 @@
 		readonly metadata: AuctionMetadata | null;
 		readonly nominatingTeam: string;
 		readonly nominatedAt: string;
+		readonly contention: string;
+		readonly price: string | null;
+		readonly leadingBidder: string | null;
+		readonly closesAt: string | null;
+		readonly bids: readonly AuctionBid[];
+		readonly bidControl: BidControl;
 	};
 
-	let { data }: { data: PageData } = $props();
+	type BidForm = {
+		readonly notice?: string;
+		readonly appended?: { readonly seq: string } | null;
+	};
+
+	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	const auction = $derived(data.auction as Auction);
+	const control = $derived(auction.bidControl);
+	const bidForm = $derived(form as BidForm | undefined);
+	const notice = $derived(bidForm?.notice);
+	const appended = $derived(bidForm?.appended ?? null);
+
+	/**
+	 * The typed amount. Typing is not bidding: the server decides.
+	 *
+	 * Seeded at declaration rather than only in an effect, because effects do
+	 * not run during server rendering — an empty initial value would ship a
+	 * first paint whose control said "the amount is not a whole number of
+	 * dollars" about a field the Manager has not touched.
+	 */
+	// svelte-ignore state_referenced_locally
+	let amount = $state(String((data.auction as Auction).bidControl.minimumLegal));
+
+	/** The confirmation. Ticking it is not bidding either. */
+	let confirmed = $state(false);
+
+	// Re-seed whenever the server's figure changes — a raise landed, or the
+	// page reloaded after a submit.
+	$effect(() => {
+		amount = String(control.minimumLegal);
+	});
+
+	/**
+	 * The two facts every gate decides from, rebuilt from what the read path
+	 * serialised. `Money` is branded, so the integer dollars that came over
+	 * the wire are re-parsed at this boundary rather than cast (AD-8).
+	 */
+	const gateState: BidState = $derived({
+		leadingBid:
+			control.leadingAmount === null || control.leadingTeamId === null
+				? null
+				: { teamId: control.leadingTeamId, amount: parseMoney(control.leadingAmount) }
+	});
+
+	/**
+	 * What the control says about the amount as it stands, from the core.
+	 *
+	 * `now` is the empty string, deliberately: no gate in `PLACE_BID_GATES`
+	 * reads it, and the viewer's own clock must never be an input to a rule
+	 * (AD-3 — server time, injected). When Story 3.1 adds the expiry gate,
+	 * this call must take the server's instant, not this machine's.
+	 */
+	const typed = $derived(
+		bidControlState({
+			state: gateState,
+			fantraxPlayerId: auction.fantraxPlayerId,
+			viewerTeamId: control.viewerTeamId,
+			amountText: amount,
+			confirmed,
+			now: ''
+		})
+	);
+
+	/**
+	 * The one flag both the affordance and the stated reason read from. The
+	 * server re-derives every gate under the lock regardless — disabling a
+	 * control is never the check.
+	 */
+	const blocked = $derived(typed.blocked);
+
+	/**
+	 * The one sentence beneath the control, and never two.
+	 *
+	 * A standing condition the server already stated — your Team leads, or you
+	 * are bound to none — is what a Manager is shown, because the field is
+	 * disabled on it and nothing they could type would change the answer.
+	 * Otherwise the live per-amount reason, which tracks the field. Both come
+	 * out of the same core function, so the two branches cannot word the same
+	 * refusal differently.
+	 */
+	const reason = $derived(control.available ? typed.detail : control.detail);
+
+	/**
+	 * What confirming commits, naming the amount being confirmed. Falls back
+	 * to the amount-free sentence when the field holds no usable amount —
+	 * `bidConsequenceSentence` handles that and the off-grid case alike.
+	 */
+	const reading = $derived(readBidAmount(amount));
+	const consequence = $derived(
+		bidConsequenceSentence(reading.kind === 'usable' ? reading.amount : null)
+	);
 
 	// The viewer's own clock, read once at render time — never fed back into
 	// the pure core, which takes `now` as an argument and reads no clock of
 	// its own (AD-3). This is display-only arithmetic in the component, the
-	// same split `core/instant.ts`'s own header describes: the pure helper
-	// derives the relative phrase, and `Intl.DateTimeFormat` here renders the
-	// absolute stamp in the viewer's own timezone.
+	// same split `core/instant.ts`'s own header describes: the pure helpers
+	// derive the phrases, and `Intl.DateTimeFormat` here renders the absolute
+	// stamps in the viewer's own timezone.
 	//
-	// The relative phrase is safe to derive on the server as well as the
+	// The relative phrases are safe to derive on the server as well as the
 	// client: both instants are UTC and the arithmetic between them is the
 	// same wherever it runs.
 	const nowIso = $derived(new Date().toISOString());
 	const relative = $derived(relativePhrase(auction.nominatedAt, nowIso));
+	// `closesInPhrase` rather than `relativePhrase`: a close time is ahead of
+	// the reader, and the "ago" phrasing would read a future instant as
+	// "moments ago".
+	const closesIn = $derived(
+		auction.closesAt === null ? null : closesInPhrase(auction.closesAt, nowIso)
+	);
 
-	// The absolute stamp is NOT. `Intl.DateTimeFormat(undefined, ...)`
-	// resolves `undefined` to the timezone of whatever machine formats it,
-	// and this route is server-rendered like every other, so deriving it
-	// during SSR would ship the SERVER's timezone in the delivered HTML —
-	// which Svelte does not diff-correct on hydration. AC3 asks for the
-	// VIEWER's timezone, so the stamp is computed in an effect, which runs
-	// only in the browser, and the markup omits it until it exists rather
-	// than rendering a stamp that is wrong for one paint.
+	// The absolute stamps are NOT safe to derive during SSR.
+	// `Intl.DateTimeFormat(undefined, ...)` resolves `undefined` to the
+	// timezone of whatever machine formats it, and this route is
+	// server-rendered like every other, so deriving them during SSR would
+	// ship the SERVER's timezone in the delivered HTML — which Svelte does
+	// not diff-correct on hydration. The AC asks for the VIEWER's timezone,
+	// so each stamp is computed in an effect, which runs only in the browser,
+	// and the markup omits it until it exists rather than rendering a stamp
+	// that is wrong for one paint.
 	//
-	// This is not the "dropped to save space" the Boundaries forbid: the
-	// stamp is never traded away for layout, and it is present for every
+	// This is not the "dropped to save space" the Boundaries forbid: neither
+	// stamp is ever traded away for layout, and both are present for every
 	// viewer that runs scripts. A viewer that does not gets the relative
 	// phrase, which is honest, rather than a time in a timezone that is not
 	// theirs, which is not.
-	let absolute = $state<string | null>(null);
+	let nominatedAbsolute = $state<string | null>(null);
+	let closesAtAbsolute = $state<string | null>(null);
 
 	// `Intl.DateTimeFormat.format` throws `RangeError` on an Invalid Date,
 	// so an unparseable instant is checked for rather than formatted. The
-	// pure `relativePhrase` beside it deliberately returns a stated phrase
-	// instead of throwing for exactly this input, and `core/instant.ts`'s
-	// own header justifies that by saying the absolute stamp renders
-	// regardless — which is only true if this cannot crash the page.
+	// pure helpers beside it deliberately return a stated phrase instead of
+	// throwing for exactly this input, and `core/instant.ts`'s own header
+	// justifies that by saying the absolute stamp renders regardless — which
+	// is only true if this cannot crash the page.
 	function formatAbsolute(iso: string): string {
 		const parsed = new Date(iso);
 		if (Number.isNaN(parsed.getTime())) return 'at an unknown time';
@@ -82,7 +238,11 @@
 	}
 
 	$effect(() => {
-		absolute = formatAbsolute(auction.nominatedAt);
+		nominatedAbsolute = formatAbsolute(auction.nominatedAt);
+	});
+
+	$effect(() => {
+		closesAtAbsolute = auction.closesAt === null ? null : formatAbsolute(auction.closesAt);
 	});
 </script>
 
@@ -132,30 +292,157 @@
 		     space. -->
 		<p class="prose" id="auction-nominated-at">
 			<span id="auction-nominated-relative">{relative}</span>
-			{#if absolute !== null}
+			{#if nominatedAbsolute !== null}
 				&mdash;
-				<span id="auction-nominated-absolute">{absolute}</span>
+				<span id="auction-nominated-absolute">{nominatedAbsolute}</span>
 			{/if}
 		</p>
 	</section>
 
 	<section class="panel">
 		<p class="section-label">Price</p>
-		<!-- An honest "no bids yet" — never a pre-filled smallest-offer
-		     figure, never an offer ceiling, never wording about why an
-		     action is unavailable. Those all require `core/rules/bidding`,
-		     which does not exist yet. -->
-		<p class="prose" id="auction-price">No bids yet.</p>
+		<!-- The current price and who holds it, both from the fold. The
+		     Leading Bidder is spelled out with the acting Manager: there is
+		     no anonymity at any point on this page. -->
+		<p class="prose" id="auction-price">
+			{#if auction.price === null}
+				No bids yet.
+			{:else}
+				{auction.price}
+			{/if}
+		</p>
+		<p class="prose" id="auction-leading-bidder">
+			{#if auction.leadingBidder === null}
+				No Team leads this Auction yet.
+			{:else}
+				Leading Bidder: {auction.leadingBidder}
+			{/if}
+		</p>
+		<!-- The contention state, worded by the fold that decides it. A plain
+		     label and no chip: `DESIGN.md` gives ambient states a plain
+		     label, and the one attention colour marks Outbid and refusal. -->
+		<p class="prose" id="auction-contention">{auction.contention}</p>
+	</section>
+
+	<!-- The Auction Clock. Absent until the first Bid, because until then
+	     there is no clock to state — the server persists an ABSOLUTE close
+	     instant and this page counts down from it; "seconds remaining" is
+	     never sent (AD-3). Rendered TWICE, relative and absolute in the
+	     viewer's own timezone, and the absolute is never dropped. -->
+	{#if auction.closesAt !== null}
+		<section class="panel">
+			<p class="section-label">Auction Clock</p>
+			<p class="prose" id="auction-closes-at">
+				<span id="auction-closes-relative">{closesIn}</span>
+				{#if closesAtAbsolute !== null}
+					&mdash;
+					<span id="auction-closes-absolute">{closesAtAbsolute}</span>
+				{/if}
+			</p>
+		</section>
+	{/if}
+
+	<section class="manager-block">
+		<p class="section-label">Place a Bid</p>
+		<p class="prose">{consequence}</p>
+
+		<form method="POST" action="?/bid">
+			<!-- The field and its submit sit on one row at the same 46px
+			     height, which is the only horizontal pairing on this page.
+			     Pre-filled with the smallest LEGAL Bid — a rule, never a
+			     recommendation. -->
+			<div class="bid-row">
+				<label class="visually-hidden" for="auction-bid-amount">
+					Your Bid, in whole dollars
+				</label>
+				<!-- The FIELD is disabled on the standing condition, not just the
+				     submit: when this Auction will take no Bid from your Team at
+				     any amount, there is nothing to type. -->
+				<input
+					id="auction-bid-amount"
+					class="bid-amount"
+					name="amount"
+					type="text"
+					inputmode="numeric"
+					autocomplete="off"
+					disabled={!control.available}
+					aria-describedby="auction-bid-availability auction-bid-minimum"
+					bind:value={amount}
+				/>
+				<button
+					class="control-manager"
+					type="submit"
+					disabled={blocked}
+					aria-describedby="auction-bid-availability"
+				>
+					Place the Bid
+				</button>
+			</div>
+
+			<!-- Omitted, never blanked, when the figure has no lossless
+			     rendering — which only a historical off-grid Bid could cause,
+			     and which the fold deliberately does not rewrite (AD-20). -->
+			{#if control.minimumLegalSentence !== null}
+				<p class="prose" id="auction-bid-minimum">{control.minimumLegalSentence}</p>
+			{/if}
+
+			<!-- The second part of the two-part act, separate from the amount
+			     above and stating what it costs, at the amount entered. -->
+			<label class="confirm" for="auction-bid-confirm">
+				<input
+					id="auction-bid-confirm"
+					name="confirm"
+					type="checkbox"
+					value="yes"
+					bind:checked={confirmed}
+				/>
+				<span class="prose">
+					I confirm this Bid. {consequence}
+				</span>
+			</label>
+		</form>
+
+		<!-- The reason, BENEATH the control it is about, and always in the
+		     DOM so the two `aria-describedby` references above can never
+		     dangle — which is the entire justification for a disabled
+		     control's label being exempt from WCAG 1.4.3. Worded by the core
+		     in every branch, including the ready one: the surface prints one
+		     field and decides nothing. -->
+		<p class="prose" id="auction-bid-availability">{reason}</p>
+
+		<!-- The outcome of a submit is the only place a Manager learns whether
+		     the Bid landed, and after a form post the focus is still on the
+		     control that was pressed. `role="status"` announces it politely
+		     rather than leaving a screen reader user to go looking. -->
+		<div role="status">
+			{#if notice}
+				<p class="prose" id="auction-bid-notice">{notice}</p>
+			{/if}
+			{#if appended}
+				<p class="prose" id="auction-bid-appended">{bidAppendedSentence(appended.seq)}</p>
+			{/if}
+		</div>
 	</section>
 
 	<section class="panel">
 		<p class="section-label">History</p>
-		<!-- No BidPlaced event exists, so this is the whole of the history
-		     region: an explicit sentence, not an empty box. Nothing here
-		     lets a Bid be withdrawn, amended or reduced — that whole class
-		     of control is absent, because there is no bidding surface on
-		     this page at all. -->
-		<p class="prose" id="auction-history">No bids have been placed yet.</p>
+		<!-- Every Bid, oldest first, each naming the Team and the acting
+		     Manager. No anonymity at any point. Nothing here lets a Bid be
+		     taken back, revised or reduced — that whole class of control is
+		     absent from this page, not merely turned off. -->
+		{#if auction.bids.length === 0}
+			<p class="prose" id="auction-history">No bids have been placed yet.</p>
+		{:else}
+			<ul class="history" id="auction-history">
+				{#each auction.bids as bid (bid.seq)}
+					<li class="history-row">
+						<span class="history-amount">{bid.amount}</span>
+						<span class="prose">{bid.bidder}</span>
+						<span class="history-when">{relativePhrase(bid.occurredAt, nowIso)}</span>
+					</li>
+				{/each}
+			</ul>
+		{/if}
 	</section>
 </main>
 
@@ -169,5 +456,106 @@
 	.masthead h1 {
 		font-size: var(--size-26);
 		color: var(--color-text);
+	}
+
+	form {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: var(--space-row-gap);
+		width: 100%;
+	}
+
+	/*
+	 * The one horizontal pairing on the page: the amount field and the
+	 * control that submits it, at the same height so they read as one act.
+	 * It wraps rather than shrinking below the touch floor at 375px.
+	 */
+	.bid-row {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: stretch;
+		gap: var(--space-row-gap);
+		width: 100%;
+	}
+
+	.bid-amount {
+		flex: 1 1 10ch;
+		min-height: var(--control-height);
+		padding: 0 var(--space-row-gap);
+		color: var(--color-text);
+		background-color: var(--color-surface-sunken);
+		border: var(--border-width) solid var(--color-border-interactive);
+		border-radius: var(--rounded-control);
+		font-family: var(--font-ui);
+		font-size: var(--size-18);
+		font-variant-numeric: var(--numerals);
+	}
+
+	.bid-row .control-manager {
+		min-height: var(--control-height);
+	}
+
+	.confirm {
+		display: flex;
+		align-items: flex-start;
+		gap: var(--space-row-gap);
+		min-height: var(--touch-min);
+	}
+
+	/*
+	 * 22px and the 2px nudge that optically aligns the box with the first
+	 * line of its label have no token in `tokens.css`, which sizes controls
+	 * and spacing but not a native checkbox's own box. Copied verbatim from
+	 * `/nominate`'s confirm so the two read identically; inventing a token is
+	 * an Ask First item and this is not the story to open it in.
+	 */
+	.confirm input[type='checkbox'] {
+		width: 22px;
+		height: 22px;
+		margin-top: 2px;
+		/* The interactive token: this is a Manager control in a Manager block. */
+		accent-color: var(--color-border-interactive);
+	}
+
+	/* The standard clipping rectangle. Its 1px box is the technique, not a
+	   spacing decision, so no token applies. */
+	.visually-hidden {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+		white-space: nowrap;
+		border: 0;
+	}
+
+	.history {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-row-gap);
+		list-style: none;
+		width: 100%;
+	}
+
+	.history-row {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-row-gap);
+		padding-top: var(--space-row-gap);
+		border-top: var(--border-width) solid var(--color-border);
+	}
+
+	.history-amount {
+		color: var(--color-text);
+		font-size: var(--size-18);
+		font-variant-numeric: var(--numerals);
+	}
+
+	.history-when {
+		color: var(--color-text-tertiary);
+		font-size: var(--size-12-5);
 	}
 </style>

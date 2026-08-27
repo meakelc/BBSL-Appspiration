@@ -26,6 +26,22 @@ const AR2_DIRECTORIES: Array<[path: string, purpose: string]> = [
 	['tests/examples', 'PRD §10 examples 1-28, one test each']
 ];
 
+/**
+ * The §10 examples that exist as named tests today (AD-25).
+ *
+ * AD-25 requires all 28 eventually; the epics assign them story by story, and
+ * a directory that merely EXISTS proves nothing about whether the examples in
+ * it were written. This list grows as each story lands its own — Story 2.5
+ * lands 1, 2, 15 and 26 — so a file deleted or renamed away fails here rather
+ * than silently reducing the executable specification.
+ */
+const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
+	['example-01-ordinary-raise.test.ts', '1 — Ordinary raise'],
+	['example-02-insufficient-increment.test.ts', '2 — Insufficient increment, and off-grid'],
+	['example-15-co-manager-race.test.ts', '15 — Co-manager race'],
+	['example-26-off-grid-everywhere.test.ts', '26 — Off-grid amounts are refused everywhere']
+];
+
 const AR2_FILES: Array<[path: string, purpose: string]> = [
 	['src/lib/core/money.ts', 'branded integer-dollar type and parsers (AD-8)'],
 	['src/lib/core/constants.ts', 'league constants AND the AD-6 lock key'],
@@ -57,8 +73,7 @@ describe('the AR-2 source tree', () => {
 			'src/lib/adapters/discord',
 			'src/lib/server',
 			'supabase/migrations',
-			'supabase/functions/tick',
-			'tests/examples'
+			'supabase/functions/tick'
 		];
 		for (const path of wouldBeEmpty) {
 			const marker = at(...path.split('/'), '.gitkeep');
@@ -66,12 +81,31 @@ describe('the AR-2 source tree', () => {
 		}
 	});
 
+	it.each(SECTION_10_EXAMPLES)('holds tests/examples/%s — §10 example %s', (file: string) => {
+		expect(existsSync(at('tests', 'examples', file)), `tests/examples/${file} is missing`).toBe(
+			true
+		);
+	});
+
+	it('holds nothing in tests/examples but real example tests', () => {
+		// The marker is gone and every file left is one of the examples above:
+		// a stray fixture or a leftover .gitkeep both fail here.
+		const entries = readdirSync(at('tests', 'examples')).sort();
+		expect(entries).toEqual(SECTION_10_EXAMPLES.map(([file]) => file).sort());
+	});
+
 	it('deletes the .gitkeep from every directory that now holds a real file', () => {
 		for (const path of [
 			'src/lib/core/projection',
 			'src/lib/shell',
 			'src/lib/core/rules',
-			'src/lib/adapters/fantrax'
+			'src/lib/adapters/fantrax',
+			// Story 2.5 writes the first real files into tests/examples — the
+			// §10 examples AD-25 calls the executable specification. AGENTS.md
+			// named this exact trap: leaving the marker fails the assertion
+			// above, and deleting it without moving the entry here fails this
+			// one. Both halves move together or neither does.
+			'tests/examples'
 		]) {
 			const marker = at(...path.split('/'), '.gitkeep');
 			expect(existsSync(marker), `${path}/.gitkeep should be gone now that it holds real files`).toBe(

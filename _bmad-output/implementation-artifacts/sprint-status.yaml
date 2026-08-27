@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 08-18-2026 13:11
-last_updated: 08-26-2026
+last_updated: 08-27-2026
 project: BBSL-Appspiration
 project_key: NOKEY
 tracking_system: file-system
@@ -54,7 +54,7 @@ development_status:
   2-2-nomination-refusals-and-concurrency: done
   2-3-nomination-slot-lifecycle-and-dead-nomination-visibility: done
   2-4-the-auction-page-and-its-bid-control: done
-  2-5-place-a-bid-increment-granularity-and-the-24-hour-clock: backlog
+  2-5-place-a-bid-increment-granularity-and-the-24-hour-clock: done
   2-6-the-money-gate-and-the-refusal-panel: backlog
   2-7-the-slots-gate-roster-capacity-and-both-gates-always-reporte: backlog
   2-8-minors-exposure-unbounded-eligible-bidding-bounded-by-overfl: backlog

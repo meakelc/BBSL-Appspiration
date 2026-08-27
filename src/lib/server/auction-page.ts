@@ -1,20 +1,42 @@
 /**
- * The Auction page's read: fold the open nomination for one Player, then
- * join Player and Manager reference data. Server-only (Story 2.4).
+ * The Auction page's read: fold the open nomination and the Auction's Bids
+ * for one Player, then join Player and Manager reference data, and ask the
+ * pure core what the bid control should say. Server-only (Stories 2.4, 2.5).
  *
- * **This IS a nomination.** Until Epic 3 closes anything, "open Auction" and
- * "open Nomination" are the same row of the same fold — `nominationsReducer`
- * / `nominationForPlayer`, the identical accessor every other gate in Epic 2
- * uses (`server/nomination.ts`, `server/auction-open.ts`'s sibling reads).
- * Nothing here invents a second projection.
+ * **The Auction is still the nomination; the BIDS are a second fold.** Until
+ * Epic 3 closes anything, "open Auction" and "open Nomination" are the same
+ * row of the same fold — `nominationsReducer` / `nominationForPlayer`, the
+ * identical accessor every other gate in Epic 2 uses. Story 2.5 adds
+ * `auctionsReducer` beside it, over the SAME already-loaded events array, so
+ * the two projections cannot disagree about which events they saw. A
+ * nominated Player nobody has bid on folds to `null` there, which is "no bids
+ * yet" and never "no Auction".
  *
  * **No write path.** This module opens a transaction only to get one
  * `TransactionalClient` for `loadEventsViaClient` plus the point reads that
  * follow, exactly as `readAuctionOpenReport`/`loadNominatablePool` do, and
  * always rolls back — rendering a page is not a write, and it deliberately
- * takes NO advisory lock: a report torn across a concurrent nomination or
- * close is possible and harmless, since it can only ever be stale, never
+ * takes NO advisory lock: a report torn across a concurrent nomination, bid
+ * or close is possible and harmless, since it can only ever be stale, never
  * authoritative.
+ *
+ * **The control's state is `evaluate()`'s answer, not a second rule.** AD-1
+ * requires the read path to call `evaluate()` directly — the same function
+ * `decide()` calls — so a control that says a Bid is impossible and the
+ * refusal that explains why cannot disagree. It is asked about the PRE-FILLED
+ * amount (`minimumLegalBid`), which is the only amount the page can honestly
+ * ask about before anyone has typed anything; every gate but `selfBid` passes
+ * by construction on that amount, which is precisely why `selfBid` is the
+ * refusal a Manager sees on the board rather than at submission. A typed
+ * amount is re-derived server-side under the lock, and the wording it comes
+ * back with is `bidRefusalDetail`'s, the same one used here.
+ *
+ * **No cap figure and no capacity figure.** A Team's budget arithmetic and
+ * its roster occupancy are Stories 2.6 and 2.7, along with the refusal panel
+ * that breaks them out; nothing here computes, displays or refuses on one,
+ * and no wording here names one. The only figures this module renders are
+ * the price, the minimum legal Bid and each Bid's own amount — all three of
+ * them properties of the Auction, not of the viewer.
  *
  * **Reference fields come from `free_agent_players` and nothing else** — no
  * salary or contract-length column exists on that table
@@ -33,13 +55,13 @@
  * produced the kept nomination (matched on `fantraxPlayerId`, `teamId` and
  * `occurredAt`, exactly the fields the fold copied across).
  *
- * The id then comes off the event ENVELOPE — `AppendedEvent.managerId`
- * (`core/types.ts:89`), the acting Manager the shell stamped on the append —
- * not off the payload's own copy of it. The envelope is the same field for
- * a `NominationPlaced`, is typed `string` rather than `unknown`, and is the
- * one the log guarantees for every event regardless of what a payload
- * happens to carry; reading the payload copy made a third source for a
- * field the loaded events already expose.
+ * The id then comes off the event ENVELOPE — `AppendedEvent.managerId`, the
+ * acting Manager the shell stamped on the append — not off the payload's own
+ * copy of it. The envelope is the same field for a `NominationPlaced`, is
+ * typed `string` rather than `unknown`, and is the one the log guarantees for
+ * every event regardless of what a payload happens to carry; reading the
+ * payload copy made a third source for a field the loaded events already
+ * expose.
  *
  * The name resolves through a `teams left join managers` keyed on that id,
  * the shape `auction-open.ts:93-98` establishes and for the reason it
@@ -51,7 +73,17 @@
  * `teams`: the spec pins the nominating Team to the fold, and a second
  * source for it could disagree.
  *
- * When the Manager cannot be resolved the page renders the Team name ALONE.
+ * **Bidding Managers resolve the same way, in ONE further read.** A Bid
+ * carries its acting `managerId` in the payload (`BidPlacedPayload`), and Bid
+ * history names the acting Manager with no anonymity at any point — so a
+ * history of six Bids must not become six queries. One statement resolves
+ * every distinct bidding Manager, and the Team pairing the nominating join
+ * asserts in SQL is asserted here in code against the Bid's own `teamId`,
+ * which the payload already carries. That read is issued only when the
+ * Auction actually has Bids: a Player with none costs exactly the queries
+ * Story 2.4 already made.
+ *
+ * When a Manager cannot be resolved the page renders the Team name ALONE.
  * `formatTeamManager` (`core/team-identity.ts`) is the one renderer for the
  * pairing and is never re-implemented here, but it has no shape for "Team
  * known, Manager unknown" — and pairing the Team with its own name produced
@@ -64,12 +96,28 @@
 import type { AppendedEvent } from '../core/types.ts';
 import { fold } from '../core/projection/fold.ts';
 import {
+	INITIAL_AUCTIONS,
+	auctionForPlayer,
+	auctionsReducer,
+	contentionOf,
+	contentionSentence
+} from '../core/projection/auctions.ts';
+import type { Auction, Bid } from '../core/projection/auctions.ts';
+import {
 	INITIAL_NOMINATIONS,
 	NOMINATION_PLACED_EVENT,
 	nominationForPlayer,
 	nominationsReducer
 } from '../core/projection/nominations.ts';
 import type { OpenNomination } from '../core/projection/nominations.ts';
+import {
+	bidControlState,
+	bidStateFor,
+	describeAmount,
+	minimumLegalBid,
+	minimumLegalSentence
+} from '../core/rules/bidding.ts';
+import type { BidState } from '../core/rules/bidding.ts';
 import { formatTeamManager } from '../core/team-identity.ts';
 import { loadEventsViaClient } from './event-log.ts';
 import type { ConnectionGateway } from '../shell/write.ts';
@@ -84,7 +132,69 @@ export type AuctionPageMetadata = {
 	readonly nbaTeam: string;
 };
 
-/** Everything the Auction page renders. Read-only — no bid, no figure. */
+/** One line of Bid history. Names the acting Manager — there is no anonymity. */
+export type AuctionPageBid = {
+	/** The log's own ordering column, and this line's key. */
+	readonly seq: string;
+	/** `Lakers — Meakel`, or the Team alone when the Manager cannot be resolved. */
+	readonly bidder: string;
+	/** The amount, rendered through the core's one money renderer. */
+	readonly amount: string;
+	/** The Bid's own instant, for the page to render twice. */
+	readonly occurredAt: string;
+};
+
+/**
+ * Everything the bid control needs, all of it decided by the pure core.
+ *
+ * `available` and `detail` are `bidControlState()`'s answer about the
+ * PRE-FILLED amount — what a Manager sees on the board before typing
+ * anything, which is what AC7 asks for "when the page renders". Every gate
+ * but `selfBid` passes on that amount by construction, which is why "your
+ * Team already leads" is a refusal read on the board rather than discovered
+ * at submission.
+ *
+ * **The typed amount is a second question, and the surface asks it.**
+ * `leadingAmount` and `leadingTeamId` are the two facts every gate in
+ * `PLACE_BID_GATES` decides from (`BidState`), serialised so the page can
+ * rebuild that state and call the SAME `bidControlState()` on every
+ * keystroke. Shipping them is what lets a control disable itself against
+ * `8400000` instead of waiting for the server to say so — and the server
+ * still says so, under the lock, with the identical wording, because both
+ * answers come out of one function (AD-9: client-side validation exists only
+ * to disable controls and pre-fill amounts; it is never the check).
+ *
+ * `minimumLegalSentence` is `null` when the figure has no lossless rendering
+ * — reachable only through a historical off-grid Bid this story cannot write
+ * (see `minimumLegalSentence` in the core). The surface omits the line rather
+ * than printing a sentence whose figure is a phrase.
+ */
+export type AuctionPageBidControl = {
+	/**
+	 * Whether this Auction will take a Bid from the viewer's Team AT ALL.
+	 *
+	 * A standing condition no amount changes — the viewer's Team already
+	 * leads, or they are bound to no Team — so the surface disables the
+	 * amount field itself on it, not merely the submit. Typing your way out
+	 * of leading an Auction is not a thing, and a live field that can only
+	 * ever be refused is a worse answer than a disabled one.
+	 */
+	readonly available: boolean;
+	/** The standing reason, or the statement that the Auction is ready for one. */
+	readonly detail: string;
+	/** The pre-filled minimum legal Bid, in integer dollars — the form's value. */
+	readonly minimumLegal: number;
+	/** That figure as a finished sentence, or `null` when it cannot be rendered. */
+	readonly minimumLegalSentence: string | null;
+	/** The leading Bid's amount, in integer dollars, or `null` when nothing leads. */
+	readonly leadingAmount: number | null;
+	/** The leading Bid's Team, or `null` when nothing leads. */
+	readonly leadingTeamId: string | null;
+	/** The viewer's own Team, from the session and nothing else (AD-4). */
+	readonly viewerTeamId: string | null;
+};
+
+/** Everything the Auction page renders. */
 export type AuctionPageState = {
 	readonly fantraxPlayerId: string;
 	readonly playerName: string;
@@ -94,6 +204,18 @@ export type AuctionPageState = {
 	readonly nominatingTeam: string;
 	/** The nomination's own instant, for the page to render twice. */
 	readonly nominatedAt: string;
+	/** Which contention this Auction is in, worded by the fold that decides it. */
+	readonly contention: string;
+	/** The current price, rendered, or `null` when there are no Bids. */
+	readonly price: string | null;
+	/** The Leading Bidder, Team spelled out with acting Manager, or `null`. */
+	readonly leadingBidder: string | null;
+	/** The Auction Clock's absolute expiry, or `null` when there are no Bids. */
+	readonly closesAt: string | null;
+	/** Every Bid, oldest first. Empty when there are none. */
+	readonly bids: readonly AuctionPageBid[];
+	/** The bid control's state, worded by the core. */
+	readonly bidControl: AuctionPageBidControl;
 };
 
 /**
@@ -128,19 +250,58 @@ function findNominationManagerId(
 }
 
 /**
+ * `formatTeamManager` when the Manager is known, the Team's name alone when
+ * they are not.
+ *
+ * One helper for the nominating Team, the Leading Bidder and every history
+ * line, so the "Team known, Manager unknown" fallback cannot be spelled three
+ * different ways.
+ */
+function nameBidder(teamName: string, managerDisplayName: string | null): string {
+	return managerDisplayName === null ? teamName : formatTeamManager(teamName, managerDisplayName);
+}
+
+/**
+ * The distinct acting Manager ids across a Bid history, in first-seen order.
+ *
+ * Explicitly ordered rather than handed back from a `Set`'s iteration
+ * incidentally: it is only a query parameter and affects no outcome, but
+ * AD-1's discipline about incidental ordering is cheaper to keep than to
+ * argue about at each site.
+ */
+function distinctManagerIds(bids: readonly Bid[]): readonly string[] {
+	const seen = new Set<string>();
+	const ids: string[] = [];
+	for (const bid of bids) {
+		if (bid.managerId === '' || seen.has(bid.managerId)) continue;
+		seen.add(bid.managerId);
+		ids.push(bid.managerId);
+	}
+	return ids;
+}
+
+/**
  * Read the Auction page's state for one Player, or `null` when there is no
  * open nomination for them — the caller 404s on `null` (closed, or never
  * nominated).
  *
- * One `loadEventsViaClient` read folds the nomination; at most two further
- * reads follow only when a nomination is found — one keyed on
+ * `viewerTeamId` is the Team the VIEWER is bound to, resolved from the
+ * session by the route and never from a form field or a query parameter
+ * (AD-4). `null` is a registered Manager bound to no Team, which is a real
+ * supported state: they see the whole Auction and a control disabled with the
+ * core's `unbound_actor` sentence.
+ *
+ * One `loadEventsViaClient` read serves both folds; at most three further
+ * reads follow, and only when a nomination is found — one keyed on
  * `fantrax_player_id` (unique on `free_agent_players`), one a join keyed on
  * `teams.id` (primary key) and the nominating event's own `managerId`
- * (`managers.id`, primary key). Each returns at most one row.
+ * (`managers.id`, primary key), and one resolving the distinct bidding
+ * Managers, issued only when the Auction has Bids.
  */
 export async function loadAuctionPage(
 	gateway: ConnectionGateway,
-	fantraxPlayerId: string
+	fantraxPlayerId: string,
+	viewerTeamId: string | null
 ): Promise<AuctionPageState | null> {
 	const client = await gateway.connect();
 	try {
@@ -154,6 +315,11 @@ export async function loadAuctionPage(
 			await client.query('rollback');
 			return null;
 		}
+
+		// The second fold, over the SAME events array — so the board and the
+		// price cannot describe two different moments.
+		const auctions = fold(INITIAL_AUCTIONS, events, auctionsReducer);
+		const auction = auctionForPlayer(auctions, fantraxPlayerId);
 
 		const referenceResult = await client.query(
 			`select player_name, positions, nba_team
@@ -196,6 +362,42 @@ export async function loadAuctionPage(
 		// Manager and the mismatched pairing alike.
 		const managerDisplayName = typeof rawDisplayName === 'string' ? rawDisplayName : null;
 
+		// One statement for every bidding Manager, and only when there is at
+		// least one Bid. `::text` on both sides rather than a `uuid[]` cast: a
+		// malformed historical payload carrying a non-uuid id must produce a
+		// missing NAME, not a failed query that 500s the whole page.
+		const bids = auction?.bids ?? [];
+		const bidderIds = distinctManagerIds(bids);
+		const bidderResult =
+			bidderIds.length === 0
+				? { rows: [] as ReadonlyArray<Record<string, unknown>> }
+				: await client.query(
+						`select m.id::text as id, m.team_id::text as team_id, m.display_name
+						from ${MANAGERS_TABLE} m
+						where m.id::text = any($1::text[])`,
+						[[...bidderIds]]
+					);
+		// Keyed on manager id AND team id together, which is the same pairing
+		// the nominating join asserts in SQL: a `managerId` that does not
+		// belong to the bidding Team resolves to no name rather than to some
+		// other Team's Manager.
+		// `JSON.stringify` of the pair rather than a delimiter-joined string:
+		// the two halves are ids from an insert-only log, and a `|` inside one
+		// would let `a|b` + `c` collide with `a` + `b|c` and name the wrong
+		// Manager on a Bid. This module already tolerates a malformed id
+		// through the `::text` cast above; tolerating one here costs a
+		// function call.
+		const pairKey = (managerId: string, teamId: string): string =>
+			JSON.stringify([managerId, teamId]);
+		const bidderNames = new Map<string, string>();
+		for (const row of bidderResult.rows) {
+			const displayName = row['display_name'];
+			if (typeof displayName !== 'string' || displayName === '') continue;
+			bidderNames.set(pairKey(String(row['id']), String(row['team_id'])), displayName);
+		}
+		const nameOf = (bid: Bid): string | null =>
+			bidderNames.get(pairKey(bid.managerId, bid.teamId)) ?? null;
+
 		await client.query('rollback');
 
 		return {
@@ -205,11 +407,22 @@ export async function loadAuctionPage(
 			// Team alone when the Manager cannot be resolved — never the Team
 			// paired with its own name, which would read as a Manager called
 			// "Lakers" and invent a figure the spec forbids inventing.
-			nominatingTeam:
-				managerDisplayName === null
-					? nomination.teamName
-					: formatTeamManager(nomination.teamName, managerDisplayName),
-			nominatedAt: nomination.occurredAt
+			nominatingTeam: nameBidder(nomination.teamName, managerDisplayName),
+			nominatedAt: nomination.occurredAt,
+			contention: contentionSentence(contentionOf(auction)),
+			price: auction === null ? null : describeAmount(auction.leadingBid.amount),
+			leadingBidder:
+				auction === null
+					? null
+					: nameBidder(auction.leadingBid.teamName, nameOf(auction.leadingBid)),
+			closesAt: auction?.closesAt ?? null,
+			bids: bids.map((bid) => ({
+				seq: bid.seq,
+				bidder: nameBidder(bid.teamName, nameOf(bid)),
+				amount: describeAmount(bid.amount),
+				occurredAt: bid.occurredAt
+			})),
+			bidControl: readBidControl(auction, viewerTeamId, nomination.fantraxPlayerId)
 		};
 	} catch (error) {
 		await client.query('rollback').catch(() => {
@@ -219,4 +432,52 @@ export async function loadAuctionPage(
 	} finally {
 		client.release();
 	}
+}
+
+/**
+ * The bid control's state, from the pure core and nowhere else.
+ *
+ * `bidControlState()` is the one decision function, shared with the surface:
+ * this call asks it about the PRE-FILLED amount, and the page asks it again
+ * about whatever a Manager types. Neither re-implements a gate.
+ *
+ * `confirmed: true` is passed deliberately. This answer is about whether the
+ * Auction and the viewer's Team allow a Bid at all — the board-level question
+ * AC7 asks "when the page renders" — and a control reported as unavailable
+ * merely because a checkbox has not been ticked yet would say the Auction
+ * refused something it did not.
+ *
+ * `now` is passed as the empty string, and that is safe rather than sloppy:
+ * `evaluate()` is total and reads no clock, none of the four gates in
+ * `PLACE_BID_GATES` looks at `now`, and this module has no database clock in
+ * hand — the read path deliberately takes no lock and reads no `now()`. Story
+ * 3.1's `expiry` gate is the first that will need one, and it will have to
+ * source it here rather than invent one, which is the correct pressure.
+ */
+function readBidControl(
+	auction: Auction | null,
+	viewerTeamId: string | null,
+	fantraxPlayerId: string
+): AuctionPageBidControl {
+	const state: BidState = bidStateFor(auction);
+	const minimumLegal = minimumLegalBid(state);
+
+	const control = bidControlState({
+		state,
+		fantraxPlayerId,
+		viewerTeamId,
+		amountText: String(minimumLegal),
+		confirmed: true,
+		now: ''
+	});
+
+	return {
+		available: !control.blocked,
+		detail: control.detail,
+		minimumLegal,
+		minimumLegalSentence: minimumLegalSentence(minimumLegal),
+		leadingAmount: state.leadingBid?.amount ?? null,
+		leadingTeamId: state.leadingBid?.teamId ?? null,
+		viewerTeamId
+	};
 }
