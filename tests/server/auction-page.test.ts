@@ -676,7 +676,11 @@ describe('loadAuctionPage — the bid control is evaluate() on the read path (AC
 						projectedAdditions: 1,
 						rosterReserve: 2_000_000 as never,
 						maximumBid: 154_000_000 as never
-					}
+					},
+					// And so does the capacity gate (Story 2.7), with its OWN
+					// copy of the two counts rather than a pointer at `cap`'s:
+					// nine held plus the one being bid is ten of twelve.
+					slots: { passed: true, rosterCount: 9, projectedAdditions: 1, ceiling: 12 }
 				}
 			})
 		);
@@ -739,20 +743,29 @@ describe('loadAuctionPage — the bid control is evaluate() on the read path (AC
 		expect(auction?.bidControl.detail).toBe(bidRefusalDetail({ kind: 'unbound_actor' }));
 	});
 
-	it('names no money or capacity figure anywhere in what it returns — those are 2.6 and 2.7', async () => {
+	it('serialises no DERIVED money figure anywhere in what it returns (AD-7)', async () => {
 		const harness = contestedAuction();
 
 		const auction = await loadAuctionPage(harness.gateway, 'p-1', 't-2');
 
+		// Narrowed to the DERIVED money figures in Story 2.7. `Roster Count` is
+		// no longer forbidden here: a read path that refuses on capacity now
+		// legitimately carries it in `detail`, worded by the core. What may
+		// never be serialised is a figure the surface could compare against
+		// instead of re-deriving — AD-7 forbids caching one client-side, and
+		// the surface is a client.
 		const rendered = JSON.stringify(auction);
 		for (const forbidden of [
 			'maximumBid',
 			'committedBids',
 			'minorsExposure',
 			'rosterReserve',
-			'Roster Count',
-			'no money',
-			'roster slot'
+			// Kept from the pre-2.7 list: `no money` is not a derived figure
+			// and is not vocabulary this story earned, so the narrowing above
+			// gives no ground to drop it. Nothing on the read path words it —
+			// a cap refusal says "exceeds your Maximum Bid" — and this is what
+			// would notice if something started to.
+			'no money'
 		]) {
 			expect(rendered, `${forbidden} leaked into the Auction page read`).not.toContain(forbidden);
 		}
@@ -838,6 +851,35 @@ describe('loadAuctionPage — the viewer Team money state (Story 2.6)', () => {
 		// Worded by the core, and it names the figure rather than saying "no".
 		expect(auction?.bidControl.detail).toContain('Maximum Bid');
 		expect(auction?.bidControl.detail).toContain('exceeds');
+	});
+
+	it('disables the control on the board for a Team at Roster Capacity (Story 2.7)', async () => {
+		// The matrix's "announced on the board, not at submission", and a
+		// state reachable straight from import: twelve $1.0M contracts leave
+		// $153.0M of Cap Space, so nothing about the money is marginal and the
+		// only possible reason is the roster.
+		const harness = fakeGateway({
+			events: [nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1')],
+			freeAgents: [
+				{ fantraxPlayerId: 'p-1', playerName: 'Jalen Green', positions: 'SG', nbaTeam: 'HOU' }
+			],
+			managers: [{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' }],
+			roster: Array.from({ length: 12 }, () => ({
+				cap_hit: '1000000',
+				roster_slot_kind: 'active_bench'
+			}))
+		});
+
+		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+
+		expect(auction?.bidControl.available).toBe(false);
+		// Worded by the core, with the capacity arithmetic and no cap figure.
+		expect(auction?.bidControl.detail).toContain('no roster slot');
+		expect(auction?.bidControl.detail).toContain('Roster Capacity of 12');
+		expect(auction?.bidControl.detail).not.toContain('Maximum Bid');
+		// And the FACTS are shipped, not a derived verdict: the surface
+		// re-derives the same gate on every keystroke (AD-7, AD-9).
+		expect(auction?.bidControl.team?.rosterCount).toBe(12);
 	});
 
 	it('still offers the control when the money is there', async () => {

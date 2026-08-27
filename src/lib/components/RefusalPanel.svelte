@@ -111,8 +111,10 @@
 		Every gate, always — the passing ones beside the refusing one. That
 		costs a line per gate and proves every check ran, which forecloses
 		"what else is it not telling me". The list is built from
-		`PLACE_BID_GATES` in the core, so Story 2.7's `slots` gate appears here
-		the moment it is declared and no markup changes.
+		`PLACE_BID_GATES` in the core, which is how Story 2.7's `slots` gate
+		reached this panel: declaring it was the whole change, and this file
+		was not edited to make the sixth row appear. Story 3.1's `expiry` gate
+		arrives the same way.
 	-->
 	{#if gates.length > 0}
 		<ul class="gates">

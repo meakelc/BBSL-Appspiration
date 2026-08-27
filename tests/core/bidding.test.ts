@@ -10,6 +10,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+	ACTIVE_BENCH_SLOTS,
 	AUCTION_CLOCK,
 	MINIMUM_BID,
 	MINIMUM_INCREMENT,
@@ -112,17 +113,18 @@ function command(amount: number, teamId = 't-2'): PlaceBid {
 // --- AC1: the shape of the two entry points --------------------------------
 
 describe('evaluate — total, and the gate set is fixed per command type (AC1)', () => {
-	it('declares exactly five gates for PlaceBid, in one place', () => {
-		// Four in Story 2.5, five in 2.6. The list is asserted literally rather
-		// than by length so ADDING a gate is a deliberate edit here as well as
-		// in `core/types.ts` — which is the whole point of it living in one
-		// place. Story 2.7 adds `slots` and 3.1 adds `expiry`.
+	it('declares exactly six gates for PlaceBid, in one place', () => {
+		// Four in Story 2.5, five in 2.6, six in 2.7. The list is asserted
+		// literally rather than by length so ADDING a gate is a deliberate
+		// edit here as well as in `core/types.ts` — which is the whole point
+		// of it living in one place. Story 3.1 adds `expiry`.
 		expect([...PLACE_BID_GATES]).toEqual([
 			'opening',
 			'selfBid',
 			'increment',
 			'granularity',
-			'cap'
+			'cap',
+			'slots'
 		]);
 	});
 
@@ -505,7 +507,7 @@ describe('bidRefusalDetail — one sentence per refusal, worded here and nowhere
 		}
 	});
 
-	it('names no capacity gate and no exposure arithmetic — those are 2.7 and 2.8', () => {
+	it('names no exposure arithmetic and no unbounded Maximum Bid — those are 2.8', () => {
 		const everything = [
 			bidRefusalDetail({ kind: 'gates', gates: evaluate(NO_BIDS, command(1), NOW) }),
 			bidRefusalDetail({ kind: 'unusable_amount' }),
@@ -517,19 +519,20 @@ describe('bidRefusalDetail — one sentence per refusal, worded here and nowhere
 			BID_CONSEQUENCE,
 			bidConsequenceSentence(null)
 		].join('\n');
-		// The money vocabulary is Story 2.6's and is now expected in a cap
-		// refusal — `Maximum Bid` above all. What must still be absent is the
-		// CAPACITY gate's wording (2.7) and the exposure arithmetic (2.8),
-		// because reporting a capacity refusal as a cap refusal is a defect
-		// (AD-7) and an unbounded Maximum Bid does not exist yet.
+		// The money vocabulary is Story 2.6's and is expected in a cap
+		// refusal — `Maximum Bid` above all. `Roster Capacity` and `no roster
+		// slot` were forbidden here until Story 2.7, because a sentence
+		// naming a gate that did not exist would state a rule nothing
+		// enforced; 2.7 built the gate, so those two words are now EARNED and
+		// exactly those two came off this list. What must still be absent is
+		// the exposure arithmetic (2.8) and an unbounded Maximum Bid, which
+		// still does not exist.
 		//
 		// `Minors Exposure` is deliberately not forbidden: it is a named term
 		// in the breakdown, structurally zero, because FR-13 requires the
 		// refusal to show it and a breakdown missing a component would not
 		// sum. What 2.8 adds is a non-zero value, not the words.
 		for (const forbidden of [
-			/roster capacity/i,
-			/no roster slot/i,
 			/free minor league/i,
 			/eligible leading bid/i,
 			/overflow/i,
@@ -902,10 +905,28 @@ describe('evaluateCap — Maximum Bid, derived on every evaluation (AD-7)', () =
 		expect(capBreakdown(cap)).toEqual([]);
 	});
 
+	it('nulls the capacity gate’s two counts on the same state, and passes it too', () => {
+		const slots = evaluate(bidStateFor(null, null), command(1_500_000), NOW).slots;
+
+		// Both absent rather than invented zeroes, and absent TOGETHER — the
+		// real refusal is `unbound_actor`, raised before any transaction opens.
+		expect(slots.passed).toBe(true);
+		expect(slots.rosterCount).toBeNull();
+		expect(slots.projectedAdditions).toBeNull();
+		// The ceiling is a league constant and is true of a Team that does not
+		// exist, so it is stated rather than nulled with the other two.
+		expect(slots.ceiling).toBe(ACTIVE_BENCH_SLOTS);
+	});
+
 	it('carries a negative Available Cap Space honestly rather than clamping it', () => {
 		// Only the ROSTER RESERVE has a clamp. A Team that is over-committed
 		// has a genuinely negative Maximum Bid, and reporting $0 would imply it
 		// could still open at the minimum.
+		//
+		// Roster Count 11 plus one lead plus the bid is 13, so `slots` refuses
+		// this state too — which is exactly why every assertion below names
+		// `cap`. Two gates refusing one Bid is the ordinary case, and each
+		// reports its own arithmetic.
 		const state = bidStateFor(
 			null,
 			team({ capSpace: 2_000_000, rosterCount: 11, leading: [['p-2', 5_000_000]] })
@@ -945,6 +966,238 @@ describe('evaluateCap — Maximum Bid, derived on every evaluation (AD-7)', () =
 		expect(Object.keys(accepted).sort()).toEqual(Object.keys(refused).sort());
 		expect(accepted.cap.passed).toBe(true);
 		expect(accepted.cap.maximumBid).toBe(refused.cap.maximumBid);
+	});
+});
+
+describe('evaluateSlots — Roster Capacity, the second independent ground (AC2, AC3)', () => {
+	/** A Team stated as its two capacity facts, so each test reads as one. */
+	function team(input: {
+		capSpace: number;
+		rosterCount: number;
+		leading?: readonly [string, number][];
+	}): TeamMoneyState {
+		return {
+			capSpace: parseMoney(input.capSpace),
+			rosterCount: input.rosterCount,
+			leading: (input.leading ?? []).map(([fantraxPlayerId, amount]) => ({
+				fantraxPlayerId,
+				amount: parseMoney(amount)
+			}))
+		};
+	}
+
+	const slotsOf = (state: BidState, amount: number) =>
+		evaluate(state, command(amount), NOW).slots;
+
+	it('refuses exactly when Roster Count plus Projected Additions exceeds twelve', () => {
+		// The boundary stated as a table rather than as three separate tests,
+		// because the whole gate is one comparison and the only thing worth
+		// asserting about it is where it turns over.
+		const cases: Array<[rosterCount: number, leads: number, passed: boolean]> = [
+			[0, 0, true],
+			[9, 0, true],
+			[10, 1, true],
+			[11, 0, true],
+			[9, 2, true],
+			[12, 0, false],
+			[10, 2, false],
+			[9, 3, false],
+			[14, 0, false]
+		];
+		for (const [rosterCount, leads, passed] of cases) {
+			const state = bidStateFor(
+				null,
+				team({
+					capSpace: SALARY_CAP,
+					rosterCount,
+					leading: Array.from(
+						{ length: leads },
+						(_unused, index) => [`p-lead-${String(index)}`, 1_000_000] as [string, number]
+					)
+				})
+			);
+			const slots = slotsOf(state, 1_500_000);
+
+			expect(slots.passed, `${String(rosterCount)} held, ${String(leads)} led`).toBe(passed);
+			expect(slots.rosterCount).toBe(rosterCount);
+			// The POST-BID basis: the leads elsewhere PLUS the Bid being placed.
+			expect(slots.projectedAdditions).toBe(leads + 1);
+			expect(slots.ceiling).toBe(ACTIVE_BENCH_SLOTS);
+		}
+	});
+
+	it('reads no amount at all — it fails with unlimited Cap Space and passes with none', () => {
+		// FR-37's property, asserted as the structural fact it is: the gate has
+		// no `offered` field, so the only way to check it is that the verdict
+		// does not move when the money does.
+		const full = bidStateFor(null, team({ capSpace: 400_000_000, rosterCount: 12 }));
+		const broke = bidStateFor(null, team({ capSpace: 0, rosterCount: 9 }));
+
+		for (const amount of [1_500_000, 5_000_000, 40_000_000]) {
+			expect(slotsOf(full, amount).passed, String(amount)).toBe(false);
+			expect(slotsOf(broke, amount).passed, String(amount)).toBe(true);
+		}
+		// And the outcome carries no money figure to be confused for a ground.
+		expect(Object.keys(slotsOf(full, 5_000_000)).sort()).toEqual([
+			'ceiling',
+			'passed',
+			'projectedAdditions',
+			'rosterCount'
+		]);
+	});
+
+	it('shares the derivation with the money gate and never the outcome', () => {
+		// One expression behind both counts, two outcomes in front of it:
+		// the figures agree, and the objects are not the same object.
+		const state = bidStateFor(
+			null,
+			team({ capSpace: 12_000_000, rosterCount: 9, leading: [['p-2', 3_000_000]] })
+		);
+		const gates = evaluate(state, command(1_500_000), NOW);
+
+		expect(gates.slots.rosterCount).toBe(gates.cap.rosterCount);
+		expect(gates.slots.projectedAdditions).toBe(gates.cap.projectedAdditions);
+		expect(gates.slots).not.toBe(gates.cap);
+	});
+
+	it('is refused by leads elsewhere, though no single Bid did it', () => {
+		// Roster Count 10 and two non-eligible Auctions led: 10 + 3 = 13.
+		const state = bidStateFor(
+			null,
+			team({
+				capSpace: SALARY_CAP,
+				rosterCount: 10,
+				leading: [
+					['p-2', 1_000_000],
+					['p-3', 1_000_000]
+				]
+			})
+		);
+		const gates = evaluate(state, command(1_500_000), NOW);
+
+		expect(gates.slots.projectedAdditions).toBe(3);
+		expect(gates.slots.passed).toBe(false);
+		expect(failedGates(gates)).toEqual(['slots']);
+	});
+
+	it('neither short-circuits the other, on either side of the pair', () => {
+		// Money fails, capacity does not: Roster Count 9, over Maximum Bid.
+		const moneyOnly = bidStateFor(null, team({ capSpace: 12_000_000, rosterCount: 9 }));
+		const overCap = evaluate(moneyOnly, command(10_500_000), NOW);
+		expect(failedGates(overCap)).toEqual(['cap']);
+		expect(overCap.slots.passed).toBe(true);
+		expect(overCap.slots.rosterCount).toBe(9);
+
+		// Capacity fails, money does not: Roster Count 12 with $40.0M spare.
+		const slotsOnly = bidStateFor(null, team({ capSpace: 40_000_000, rosterCount: 12 }));
+		const overSlots = evaluate(slotsOnly, command(5_000_000), NOW);
+		expect(failedGates(overSlots)).toEqual(['slots']);
+		expect(overSlots.cap.passed).toBe(true);
+		expect(overSlots.cap.maximumBid).toBe(40_000_000);
+
+		// Both fail, each with its own arithmetic, in PLACE_BID_GATES order.
+		const both = bidStateFor(null, team({ capSpace: 3_000_000, rosterCount: 12 }));
+		const gates = evaluate(both, command(5_000_000), NOW);
+		expect(failedGates(gates)).toEqual(['cap', 'slots']);
+		expect(gates.cap.maximumBid).toBe(3_000_000);
+		expect(gates.slots.rosterCount).toBe(12);
+
+		// And the composed refusal states BOTH sentences, in that same order —
+		// the half of "each with its own sentence" that the numeric assertions
+		// above cannot reach. AD-1 forbids short-circuiting, so a Bid refused
+		// on two grounds must say both; saying only the first would be the
+		// same defect as evaluating only the first.
+		const detail = bidRefusalDetail({ kind: 'gates', gates });
+		expect(detail).toContain('exceeds your Maximum Bid');
+		expect(detail).toContain('no roster slot');
+		expect(detail.indexOf('Maximum Bid')).toBeLessThan(detail.indexOf('no roster slot'));
+		// Two complete sentences joined, not one ground swallowing the other.
+		expect(detail).toContain('Roster Count is 12');
+		expect(detail).toContain('Roster Capacity of 12');
+	});
+
+	it('keeps the two machine-readable reasons distinct, and their two sentences', () => {
+		const capOnly = bidRefusalDetail({
+			kind: 'gates',
+			gates: evaluate(
+				bidStateFor(null, team({ capSpace: 12_000_000, rosterCount: 9 })),
+				command(10_500_000),
+				NOW
+			)
+		});
+		const slotsOnly = bidRefusalDetail({
+			kind: 'gates',
+			gates: evaluate(
+				bidStateFor(null, team({ capSpace: 40_000_000, rosterCount: 12 })),
+				command(5_000_000),
+				NOW
+			)
+		});
+
+		// A capacity refusal never states a cap figure as its ground...
+		expect(slotsOnly).toContain('no roster slot');
+		expect(slotsOnly).toContain('Roster Capacity');
+		expect(slotsOnly).not.toContain('Maximum Bid');
+		expect(slotsOnly).not.toMatch(/\$\d/);
+		// ...and a cap refusal never states a roster one.
+		expect(capOnly).toContain('Maximum Bid');
+		expect(capOnly).not.toContain('Roster Capacity');
+		expect(capOnly).not.toContain('roster slot');
+	});
+
+	it('refuses a Team a Commissioner override put above the ceiling', () => {
+		// The other half of the `unfilledSlots` clamp: the reserve stays at $0
+		// so no extra spending power is handed out, and the capacity gate is
+		// what actually refuses the Bid.
+		const state = bidStateFor(null, team({ capSpace: 40_000_000, rosterCount: 14 }));
+		const gates = evaluate(state, command(5_000_000), NOW);
+
+		expect(gates.cap.rosterReserve).toBe(0);
+		expect(gates.cap.passed).toBe(true);
+		expect(gates.slots.passed).toBe(false);
+		expect(gates.slots.rosterCount).toBe(14);
+		expect(gates.slots.projectedAdditions).toBe(1);
+	});
+
+	it('passes a Team with no roster rows at all — a real post-import state', () => {
+		const gates = evaluate(
+			bidStateFor(null, team({ capSpace: SALARY_CAP, rosterCount: 0 })),
+			command(1_500_000),
+			NOW
+		);
+
+		expect(gates.slots.rosterCount).toBe(0);
+		expect(gates.slots.projectedAdditions).toBe(1);
+		expect(gates.slots.passed).toBe(true);
+	});
+
+	it('carries its figure when it PASSES, which is the row EXPERIENCE.md specifies', () => {
+		// `EXPERIENCE.md:89` shows the passing row verbatim — `Slots · Passed`
+		// beside `Roster Count would be 10 of 12` — and that is the row the
+		// whole "both gates, always" design exists to produce: reporting the
+		// gate that passed proves every check ran and this is the only
+		// obstacle. Asserted as the exact string, because a generic
+		// "the figure is non-empty" check would pass on a wrong one, and the
+		// refused figure being right is no evidence the passing one is.
+		const rowFor = (state: BidState, amount: number) =>
+			bidGateReport(evaluate(state, command(amount), NOW)).find((row) => row.gate === 'slots');
+
+		// The example's own numbers: Roster Count 9, one Bid being placed.
+		const spare = bidStateFor(null, team({ capSpace: SALARY_CAP, rosterCount: 9 }));
+		expect(rowFor(spare, 1_500_000)?.chip).toBe('Slots · Passed');
+		expect(rowFor(spare, 1_500_000)?.figure).toBe('Roster Count would be 10 of 12');
+
+		// And at the boundary, where the Bid itself fills the last hole.
+		const lastHole = bidStateFor(null, team({ capSpace: SALARY_CAP, rosterCount: 11 }));
+		expect(rowFor(lastHole, 1_500_000)?.chip).toBe('Slots · Passed');
+		expect(rowFor(lastHole, 1_500_000)?.figure).toBe('Roster Count would be 12 of 12');
+
+		// One branch serves both outcomes: the figure states the arithmetic
+		// and the chip beside it states the verdict, so the same sentence
+		// shape survives the turnover.
+		const full = bidStateFor(null, team({ capSpace: SALARY_CAP, rosterCount: 12 }));
+		expect(rowFor(full, 1_500_000)?.chip).toBe('Slots · Refused');
+		expect(rowFor(full, 1_500_000)?.figure).toBe('Roster Count would be 13 of 12');
 	});
 });
 

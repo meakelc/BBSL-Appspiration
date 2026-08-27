@@ -125,4 +125,19 @@ describe('§10 example 23 — IR does not fill the twelve', () => {
 		const over = evaluate(STATE, bidOf(TEAM_N.capSpace + 500_000), NOW);
 		expect(over.cap.passed).toBe(false);
 	});
+
+	it('is the capacity gate’s AT-THE-CEILING case: 11 + 1 = 12 passes (Story 2.7)', () => {
+		// `evaluateSlots`'s own doc cites this example as the boundary where
+		// the twelfth hole is filled and the Bid is still legal. That claim was
+		// true here only by implication — the `decide()` above cannot accept
+		// unless `slots` passed — so it is stated outright, and the file the
+		// doc points at now verifies what the doc says about it.
+		const gates = evaluate(STATE, bidOf(1_500_000), NOW);
+
+		expect(gates.slots.rosterCount).toBe(11);
+		expect(gates.slots.projectedAdditions).toBe(1);
+		expect(gates.slots.ceiling).toBe(12);
+		// `12 <= 12` — at the ceiling passes; only exceeding it is refused.
+		expect(gates.slots.passed).toBe(true);
+	});
 });

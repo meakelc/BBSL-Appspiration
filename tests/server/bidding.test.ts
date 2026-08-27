@@ -384,7 +384,8 @@ describe('placeBid — the gate refuses (AC1, AC2, AC3)', () => {
 			'granularity',
 			'increment',
 			'opening',
-			'selfBid'
+			'selfBid',
+			'slots'
 		]);
 		expect(rejection.refusal.gates.increment.passed).toBe(false);
 		expect(rejection.refusal.gates.granularity.passed).toBe(false);
@@ -394,6 +395,11 @@ describe('placeBid — the gate refuses (AC1, AC2, AC3)', () => {
 		// forecloses "what else is it not telling me".
 		expect(rejection.refusal.gates.cap.passed).toBe(true);
 		expect(rejection.refusal.gates.cap.maximumBid).toBe(154_000_000);
+		// And so does the capacity gate, with its own two counts: nine held
+		// plus the one being bid is ten of twelve.
+		expect(rejection.refusal.gates.slots.passed).toBe(true);
+		expect(rejection.refusal.gates.slots.rosterCount).toBe(9);
+		expect(rejection.refusal.gates.slots.projectedAdditions).toBe(1);
 
 		// And the rejection carries the figures back with the clock they were
 		// decided at, so the panel shows what THIS transaction judged (FR-13).
@@ -454,6 +460,49 @@ describe('placeBid — the gate refuses (AC1, AC2, AC3)', () => {
 			expect(rejection.detail).toBe(bidRefusalDetail({ kind: 'no_open_auction' }));
 			expect(harness.appendedEvents).toHaveLength(0);
 		}
+	});
+
+	it('refuses on capacity under the lock, against roster figures read after it', async () => {
+		// Story 2.7's row of the matrix. The roster is read INSIDE the
+		// transaction, after `pg_advisory_xact_lock` — the order below is the
+		// assertion, not a description of it — so a page rendered before a
+		// Commissioner filled the twelfth Slot cannot race a stale count past
+		// the board.
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, 8_000_000)],
+			roster: Array.from({ length: 12 }, () => ({
+				cap_hit: '1000000',
+				roster_slot_kind: 'active_bench'
+			}))
+		});
+
+		const outcome = await placeBid(
+			harness.gateway,
+			ACTOR,
+			'p-1',
+			parseMoney(8_500_000),
+			DEVICE_CLASS
+		);
+
+		const rejection = rejectionOf(outcome);
+		if (rejection.refusal.kind !== 'gates') throw new Error('expected a gate refusal');
+
+		expect(rejection.refusal.gates.slots.passed).toBe(false);
+		expect(rejection.refusal.gates.slots.rosterCount).toBe(12);
+		expect(rejection.refusal.gates.slots.projectedAdditions).toBe(1);
+		expect(rejection.refusal.gates.slots.ceiling).toBe(12);
+		// $153.0M of Cap Space against an $8.5M Bid: the money is not the
+		// obstacle, and the panel says so rather than leaving it ambiguous.
+		expect(rejection.refusal.gates.cap.passed).toBe(true);
+		expect(rejection.detail).toContain('no roster slot');
+		expect(rejection.detail).not.toContain('Maximum Bid');
+		// The transaction's own gate set and its own stamp.
+		expect(rejection.gates).toBe(rejection.refusal.gates);
+		expect(rejection.at).toBe(NOW.toISOString());
+		// The lock came first, the roster read after it, and no BidPlaced.
+		expect(harness.order).toEqual(['begin', 'lock', 'read-log', 'read-roster', 'rollback']);
+		expect(harness.appendedEvents).toHaveLength(0);
+		expect(harness.state.committed).toBe(false);
 	});
 
 	it('always rolls back and releases the connection on a refusal', async () => {
