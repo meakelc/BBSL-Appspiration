@@ -7,8 +7,9 @@
  * Epic 3 closes anything, "open Auction" and "open Nomination" are the same
  * row of the same fold — `nominationsReducer` / `nominationForPlayer`, the
  * identical accessor every other gate in Epic 2 uses. Story 2.5 adds
- * `auctionsReducer` beside it, over the SAME already-loaded events array, so
- * the two projections cannot disagree about which events they saw. A
+ * `auctionsReducer` beside it and Story 2.6 adds `eligibilityReducer`, all
+ * over the SAME already-loaded events array, so the three projections cannot
+ * disagree about which events they saw. A
  * nominated Player nobody has bid on folds to `null` there, which is "no bids
  * yet" and never "no Auction".
  *
@@ -31,12 +32,15 @@
  * amount is re-derived server-side under the lock, and the wording it comes
  * back with is `bidRefusalDetail`'s, the same one used here.
  *
- * **No cap figure and no capacity figure.** A Team's budget arithmetic and
- * its roster occupancy are Stories 2.6 and 2.7, along with the refusal panel
- * that breaks them out; nothing here computes, displays or refuses on one,
- * and no wording here names one. The only figures this module renders are
- * the price, the minimum legal Bid and each Bid's own amount — all three of
- * them properties of the Auction, not of the viewer.
+ * **The viewer's cap figures, but no capacity figure.** Story 2.6 adds the
+ * money half: one read of `team_rosters` for the viewer's Team, narrowed
+ * through the core's own `teamMoneyStateFor` and serialised as FACTS — Cap
+ * Space, Roster Count and the Auctions that Team leads. Maximum Bid,
+ * Committed Bids, Available Cap Space and Roster Reserve are NOT serialised,
+ * because AD-7 forbids a derived money figure being cached client-side for
+ * validation and the surface is a client; it re-derives them through the same
+ * `evaluate()` this module calls. Roster occupancy as a REFUSAL ground is
+ * still Story 2.7's, and no wording here names one.
  *
  * **Reference fields come from `free_agent_players` and nothing else** — no
  * salary or contract-length column exists on that table
@@ -111,15 +115,22 @@ import {
 } from '../core/projection/nominations.ts';
 import type { OpenNomination } from '../core/projection/nominations.ts';
 import {
+	INITIAL_ELIGIBILITY,
+	eligibilityReducer,
+	isEligible
+} from '../core/projection/eligibility.ts';
+import {
 	bidControlState,
 	bidStateFor,
 	describeAmount,
 	minimumLegalBid,
-	minimumLegalSentence
+	minimumLegalSentence,
+	teamMoneyStateFor
 } from '../core/rules/bidding.ts';
-import type { BidState } from '../core/rules/bidding.ts';
+import type { BidState, TeamMoneyState } from '../core/rules/bidding.ts';
 import { formatTeamManager } from '../core/team-identity.ts';
 import { loadEventsViaClient } from './event-log.ts';
+import { loadTeamRoster } from './team-roster.ts';
 import type { ConnectionGateway } from '../shell/write.ts';
 
 const FREE_AGENT_PLAYERS_TABLE = 'free_agent_players';
@@ -192,6 +203,36 @@ export type AuctionPageBidControl = {
 	readonly leadingTeamId: string | null;
 	/** The viewer's own Team, from the session and nothing else (AD-4). */
 	readonly viewerTeamId: string | null;
+	/**
+	 * The viewer Team's money FACTS — Cap Space, Roster Count, and the open
+	 * Auctions it leads. `null` for a viewer bound to no Team.
+	 *
+	 * **Facts, never the derived figure.** Maximum Bid, Committed Bids,
+	 * Available Cap Space and Roster Reserve are deliberately NOT here: AD-7
+	 * forbids a derived money figure being cached client-side for validation,
+	 * and the surface is a client. Shipping it `maximumBid` and letting it
+	 * compare would make the transported number the check. Shipping these
+	 * facts means `evaluateCap` runs again in the browser, on this read path
+	 * and inside the lock, from the same inputs — so the breakdown a Manager
+	 * reads and the arithmetic a refusal shows are one derivation with three
+	 * callers, not three numbers that must be kept in step.
+	 *
+	 * Amounts cross as integer dollars and are re-branded by whoever reads
+	 * them (AD-8); `Money` does not survive JSON.
+	 */
+	readonly team: TeamMoneyState | null;
+	/**
+	 * When these figures were computed, ISO-8601 — the arithmetic's timestamp
+	 * caption ("Your figures at 2:14 AM Wed").
+	 *
+	 * A rendering fact, not a rule input: nothing compares it to anything.
+	 * The read path takes no lock and reads no database clock, so this is the
+	 * server's own instant at the moment the roster and the folds were read,
+	 * which is exactly what the caption claims it is. A refused SUBMIT
+	 * replaces it with the transaction's clock, because those figures are the
+	 * ones that Bid was actually judged against (FR-13).
+	 */
+	readonly figuresAt: string;
 };
 
 /** Everything the Auction page renders. */
@@ -316,10 +357,34 @@ export async function loadAuctionPage(
 			return null;
 		}
 
-		// The second fold, over the SAME events array — so the board and the
-		// price cannot describe two different moments.
+		// The second and third folds, over the SAME events array — so the
+		// board, the price and the money cannot describe three different
+		// moments. Eligibility is folded rather than read off
+		// `free_agent_players.minor_league_eligible` for the reason
+		// `server/bidding.ts` gives: the column is the fold of those events,
+		// and asking both would make two answers possible at the moment a
+		// Commissioner is changing one.
 		const auctions = fold(INITIAL_AUCTIONS, events, auctionsReducer);
 		const auction = auctionForPlayer(auctions, fantraxPlayerId);
+		const eligibility = fold(INITIAL_ELIGIBILITY, events, eligibilityReducer);
+
+		// The viewer's own Cap figures. Skipped entirely for a viewer bound to
+		// no Team — there is no roster to read and no arithmetic to show, and
+		// a query keyed on `null` would be a statement asking nothing.
+		// Stamped HERE, beside the reads it describes, rather than at the end
+		// of the load: the caption claims these figures held at this instant,
+		// and three further statements run before the page state is built.
+		const figuresAt = new Date().toISOString();
+		const team =
+			viewerTeamId === null
+				? null
+				: teamMoneyStateFor({
+						teamId: viewerTeamId,
+						fantraxPlayerId,
+						...(await loadTeamRoster(client, viewerTeamId)),
+						auctions,
+						isMinorLeagueEligible: (playerId) => isEligible(eligibility, playerId)
+					});
 
 		const referenceResult = await client.query(
 			`select player_name, positions, nba_team
@@ -422,7 +487,7 @@ export async function loadAuctionPage(
 				amount: describeAmount(bid.amount),
 				occurredAt: bid.occurredAt
 			})),
-			bidControl: readBidControl(auction, viewerTeamId, nomination.fantraxPlayerId)
+			bidControl: readBidControl(auction, team, viewerTeamId, nomination.fantraxPlayerId, figuresAt)
 		};
 	} catch (error) {
 		await client.query('rollback').catch(() => {
@@ -448,18 +513,22 @@ export async function loadAuctionPage(
  * refused something it did not.
  *
  * `now` is passed as the empty string, and that is safe rather than sloppy:
- * `evaluate()` is total and reads no clock, none of the four gates in
- * `PLACE_BID_GATES` looks at `now`, and this module has no database clock in
+ * `evaluate()` is total and reads no clock, no gate in `PLACE_BID_GATES`
+ * looks at `now` — including Story 2.6's `cap`, whose arithmetic is a
+ * question about committed state and not about time — and this module has no database clock in
  * hand — the read path deliberately takes no lock and reads no `now()`. Story
  * 3.1's `expiry` gate is the first that will need one, and it will have to
  * source it here rather than invent one, which is the correct pressure.
  */
 function readBidControl(
 	auction: Auction | null,
+	team: TeamMoneyState | null,
 	viewerTeamId: string | null,
-	fantraxPlayerId: string
+	fantraxPlayerId: string,
+	/** When the roster and the folds were read — the caption's instant. */
+	figuresAt: string
 ): AuctionPageBidControl {
-	const state: BidState = bidStateFor(auction);
+	const state: BidState = bidStateFor(auction, team);
 	const minimumLegal = minimumLegalBid(state);
 
 	const control = bidControlState({
@@ -478,6 +547,11 @@ function readBidControl(
 		minimumLegalSentence: minimumLegalSentence(minimumLegal),
 		leadingAmount: state.leadingBid?.amount ?? null,
 		leadingTeamId: state.leadingBid?.teamId ?? null,
-		viewerTeamId
+		viewerTeamId,
+		team,
+		// Not a rule input and never compared to anything — the caption's
+		// instant, taken where the figures were actually read. The core may
+		// not name `Date`; this module may.
+		figuresAt
 	};
 }

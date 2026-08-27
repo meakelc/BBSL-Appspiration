@@ -42,11 +42,17 @@
 import { error, fail } from '@sveltejs/kit';
 
 import { classifyDeviceClass } from '$lib/core/device-class.ts';
-import { bidPlacedNotice, bidRefusalDetail, readBidAmount } from '$lib/core/rules/bidding.ts';
+import {
+	bidPlacedNotice,
+	bidRefusalDelta,
+	bidRefusalDetail,
+	readBidAmount
+} from '$lib/core/rules/bidding.ts';
 import { requireLiveDestination } from '$lib/server/destinations.ts';
 import { loadAuctionPage } from '$lib/server/auction-page.ts';
 import { placeBid } from '$lib/server/bidding.ts';
 import type { BidRejection } from '$lib/server/bidding.ts';
+import type { BidRefusal } from '$lib/core/rules/bidding.ts';
 import { writeGateway } from '$lib/shell/db.ts';
 
 import type { Actions, PageServerLoad } from './$types';
@@ -95,6 +101,34 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	};
 };
 
+/**
+ * A refusal, shaped for the panel that renders it.
+ *
+ * `notice` is the one-line form for a viewer with no panel; `delta` is the
+ * same wording unframed, which is what the panel's part two prints beneath
+ * its headline. Both come from the core, and the second is where the first
+ * gets its middle — a route that composed either itself would be a second
+ * definition of what a refusal says.
+ *
+ * `gates` and `figuresAt` are `null` for every refusal decided before a
+ * transaction opened. Those have a sentence but no arithmetic, and the panel
+ * renders for them anyway: the matrix requires it on ANY refused submit, and
+ * a Manager who mis-typed an amount deserves the same surface as one who
+ * overran their cap.
+ */
+function refused(
+	status: number,
+	refusal: BidRefusal,
+	arithmetic: { gates: unknown; figuresAt: string | null } = { gates: null, figuresAt: null }
+) {
+	return fail(status, {
+		notice: bidRefusalDetail(refusal),
+		delta: bidRefusalDelta(refusal),
+		gates: arithmetic.gates,
+		figuresAt: arithmetic.figuresAt
+	});
+}
+
 export const actions: Actions = {
 	bid: async ({ request, locals, params }) => {
 		requireLiveDestination(locals.session, locals.phase.name, AUCTION_DESTINATION_ID);
@@ -109,13 +143,13 @@ export const actions: Actions = {
 		// `nominate/+page.server.ts` applies to a submit naming no Player.
 		const reading = readBidAmount(String(form.get('amount') ?? ''));
 		if (reading.kind === 'unusable') {
-			return fail(400, { notice: bidRefusalDetail(reading.refusal) });
+			return refused(400, reading.refusal);
 		}
 
 		if (form.get('confirm') !== 'yes') {
 			// A Bid commits the Team to the amount for as long as it leads, so
 			// it is never inferred from a submit.
-			return fail(400, { notice: bidRefusalDetail({ kind: 'unconfirmed' }) });
+			return refused(400, { kind: 'unconfirmed' });
 		}
 
 		// The actor, resolved server-side from the application tables the
@@ -124,7 +158,7 @@ export const actions: Actions = {
 		// administration problem with a stated remedy, not an HTTP error.
 		const actor = actorFrom(locals.session);
 		if (actor === null) {
-			return fail(400, { notice: bidRefusalDetail({ kind: 'unbound_actor' }) });
+			return refused(400, { kind: 'unbound_actor' });
 		}
 
 		// Classified here, at the transport boundary. `'unknown'` is a real
@@ -145,8 +179,15 @@ export const actions: Actions = {
 			// route never words a refusal itself, so the disabled control, the
 			// tests and the transaction all read one wording.
 			const rejection = outcome.reason as BidRejection | undefined;
-			return fail(409, {
-				notice: rejection?.detail ?? bidRefusalDetail({ kind: 'unrecorded' })
+			// The gate set as the LOCKED TRANSACTION decided it, and the clock
+			// it decided at — passed through untouched so the refusal panel
+			// prints the arithmetic this Bid was actually judged against
+			// (FR-13: "refused with the current figures shown"). A route that
+			// recomputed them would be evaluating a state that no longer
+			// exists.
+			return refused(409, rejection?.refusal ?? { kind: 'unrecorded' }, {
+				gates: rejection?.gates ?? null,
+				figuresAt: rejection?.at ?? null
 			});
 		}
 

@@ -24,7 +24,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { MINIMUM_BID, MINIMUM_INCREMENT } from '../../src/lib/core/constants.ts';
+import { MINIMUM_BID, MINIMUM_INCREMENT, SALARY_CAP } from '../../src/lib/core/constants.ts';
 import type { Auction } from '../../src/lib/core/projection/auctions.ts';
 import { parseMoney } from '../../src/lib/core/money.ts';
 import {
@@ -34,8 +34,24 @@ import {
 	evaluate,
 	failedGates
 } from '../../src/lib/core/rules/bidding.ts';
-import type { BidState } from '../../src/lib/core/rules/bidding.ts';
+import type { BidState, TeamMoneyState } from '../../src/lib/core/rules/bidding.ts';
 import type { PlaceBid } from '../../src/lib/core/types.ts';
+
+/**
+ * A Team the money gate cannot be the reason for anything here.
+ *
+ * Story 2.6 added `cap` to `PLACE_BID_GATES`, and every state literal in this
+ * file must now say something about money whether or not the example is about
+ * money. This one says "not the constraint": the full Salary Cap, nothing
+ * committed, and a roster with room — so a refusal in this file is always the
+ * gate the example is actually about. §10 examples 3, 4, 5 and 23 are where
+ * the money arithmetic is exercised on purpose.
+ */
+const RICH: TeamMoneyState = {
+	capSpace: parseMoney(SALARY_CAP),
+	rosterCount: 9,
+	leading: []
+};
 
 const NOW = '2026-08-26T12:00:00.000Z';
 
@@ -71,7 +87,7 @@ function bidOf(amount: number): PlaceBid {
 
 // --- 26a: Standard Contention, off-grid, and it CLEARS the increment -------
 
-const STANDARD_AT_SIX: BidState = bidStateFor(auctionAt(6_000_000, 'standard'));
+const STANDARD_AT_SIX: BidState = bidStateFor(auctionAt(6_000_000, 'standard'), RICH);
 
 describe('§10 example 26a — $6,750,000 over a $6,000,000 high', () => {
 	it('refuses on granularity', () => {
@@ -118,7 +134,7 @@ describe('§10 example 26a — $6,750,000 over a $6,000,000 high', () => {
 // --- 26b: a Minimum-Bid Contention, off-grid by one dollar -----------------
 
 const LOTTERY_AUCTION: Auction = auctionAt(MINIMUM_BID, 'minimum_bid');
-const LOTTERY: BidState = bidStateFor(LOTTERY_AUCTION);
+const LOTTERY: BidState = bidStateFor(LOTTERY_AUCTION, RICH);
 
 describe('§10 example 26b — $1,000,001 in a Minimum-Bid Contention', () => {
 	it('is a Minimum-Bid Contention state literal, not one this story created', () => {
@@ -127,7 +143,7 @@ describe('§10 example 26b — $1,000,001 in a Minimum-Bid Contention', () => {
 		// And the gate refuses to CREATE one: an Opening Bid of exactly
 		// $1,000,000 is named and refused, so nothing here can produce this
 		// state through the rules.
-		const opening = evaluate(bidStateFor(null), bidOf(MINIMUM_BID), NOW);
+		const opening = evaluate(bidStateFor(null, RICH), bidOf(MINIMUM_BID), NOW);
 		expect(opening.opening.passed).toBe(false);
 		expect(opening.opening.opening).toBe('at_the_minimum');
 	});
@@ -154,7 +170,7 @@ describe('§10 example 26b — $1,000,001 in a Minimum-Bid Contention', () => {
 		// no bids at all, Standard Contention, and the lottery above. The gate
 		// reads the amount and nothing else, so all three agree exactly.
 		const offGrid = 1_000_001;
-		const states: BidState[] = [bidStateFor(null), STANDARD_AT_SIX, LOTTERY];
+		const states: BidState[] = [bidStateFor(null, RICH), STANDARD_AT_SIX, LOTTERY];
 		for (const state of states) {
 			expect(evaluate(state, bidOf(offGrid), NOW).granularity).toEqual({
 				passed: false,

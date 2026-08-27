@@ -1,5 +1,5 @@
 /**
- * The bidding transaction. Server-only (Story 2.5).
+ * The bidding transaction. Server-only (Stories 2.5, 2.6).
  *
  * The stateful fake `ConnectionGateway` is `tests/server/nomination.test.ts`'s:
  * it records every statement in order and keeps the appended events in
@@ -7,13 +7,15 @@
  * are observable rather than assumed. It throws on any statement it does not
  * recognise, which is what makes "no projection table was written" provable
  * rather than merely unasserted — there is no `open_nominations` branch here
- * and no branch for any other table, because `placeBid` passes no
- * `projections` array at all.
+ * and no branch for any other table beyond the one `team_rosters` READ Story
+ * 2.6 added, because `placeBid` passes no `projections` array at all. The
+ * distinction the fake preserves is exactly the one that matters: the money
+ * gate reads a table, and still writes none.
  */
 
 import { describe, expect, it } from 'vitest';
 
-import { AUCTION_CLOCK } from '../../src/lib/core/constants.ts';
+import { AUCTION_CLOCK, SALARY_CAP } from '../../src/lib/core/constants.ts';
 import { BID_PLACED_EVENT } from '../../src/lib/core/projection/auctions.ts';
 import {
 	AUCTION_CLOSED_EVENT,
@@ -36,7 +38,25 @@ const NOW = new Date('2026-08-26T12:00:00.000Z');
 
 const DEVICE_CLASS = 'mobile';
 
-function fakeGateway(options: { events?: QueryResultRow[] } = {}) {
+/**
+ * The acting Team's roster rows, as `team_rosters` returns them.
+ *
+ * Story 2.6 gave `loadBidState` its first table read, so the fake answers one
+ * more statement. The default is a nine-player roster of $1.0M contracts: Cap
+ * Space $156.0M and Roster Count 9, which is deliberately far more than any
+ * amount bid in this file needs — every assertion here is about the four
+ * gates that were already present, and a money gate that started refusing
+ * them would be testing the wrong thing. `tests/examples/example-03-*` and
+ * its neighbours are where the money arithmetic is the subject.
+ */
+const NINE_CHEAP_PLAYERS: QueryResultRow[] = Array.from({ length: 9 }, () => ({
+	cap_hit: '1000000',
+	roster_slot_kind: 'active_bench'
+}));
+
+function fakeGateway(
+	options: { events?: QueryResultRow[]; roster?: QueryResultRow[] } = {}
+) {
 	const order: string[] = [];
 	const params: unknown[][] = [];
 	const appendedEvents: QueryResultRow[] = [];
@@ -59,6 +79,11 @@ function fakeGateway(options: { events?: QueryResultRow[] } = {}) {
 			if (/^select \* from auction_events/i.test(sql)) {
 				order.push('read-log');
 				return { rows: [...(options.events ?? []), ...appendedEvents] };
+			}
+			if (/^select cap_hit, roster_slot_kind\s+from team_rosters/i.test(sql)) {
+				order.push('read-roster');
+				params.push([...queryParams]);
+				return { rows: options.roster ?? NINE_CHEAP_PLAYERS };
 			}
 			if (/^insert into auction_events/i.test(sql)) {
 				order.push('append-event');
@@ -272,7 +297,17 @@ describe('placeBid — the gate holds (AC4)', () => {
 
 		await placeBid(harness.gateway, ACTOR, 'p-1', parseMoney(8_500_000), DEVICE_CLASS);
 
-		expect(harness.order).toEqual(['begin', 'lock', 'read-log', 'append-event', 'commit']);
+		expect(harness.order).toEqual([
+			'begin',
+			'lock',
+			'read-log',
+			// Story 2.6's one table READ, and it is AFTER the lock — which is
+			// what makes the Cap figures the gate decides from unable to move
+			// between the read and the decision (AD-6, AD-7).
+			'read-roster',
+			'append-event',
+			'commit'
+		]);
 	});
 
 	it('writes NOTHING but the event — no claim row, no projection table, no derived figure', async () => {
@@ -285,7 +320,13 @@ describe('placeBid — the gate holds (AC4)', () => {
 
 		expect(harness.order.filter((step) => step === 'append-event')).toHaveLength(1);
 		expect(harness.order).not.toContain('claim');
-		expect(harness.params).toHaveLength(1);
+		// Two parameterised statements now: the roster READ and the event
+		// INSERT. The read is the point of the distinction — Story 2.6 reads a
+		// table and still writes none, so no `insert`/`update`/`delete`
+		// touches anything but `auction_events`.
+		expect(harness.params).toHaveLength(2);
+		const writes = harness.order.filter((step) => step !== 'read-log' && step !== 'read-roster');
+		expect(writes).toEqual(['begin', 'lock', 'append-event', 'commit']);
 	});
 
 	it('opens an Auction that has no Bid yet, at the minimum legal opening', async () => {
@@ -320,7 +361,7 @@ describe('placeBid — the gate refuses (AC1, AC2, AC3)', () => {
 		const rejection = rejectionOf(outcome);
 		expect(rejection.refusal.kind).toBe('gates');
 		expect(rejection.detail).toBe(bidRefusalDetail(rejection.refusal));
-		expect(harness.order).toEqual(['begin', 'lock', 'read-log', 'rollback']);
+		expect(harness.order).toEqual(['begin', 'lock', 'read-log', 'read-roster', 'rollback']);
 		expect(harness.appendedEvents).toHaveLength(0);
 		expect(harness.state.committed).toBe(false);
 	});
@@ -339,6 +380,7 @@ describe('placeBid — the gate refuses (AC1, AC2, AC3)', () => {
 		if (rejection.refusal.kind !== 'gates') throw new Error('expected a gate refusal');
 
 		expect(Object.keys(rejection.refusal.gates).sort()).toEqual([
+			'cap',
 			'granularity',
 			'increment',
 			'opening',
@@ -347,6 +389,16 @@ describe('placeBid — the gate refuses (AC1, AC2, AC3)', () => {
 		expect(rejection.refusal.gates.increment.passed).toBe(false);
 		expect(rejection.refusal.gates.granularity.passed).toBe(false);
 		expect(rejection.refusal.gates.selfBid.passed).toBe(true);
+		// The money gate passed and carries its own arithmetic anyway — an
+		// $8.4M bid is well inside a $154.0M Maximum Bid. Reporting it is what
+		// forecloses "what else is it not telling me".
+		expect(rejection.refusal.gates.cap.passed).toBe(true);
+		expect(rejection.refusal.gates.cap.maximumBid).toBe(154_000_000);
+
+		// And the rejection carries the figures back with the clock they were
+		// decided at, so the panel shows what THIS transaction judged (FR-13).
+		expect(rejection.gates).toBe(rejection.refusal.gates);
+		expect(rejection.at).toBe(NOW.toISOString());
 	});
 
 	it('refuses the Team that already leads, with its own distinct wording', async () => {
@@ -450,30 +502,76 @@ describe('placeBid — the co-manager race, serialised by the lock (§10 example
 
 // --- loadBidState -----------------------------------------------------------
 
-describe('loadBidState — two folds over ONE read of the log', () => {
-	it('reads the log exactly once and no table at all', async () => {
+describe('loadBidState — three folds over ONE read of the log, plus one roster read', () => {
+	it('reads the log exactly once and the roster exactly once', async () => {
 		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 8_000_000)] });
 		await harness.client.query('begin');
 
-		const loaded = await loadBidState(harness.client, 'p-1');
+		const loaded = await loadBidState(harness.client, 'p-1', 't-2');
 
 		expect(loaded.nomination?.fantraxPlayerId).toBe('p-1');
-		// Narrowed to exactly what the gates decide from — the leading Team
-		// and the leading amount, and nothing else.
-		expect(loaded.bid).toEqual({ leadingBid: { teamId: 't-1', amount: 8_000_000 } });
-		expect(harness.order).toEqual(['begin', 'read-log']);
+		// Narrowed to exactly what the gates decide from: the leading Team and
+		// amount for the first four, and the acting Team's money facts for the
+		// fifth. Nothing derived — no Committed Bids, no Maximum Bid (AD-7).
+		expect(loaded.bid).toEqual({
+			leadingBid: { teamId: 't-1', amount: 8_000_000 },
+			team: { capSpace: 156_000_000, rosterCount: 9, leading: [] }
+		});
+		// The log is read once and the roster once, and BOTH after the lock —
+		// which is what makes the figures the gate decides from unable to move
+		// between the read and the decision (AD-6, AD-7).
+		expect(harness.order).toEqual(['begin', 'read-log', 'read-roster']);
+	});
+
+	it('keys the roster read on the ACTING Team, never on the leading one', async () => {
+		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 8_000_000)] });
+		await harness.client.query('begin');
+
+		await loadBidState(harness.client, 'p-1', 't-2');
+
+		// `t-1` leads this Auction; `t-2` is bidding. A roster read keyed on
+		// the leader would compute the wrong Team's Maximum Bid and refuse the
+		// bidder on somebody else's arithmetic.
+		expect(harness.params.at(-1)).toEqual(['t-2']);
+	});
+
+	it('excludes the Auction being bid on from that Team’s own commitments', async () => {
+		// `t-2` already leads p-1 at $8.0M and is bidding on p-1 again. The
+		// prospective Bid REPLACES that lead, so counting both would commit
+		// the Team twice for one Player.
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, 8_000_000, 't-2')]
+		});
+		await harness.client.query('begin');
+
+		const loaded = await loadBidState(harness.client, 'p-1', 't-2');
+		expect(loaded.bid.team?.leading).toEqual([]);
 	});
 
 	it('separates "no Auction" from "no Bids yet"', async () => {
 		const harness = fakeGateway({ events: [nominated()] });
 		await harness.client.query('begin');
 
-		const loaded = await loadBidState(harness.client, 'p-1');
+		const loaded = await loadBidState(harness.client, 'p-1', 't-2');
 		expect(loaded.nomination).not.toBeNull();
 		expect(loaded.bid.leadingBid).toBeNull();
 
-		const missing = await loadBidState(harness.client, 'p-nobody');
+		const missing = await loadBidState(harness.client, 'p-nobody', 't-2');
 		expect(missing.nomination).toBeNull();
 		expect(missing.bid.leadingBid).toBeNull();
+	});
+
+	it('answers with the full Salary Cap and Roster Count 0 for a Team with no rows', async () => {
+		// A real state, reachable before the import promotes anything — not an
+		// error, and not a refusal for a reason no rule states.
+		const harness = fakeGateway({ events: [nominated()], roster: [] });
+		await harness.client.query('begin');
+
+		const loaded = await loadBidState(harness.client, 'p-1', 't-2');
+		expect(loaded.bid.team).toEqual({
+			capSpace: SALARY_CAP,
+			rosterCount: 0,
+			leading: []
+		});
 	});
 });

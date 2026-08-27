@@ -25,6 +25,12 @@
  * adding the `cap` or `slots` gate edits ONE list and every consumer becomes
  * a compile error until it handles the addition.
  *
+ * **Story 2.6 is the first story to spend that.** Adding `'cap'` to
+ * `PLACE_BID_GATES` and one key to `PlaceBidGateResults` is the whole
+ * declaration change; the rules module, the transaction, the read path and
+ * the surface each stopped compiling until they handled the money gate,
+ * which is precisely the property the single list was bought for.
+ *
  * Still true, and deliberately: **no domain EVENT type is named in this
  * file.** `NominationPlaced`, `AuctionClosed` and `BidPlaced` are each
  * declared beside the reducer that gives them meaning
@@ -277,12 +283,56 @@ export type GranularityGateOutcome = GateOutcome & {
 };
 
 /**
+ * The money gate: a Bid may not exceed its Team's Maximum Bid (Story 2.6).
+ *
+ * Every figure the refusal panel prints is here, and they are here rather
+ * than derived a second time by a caller because AD-7 makes the derivation
+ * the core's — a displayed figure is a rendering, and only a freshly
+ * computed one may authorise a Bid.
+ *
+ * **They sum, and the panel prints them summing.**
+ * `capSpace − committedBids = availableCapSpace`, and
+ * `availableCapSpace − rosterReserve = maximumBid`. `committedBids` itself
+ * is the Team's leading amounts on open non-eligible Auctions plus
+ * `minorsExposure`. Every one sits on the $500,000 grid, which is what makes
+ * the abbreviated `$14.5M` rendering add up as displayed (AD-8).
+ *
+ * **All nine figures are `null` together, and only when the acting party is
+ * bound to no Team.** There is no cap arithmetic for a Manager who has no
+ * Team, and stating `$0` would be an invented figure a refusal panel would
+ * then print — the same reason `IncrementGateOutcome` nulls its two figures
+ * on an opening. The gate PASSES in that case: the real refusal is
+ * `unbound_actor`, raised by the route before any transaction opens, and
+ * `server/bidding.ts` always has a bound actor, so the null case is
+ * reachable only on the read path.
+ *
+ * `rosterCount` and `projectedAdditions` are counts, not money, and are the
+ * two inputs to `rosterReserve`. Story 2.7's `slots` gate refuses on the
+ * same two figures and carries its own copy of them: reporting a capacity
+ * refusal as a cap refusal is a defect (AD-7), so the two gates share the
+ * arithmetic and never the outcome.
+ */
+export type CapGateOutcome = GateOutcome & {
+	readonly offered: Money;
+	readonly capSpace: Money | null;
+	readonly committedBids: Money | null;
+	readonly minorsExposure: Money | null;
+	readonly availableCapSpace: Money | null;
+	readonly rosterCount: number | null;
+	readonly projectedAdditions: number | null;
+	readonly rosterReserve: Money | null;
+	readonly maximumBid: Money | null;
+};
+
+/**
  * The gate set for `PlaceBid`, **fixed per command type** (AD-1).
  *
  * Declared here, in one place, so a later story adds a gate with a single
  * edit and every caller is a compile error until it handles the new one.
  * "Fixed" means fixed at any given commit, not frozen forever: Story 2.6
- * adds `cap`, 2.7 adds `slots`, 3.1 adds `expiry`.
+ * added `cap` — this is that single edit, and it is what made every
+ * consumer stop compiling until it handled the new gate — 2.7 adds `slots`,
+ * 3.1 adds `expiry`.
  *
  * Frozen at runtime as well as `as const`, because this list is what
  * `evaluate()`'s totality is asserted against — a caller that could splice
@@ -292,10 +342,11 @@ export const PLACE_BID_GATES = Object.freeze([
 	'opening',
 	'selfBid',
 	'increment',
-	'granularity'
+	'granularity',
+	'cap'
 ] as const);
 
-/** One of the four gate names above. */
+/** One of the five gate names above. */
 export type PlaceBidGate = (typeof PLACE_BID_GATES)[number];
 
 /**
@@ -311,6 +362,7 @@ export type PlaceBidGateResults = {
 	readonly selfBid: SelfBidGateOutcome;
 	readonly increment: IncrementGateOutcome;
 	readonly granularity: GranularityGateOutcome;
+	readonly cap: CapGateOutcome;
 };
 
 /**

@@ -50,9 +50,17 @@
 		bidAppendedSentence,
 		bidConsequenceSentence,
 		bidControlState,
+		bidGateReport,
+		bidRefusalDelta,
+		capBreakdown,
+		evaluate,
+		figuresAtCaption,
 		readBidAmount
 	} from '$lib/core/rules/bidding.ts';
-	import type { BidState } from '$lib/core/rules/bidding.ts';
+	import type { BidState, TeamMoneyState } from '$lib/core/rules/bidding.ts';
+	import type { PlaceBidGateResults } from '$lib/core/types.ts';
+	import CapBreakdown from '$lib/components/CapBreakdown.svelte';
+	import RefusalPanel from '$lib/components/RefusalPanel.svelte';
 
 	import type { ActionData, PageData } from './$types';
 
@@ -68,6 +76,23 @@
 		readonly occurredAt: string;
 	};
 
+	/**
+	 * The viewer Team's money FACTS as the read path serialised them — Cap
+	 * Space and the leading amounts arrive as integer dollars, because `Money`
+	 * is a brand and a brand does not survive JSON (AD-8).
+	 *
+	 * Deliberately NOT Maximum Bid. AD-7 forbids a derived money figure being
+	 * cached client-side for validation, and this file is the client: a
+	 * transported `maximumBid` compared here would BE the check. What arrives
+	 * are the inputs, and `evaluate()` derives the figure again on every
+	 * keystroke from the same core function the locked transaction calls.
+	 */
+	type TeamMoney = {
+		readonly capSpace: number;
+		readonly rosterCount: number;
+		readonly leading: readonly { readonly fantraxPlayerId: string; readonly amount: number }[];
+	};
+
 	type BidControl = {
 		readonly available: boolean;
 		readonly detail: string;
@@ -76,6 +101,8 @@
 		readonly leadingAmount: number | null;
 		readonly leadingTeamId: string | null;
 		readonly viewerTeamId: string | null;
+		readonly team: TeamMoney | null;
+		readonly figuresAt: string;
 	};
 
 	type Auction = {
@@ -95,6 +122,25 @@
 	type BidForm = {
 		readonly notice?: string;
 		readonly appended?: { readonly seq: string } | null;
+		/**
+		 * The refusal's own sentence, unframed — the panel's part two.
+		 *
+		 * Present on EVERY refusal, including the three raised before a
+		 * transaction opens, because the matrix requires the panel on any
+		 * refused submit. Its presence is what the panel keys on.
+		 */
+		readonly delta?: string;
+		/**
+		 * The gate set exactly as the LOCKED TRANSACTION decided it, and the
+		 * clock it decided at. `null` on a refusal with no arithmetic behind
+		 * it — the panel checks before drawing a breakdown of nothing.
+		 *
+		 * Named for what it holds. It is a `PlaceBidGateResults`, not the
+		 * `BidRefusal` that `BidRejection.refusal` carries, and calling both
+		 * "refusal" made two unrelated shapes share a name across four files.
+		 */
+		readonly gates?: PlaceBidGateResults | null;
+		readonly figuresAt?: string | null;
 	};
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
@@ -130,11 +176,25 @@
 	 * serialised. `Money` is branded, so the integer dollars that came over
 	 * the wire are re-parsed at this boundary rather than cast (AD-8).
 	 */
+	const teamMoney: TeamMoneyState | null = $derived(
+		control.team === null
+			? null
+			: {
+					capSpace: parseMoney(control.team.capSpace),
+					rosterCount: control.team.rosterCount,
+					leading: control.team.leading.map((lead) => ({
+						fantraxPlayerId: lead.fantraxPlayerId,
+						amount: parseMoney(lead.amount)
+					}))
+				}
+	);
+
 	const gateState: BidState = $derived({
 		leadingBid:
 			control.leadingAmount === null || control.leadingTeamId === null
 				? null
-				: { teamId: control.leadingTeamId, amount: parseMoney(control.leadingAmount) }
+				: { teamId: control.leadingTeamId, amount: parseMoney(control.leadingAmount) },
+		team: teamMoney
 	});
 
 	/**
@@ -163,6 +223,7 @@
 	 */
 	const blocked = $derived(typed.blocked);
 
+
 	/**
 	 * The one sentence beneath the control, and never two.
 	 *
@@ -184,6 +245,89 @@
 	const consequence = $derived(
 		bidConsequenceSentence(reading.kind === 'usable' ? reading.amount : null)
 	);
+
+	/**
+	 * Every gate's outcome for the amount as it stands — the same `evaluate()`
+	 * `decide()` calls inside the lock, reached through the same command shape
+	 * `bidControlState` builds.
+	 *
+	 * This is what makes the displayed Maximum Bid a rendering of the
+	 * evaluator's own output rather than a second computation of it (AD-7:
+	 * "the displayed Maximum Bid is `evaluate()` output on the read path"). It
+	 * recomputes on every keystroke and on every reload, which is also how the
+	 * one-second recomputation requirement is met: nothing is memoised, so
+	 * there is no stale value to invalidate.
+	 */
+	const liveGates = $derived(
+		evaluate(
+			gateState,
+			{
+				kind: 'PlaceBid' as const,
+				fantraxPlayerId: auction.fantraxPlayerId,
+				teamId: control.viewerTeamId ?? '',
+				// Neither is read by any gate — both ride the command for the
+				// event's sake — so a render passes placeholders rather than
+				// resolving names for a command it will never append.
+				teamName: '',
+				managerId: '',
+				amount: reading.kind === 'usable' ? reading.amount : parseMoney(control.minimumLegal)
+			},
+			// The empty string, for the same reason `typed` passes it: no gate
+			// in `PLACE_BID_GATES` reads `now`, and the viewer's own clock must
+			// never be an input to a rule (AD-3 — server time, injected). Story
+			// 3.1's `expiry` gate is the first that will need one, and it must
+			// be sourced from the server here rather than invented.
+			''
+		)
+	);
+
+	/**
+	 * Maximum Bid, broken into its components — never a bare number (FR-12).
+	 *
+	 * Empty for a viewer bound to no Team, which is the surface's cue to omit
+	 * the whole panel rather than render a column of zeroes that would read as
+	 * a Team that is broke rather than one that does not exist.
+	 */
+	const standingBreakdown = $derived(capBreakdown(liveGates.cap));
+
+	/**
+	 * The gate set a REFUSED SUBMIT came back with, or `null`.
+	 *
+	 * Not `liveGates`: these are the figures the locked transaction actually
+	 * judged the Bid against, at its own clock, which is what FR-13 requires a
+	 * refusal to show. A Bid composed against one Cap Space and refused
+	 * against another must display the second, or the panel explains a
+	 * decision with numbers that did not make it.
+	 *
+	 * The amounts inside arrive as plain integers — `Money`'s brand is a
+	 * compile-time phantom and does not survive JSON — which is exactly what
+	 * every money function here already accepts at runtime.
+	 */
+	const refusedGates = $derived(bidForm?.gates ?? null);
+
+	/**
+	 * The refusal panel's part two, from the server.
+	 *
+	 * Read off the form rather than recomputed, so a refusal decided before a
+	 * transaction opened — a mis-typed amount, a missing confirmation, an
+	 * unbound Manager — gets the same panel as one that ran the gates. Those
+	 * have a sentence without having arithmetic, and the matrix requires the
+	 * panel on ANY refused submit.
+	 *
+	 * `null` when nothing was refused, which is the cue that there is no panel
+	 * to draw. Checked for emptiness as well: `bidRefusalDelta` returns `''`
+	 * for a gate set in which nothing actually failed, and an empty paragraph
+	 * under a headline saying a Bid was not placed would state nothing.
+	 */
+	const refusalDelta = $derived(
+		bidForm?.delta === undefined || bidForm.delta === '' ? null : bidForm.delta
+	);
+
+	/** Every gate's chip row, refused and passed alike — built from the core's list. */
+	const refusalGateRows = $derived(refusedGates === null ? [] : bidGateReport(refusedGates));
+
+	/** The arithmetic the refusal was decided from. */
+	const refusalBreakdown = $derived(refusedGates === null ? [] : capBreakdown(refusedGates.cap));
 
 	// The viewer's own clock, read once at render time — never fed back into
 	// the pure core, which takes `now` as an argument and reads no clock of
@@ -243,6 +387,19 @@
 
 	$effect(() => {
 		closesAtAbsolute = auction.closesAt === null ? null : formatAbsolute(auction.closesAt);
+	});
+
+	// The arithmetic's timestamp, in the viewer's own timezone and therefore
+	// client-only for the same reason the two stamps above are. The caption is
+	// omitted until it resolves rather than rendered in the server's timezone:
+	// "your figures at" a time the reader does not live in is worse than no
+	// caption, because the figures beside it are the ones they are being asked
+	// to check.
+	let figuresAtAbsolute = $state<string | null>(null);
+
+	$effect(() => {
+		const stamp = bidForm?.figuresAt ?? control.figuresAt;
+		figuresAtAbsolute = formatAbsolute(stamp);
 	});
 </script>
 
@@ -342,8 +499,41 @@
 		</section>
 	{/if}
 
+	<!-- Maximum Bid, wherever bidding occurs (FR-12), and never as a bare
+	     number: the four components are broken out and the column sums
+	     exactly as displayed, which the $500,000 grid makes possible at one
+	     decimal. Every figure is `evaluate()`'s own output, recomputed on
+	     each keystroke and each reload — nothing is memoised, so there is no
+	     stale figure to invalidate. Omitted entirely for a viewer bound to no
+	     Team: there is no Maximum Bid, and a column of zeroes would read as a
+	     Team that is broke rather than one that does not exist. -->
+	{#if standingBreakdown.length > 0}
+		<section class="panel">
+			<p class="section-label">Maximum Bid</p>
+			<CapBreakdown lines={standingBreakdown} id="auction-maximum-bid" />
+		</section>
+	{/if}
+
 	<section class="manager-block">
 		<p class="section-label">Place a Bid</p>
+
+		<!-- The refusal panel, above the control it is about — the six-part
+		     anatomy `EXPERIENCE.md` specifies, ending with the disabled
+		     control and its reason, which are the markup that follows. It
+		     appears only for a refusal that HAS arithmetic behind it; the
+		     three raised before any transaction opens carry none and are said
+		     in the notice below instead. -->
+		{#if refusalDelta !== null}
+			<RefusalPanel
+				delta={refusalDelta}
+				gates={refusalGateRows}
+				breakdown={refusalBreakdown}
+				caption={refusalBreakdown.length === 0 || figuresAtAbsolute === null
+					? null
+					: figuresAtCaption(figuresAtAbsolute)}
+			/>
+		{/if}
+
 		<p class="prose">{consequence}</p>
 
 		<form method="POST" action="?/bid">
@@ -415,7 +605,12 @@
 		     control that was pressed. `role="status"` announces it politely
 		     rather than leaving a screen reader user to go looking. -->
 		<div role="status">
-			{#if notice}
+			<!-- Suppressed whenever the panel above carries this refusal — which
+			     is every refusal now, not only the ones with arithmetic. The
+			     panel's headline, delta and reassurance ARE this sentence,
+			     broken into its parts, and printing both would say the same
+			     thing twice on the one surface that must read cleanly. -->
+			{#if notice && refusalDelta === null}
 				<p class="prose" id="auction-bid-notice">{notice}</p>
 			{/if}
 			{#if appended}
@@ -558,4 +753,5 @@
 		color: var(--color-text-tertiary);
 		font-size: var(--size-12-5);
 	}
+
 </style>

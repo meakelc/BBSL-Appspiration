@@ -109,6 +109,8 @@ function fakeGateway(options: {
 	managers?: ManagerRow[];
 	/** Team ids that exist in `teams`. Defaults to "every Team the events name". */
 	teams?: string[];
+	/** The viewer Team's `team_rosters` rows. Defaults to nine $1.0M contracts. */
+	roster?: QueryResultRow[];
 }) {
 	const order: string[] = [];
 	let committed = false;
@@ -118,6 +120,13 @@ function fakeGateway(options: {
 	const events = options.events ?? [];
 	const freeAgents = options.freeAgents ?? [];
 	const managers = options.managers ?? [];
+	// Cap Space $156.0M and Roster Count 9 — deliberately generous, so the
+	// money gate is never the reason an assertion in this file changes
+	// meaning. `tests/examples/example-03-*` and its neighbours are where the
+	// arithmetic itself is the subject.
+	const roster =
+		options.roster ??
+		Array.from({ length: 9 }, () => ({ cap_hit: '1000000', roster_slot_kind: 'active_bench' }));
 	// The nominating Team exists unless a test says otherwise — the join's
 	// driving table, so "no such Team" has to be expressible too.
 	const teams =
@@ -173,6 +182,13 @@ function fakeGateway(options: {
 						.filter((row) => wanted.includes(row.id))
 						.map((row) => ({ id: row.id, team_id: row.teamId, display_name: row.displayName }))
 				};
+			}
+			// The viewer Team's Cap figures (Story 2.6). A label, not a
+			// loosened fake: the read is skipped entirely for a viewer bound
+			// to no Team, and `order` is what proves it.
+			if (/^select cap_hit, roster_slot_kind\s+from team_rosters/i.test(sql)) {
+				order.push('read-roster');
+				return { rows: roster };
 			}
 			if (/^commit/i.test(sql)) {
 				order.push('commit');
@@ -248,7 +264,13 @@ describe('loadAuctionPage — an open Auction', () => {
 				// surface can ask the same question about a TYPED amount.
 				leadingAmount: null,
 				leadingTeamId: null,
-				viewerTeamId: VIEWER_TEAM
+				viewerTeamId: VIEWER_TEAM,
+				// The viewer Team's money FACTS, and deliberately not its
+				// Maximum Bid: AD-7 forbids a derived money figure being cached
+				// client-side for validation, so the surface gets the inputs and
+				// re-derives through the same `evaluate()` the lock calls.
+				team: { capSpace: 156_000_000, rosterCount: 9, leading: [] },
+				figuresAt: expect.any(String)
 			}
 		});
 	});
@@ -361,7 +383,18 @@ describe('loadAuctionPage — an open Auction', () => {
 		// also states the order actually taken.
 		// No `read-bidders`: this Auction has no Bids, so the statement that
 		// resolves bidding Managers is never issued at all.
-		expect(harness.order).toEqual(['begin', 'read-log', 'read-reference', 'read-manager', 'rollback']);
+		expect(harness.order).toEqual([
+			'begin',
+			'read-log',
+			// Story 2.6's read of the VIEWER's Cap figures. Still no
+			// open_nominations and no `free_agent_players.minor_league_eligible`
+			// — eligibility is folded from the events already read, so one
+			// transaction cannot hold two answers about it.
+			'read-roster',
+			'read-reference',
+			'read-manager',
+			'rollback'
+		]);
 	});
 });
 
@@ -504,6 +537,7 @@ describe('loadAuctionPage — the Auction with Bids on it (AC6)', () => {
 		expect(harness.order).toEqual([
 			'begin',
 			'read-log',
+			'read-roster',
 			'read-reference',
 			'read-manager',
 			'read-bidders',
@@ -626,7 +660,23 @@ describe('loadAuctionPage — the bid control is evaluate() on the read path (AC
 						currentHigh: 8_500_000 as never,
 						minimumLegal: 9_000_000 as never
 					},
-					granularity: { passed: true, offered: 9_000_000 as never, grid: 500_000 as never }
+					granularity: { passed: true, offered: 9_000_000 as never, grid: 500_000 as never },
+					// The money gate passes and says so with its own figures.
+					// The self-bid refusal is the only ground, which is exactly
+					// what "every gate always reports" is for: a reader can see
+					// the cap was checked and is not the obstacle.
+					cap: {
+						passed: true,
+						offered: 9_000_000 as never,
+						capSpace: 156_000_000 as never,
+						committedBids: 0 as never,
+						minorsExposure: 0 as never,
+						availableCapSpace: 156_000_000 as never,
+						rosterCount: 9,
+						projectedAdditions: 1,
+						rosterReserve: 2_000_000 as never,
+						maximumBid: 154_000_000 as never
+					}
 				}
 			})
 		);
@@ -706,5 +756,101 @@ describe('loadAuctionPage — the bid control is evaluate() on the read path (AC
 		]) {
 			expect(rendered, `${forbidden} leaked into the Auction page read`).not.toContain(forbidden);
 		}
+	});
+});
+
+// --- Story 2.6: the money state on the read path --------------------------
+
+describe('loadAuctionPage — the viewer Team money state (Story 2.6)', () => {
+	it('skips the roster read entirely for a viewer bound to no Team', async () => {
+		const harness = fakeGateway({
+			events: [nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1')],
+			freeAgents: [
+				{ fantraxPlayerId: 'p-1', playerName: 'Jalen Green', positions: 'SG', nbaTeam: 'HOU' }
+			],
+			managers: [{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' }]
+		});
+
+		const auction = await loadAuctionPage(harness.gateway, 'p-1', null);
+
+		// No Team, no roster to read and no arithmetic to show. A query keyed
+		// on `null` would be a statement asking nothing.
+		expect(harness.order).not.toContain('read-roster');
+		expect(auction?.bidControl.team).toBeNull();
+	});
+
+	it('ships the FACTS, never the derived figure (AD-7)', async () => {
+		const harness = fakeGateway({
+			events: [nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1')],
+			freeAgents: [
+				{ fantraxPlayerId: 'p-1', playerName: 'Jalen Green', positions: 'SG', nbaTeam: 'HOU' }
+			],
+			managers: [{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' }]
+		});
+
+		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const control = auction?.bidControl as Record<string, unknown>;
+
+		expect(control['team']).toEqual({ capSpace: 156_000_000, rosterCount: 9, leading: [] });
+		// A derived money figure cached client-side for validation is exactly
+		// what AD-7 forbids, and the surface is a client.
+		expect(control['maximumBid']).toBeUndefined();
+		expect(control['committedBids']).toBeUndefined();
+		expect(control['rosterReserve']).toBeUndefined();
+	});
+
+	it('stamps when the figures were computed, for the arithmetic caption', async () => {
+		const harness = fakeGateway({
+			events: [nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1')],
+			freeAgents: [
+				{ fantraxPlayerId: 'p-1', playerName: 'Jalen Green', positions: 'SG', nbaTeam: 'HOU' }
+			],
+			managers: [{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' }]
+		});
+
+		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+
+		expect(Number.isNaN(Date.parse(String(auction?.bidControl.figuresAt)))).toBe(false);
+	});
+
+	it('disables the control on the board when no legal Bid is affordable', async () => {
+		// EXPERIENCE.md: the state is reachable straight from import, so it
+		// must be visible on arrival rather than discovered at submission. A
+		// Team whose Maximum Bid is below the minimum legal Bid has no amount
+		// it could type, so the FIELD goes too, not only the submit.
+		const harness = fakeGateway({
+			events: [nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1')],
+			freeAgents: [
+				{ fantraxPlayerId: 'p-1', playerName: 'Jalen Green', positions: 'SG', nbaTeam: 'HOU' }
+			],
+			managers: [{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' }],
+			// Eleven $15.0M contracts leave $0 of Cap Space against a $165.0M
+			// cap, and the twelfth hole holds $1.0M of Roster Reserve back.
+			roster: Array.from({ length: 11 }, () => ({
+				cap_hit: '15000000',
+				roster_slot_kind: 'active_bench'
+			}))
+		});
+
+		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+
+		expect(auction?.bidControl.available).toBe(false);
+		// Worded by the core, and it names the figure rather than saying "no".
+		expect(auction?.bidControl.detail).toContain('Maximum Bid');
+		expect(auction?.bidControl.detail).toContain('exceeds');
+	});
+
+	it('still offers the control when the money is there', async () => {
+		const harness = fakeGateway({
+			events: [nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1')],
+			freeAgents: [
+				{ fantraxPlayerId: 'p-1', playerName: 'Jalen Green', positions: 'SG', nbaTeam: 'HOU' }
+			],
+			managers: [{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' }]
+		});
+
+		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+
+		expect(auction?.bidControl.available).toBe(true);
 	});
 });

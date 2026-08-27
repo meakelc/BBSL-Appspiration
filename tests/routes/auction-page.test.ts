@@ -426,8 +426,10 @@ describe('the Auction page — what it never renders', () => {
 		expect(PAGE_CODE).not.toMatch(/suggested/i);
 		expect(PAGE_CODE).not.toMatch(/recommended/i);
 		expect(PAGE_CODE).not.toMatch(/hurry|act now|running out|urgent/i);
-		// The single attention colour in the product marks Outbid and refusal
-		// and is Story 2.6's; nothing here reaches for it.
+		// The single attention colour marks Outbid and refusal and nothing
+		// else. Story 2.6 brought the refusal panel, and it lives in its own
+		// component — so this page still never reaches for the token, and the
+		// one place that does is the one surface entitled to.
 		expect(PAGE).not.toContain('--color-attention');
 	});
 
@@ -442,9 +444,28 @@ describe('the Auction page — what it never renders', () => {
 
 	it('manual check (Verification section): the forbidden vocabulary is in neither route file', () => {
 		const combined = `${PAGE}\n${SERVER}`;
+		// Story 2.5 forbade the money vocabulary here because the gate behind
+		// it did not exist and a rendered figure would have been invented.
+		// Story 2.6 built the gate, so `Maximum Bid` is now rendered — from
+		// `capBreakdown()`, whose labels and figures are the core's.
+		//
+		// What remains forbidden is what remains unbuilt: the CAPACITY gate's
+		// wording (2.7) and the exposure branch (2.8). A page that said "no
+		// roster slot" or "no cap limit" today would state a rule nothing in
+		// the codebase enforces, which is the precise failure the refusal
+		// design exists to prevent.
+		// `Overflow Count`, not bare "overflow": the CSS property is not the
+		// domain term, and a check that cannot tell them apart would have to
+		// be either loosened or worked around the first time a panel needed to
+		// clip. The glossary terms are capitalised multi-word names, so
+		// matching them as such is the precise test rather than the lucky one.
 		expect(combined).not.toMatch(
-			/maximumBid|committedBids|minorsExposure|rosterReserve|Roster Count|no money|roster slot/i
+			/Roster Capacity|no roster slot|no cap limit|unbounded|Overflow Count|Eligible Leading Bid|Minor League Slot/i
 		);
+		// And no figure is computed here: the surface calls the core and
+		// prints what it returns.
+		expect(combined).not.toMatch(/const\s+maximumBid\s*=/);
+		expect(combined).not.toMatch(/SALARY_CAP|ACTIVE_BENCH_SLOTS/);
 	});
 });
 
@@ -779,5 +800,263 @@ describe('the Auction page — the absolute stamps resolve client-side', () => {
 		expect(PAGE).toContain('id="auction-closes-absolute"');
 		expect(PAGE).toMatch(/\{#if nominatedAbsolute !== null\}/);
 		expect(PAGE).toMatch(/\{#if closesAtAbsolute !== null\}/);
+	});
+});
+
+// --- Story 2.6: the refusal panel and the Maximum Bid breakdown ------------
+
+const PANEL = readFileSync(at('src', 'lib', 'components', 'RefusalPanel.svelte'), 'utf8');
+// Prose ABOUT a forbidden thing is not that thing - the same discipline
+// `PAGE_CODE` applies above. This component's header explains at length why it
+// uses `role="alert"` rather than `role="status"`, why there is no `<details>`
+// and why no red appears, and an absence check run over the raw text would fail
+// on every sentence that promises the absence.
+const PANEL_CODE = stripComments(PANEL);
+
+const BREAKDOWN = readFileSync(at('src', 'lib', 'components', 'CapBreakdown.svelte'), 'utf8');
+
+describe('the refusal panel — the only surface with a dedicated anatomy', () => {
+	it('is the one place in the product with a top accent bar, in attention', () => {
+		expect(PANEL).toContain('border-top: var(--accent-bar-width) solid var(--color-attention)');
+		// Nothing else may borrow the device. The page that renders the panel
+		// still never reaches for the token itself.
+		expect(PAGE).not.toContain('--color-attention');
+	});
+
+	it('presents the six parts in EXPERIENCE.md order', () => {
+		// All six, in order. An earlier version of this test checked four and
+		// would have stayed green while the reassurance drifted above the
+		// delta — the two shared a CSS class at the time, which is exactly the
+		// kind of slip a partial order check cannot see.
+		const order = [
+			'refusal-headline',
+			'refusal-delta',
+			'refusal-reassurance',
+			'class="gates"',
+			'class="arithmetic"',
+			'class="caption"'
+		];
+		let cursor = -1;
+		for (const marker of order) {
+			const found = PANEL.indexOf(marker);
+			expect(found, marker).toBeGreaterThan(cursor);
+			cursor = found;
+		}
+		// The control and its reason are the markup that FOLLOWS the panel on
+		// the page — part six, and the reason the panel does not render one.
+		expect(PANEL_CODE).not.toContain('<form');
+		expect(PANEL_CODE).not.toContain('<button');
+		expect(PAGE.indexOf('<RefusalPanel')).toBeLessThan(PAGE.indexOf('<form method="POST"'));
+		expect(PAGE.indexOf('<form method="POST"')).toBeLessThan(
+			PAGE.indexOf('id="auction-bid-availability">{reason}')
+		);
+	});
+
+	it('gives the delta and the reassurance separate classes — they are separate parts', () => {
+		// One shared class would let a styling change aimed at "the delta"
+		// silently restyle the reassurance, and would make the order check
+		// above unable to tell the two apart.
+		expect(PANEL_CODE).toContain('class="refusal-delta"');
+		expect(PANEL_CODE).toContain('class="refusal-reassurance"');
+	});
+
+	it('takes focus when it appears, so a full page load announces it', () => {
+		// `role="alert"` alone is not enough: this form posts without
+		// `use:enhance`, so a refusal arrives as a full page load and the
+		// panel is in the document at parse time — and a live region that
+		// already exists when a screen reader registers it is not reliably
+		// announced, because announcement fires on MUTATION.
+		expect(PANEL_CODE).toContain('tabindex="-1"');
+		expect(PANEL_CODE).toContain('bind:this={panel}');
+		expect(PANEL_CODE).toContain('panel?.focus()');
+	});
+
+	it('renders for a refusal that has no arithmetic at all', () => {
+		// The matrix says "any refused submit" — a mis-typed amount deserves
+		// the same surface as an overrun cap. The gate list and the breakdown
+		// are what fall away, not the panel.
+		expect(PANEL_CODE).toContain('{#if gates.length > 0}');
+		expect(PANEL_CODE).toContain('{#if breakdown.length > 0}');
+		expect(PAGE_CODE).toContain('{#if refusalDelta !== null}');
+	});
+
+	it('takes the chip text from the core, and does not word the outcome itself', () => {
+		expect(PANEL_CODE).toContain('{row.chip}');
+		expect(PANEL_CODE).not.toMatch(/'Passed'|'Refused'|Passed\s*:\s*|·/);
+	});
+
+	it('sets the headline in the display face at 19px, per the anatomy table', () => {
+		expect(PANEL).toMatch(/\.refusal-headline\s*\{[^}]*--font-display/);
+		expect(PANEL).toMatch(/\.refusal-headline\s*\{[^}]*--size-19/);
+	});
+
+	it('distinguishes the gates by FILL, so the difference survives greyscale', () => {
+		// The passing chip is outlined and the refusing chip filled. A colour
+		// difference alone would fail exactly the colourblind manager the
+		// design exists to protect.
+		expect(PANEL).toMatch(/\.chip\s*\{[^}]*border:\s*var\(--border-width\) solid/);
+		expect(PANEL).toMatch(/\.chip\.refused\s*\{[^}]*background:\s*var\(--color-attention\)/);
+		expect(PANEL).toMatch(/\.chip\.refused\s*\{[^}]*color:\s*var\(--color-attention-ink\)/);
+	});
+
+	it('announces itself to assistive technology rather than merely rendering', () => {
+		// `alert`, not `status`: a refusal is assertive, and it must be
+		// ANNOUNCED as it appears.
+		expect(PANEL).toContain('role="alert"');
+		expect(PANEL_CODE).not.toContain('role="status"');
+	});
+
+	it('puts the arithmetic behind no disclosure', () => {
+		expect(PANEL_CODE).not.toContain('<details');
+		expect(PANEL_CODE).not.toContain('<summary');
+		expect(PANEL_CODE).not.toMatch(/show (the )?(working|maths|math|arithmetic)/i);
+	});
+
+	it('uses no red, and no raw colour of any kind', () => {
+		expect(PANEL_CODE).not.toMatch(/#[0-9a-f]{3,8}\b/i);
+		expect(PANEL_CODE).not.toMatch(/\b(red|crimson|#ff0000|rgb\()/i);
+	});
+
+	it('words nothing of its own — every sentence comes from the core', () => {
+		expect(PANEL).toContain("from '$lib/core/rules/bidding.ts'");
+		expect(PANEL).toContain('REFUSAL_HEADLINE');
+		expect(PANEL).toContain('REFUSAL_REASSURANCE');
+		// No money is formatted here, and no figure is computed here.
+		expect(PANEL_CODE).not.toMatch(/formatMoney|parseMoney|\$\d/);
+	});
+});
+
+describe('the Maximum Bid breakdown on the page', () => {
+	it('renders the components rather than a bare number', () => {
+		expect(PAGE).toContain('capBreakdown(');
+		expect(PAGE).toContain('id="auction-maximum-bid"');
+		// The labels and figures are the core's; the column prints rows.
+		expect(BREAKDOWN).toContain('{line.label}');
+		expect(BREAKDOWN).toContain('{line.figure}');
+	});
+
+	it('is ONE column definition, shared by the page and the refusal panel', () => {
+		// A Manager who reads the standing figures and then reads a refusal
+		// must see the same ledger, or the refusal looks like a different
+		// claim about a different thing. Two copies could drift into exactly
+		// that.
+		expect(PAGE).toContain("import CapBreakdown from '$lib/components/CapBreakdown.svelte'");
+		expect(PANEL).toContain("import CapBreakdown from './CapBreakdown.svelte'");
+		// Neither surface keeps a private copy of the column's markup or CSS.
+		expect(PAGE_CODE).not.toContain('class="breakdown"');
+		expect(PANEL_CODE).not.toContain('class="breakdown"');
+	});
+
+	it('lets a detail row wrap rather than pushing the column into a scroll', () => {
+		// A detail row carries a sentence, not a figure, and cannot sit on one
+		// line beside its label at 375px. Hiding the arithmetic behind a
+		// horizontal scroll on the most important surface in the product is
+		// the failure this prevents.
+		expect(BREAKDOWN).toMatch(/\.line\.detail\s*\{[^}]*flex-wrap:\s*wrap/);
+		expect(BREAKDOWN).toMatch(/\.line\.detail dd\s*\{[^}]*white-space:\s*normal/);
+	});
+
+	it('formats no money and computes nothing of its own', () => {
+		expect(stripComments(BREAKDOWN)).not.toMatch(/formatMoney|parseMoney|Math\.|\$\d/);
+	});
+
+	it('re-derives through evaluate() on every keystroke, and caches no figure', () => {
+		// AD-7: derived money is never cached client-side for validation. The
+		// page holds the INPUTS and calls the core; it never receives a
+		// `maximumBid` to compare against.
+		expect(PAGE).toContain('evaluate(');
+		expect(PAGE).toMatch(/capSpace:\s*parseMoney\(/);
+		expect(PAGE_CODE).not.toMatch(/maximumBid:\s*\w/);
+	});
+
+	it('omits the whole panel for a viewer bound to no Team', () => {
+		expect(PAGE).toContain('{#if standingBreakdown.length > 0}');
+	});
+});
+
+describe('the bid action — a refusal carries the figures it was judged against', () => {
+	/** A gate set shaped as the locked transaction would return it. */
+	const REFUSED_GATES = {
+		opening: {
+			passed: true,
+			opening: 'not_an_opening',
+			offered: 10_500_000,
+			minimumOpening: 1_000_000
+		},
+		selfBid: { passed: true, actingTeamId: 't-2', leadingTeamId: 't-9' },
+		increment: {
+			passed: true,
+			offered: 10_500_000,
+			currentHigh: 8_500_000,
+			minimumLegal: 9_000_000
+		},
+		granularity: { passed: true, offered: 10_500_000, grid: 500_000 },
+		cap: {
+			passed: false,
+			offered: 10_500_000,
+			capSpace: 12_000_000,
+			committedBids: 0,
+			minorsExposure: 0,
+			availableCapSpace: 12_000_000,
+			rosterCount: 9,
+			projectedAdditions: 1,
+			rosterReserve: 2_000_000,
+			maximumBid: 10_000_000
+		}
+	};
+
+	const TRANSACTION_CLOCK = '2026-08-27T02:14:00.000Z';
+
+	it('passes the transaction gate set and its clock through untouched', async () => {
+		stub.outcome = {
+			kind: 'rejected',
+			reason: {
+				refusal: { kind: 'gates', gates: REFUSED_GATES },
+				detail: 'No Bid was placed. …',
+				gates: REFUSED_GATES,
+				at: TRANSACTION_CLOCK
+			}
+		};
+
+		const result = await bidAction(bidEvent({ amount: '10500000', confirm: 'yes' }));
+		const data = result['data'] as { gates: unknown; figuresAt: unknown; delta: string };
+
+		// FR-13: refused with the CURRENT figures shown — the ones the locked
+		// transaction judged the Bid against, not the ones the page rendered.
+		expect(data.gates).toBe(REFUSED_GATES);
+		expect(data.figuresAt).toBe(TRANSACTION_CLOCK);
+		expect(result['status']).toBe(409);
+	});
+
+	it('sends no arithmetic for a refusal that has none', async () => {
+		stub.outcome = {
+			kind: 'rejected',
+			reason: {
+				refusal: { kind: 'no_open_auction' },
+				detail: 'No Bid was placed: there is no open Auction for this Player.',
+				gates: null,
+				at: null
+			}
+		};
+
+		const result = await bidAction(bidEvent({ amount: '10500000', confirm: 'yes' }));
+		const data = result['data'] as { gates: unknown; figuresAt: unknown; delta: string };
+
+		// A panel handed empty figures would print a breakdown of nothing.
+		expect(data.gates).toBeNull();
+		expect(data.figuresAt).toBeNull();
+		// But it still gets a sentence, so the panel renders. The matrix
+		// requires it on ANY refused submit.
+		expect(data.delta.length).toBeGreaterThan(20);
+	});
+
+	it('words the refusal in the core, never in the route', async () => {
+		// The route reads `detail` off the rejection and never composes one.
+		expect(SERVER_CODE).not.toMatch(/Maximum Bid|exceeds your/);
+		expect(SERVER_CODE).toContain('rejection?.gates ?? null');
+		expect(SERVER_CODE).toContain('rejection?.at ?? null');
+		// Both strings come from the core, through one helper.
+		expect(SERVER_CODE).toContain('bidRefusalDetail(refusal)');
+		expect(SERVER_CODE).toContain('bidRefusalDelta(refusal)');
 	});
 });

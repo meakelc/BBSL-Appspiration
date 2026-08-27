@@ -30,14 +30,34 @@ export type CapSpaceResult = {
 };
 
 /**
+ * The two fields Cap Space is computed from, and no others.
+ *
+ * `ParsedRosterRow` satisfies this structurally, so the import path passes
+ * its own rows unchanged. Story 2.6's money gate is the second caller and
+ * has neither a player name nor a contract length in hand — it reads two
+ * columns off `team_rosters` — and widening the parameter is what let it
+ * reuse this function rather than write a second definition of Cap Space
+ * that could disagree about the Minor League rule below.
+ */
+export type CapHitRow = {
+	readonly capHit: Money;
+	readonly rosterSlotKind: RosterSlotKind;
+};
+
+/**
  * Cap Space = SALARY_CAP − Σ(cap hits), with a Minor League row's cap hit
  * always treated as $0 regardless of what the file states for it — a Minor
  * League contract does not count against the Cap by rule, and this
  * computation enforces that itself rather than trusting the import to have
  * already zeroed it (the imported figure is preserved exactly as supplied in
  * `import_staged_rosters.cap_hit`; only this computation zeroes it).
+ *
+ * **Injury Reserve is NOT zeroed**, and that asymmetry is the rule rather
+ * than an omission: an IR contract counts against the Cap in full, and only
+ * against Roster Count does it drop out (PRD §3 "Roster Count", §10 ex 23).
+ * Story 2.6 counts the two separately for exactly that reason.
  */
-export function computeCapSpace(rows: readonly ParsedRosterRow[]): CapSpaceResult {
+export function computeCapSpace(rows: readonly CapHitRow[]): CapSpaceResult {
 	let total: Money = parseMoney(0);
 	for (const row of rows) {
 		const hit: Money = row.rosterSlotKind === 'minor_league' ? parseMoney(0) : row.capHit;

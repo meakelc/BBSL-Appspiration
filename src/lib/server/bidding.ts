@@ -54,18 +54,24 @@ import {
 	auctionsReducer
 } from '../core/projection/auctions.ts';
 import {
+	INITIAL_ELIGIBILITY,
+	eligibilityReducer,
+	isEligible
+} from '../core/projection/eligibility.ts';
+import {
 	INITIAL_NOMINATIONS,
 	nominationForPlayer,
 	nominationsReducer
 } from '../core/projection/nominations.ts';
-import type { OpenNomination } from '../core/projection/nominations.ts';
 import type { Money } from '../core/money.ts';
-import { bidRefusalDetail, bidStateFor, decide } from '../core/rules/bidding.ts';
+import type { OpenNomination } from '../core/projection/nominations.ts';
+import { bidRefusalDetail, bidStateFor, decide, teamMoneyStateFor } from '../core/rules/bidding.ts';
 import type { BidRefusal, BidState } from '../core/rules/bidding.ts';
-import type { EventEnvelope, PlaceBid } from '../core/types.ts';
+import type { EventEnvelope, PlaceBid, PlaceBidGateResults } from '../core/types.ts';
 import { runTransactionalWrite } from '../shell/write.ts';
 import type { ConnectionGateway, TransactionalClient, WriteOutcome } from '../shell/write.ts';
 import { loadEventsViaClient } from './event-log.ts';
+import { loadTeamRoster } from './team-roster.ts';
 
 /** Who acted, resolved server-side from application tables (AD-4). */
 export type BidActor = {
@@ -91,34 +97,78 @@ export type LoadedBidState = {
 	readonly nomination: OpenNomination | null;
 };
 
-/** What a rejection carries back to the route: the refusal and its one sentence. */
+/**
+ * What a rejection carries back to the route: the refusal, its one sentence,
+ * and — for a gate refusal — the figures it was actually judged against.
+ *
+ * `gates` and `at` are Story 2.6's, and they are what make FR-13's "a Bid
+ * valid when composed but invalid by the time it lands is refused **with the
+ * current figures shown**" true rather than merely intended. The panel must
+ * print the arithmetic the transaction used, under the lock, at the
+ * transaction's own clock — not the arithmetic the page rendered some
+ * seconds earlier against a Cap Space that has since moved. Reconstructing
+ * them on the route would be a second evaluation of a state that no longer
+ * exists.
+ *
+ * Both are `null` for the refusals decided outside the gate set —
+ * `no_open_auction` here, and the route's own `unusable_amount`,
+ * `unconfirmed` and `unbound_actor`. None of those has arithmetic, and a
+ * panel handed empty figures would print a breakdown of nothing.
+ */
 export type BidRejection = {
 	readonly refusal: BidRefusal;
 	readonly detail: string;
+	readonly gates: PlaceBidGateResults | null;
+	/** The transaction-start clock, ISO-8601 — the instant these figures held. */
+	readonly at: string | null;
 };
 
 /**
  * Fold the open nomination and the Auction's bid state from one read of the
- * log, on the given client.
+ * log, on the given client, plus the bidding Team's Cap figures.
  *
- * No table read at all, unlike `loadNominationState`: every fact a bid gate
- * decides from is in `auction_events`. The Player's name, their pool row and
- * their contract holder are nomination questions, already answered when the
- * Player reached the board.
+ * **Story 2.5 said "no table read at all"; the money gate ends that.** Every
+ * fact the first four gates decide from is in `auction_events`, and still
+ * is. Cap Space and Roster Count are not: `team_rosters` is mutable
+ * reference data that nothing rebuilds from the log, so AD-7's "computed
+ * from committed state at validation time" requires reading it here — inside
+ * the transaction, after `pg_advisory_xact_lock`, so the figures cannot
+ * move between the read and the decision.
+ *
+ * Three folds now share the ONE `loadEventsViaClient` read, and eligibility
+ * is one of them rather than a `select minor_league_eligible` on
+ * `free_agent_players`. That is deliberate: the flag is the fold of
+ * `MinorLeagueEligibilitySet` events, and asking the table instead would
+ * make two answers possible inside one transaction — the fold's and the
+ * projection column's — at the exact moment a Commissioner is changing it.
  */
 export async function loadBidState(
 	client: TransactionalClient,
-	fantraxPlayerId: string
+	fantraxPlayerId: string,
+	teamId: string
 ): Promise<LoadedBidState> {
 	const events = await loadEventsViaClient(client);
 	const nominations = fold(INITIAL_NOMINATIONS, events, nominationsReducer);
 	const auctions = fold(INITIAL_AUCTIONS, events, auctionsReducer);
+	const eligibility = fold(INITIAL_ELIGIBILITY, events, eligibilityReducer);
+
+	const roster = await loadTeamRoster(client, teamId);
 
 	return {
-		// `bidStateFor` is the ONE narrowing from the fold to the gates, shared
-		// with the read path, so the transaction and the render cannot narrow
-		// the same Auction two different ways.
-		bid: bidStateFor(auctionForPlayer(auctions, fantraxPlayerId)),
+		// `bidStateFor` and `teamMoneyStateFor` are the ONE narrowing from the
+		// folds to the gates, shared with the read path, so the transaction and
+		// the render cannot narrow the same state two different ways.
+		bid: bidStateFor(
+			auctionForPlayer(auctions, fantraxPlayerId),
+			teamMoneyStateFor({
+				teamId,
+				fantraxPlayerId,
+				capSpace: roster.capSpace,
+				rosterCount: roster.rosterCount,
+				auctions,
+				isMinorLeagueEligible: (playerId) => isEligible(eligibility, playerId)
+			})
+		),
 		nomination: nominationForPlayer(nominations, fantraxPlayerId)
 	};
 }
@@ -155,7 +205,7 @@ export async function placeBid(
 ): Promise<WriteOutcome> {
 	return await runTransactionalWrite<LoadedBidState>({
 		gateway,
-		load: (client) => loadBidState(client, fantraxPlayerId),
+		load: (client) => loadBidState(client, fantraxPlayerId, actor.teamId),
 		// No `projections` array, deliberately: nothing derived is stored, and
 		// there is no uniqueness constraint for a Bid to collide with.
 		decide: ({ state, now }) => {
@@ -165,7 +215,15 @@ export async function placeBid(
 			// submit lands here.
 			if (state.nomination === null) {
 				const refusal: BidRefusal = { kind: 'no_open_auction' };
-				const rejection: BidRejection = { refusal, detail: bidRefusalDetail(refusal) };
+				// No gates and no stamp: this refusal has no arithmetic behind
+				// it, and a panel handed empty figures would print a breakdown
+				// of nothing.
+				const rejection: BidRejection = {
+					refusal,
+					detail: bidRefusalDetail(refusal),
+					gates: null,
+					at: null
+				};
 				return { kind: 'rejected', reason: rejection };
 			}
 
@@ -182,7 +240,15 @@ export async function placeBid(
 
 			if (decided.kind === 'rejected') {
 				const refusal: BidRefusal = { kind: 'gates', gates: decided.gates };
-				const rejection: BidRejection = { refusal, detail: bidRefusalDetail(refusal) };
+				// The gate set and the clock it was decided at, carried back so
+				// the refusal panel prints the arithmetic this transaction
+				// actually used rather than what the page rendered (FR-13).
+				const rejection: BidRejection = {
+					refusal,
+					detail: bidRefusalDetail(refusal),
+					gates: decided.gates,
+					at: now.toISOString()
+				};
 				return { kind: 'rejected', reason: rejection };
 			}
 

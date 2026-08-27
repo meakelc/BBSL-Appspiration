@@ -18,7 +18,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { AUCTION_CLOCK } from '../../src/lib/core/constants.ts';
+import { AUCTION_CLOCK, SALARY_CAP } from '../../src/lib/core/constants.ts';
 import {
 	BID_PLACED_EVENT,
 	INITIAL_AUCTIONS,
@@ -35,8 +35,28 @@ import {
 import { AUCTION_OPENED_EVENT } from '../../src/lib/core/projection/phase.ts';
 import { parseMoney } from '../../src/lib/core/money.ts';
 import { allGatesPassed, bidStateFor, decide, evaluate } from '../../src/lib/core/rules/bidding.ts';
-import type { BidPlacedPayload, BidState } from '../../src/lib/core/rules/bidding.ts';
+import type {
+	BidPlacedPayload,
+	BidState,
+	TeamMoneyState
+} from '../../src/lib/core/rules/bidding.ts';
 import type { AppendedEvent, PlaceBid } from '../../src/lib/core/types.ts';
+
+/**
+ * A Team the money gate cannot be the reason for anything here.
+ *
+ * Story 2.6 added `cap` to `PLACE_BID_GATES`, and every state literal in this
+ * file must now say something about money whether or not the example is about
+ * money. This one says "not the constraint": the full Salary Cap, nothing
+ * committed, and a roster with room — so a refusal in this file is always the
+ * gate the example is actually about. §10 examples 3, 4, 5 and 23 are where
+ * the money arithmetic is exercised on purpose.
+ */
+const RICH: TeamMoneyState = {
+	capSpace: parseMoney(SALARY_CAP),
+	rosterCount: 9,
+	leading: []
+};
 
 /** Team A's $8,000,000, already leading — as the fold produced it. */
 const AUCTION: Auction = {
@@ -56,7 +76,7 @@ const AUCTION: Auction = {
 };
 
 /** ...narrowed to what the gates decide from, through the core's own bridge. */
-const STATE: BidState = bidStateFor(AUCTION);
+const STATE: BidState = bidStateFor(AUCTION, RICH);
 
 /** Team B's raise, at exactly one Minimum Increment above the high. */
 const RAISE: PlaceBid = {
