@@ -53,7 +53,7 @@ development_status:
   2-1-nominate-a-free-agent: done
   2-2-nomination-refusals-and-concurrency: done
   2-3-nomination-slot-lifecycle-and-dead-nomination-visibility: done
-  2-4-the-auction-page-and-its-bid-control: backlog
+  2-4-the-auction-page-and-its-bid-control: in-progress
   2-5-place-a-bid-increment-granularity-and-the-24-hour-clock: backlog
   2-6-the-money-gate-and-the-refusal-panel: backlog
   2-7-the-slots-gate-roster-capacity-and-both-gates-always-reporte: backlog
