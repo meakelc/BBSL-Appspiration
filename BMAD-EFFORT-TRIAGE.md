@@ -196,6 +196,11 @@ of carrying a long context across many turns. Two single sessions cost $64 and $
 at 28.7M and 31.0M cache-read tokens. No model or effort setting touches that column.
 Two things do.
 
+That figure counts **Claude Code sessions only**. `scripts/hermes-cost-report.py --hours
+240` prices the Hermes side of the same window at a further **$684, 97.9% of it opus**,
+with cache read again dominating every other column — so the cache-read conclusion holds
+in both runtimes, and neither total is the whole bill on its own.
+
 ### 1. The duplication test is whether a review RAN, not whether `bmad-build` ran
 
 `bmad-build` step-04 and `bmad-code-review` step-02 run the same layers over the same diff

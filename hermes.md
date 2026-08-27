@@ -175,6 +175,27 @@ to apply**, and treat an empty `scripts/bmad-cost-report.py` as proof the run ha
 outside Claude Code rather than proof it was cheap — that script reads
 `~/.claude/projects/**/*.jsonl` and cannot see a Hermes session at all.
 
+A Hermes run is not untelemetered, though, so **pick the report that matches the runtime**
+— an empty report from the wrong one is indistinguishable from a free run:
+
+| Ran in | Report | Source it reads |
+| --- | --- | --- |
+| Claude Code CLI | `scripts/bmad-cost-report.py` | `~/.claude/projects/**/*.jsonl` |
+| Hermes | `scripts/hermes-cost-report.py` | `session_model_usage` in `%LOCALAPPDATA%/hermes/state.db` |
+
+The Hermes side reports one thing the Claude Code side structurally cannot: subagent
+sessions are marked `source='subagent'` with a `parent_session_id`, so the
+orchestrator/swarm split is **recorded** rather than inferred from model tier (CC's
+`isSidechain` is always false). A sonnet row under `subagent` is therefore positive proof
+a `delegation.model` toggle took effect. Three measured caveats, 2026-08-26: **do not
+cross-check against `hermes insights`** — its pricing table has no `claude-opus-5` entry,
+so it reported ~$4.60 for a window the same rows price at $684; there is **no reliable
+per-project scoping**, because `git_repo_root` is NULL on every session row and `cwd` is
+recorded on 3 of 79 sessions and never on a subagent, so the script defaults to all
+sessions and warns when `--project-root` drops rows; and `input_tokens` counts uncached
+input only. Both scripts price from their own table — check it against
+<https://www.anthropic.com/pricing> before citing a dollar figure.
+
 Two-tier work from Hermes *is* possible, just not per-role. `hermes config set
 delegation.model claude-sonnet-5` is read **at dispatch time, not session start**
 (measured both directions inside one opus session), so it can be toggled around each
