@@ -20,7 +20,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { MINIMUM_INCREMENT } from '../../src/lib/core/constants.ts';
+import { MINIMUM_INCREMENT, SALARY_CAP } from '../../src/lib/core/constants.ts';
 import type { Auction } from '../../src/lib/core/projection/auctions.ts';
 import { parseMoney } from '../../src/lib/core/money.ts';
 import {
@@ -30,9 +30,25 @@ import {
 	evaluate,
 	failedGates
 } from '../../src/lib/core/rules/bidding.ts';
-import type { BidState } from '../../src/lib/core/rules/bidding.ts';
+import type { BidState, TeamMoneyState } from '../../src/lib/core/rules/bidding.ts';
 import { PLACE_BID_GATES } from '../../src/lib/core/types.ts';
 import type { PlaceBid } from '../../src/lib/core/types.ts';
+
+/**
+ * A Team the money gate cannot be the reason for anything here.
+ *
+ * Story 2.6 added `cap` to `PLACE_BID_GATES`, and every state literal in this
+ * file must now say something about money whether or not the example is about
+ * money. This one says "not the constraint": the full Salary Cap, nothing
+ * committed, and a roster with room — so a refusal in this file is always the
+ * gate the example is actually about. §10 examples 3, 4, 5 and 23 are where
+ * the money arithmetic is exercised on purpose.
+ */
+const RICH: TeamMoneyState = {
+	capSpace: parseMoney(SALARY_CAP),
+	rosterCount: 9,
+	leading: []
+};
 
 /** The same auction as example 1: Team A leading at $8,000,000. */
 const AUCTION: Auction = {
@@ -51,7 +67,7 @@ const AUCTION: Auction = {
 	bids: []
 };
 
-const STATE: BidState = bidStateFor(AUCTION);
+const STATE: BidState = bidStateFor(AUCTION, RICH);
 
 const OFF_GRID_UNDER_INCREMENT: PlaceBid = {
 	kind: 'PlaceBid',

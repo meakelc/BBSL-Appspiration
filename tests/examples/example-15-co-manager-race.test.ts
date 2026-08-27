@@ -28,11 +28,32 @@ import {
 	auctionsReducer
 } from '../../src/lib/core/projection/auctions.ts';
 import type { Auction } from '../../src/lib/core/projection/auctions.ts';
+import { SALARY_CAP } from '../../src/lib/core/constants.ts';
 import { fold } from '../../src/lib/core/projection/fold.ts';
 import { parseMoney } from '../../src/lib/core/money.ts';
 import { bidRefusalDetail, bidStateFor, decide, evaluate } from '../../src/lib/core/rules/bidding.ts';
-import type { BidPlacedPayload, BidState } from '../../src/lib/core/rules/bidding.ts';
+import type {
+	BidPlacedPayload,
+	BidState,
+	TeamMoneyState
+} from '../../src/lib/core/rules/bidding.ts';
 import type { AppendedEvent, PlaceBid } from '../../src/lib/core/types.ts';
+
+/**
+ * A Team the money gate cannot be the reason for anything here.
+ *
+ * Story 2.6 added `cap` to `PLACE_BID_GATES`, and every state literal in this
+ * file must now say something about money whether or not the example is about
+ * money. This one says "not the constraint": the full Salary Cap, nothing
+ * committed, and a roster with room — so a refusal in this file is always the
+ * gate the example is actually about. §10 examples 3, 4, 5 and 23 are where
+ * the money arithmetic is exercised on purpose.
+ */
+const RICH: TeamMoneyState = {
+	capSpace: parseMoney(SALARY_CAP),
+	rosterCount: 9,
+	leading: []
+};
 
 /** Team A leads at $8,000,000. Team L is about to raise — twice, at once. */
 const OPENING_AUCTION: Auction = {
@@ -85,7 +106,7 @@ function appendedFrom(payload: unknown, managerId: string): AppendedEvent {
 
 describe('§10 example 15 — Co-manager race', () => {
 	it('accepts exactly one of the two, and refuses the other because the price moved', () => {
-		const first = decide(bidStateFor(OPENING_AUCTION), fromManager('m-l1'), SAME_SECOND, null);
+		const first = decide(bidStateFor(OPENING_AUCTION, RICH), fromManager('m-l1'), SAME_SECOND, null);
 		expect(first.kind).toBe('accepted');
 		if (first.kind !== 'accepted') return;
 
@@ -96,7 +117,7 @@ describe('§10 example 15 — Co-manager race', () => {
 			[appendedFrom(first.events[0]?.payload, 'm-l1')],
 			auctionsReducer
 		);
-		const after: BidState = bidStateFor(auctionForPlayer(auctions, 'p-1'));
+		const after: BidState = bidStateFor(auctionForPlayer(auctions, 'p-1'), RICH);
 
 		const second = decide(after, fromManager('m-l2'), SAME_SECOND, null);
 		expect(second.kind).toBe('rejected');
@@ -120,7 +141,7 @@ describe('§10 example 15 — Co-manager race', () => {
 		// Manager of the leading Team is refused exactly as the first would be
 		// if they tried to raise their own Bid. Both grounds are reported, per
 		// AD-1; the price moving is the example's stated one.
-		const first = decide(bidStateFor(OPENING_AUCTION), fromManager('m-l1'), SAME_SECOND, null);
+		const first = decide(bidStateFor(OPENING_AUCTION, RICH), fromManager('m-l1'), SAME_SECOND, null);
 		if (first.kind !== 'accepted') throw new Error('the first Bid was refused');
 		const auctions = fold(
 			{ byPlayer: { 'p-1': OPENING_AUCTION } },
@@ -128,7 +149,7 @@ describe('§10 example 15 — Co-manager race', () => {
 			auctionsReducer
 		);
 		const gates = evaluate(
-			bidStateFor(auctionForPlayer(auctions, 'p-1')),
+			bidStateFor(auctionForPlayer(auctions, 'p-1'), RICH),
 			fromManager('m-l2'),
 			SAME_SECOND
 		);
@@ -140,7 +161,7 @@ describe('§10 example 15 — Co-manager race', () => {
 	});
 
 	it('names the Manager who placed the accepted Bid, on the event and in the payload', () => {
-		const first = decide(bidStateFor(OPENING_AUCTION), fromManager('m-l1'), SAME_SECOND, null);
+		const first = decide(bidStateFor(OPENING_AUCTION, RICH), fromManager('m-l1'), SAME_SECOND, null);
 		if (first.kind !== 'accepted') throw new Error('the first Bid was refused');
 		// The envelope the shell stamps `manager_id` from...
 		expect(first.events[0]?.managerId).toBe('m-l1');
@@ -159,7 +180,7 @@ describe('§10 example 15 — Co-manager race', () => {
 			['m-l2', 'm-l1']
 		]) {
 			const first = decide(
-				bidStateFor(OPENING_AUCTION),
+				bidStateFor(OPENING_AUCTION, RICH),
 				fromManager(winner ?? ''),
 				SAME_SECOND,
 				null
@@ -172,7 +193,7 @@ describe('§10 example 15 — Co-manager race', () => {
 				auctionsReducer
 			);
 			const second = decide(
-				bidStateFor(auctionForPlayer(auctions, 'p-1')),
+				bidStateFor(auctionForPlayer(auctions, 'p-1'), RICH),
 				fromManager(loser ?? ''),
 				SAME_SECOND,
 				null
