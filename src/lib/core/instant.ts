@@ -1,31 +1,37 @@
 /**
- * A pure relative-phrase derivation between two ISO-8601 UTC instants
- * (Story 2.4).
+ * The core's instant arithmetic, and a pure relative-phrase derivation over
+ * it (Story 2.4).
  *
  * Deferred from Story 2.3's split (`deferred-work.md:228-233`), which named
- * this file and extracted it from `core/projection/league-clock.ts`'s own
- * instant arithmetic. It is NOT a re-export of that module: `npm run
- * check:purity`'s own verification for this story requires this file to
- * import nothing outside the stdlib, so the instant parser below is a
- * second, independent, small copy of the same pure math rather than a
- * shared import — the two are allowed to exist side by side because both
- * are total, deterministic functions over the same ISO-8601 UTC text and
- * cannot disagree about what a given instant means.
+ * this file and called for `core/projection/league-clock.ts`'s instant
+ * arithmetic to be *extracted* into it. This module is that extraction and
+ * the one home for it: `parseInstant` and `formatInstant` live here and
+ * `league-clock.ts` imports them, so there is exactly one implementation of
+ * the calendar math and no way for two copies to drift apart under a fix
+ * applied to only one.
  *
- * `Date` is forbidden in the core (`scripts/check-core-purity.js`), so the
- * one conversion this module needs — ISO-8601 UTC text to epoch
- * milliseconds — is written out by hand, exactly as `league-clock.ts` does
- * for the same reason (AD-2).
+ * An earlier revision of this file kept a second, private copy on the
+ * grounds that `npm run check:purity` forbade the import. That was wrong:
+ * the gate forbids imports from *outside* the core, and a relative `.ts`
+ * import between two core modules is exactly what AD-2 permits. The only
+ * real obstacle was that the helpers were module-private in
+ * `league-clock.ts`, which this change fixes at the source rather than
+ * working around.
+ *
+ * `Date` is forbidden in the core (`scripts/check-core-purity.js`), so both
+ * conversions — ISO-8601 UTC text to epoch milliseconds and back — are
+ * written out by hand (AD-2).
  *
  * `now` is always an argument, never read (AD-3). This module contains no
  * clock of any kind; every caller supplies both instants it compares.
  *
  * This module is part of the PURE core: no I/O, no clock, no randomness,
  * stdlib only, relative .ts imports only so Deno can load it (AD-2). It has
- * no imports at all, deliberately, since its own verification note demands
- * it.
+ * no imports at all — not because a gate demands it, but because it is the
+ * bottom of the core's dependency order and has nothing to import.
  */
 
+const MS_PER_SECOND = 1000;
 const MS_PER_MINUTE = 60_000;
 const MS_PER_HOUR = 3_600_000;
 const MS_PER_DAY = 86_400_000;
@@ -36,6 +42,9 @@ const MS_PER_DAY = 86_400_000;
  *
  * Anchored and made entirely of bounded, non-overlapping digit runs, so
  * there is no alternation for a hostile input to force into backtracking.
+ * A non-UTC offset does not match and reads back as unparseable — correct
+ * for this log, which only ever carries UTC, and a great deal safer than
+ * silently treating `+05:00` as `Z`.
  */
 const ISO_UTC_INSTANT = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(?:Z|\+00:00)$/;
 
@@ -67,10 +76,16 @@ function civilFromDays(days: number): { year: number; month: number; day: number
 
 /**
  * Epoch milliseconds for an ISO-8601 UTC instant, or `null` when the text is
- * not one. Field ranges are checked rather than assumed, exactly as
- * `league-clock.ts`'s `parseInstant` does.
+ * not one.
+ *
+ * The field ranges are checked rather than assumed: `2026-13-45T99:99:99Z`
+ * matches the shape above and is not an instant, and folding it as one would
+ * silently invent an expiry months away from anything that happened.
+ *
+ * Exported because `projection/league-clock.ts` computes the League Clock's
+ * expiry with it — one implementation, two callers.
  */
-function parseInstant(text: string): number | null {
+export function parseInstant(text: string): number | null {
 	const match = ISO_UTC_INSTANT.exec(text);
 	if (match === null) return null;
 
@@ -88,10 +103,49 @@ function parseInstant(text: string): number | null {
 	if (second > 59) return null;
 
 	const civil = daysFromCivil(year, month, day);
+	// A day number that does not round-trip is a date that does not exist —
+	// 2026-02-30 and 2027-02-29 both land here.
 	const back = civilFromDays(civil);
 	if (back.year !== year || back.month !== month || back.day !== day) return null;
 
-	return civil * MS_PER_DAY + hour * MS_PER_HOUR + minute * MS_PER_MINUTE + second * 1000 + millisecond;
+	return (
+		civil * MS_PER_DAY +
+		hour * MS_PER_HOUR +
+		minute * MS_PER_MINUTE +
+		second * MS_PER_SECOND +
+		millisecond
+	);
+}
+
+/** Left-pad an integer to `width` digits. */
+function pad(value: number, width: number): string {
+	return String(value).padStart(width, '0');
+}
+
+/**
+ * The `YYYY-MM-DDTHH:MM:SS.sssZ` spelling of an epoch-millisecond instant —
+ * byte-identical to what `Date.prototype.toISOString` produces for the same
+ * value, which is what the rest of the log holds.
+ *
+ * Exported for the same reason as `parseInstant`: the League Clock's expiry
+ * is the one caller, and one implementation is the point of this module.
+ */
+export function formatInstant(ms: number): string {
+	// `Math.floor`, not truncation: instants before 1970 are negative, and
+	// truncating toward zero would put them on the wrong day.
+	const days = Math.floor(ms / MS_PER_DAY);
+	const rest = ms - days * MS_PER_DAY;
+	const { year, month, day } = civilFromDays(days);
+
+	const hour = Math.floor(rest / MS_PER_HOUR);
+	const minute = Math.floor((rest % MS_PER_HOUR) / MS_PER_MINUTE);
+	const second = Math.floor((rest % MS_PER_MINUTE) / MS_PER_SECOND);
+	const millisecond = rest % MS_PER_SECOND;
+
+	return (
+		`${pad(year, 4)}-${pad(month, 2)}-${pad(day, 2)}T` +
+		`${pad(hour, 2)}:${pad(minute, 2)}:${pad(second, 2)}.${pad(millisecond, 3)}Z`
+	);
 }
 
 /** Left-pad a whole count to make "1" read "1 minute" and "2" read "2 minutes". */

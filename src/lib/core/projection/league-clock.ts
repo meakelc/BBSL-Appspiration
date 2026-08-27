@@ -35,14 +35,21 @@
  *
  * This module is part of the PURE core: no I/O, no clock, no randomness,
  * stdlib only, relative .ts imports only so Deno can load it (AD-2). That
- * is why the instant arithmetic at the bottom of this file is written out by
- * hand rather than handed to `Date`: `Date` is a forbidden reference in the
- * core (`scripts/check-core-purity.js`) precisely because `Date.now()` and
+ * is why the instant arithmetic this file needs is written out by hand
+ * rather than handed to `Date`: `Date` is a forbidden reference in the core
+ * (`scripts/check-core-purity.js`) precisely because `Date.now()` and
  * `new Date()` are indistinguishable from `Date.parse` to a static walk, and
  * a core that could reach one could reach the others.
+ *
+ * That arithmetic used to live at the bottom of this file. Story 2.4
+ * extracted it to `core/instant.ts` — the extraction Story 2.3's deferred
+ * note called for — and this module imports it from there. One
+ * implementation, not two copies free to drift: a fix to the calendar math
+ * now reaches the League Clock and the relative phrase alike.
  */
 
 import { LEAGUE_CLOCK } from '../constants.ts';
+import { formatInstant, parseInstant } from '../instant.ts';
 import type { Reducer } from './fold.ts';
 import { NOMINATION_PLACED_EVENT } from './nominations.ts';
 import { AUCTION_OPENED_EVENT } from './phase.ts';
@@ -137,134 +144,4 @@ export function leagueClockExpiry(clock: LeagueClock): string | null {
 	}
 
 	return formatInstant(from + LEAGUE_CLOCK);
-}
-
-// --- Instant arithmetic, by hand ------------------------------------------
-//
-// `Date` is forbidden in the core, so the two conversions the expiry needs —
-// ISO-8601 UTC text to epoch milliseconds and back — are written here. Both
-// are pure integer arithmetic over the proleptic Gregorian calendar and are
-// deterministic for every input; neither reads a clock, a locale or a time
-// zone. UTC only, which is the only thing the log ever holds: `occurredAt`
-// arrives from `toAppendedEvent`'s `Date.toISOString()` in the shell, where
-// `Date` is allowed.
-
-const MS_PER_DAY = 86_400_000;
-const MS_PER_HOUR = 3_600_000;
-const MS_PER_MINUTE = 60_000;
-const MS_PER_SECOND = 1000;
-
-/**
- * `YYYY-MM-DDTHH:MM:SS[.sss]Z`, anchored, with an optional fractional part
- * of one to three digits and an optional `+00:00` spelling of `Z`.
- *
- * Anchored and made entirely of bounded, non-overlapping digit runs, so
- * there is no alternation for a hostile input to force into backtracking.
- * A non-UTC offset does not match and reads back as unparseable — correct
- * for this log, which only ever carries UTC, and a great deal safer than
- * silently treating `+05:00` as `Z`.
- */
-const ISO_UTC_INSTANT = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(?:Z|\+00:00)$/;
-
-/**
- * Days since 1970-01-01 for a proleptic Gregorian civil date.
- *
- * Howard Hinnant's `days_from_civil`, which is exact for every year in the
- * range this product can produce and needs no table of month lengths or leap
- * rules — the era arithmetic encodes both.
- */
-function daysFromCivil(year: number, month: number, day: number): number {
-	const y = year - (month <= 2 ? 1 : 0);
-	const era = Math.floor(y / 400);
-	const yoe = y - era * 400;
-	const doy = Math.floor((153 * (month + (month > 2 ? -3 : 9)) + 2) / 5) + day - 1;
-	const doe = yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy;
-	return era * 146097 + doe - 719468;
-}
-
-/** The inverse of `daysFromCivil` — Hinnant's `civil_from_days`. */
-function civilFromDays(days: number): { year: number; month: number; day: number } {
-	const z = days + 719468;
-	const era = Math.floor(z / 146097);
-	const doe = z - era * 146097;
-	const yoe = Math.floor(
-		(doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365
-	);
-	const y = yoe + era * 400;
-	const doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100));
-	const mp = Math.floor((5 * doy + 2) / 153);
-	const day = doy - Math.floor((153 * mp + 2) / 5) + 1;
-	const month = mp + (mp < 10 ? 3 : -9);
-	return { year: y + (month <= 2 ? 1 : 0), month, day };
-}
-
-/**
- * Epoch milliseconds for an ISO-8601 UTC instant, or `null` when the text is
- * not one.
- *
- * The field ranges are checked rather than assumed: `2026-13-45T99:99:99Z`
- * matches the shape above and is not an instant, and folding it as one would
- * silently invent an expiry months away from anything that happened.
- */
-function parseInstant(text: string): number | null {
-	const match = ISO_UTC_INSTANT.exec(text);
-	if (match === null) return null;
-
-	const year = Number(match[1]);
-	const month = Number(match[2]);
-	const day = Number(match[3]);
-	const hour = Number(match[4]);
-	const minute = Number(match[5]);
-	const second = Number(match[6]);
-	// `.5` means 500ms, not 5ms — a fractional part is padded on the right.
-	const millisecond = Number((match[7] ?? '0').padEnd(3, '0'));
-
-	if (month < 1 || month > 12) return null;
-	if (day < 1 || day > 31) return null;
-	if (hour > 23 || minute > 59) return null;
-	// 60 is a leap second, which UTC allows and this product never records;
-	// it is refused rather than folded as the next minute.
-	if (second > 59) return null;
-
-	const civil = daysFromCivil(year, month, day);
-	// A day number that does not round-trip is a date that does not exist —
-	// 2026-02-30 and 2027-02-29 both land here.
-	const back = civilFromDays(civil);
-	if (back.year !== year || back.month !== month || back.day !== day) return null;
-
-	return (
-		civil * MS_PER_DAY +
-		hour * MS_PER_HOUR +
-		minute * MS_PER_MINUTE +
-		second * MS_PER_SECOND +
-		millisecond
-	);
-}
-
-/** Left-pad an integer to `width` digits. */
-function pad(value: number, width: number): string {
-	return String(value).padStart(width, '0');
-}
-
-/**
- * The `YYYY-MM-DDTHH:MM:SS.sssZ` spelling of an epoch-millisecond instant —
- * byte-identical to what `Date.prototype.toISOString` produces for the same
- * value, which is what the rest of the log holds.
- */
-function formatInstant(ms: number): string {
-	// `Math.floor`, not truncation: instants before 1970 are negative, and
-	// truncating toward zero would put them on the wrong day.
-	const days = Math.floor(ms / MS_PER_DAY);
-	const rest = ms - days * MS_PER_DAY;
-	const { year, month, day } = civilFromDays(days);
-
-	const hour = Math.floor(rest / MS_PER_HOUR);
-	const minute = Math.floor((rest % MS_PER_HOUR) / MS_PER_MINUTE);
-	const second = Math.floor((rest % MS_PER_MINUTE) / MS_PER_SECOND);
-	const millisecond = rest % MS_PER_SECOND;
-
-	return (
-		`${pad(year, 4)}-${pad(month, 2)}-${pad(day, 2)}T` +
-		`${pad(hour, 2)}:${pad(minute, 2)}:${pad(second, 2)}.${pad(millisecond, 3)}Z`
-	);
 }

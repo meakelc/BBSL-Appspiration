@@ -2,7 +2,7 @@
 title: 'Story 2.4: The Auction page'
 type: 'feature'
 created: '2026-08-26'
-status: 'in-progress'
+status: 'done'
 review_loop_iteration: 0
 baseline_commit: 'a96c79f358fb479af10160f63baaf7943cfa18a3'
 context: []
@@ -89,5 +89,19 @@ Story 2.1's and 2.3's Code Maps carry the fold discipline and route idiom reused
 - `npm run check:purity` -- clean; `core/instant.ts` reads no clock and imports nothing outside the stdlib.
 
 **Manual checks (if no CLI):**
-- `rg -n "maximumBid|minimum legal|cancel|lower" src/routes/auction/` returns nothing.
+- `rg -n "maximumBid|minimum legal|cancel|lower" src/routes/auction/ src/lib/server/auction-page.ts src/lib/core/instant.ts` returns nothing. The route directory alone is too narrow: the story's forbidden vocabulary could leak just as easily into the server reader or the pure helper, neither of which lives under `src/routes/auction/`, and the automated test already covers the wider surface.
 - `git diff` touches nothing under `src/lib/core/rules/`, adds no migration, and adds no `actions` export.
+
+### Review Findings
+
+- [x] [Review][Patch] Absolute stamp is SSR'd in the *server's* timezone, not the viewer's — `+page.svelte:49-53` builds `Intl.DateTimeFormat(undefined, ...)` and `$derived`s the stamp. No route in `src/` opts out of SSR, so the HTML first delivered resolves `undefined` to the server's timezone; the viewer's timezone only applies once hydration re-derives it, and Svelte 5 does not diff-correct hydrated text. AC3 asks for "an absolute stamp in the viewer's timezone" while Boundaries/Always forbids ever dropping it, so the two obvious fixes trade against each other: render it client-only (correct timezone, momentarily absent in SSR HTML) or pin an explicit `timeZone` server-side (always present, not the viewer's).
+- [x] [Review][Patch] An unresolvable Manager renders as a fabricated name — `auction-page.ts:146-151` falls back to `nomination.teamName` as the Manager display name, so `formatTeamManager` emits `Lakers — Lakers`, which reads as a Manager literally named "Lakers"; the story's own test asserts that string. Boundaries/Ask First forbids "any figure not present in the fold or the reference table". `formatTeamManager` already has a stated shape for an absent pairing (`teamName === null` drops the em dash) but no shape for "Team known, Manager unknown". Compounding it, the Code Map says the Manager "joins from `managers`/`teams` the way `auction-open.ts:93-98` does" — a `teams left join managers` — whereas the code scans the `NominationPlaced` payload (`findNominationManagerId`, `:80-95`) then point-reads `managers`; `AppendedEvent.managerId` (`core/types.ts:89`) already carries the same id on the envelope, making the payload scan a third source for a field the loaded events expose directly.
+- [x] [Review][Patch] `core/instant.ts` duplicates `league-clock.ts`'s instant math rather than sharing it — `daysFromCivil`, `civilFromDays` and `parseInstant` now exist twice, verbatim, and can silently drift on a fix applied to one. The header's stated reason (`instant.ts:7-13`, "check:purity's own verification for this story requires this file to import nothing outside the stdlib") does not hold: the gate forbids imports *outside* the core, and `core/instant.ts` importing `core/projection/league-clock.ts` is a relative `.ts` core import the gate allows. The real obstacle is only that those three helpers are module-private in `league-clock.ts` (`:176`, `:186`, `:209`). Story 2.3's deferred note called this an *extraction*, which is what a shared module would have been.
+- [x] [Review][Patch] Route tests never execute `load` — gate ordering, the 403 rows and the 404 row are unverified [tests/routes/auction-page.test.ts:114-140]
+- [x] [Review][Patch] Player name never comes from `free_agent_players` — the Code Map's own query names `player_name` and Boundaries/Always says reference fields come from that table and nothing else [src/lib/server/auction-page.ts:125-138]
+- [x] [Review][Patch] Missing reference row still renders a labelled, bordered, empty "Player" panel — the matrix says omitted entirely, not blanked [src/routes/auction/[fantraxPlayerId]/+page.svelte:71-83]
+- [x] [Review][Patch] `Intl.DateTimeFormat.format` throws `RangeError` on an unparseable instant while `relativePhrase` beside it deliberately degrades — and `instant.ts`'s own docstring justifies not throwing on the grounds that the absolute stamp renders regardless [src/routes/auction/[fantraxPlayerId]/+page.svelte:53]
+- [x] [Review][Patch] AC5 is claimed as covered by a test file that asserts nothing about 375px single-column, ≥44×44px targets, dark-token-only styling or greyscale [tests/routes/auction-page.test.ts]
+- [x] [Review][Patch] The Verification section's manual `rg` scopes only `src/routes/auction/`, narrower than the surface the story added and narrower than the automated test's own coverage [_bmad-output/implementation-artifacts/spec-2-4-the-auction-page.md:88]
+- [x] [Review][Defer] `sprint-status.yaml` key still reads `2-4-the-auction-page-and-its-bid-control` after the bid control moved to Story 2.5 [_bmad-output/implementation-artifacts/sprint-status.yaml:56] — deferred, pre-existing
+- [x] [Review][Defer] The relative phrase never refreshes — `nowIso` is read once at render with no interval or invalidation, so "moments ago" silently ages on a long-open tab [src/routes/auction/[fantraxPlayerId]/+page.svelte:46] — deferred, pre-existing

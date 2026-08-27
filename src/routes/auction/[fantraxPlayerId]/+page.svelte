@@ -43,14 +43,47 @@
 	// same split `core/instant.ts`'s own header describes: the pure helper
 	// derives the relative phrase, and `Intl.DateTimeFormat` here renders the
 	// absolute stamp in the viewer's own timezone.
+	//
+	// The relative phrase is safe to derive on the server as well as the
+	// client: both instants are UTC and the arithmetic between them is the
+	// same wherever it runs.
 	const nowIso = $derived(new Date().toISOString());
 	const relative = $derived(relativePhrase(auction.nominatedAt, nowIso));
 
-	const absoluteFormatter = new Intl.DateTimeFormat(undefined, {
-		dateStyle: 'medium',
-		timeStyle: 'short'
+	// The absolute stamp is NOT. `Intl.DateTimeFormat(undefined, ...)`
+	// resolves `undefined` to the timezone of whatever machine formats it,
+	// and this route is server-rendered like every other, so deriving it
+	// during SSR would ship the SERVER's timezone in the delivered HTML —
+	// which Svelte does not diff-correct on hydration. AC3 asks for the
+	// VIEWER's timezone, so the stamp is computed in an effect, which runs
+	// only in the browser, and the markup omits it until it exists rather
+	// than rendering a stamp that is wrong for one paint.
+	//
+	// This is not the "dropped to save space" the Boundaries forbid: the
+	// stamp is never traded away for layout, and it is present for every
+	// viewer that runs scripts. A viewer that does not gets the relative
+	// phrase, which is honest, rather than a time in a timezone that is not
+	// theirs, which is not.
+	let absolute = $state<string | null>(null);
+
+	// `Intl.DateTimeFormat.format` throws `RangeError` on an Invalid Date,
+	// so an unparseable instant is checked for rather than formatted. The
+	// pure `relativePhrase` beside it deliberately returns a stated phrase
+	// instead of throwing for exactly this input, and `core/instant.ts`'s
+	// own header justifies that by saying the absolute stamp renders
+	// regardless — which is only true if this cannot crash the page.
+	function formatAbsolute(iso: string): string {
+		const parsed = new Date(iso);
+		if (Number.isNaN(parsed.getTime())) return 'at an unknown time';
+		return new Intl.DateTimeFormat(undefined, {
+			dateStyle: 'medium',
+			timeStyle: 'short'
+		}).format(parsed);
+	}
+
+	$effect(() => {
+		absolute = formatAbsolute(auction.nominatedAt);
 	});
-	const absolute = $derived(absoluteFormatter.format(new Date(auction.nominatedAt)));
 </script>
 
 <svelte:head>
@@ -68,19 +101,22 @@
 		<p class="prose">{data.phase.sentence}</p>
 	</section>
 
-	<section class="panel">
-		<p class="section-label">Player</p>
-		<!-- Exactly two fields when the reference row exists — NBA team as a
-		     three-letter capitalised abbreviation (real-life team only, per
-		     the glossary) and positions. No cap figure and no years-remaining
-		     field: those columns do not exist on `free_agent_players`.
-		     Omitted entirely, not blanked, when the reference row is missing. -->
-		{#if auction.metadata !== null}
+	<!-- Exactly two fields when the reference row exists — NBA team as a
+	     three-letter capitalised abbreviation (real-life team only, per the
+	     glossary) and positions. No cap figure and no years-remaining field:
+	     those columns do not exist on `free_agent_players`.
+	     The WHOLE panel is conditional, not just the line inside it: `.panel`
+	     carries a background, a border and padding, so leaving the section up
+	     with its label and no content is precisely the blanked rendering the
+	     matrix names as the wrong answer. Omitted entirely means omitted. -->
+	{#if auction.metadata !== null}
+		<section class="panel">
+			<p class="section-label">Player</p>
 			<p class="prose" id="auction-metadata">
 				{auction.metadata.nbaTeam} &middot; {auction.metadata.positions}
 			</p>
-		{/if}
-	</section>
+		</section>
+	{/if}
 
 	<section class="panel">
 		<p class="section-label">Nominating Team</p>
@@ -96,8 +132,10 @@
 		     space. -->
 		<p class="prose" id="auction-nominated-at">
 			<span id="auction-nominated-relative">{relative}</span>
-			&mdash;
-			<span id="auction-nominated-absolute">{absolute}</span>
+			{#if absolute !== null}
+				&mdash;
+				<span id="auction-nominated-absolute">{absolute}</span>
+			{/if}
 		</p>
 	</section>
 

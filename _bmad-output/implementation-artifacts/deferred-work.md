@@ -268,3 +268,17 @@
   summary: Current price, Leading Bidder and the chronological bid history render as an explicit empty state in Story 2.4; the populated versions arrive with Story 2.5's `BidPlaced` event.
   evidence: bmad-build step-02 (2026-08-26), intent gap resolved at the planning checkpoint. `epics.md:863,868-871` require current price, Leading Bidder, and every Bid listed chronologically with Team, acting Manager, amount and timestamp, visible to all with no anonymity. No `BidPlaced` event exists to fold — `src/lib/core/types.ts:7-13` states outright that domain event variants including `PlaceBid` are Epic 2's still to add, and `nominationsReducer` (`src/lib/core/projection/nominations.ts:248-280`) handles exactly two event types, neither of them a bid. The page therefore renders the honest facts — a stated no-bids price and a history region carrying an explicit "no bids" sentence rather than an empty box — which is also the correct permanent rendering for a freshly nominated Player once 2.5 lands. The no-anonymity rule is satisfied vacuously here and must be re-asserted as a live claim by the story that first renders a real bid row.
   status: open
+
+## Deferred from: code review of spec-2-4-the-auction-page (2026-08-26)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-the-auction-page.md`
+  summary: The sprint tracking key for Story 2.4 still reads `2-4-the-auction-page-and-its-bid-control` after the bid control was split out to Story 2.5.
+  evidence: bmad-code-review (2026-08-26), Blind Hunter layer, confirmed against source. `_bmad-output/implementation-artifacts/sprint-status.yaml:56` carries the un-renamed key, while the story's Intent and four `deferred-work.md` entries all place the bid control in Story 2.5. Anyone reading `sprint-status.yaml` alone would believe 2.4 still covers it.
+  deferred_reason: The key is generated from `epics.md` by sprint planning, not hand-owned by this story; renaming it here would desynchronise it from its generator.
+  status: open
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-4-the-auction-page.md`
+  summary: The Auction page's relative phrase never refreshes — `nowIso` is read once at render time, so "moments ago" silently ages on a tab left open.
+  evidence: bmad-code-review (2026-08-26), Blind Hunter layer, confirmed against source. `src/routes/auction/[fantraxPlayerId]/+page.svelte:46` derives `nowIso` from a single `new Date().toISOString()` with no interval, no `invalidate` and no revalidation. The staleness is bounded in practice because the absolute stamp renders beside it and never goes stale.
+  deferred_reason: No AC requires the phrase to advance, and the **Never** list forbids countdown pressure — a self-advancing clock is closer to that than to the honest snapshot this story asks for. Revisit when Story 2.5's Auction Clock makes elapsed time load-bearing.
+  status: open
