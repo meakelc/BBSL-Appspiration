@@ -14,9 +14,11 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 import { AUCTION_CLOCK, SALARY_CAP } from '../../src/lib/core/constants.ts';
-import { BID_PLACED_EVENT } from '../../src/lib/core/projection/auctions.ts';
+import { AUCTION_EXPIRED, BID_PLACED_EVENT } from '../../src/lib/core/projection/auctions.ts';
 import {
 	AUCTION_CLOSED_EVENT,
 	NOMINATION_PLACED_EVENT
@@ -25,6 +27,7 @@ import { MINOR_LEAGUE_ELIGIBILITY_SET } from '../../src/lib/core/projection/elig
 import { parseMoney } from '../../src/lib/core/money.ts';
 import { bidRefusalDetail } from '../../src/lib/core/rules/bidding.ts';
 import type { BidPlacedPayload } from '../../src/lib/core/rules/bidding.ts';
+import { PLACE_BID_GATES } from '../../src/lib/core/types.ts';
 import { loadBidState, placeBid } from '../../src/lib/server/bidding.ts';
 import type { BidRejection } from '../../src/lib/server/bidding.ts';
 import type {
@@ -393,6 +396,7 @@ describe('placeBid — the gate refuses (AC1, AC2, AC3)', () => {
 
 		expect(Object.keys(rejection.refusal.gates).sort()).toEqual([
 			'cap',
+			'expiry',
 			'granularity',
 			'increment',
 			'opening',
@@ -576,6 +580,11 @@ describe('loadBidState — three folds over ONE read of the log, plus one roster
 		// fifth. Nothing derived — no Committed Bids, no Maximum Bid (AD-7).
 		expect(loaded.bid).toEqual({
 			leadingBid: { teamId: 't-1', amount: 8_000_000 },
+			// Story 3.1: the persisted absolute close instant, folded from the
+			// SAME log read and narrowed by the same `bidStateFor` — which is
+			// why expiry-as-authority cost this transaction no second query
+			// and no plumbing at all.
+			closesAt: '2026-08-27T09:00:00.000Z',
 			team: {
 				capSpace: 156_000_000,
 				rosterCount: 9,
@@ -793,5 +802,187 @@ describe('placeBid — Minors Exposure refuses under the lock, and writes nothin
 		expect(loaded.bid.team?.eligibleLeading).toEqual([
 			{ fantraxPlayerId: 'p-stash', playerName: 'Ausar Bright', amount: 30_000_000 }
 		]);
+	});
+});
+
+// --- Story 3.1: expiry, re-derived under the lock -------------------------
+
+describe('placeBid — an expired Auction is refused under the lock (AC7)', () => {
+	/**
+	 * A Player nominated and bid on, whose close instant is in the PAST
+	 * relative to the transaction clock — and no `AuctionClosed` anywhere.
+	 *
+	 * That combination is the whole point: the nomination fold still holds
+	 * the Player, so `no_open_auction` does not fire and the gates actually
+	 * run; the Auction fold still holds the price, so a projection asked
+	 * "is this open" would say yes. The only thing that has happened is that
+	 * the clock ran out and Story 3.5's sweep has not recorded it.
+	 */
+	const EXPIRED = [
+		nominated(1),
+		logEvent(
+			2,
+			BID_PLACED_EVENT,
+			{
+				fantraxPlayerId: 'p-1',
+				teamId: 't-1',
+				teamName: 'Lakers',
+				managerId: 'm-1',
+				amount: 8_000_000,
+				// NOW is 2026-08-26T12:00:00.000Z, so this closed an hour ago.
+				closesAt: '2026-08-26T11:00:00.000Z'
+			},
+			'2026-08-25T11:00:00.000Z',
+			{ managerId: 'm-1', teamId: 't-1' }
+		)
+	];
+
+	it('refuses with the transaction’s own gate set and stamp, appending nothing', async () => {
+		const harness = fakeGateway({ events: EXPIRED });
+
+		const outcome = await placeBid(
+			harness.gateway,
+			ACTOR,
+			'p-1',
+			parseMoney(8_500_000),
+			DEVICE_CLASS
+		);
+
+		const rejection = rejectionOf(outcome);
+		expect(rejection.refusal.kind).toBe('gates');
+		expect(rejection.gates?.expiry.passed).toBe(false);
+		// The close instant was folded AFTER the lock, and compared against
+		// the transaction-start clock the lock itself returned.
+		expect(rejection.gates?.expiry.closesAt).toBe('2026-08-26T11:00:00.000Z');
+		expect(rejection.gates?.expiry.evaluatedAt).toBe(NOW.toISOString());
+		expect(rejection.at).toBe(NOW.toISOString());
+		// The full gate set, not only the refusing one — the other six report
+		// their own arithmetic and none of them is the ground here.
+		expect(Object.keys(rejection.gates ?? {}).sort()).toEqual([...PLACE_BID_GATES].sort());
+		expect(rejection.gates?.cap.passed).toBe(true);
+		expect(rejection.gates?.slots.passed).toBe(true);
+		expect(rejection.gates?.increment.passed).toBe(true);
+		expect(rejection.detail).toContain(AUCTION_EXPIRED);
+
+		// Locked, then read, then nothing.
+		expect(harness.order.slice(0, 4)).toEqual(['begin', 'lock', 'read-log', 'read-roster']);
+		expect(harness.order).not.toContain('append-event');
+		expect(harness.appendedEvents).toHaveLength(0);
+		expect(harness.state.committed).toBe(false);
+	});
+
+	it('leaves the earlier Bid exactly where it was', async () => {
+		const harness = fakeGateway({ events: EXPIRED });
+
+		await placeBid(harness.gateway, ACTOR, 'p-1', parseMoney(8_500_000), DEVICE_CLASS);
+
+		await harness.client.query('begin');
+		const loaded = await loadBidState(harness.client, 'p-1', 't-2');
+		expect(loaded.bid.leadingBid).toEqual({ teamId: 't-1', amount: 8_000_000 });
+		expect(loaded.bid.closesAt).toBe('2026-08-26T11:00:00.000Z');
+	});
+
+	it('is refused as expired, NOT as no_open_auction — the two are different questions', async () => {
+		// The nomination fold still holds this Player: nothing closed it. So
+		// the pre-gate check passes and the gate set runs, which is what
+		// AD-12 asks for — expiry is decided by comparing instants, never by
+		// reading whether a projection still holds an Auction row.
+		const harness = fakeGateway({ events: EXPIRED });
+
+		const outcome = await placeBid(
+			harness.gateway,
+			ACTOR,
+			'p-1',
+			parseMoney(8_500_000),
+			DEVICE_CLASS
+		);
+
+		const rejection = rejectionOf(outcome);
+		expect(rejection.refusal.kind).not.toBe('no_open_auction');
+		expect(rejection.gates).not.toBeNull();
+	});
+
+	it('accepts the same Bid on the same Auction when its clock has NOT run out', async () => {
+		const harness = fakeGateway({
+			events: [
+				nominated(1),
+				logEvent(
+					2,
+					BID_PLACED_EVENT,
+					{
+						fantraxPlayerId: 'p-1',
+						teamId: 't-1',
+						teamName: 'Lakers',
+						managerId: 'm-1',
+						amount: 8_000_000,
+						// One millisecond after NOW rather than one hour before.
+						closesAt: '2026-08-26T12:00:00.001Z'
+					},
+					'2026-08-25T12:00:00.001Z',
+					{ managerId: 'm-1', teamId: 't-1' }
+				)
+			]
+		});
+
+		const outcome = await placeBid(
+			harness.gateway,
+			ACTOR,
+			'p-1',
+			parseMoney(8_500_000),
+			DEVICE_CLASS
+		);
+
+		expect(outcome.kind).toBe('accepted');
+		expect(harness.appendedEvents).toHaveLength(1);
+	});
+
+	it('needed no executable change in server/bidding.ts to get any of this', () => {
+		// The claim worth testing rather than asserting (Design Notes). The
+		// transaction hands `decide()` the lock's own clock and hands
+		// `bidStateFor` the folded `Auction` — both since Story 2.5 — so
+		// expiry-as-authority arrived with no plumbing, no second query and
+		// no migration.
+		const source = readFileSync(
+			fileURLToPath(new URL('../../src/lib/server/bidding.ts', import.meta.url)),
+			'utf8'
+		);
+
+		// Asserting those two call sites are still present is necessary but
+		// not sufficient: an executable edit that PRESERVED both substrings
+		// would slide past it. So the claim itself is tested — with every
+		// comment stripped, the remaining code must not name expiry at all.
+		// `tests/routes/auction-page.test.ts`'s own discipline, for its
+		// reason: prose ABOUT a thing is not that thing, and this file's
+		// header explains expiry-as-authority at length precisely because the
+		// code below it does not implement any of it.
+		const code = source
+			.replace(/\/\*[\s\S]*?\*\//g, '')
+			.replace(/(^|[^:])\/\/.*$/gm, '$1');
+
+		expect(code).toContain('decide(state.bid, command, now.toISOString(), null)');
+		expect(code).toContain('bidStateFor(');
+		// The whole vocabulary of the gate this module never learned about.
+		// If any of it appears in executable code here, expiry stopped being
+		// something the core decides from state this file already loaded.
+		for (const forbidden of [
+			/\bexpiry\b/i,
+			/\bexpired\b/i,
+			/hasExpired/,
+			/AUCTION_EXPIRED/,
+			/closesAt/,
+			/closesInPhrase/,
+			/evaluatedAt/,
+			/parseInstant/
+		]) {
+			expect(code, String(forbidden)).not.toMatch(forbidden);
+		}
+		// And no clock of its own: `now` comes from the lock, never from Node.
+		expect(code).not.toMatch(/new Date\(\)|Date\.now\(\)/);
+		// The strip is doing real work — the header genuinely discusses all of
+		// this, so a broken stripper would make the loop above vacuous by
+		// failing rather than by passing. Stated so the guard cannot silently
+		// become a no-op if the comments are ever moved.
+		expect(source).toMatch(/\bexpiry\b/i);
+		expect(code.length).toBeLessThan(source.length);
 	});
 });

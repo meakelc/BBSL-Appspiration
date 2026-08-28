@@ -205,6 +205,9 @@ describe('§10 example 19 — overflow refuses the cheap bid', () => {
 		// naming a dollar, because the outcome it renders carries none.
 		expect(rowFor('slots')?.figure).toBe('Roster Count would be 12 of 12, Overflow Count 1');
 		expect(rowFor('slots')?.figure).not.toMatch(/\$/);
-		expect(rows).toHaveLength(6);
+		// Seven since Story 3.1 added `expiry`, and it reached this panel by
+		// `PLACE_BID_GATES` growing — no markup change and no edit to the
+		// example itself beyond the count.
+		expect(rows).toHaveLength(7);
 	});
 });

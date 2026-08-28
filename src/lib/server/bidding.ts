@@ -30,14 +30,24 @@
  * path calls the SAME `evaluate()` to disable the control, but that render is
  * never the check (AD-9).
  *
- * **Whether the Auction is open is asked here, not by a gate.**
- * `PLACE_BID_GATES` is fixed at six — `opening`, `selfBid`, `increment`,
- * `granularity`, `cap` and `slots` — and none of them is "does this Auction
- * exist" — that is `nominationsReducer`'s fold, the identical accessor
- * `server/auction-page.ts` and `server/nomination.ts` already use. It is
- * answered before `decide()` is called, exactly as the route answers
+ * **Whether the Auction EXISTS is asked here, not by a gate.**
+ * `PLACE_BID_GATES` is fixed at seven — `expiry`, `opening`, `selfBid`,
+ * `increment`, `granularity`, `cap` and `slots` — and none of them is "does
+ * this Auction exist" — that is `nominationsReducer`'s fold, the identical
+ * accessor `server/auction-page.ts` and `server/nomination.ts` already use.
+ * It is answered before `decide()` is called, exactly as the route answers
  * `unconfirmed` and `unbound_actor` before this function is called: a
  * question with nothing for a rule to decide is not a rule.
+ *
+ * **Whether it has RUN OUT is a gate, and it is a different question.**
+ * Story 3.1's `expiry` compares `now` — the transaction-start clock this
+ * function already hands `decide()` — against the persisted absolute close
+ * instant `loadBidState` already folds onto the `BidState`. So an Auction
+ * whose close time has passed is refused under this same lock even though
+ * the nomination fold still holds it and no `AuctionClosed` has been
+ * appended (AD-12). It cost this file no executable line: `bidStateFor`
+ * already received the `Auction` that carries `closesAt`, and `decide()`
+ * already received `now.toISOString()`.
  *
  * **Device class rides the envelope, never the payload.** It is a measurement
  * column (`shell/write.ts`), not domain data — no reducer and no gate reads
@@ -226,10 +236,12 @@ export async function placeBid(
 		// No `projections` array, deliberately: nothing derived is stored, and
 		// there is no uniqueness constraint for a Bid to collide with.
 		decide: ({ state, now }) => {
-			// Asked before `decide()`, never as a gate: `PLACE_BID_GATES` is fixed
-			// at six and "is there an open Auction" is the nomination fold's
-			// question. A Player whose Auction closed between the render and this
-			// submit lands here.
+			// Asked before `decide()`, never as a gate: "is there an open
+			// Auction" is the nomination fold's question, and `PLACE_BID_GATES`
+			// names no such question at any size. A Player whose Auction closed
+			// between the render and this submit lands here — whereas one whose
+			// clock merely ran out reaches the gates and is refused on `expiry`,
+			// which is precisely the distinction AD-12 draws.
 			if (state.nomination === null) {
 				const refusal: BidRefusal = { kind: 'no_open_auction' };
 				// No gates and no stamp: this refusal has no arithmetic behind

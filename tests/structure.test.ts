@@ -33,9 +33,15 @@ const AR2_DIRECTORIES: Array<[path: string, purpose: string]> = [
  * a directory that merely EXISTS proves nothing about whether the examples in
  * it were written. This list grows as each story lands its own — Story 2.5
  * landed 1, 2, 15 and 26; Story 2.6 added 3, 4, 5 and 23; Story 2.7 added 24;
- * Story 2.8 adds 18, 19, 20 and 25, the Minors Exposure set — so a file
+ * Story 2.8 added 18, 19, 20 and 25, the Minors Exposure set — so a file
  * deleted or renamed away fails here rather than silently reducing the
  * executable specification.
+ *
+ * **Story 3.1 added NONE, and that is recorded rather than left to look like
+ * a miss.** Epic 3's examples — 6, 7, 8, 9, 10, 11, 13, 16, 17, 21, 22 and 27
+ * — all belong to Stories 3.2 through 3.7: Minimum-Bid Contention, the fixed
+ * clock, the draw, the sweep and the League Clock. Expiry-as-authority owns
+ * no §10 example of its own, so this list is unchanged by it.
  */
 const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 	['example-01-ordinary-raise.test.ts', '1 — Ordinary raise'],

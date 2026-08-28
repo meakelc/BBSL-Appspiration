@@ -43,8 +43,8 @@
 	// follows identically. `$lib/core` is a different matter: it is the pure
 	// core, it is what AD-2 says both runtimes load, and the helpers below
 	// are the same ones the server calls.
-	import { closesInPhrase } from '$lib/core/projection/auctions.ts';
-	import { relativePhrase } from '$lib/core/instant.ts';
+	import { AUCTION_EXPIRED, closesInPhrase, hasExpired } from '$lib/core/projection/auctions.ts';
+	import { formatInstant, parseInstant, relativePhrase } from '$lib/core/instant.ts';
 	import { parseMoney } from '$lib/core/money.ts';
 	import {
 		bidAppendedSentence,
@@ -208,11 +208,92 @@
 				}
 	);
 
+	/**
+	 * How often the page re-reads its own elapsed time. A named constant, and
+	 * a plain interval — no backoff, no visibility heuristic and no network
+	 * of any kind: this tick touches nothing but a number in this component.
+	 */
+	const TICK_MS = 1000;
+
+	/**
+	 * Milliseconds measured on this device since the first paint.
+	 *
+	 * A DELTA, never an origin. It starts at zero, which is what makes the
+	 * server-rendered HTML and the first client paint agree.
+	 *
+	 * **Never negative.** `Date.now()` is a wall clock, and a device whose
+	 * system time is adjusted BACKWARD mid-interval — an NTP correction, a
+	 * timezone-fiddling user — would otherwise produce a negative delta,
+	 * pulling `nowIso` earlier than the server's own instant and letting an
+	 * Auction that has expired read as live again. The clamp is why the
+	 * anchor is a floor: this page can run late, never early.
+	 */
+	let elapsedMs = $state(0);
+
+	/**
+	 * The instant every gate, phrase and countdown on this page reads.
+	 *
+	 * **The origin is the server's, and only the elapsed time is local.**
+	 * `control.figuresAt` is the database clock, read once by the read path
+	 * and handed over; `elapsedMs` is how long this device has measured since
+	 * then. NFR §5 requires that a skewed client neither see a different
+	 * close time nor bid after expiry, and both hold here: a device three
+	 * hours fast crosses the close at the same real moment a correct one
+	 * does, because its own wall clock never enters the sum. AD-29 exempts
+	 * countdowns from freezing for exactly this reason — they derive from an
+	 * absolute close instant the client already holds.
+	 *
+	 * Deriving this from `new Date()` would hand a skewed device a different
+	 * answer. Deriving it from `$derived(new Date())` — which is what this
+	 * page used to do — derives from nothing reactive at all, so it froze at
+	 * load and a tab left open never crossed its own close.
+	 *
+	 * An unreadable anchor is passed through unchanged rather than replaced:
+	 * `hasExpired` reads an unreadable `now` as NOT expired and the phrase
+	 * helpers say so plainly, which is the honest answer when the server's
+	 * own stamp cannot be read.
+	 */
+	const nowIso = $derived.by(() => {
+		const anchor = parseInstant(control.figuresAt);
+		if (anchor === null) return control.figuresAt;
+		return formatInstant(anchor + elapsedMs);
+	});
+
+	// The tick, client-only because `$effect` never runs during SSR, and
+	// cleaned up by the function it returns — Svelte calls that on teardown
+	// and before every re-run, so a re-anchor cannot leave two intervals
+	// running. `Date.now()` appears here and nowhere else on this page: it
+	// measures a duration between two readings of the same clock, which is
+	// the one thing a client clock is allowed to do.
+	//
+	// `control.figuresAt` is read for its DEPENDENCY, not its value: a
+	// refused submit or any other reload hands over a fresh server instant,
+	// and the elapsed count has to restart with it. Without this the new
+	// origin would be added to the old device measurement and the page would
+	// run ahead of the server by however long the tab had been open.
+	$effect(() => {
+		void control.figuresAt;
+		elapsedMs = 0;
+		const startedAt = Date.now();
+		const ticking = setInterval(() => {
+			// Clamped at zero: a backward system-clock adjustment must not
+			// move this page's instant behind the server's anchor.
+			elapsedMs = Math.max(0, Date.now() - startedAt);
+		}, TICK_MS);
+		return () => {
+			clearInterval(ticking);
+		};
+	});
+
 	const gateState: BidState = $derived({
 		leadingBid:
 			control.leadingAmount === null || control.leadingTeamId === null
 				? null
 				: { teamId: control.leadingTeamId, amount: parseMoney(control.leadingAmount) },
+		// The persisted absolute close instant, straight off the wire — the
+		// same string the fold holds and the lock will re-read. Nothing here
+		// recomputes it, and no remaining duration is ever sent (AD-3).
+		closesAt: auction.closesAt,
 		team: teamMoney,
 		playerIsMinorLeagueEligible: control.playerIsMinorLeagueEligible
 	});
@@ -220,10 +301,15 @@
 	/**
 	 * What the control says about the amount as it stands, from the core.
 	 *
-	 * `now` is the empty string, deliberately: no gate in `PLACE_BID_GATES`
-	 * reads it, and the viewer's own clock must never be an input to a rule
-	 * (AD-3 — server time, injected). When Story 3.1 adds the expiry gate,
-	 * this call must take the server's instant, not this machine's.
+	 * `now` is `nowIso` below: the SERVER's instant plus the elapsed time
+	 * this device has measured since it was handed over. Story 3.1's `expiry`
+	 * gate reads it, so it had to become real — and it is anchored on the
+	 * server's clock rather than read from this machine's, because AD-3 makes
+	 * server time the only time a rule may be decided against and NFR §5
+	 * requires a skewed device to see the same close as a correct one.
+	 *
+	 * Disabling the control is still never the check (AD-9): the same gate
+	 * runs again inside the lock, against the database's own clock.
 	 */
 	const typed = $derived(
 		bidControlState({
@@ -232,7 +318,7 @@
 			viewerTeamId: control.viewerTeamId,
 			amountText: amount,
 			confirmed,
-			now: ''
+			now: nowIso
 		})
 	);
 
@@ -292,12 +378,11 @@
 				managerId: '',
 				amount: reading.kind === 'usable' ? reading.amount : parseMoney(control.minimumLegal)
 			},
-			// The empty string, for the same reason `typed` passes it: no gate
-			// in `PLACE_BID_GATES` reads `now`, and the viewer's own clock must
-			// never be an input to a rule (AD-3 — server time, injected). Story
-			// 3.1's `expiry` gate is the first that will need one, and it must
-			// be sourced from the server here rather than invented.
-			''
+			// The server-anchored instant, for the same reason `typed` passes
+			// it: `expiry` is the one gate that reads `now`, and the viewer's
+			// own clock must never be an input to a rule (AD-3 — server time,
+			// injected). Only the ELAPSED delta is measured locally.
+			nowIso
 		)
 	);
 
@@ -349,17 +434,16 @@
 	/** The arithmetic the refusal was decided from. */
 	const refusalBreakdown = $derived(refusedGates === null ? [] : capBreakdown(refusedGates.cap));
 
-	// The viewer's own clock, read once at render time — never fed back into
-	// the pure core, which takes `now` as an argument and reads no clock of
-	// its own (AD-3). This is display-only arithmetic in the component, the
-	// same split `core/instant.ts`'s own header describes: the pure helpers
-	// derive the phrases, and `Intl.DateTimeFormat` here renders the absolute
-	// stamps in the viewer's own timezone.
+	// The two relative phrases, from the same server-anchored instant every
+	// gate above reads — so the countdown a Manager watches and the gate that
+	// would refuse their Bid cannot describe two different moments. The pure
+	// helpers derive the phrases; `Intl.DateTimeFormat` below renders the
+	// absolute stamps in the viewer's own timezone, which is the split
+	// `core/instant.ts`'s own header describes.
 	//
-	// The relative phrases are safe to derive on the server as well as the
-	// client: both instants are UTC and the arithmetic between them is the
+	// Both are safe to derive on the server as well as the client: every
+	// instant involved is UTC, and the arithmetic between two of them is the
 	// same wherever it runs.
-	const nowIso = $derived(new Date().toISOString());
 	const relative = $derived(relativePhrase(auction.nominatedAt, nowIso));
 	// `closesInPhrase` rather than `relativePhrase`: a close time is ahead of
 	// the reader, and the "ago" phrasing would read a future instant as
@@ -367,6 +451,13 @@
 	const closesIn = $derived(
 		auction.closesAt === null ? null : closesInPhrase(auction.closesAt, nowIso)
 	);
+	// Whether the Auction Clock has run out, through the core's ONE
+	// derivation — the identical function the `expiry` gate calls and the
+	// locked transaction reaches. The panel states it for EVERY viewer,
+	// bound to a Team or not: an expiry is a fact about the Auction, not
+	// about who is looking at it, and the control's own refusal for an
+	// unbound Manager is a different and standing one.
+	const expired = $derived(hasExpired(auction.closesAt, nowIso));
 
 	// The absolute stamps are NOT safe to derive during SSR.
 	// `Intl.DateTimeFormat(undefined, ...)` resolves `undefined` to the
@@ -516,6 +607,14 @@
 					<span id="auction-closes-absolute">{closesAtAbsolute}</span>
 				{/if}
 			</p>
+			<!-- The core's own sentence, printed. Not worded here, and not a
+			     second reading of the countdown beside it: both derive from
+			     the same absolute close instant and the same server-anchored
+			     now, so a tab left open with no update at all still crosses
+			     its own close (AD-29). -->
+			{#if expired}
+				<p class="prose" id="auction-expired">{AUCTION_EXPIRED}</p>
+			{/if}
 		</section>
 	{/if}
 
@@ -567,7 +666,14 @@
 				</label>
 				<!-- The FIELD is disabled on the standing condition, not just the
 				     submit: when this Auction will take no Bid from your Team at
-				     any amount, there is nothing to type. -->
+				     any amount, there is nothing to type.
+				     `control.available` is the server's answer at LOAD, and it
+				     cannot change in place — so expiry is named beside it. A
+				     clock that has run out is exactly the kind of standing
+				     condition this binding is for: no amount will change it.
+				     Without this, a tab left open across its own close would
+				     grey the submit and leave the field typable, which is the
+				     one case AD-29 exempts countdowns from freezing FOR. -->
 				<input
 					id="auction-bid-amount"
 					class="bid-amount"
@@ -575,7 +681,7 @@
 					type="text"
 					inputmode="numeric"
 					autocomplete="off"
-					disabled={!control.available}
+					disabled={!control.available || expired}
 					aria-describedby="auction-bid-availability auction-bid-minimum"
 					bind:value={amount}
 				/>

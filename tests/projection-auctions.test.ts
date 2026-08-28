@@ -9,13 +9,15 @@ import { describe, expect, it } from 'vitest';
 
 import { AUCTION_CLOCK } from '../src/lib/core/constants.ts';
 import {
+	AUCTION_EXPIRED,
 	BID_PLACED_EVENT,
 	INITIAL_AUCTIONS,
 	auctionForPlayer,
 	auctionsReducer,
 	closeInstantFor,
 	closesInPhrase,
-	contentionOf
+	contentionOf,
+	hasExpired
 } from '../src/lib/core/projection/auctions.ts';
 import { AUCTION_CLOSED_EVENT } from '../src/lib/core/projection/nominations.ts';
 import { fold } from '../src/lib/core/projection/fold.ts';
@@ -309,8 +311,97 @@ describe('closesInPhrase — the client counts down from an absolute instant', (
 		expect(closesInPhrase('2026-08-27T09:00:00.000Z', 'nonsense')).toBe('an unknown time left');
 	});
 
+	it('states the last minute in words rather than as 0m left', () => {
+		expect(closesInPhrase('2026-08-27T09:00:00.000Z', '2026-08-27T08:59:23.000Z')).toBe(
+			'less than a minute left'
+		);
+	});
+
 	it('is pure — the same two instants always produce the same phrase', () => {
 		const once = closesInPhrase('2026-08-27T09:00:00.000Z', '2026-08-26T20:00:00.000Z');
 		expect(closesInPhrase('2026-08-27T09:00:00.000Z', '2026-08-26T20:00:00.000Z')).toBe(once);
+	});
+
+	it('still returns every phrase it returned before Story 3.1 — the gate reads hasExpired, not this', () => {
+		// `expiry` decides through `hasExpired`; this function is a rendering
+		// and Story 3.1 changed none of its wordings. The whole set, asserted
+		// together so a later edit to one cannot slip past the cases above.
+		const closes = '2026-08-27T09:00:00.000Z';
+		expect([
+			closesInPhrase(closes, '2026-08-26T09:00:00.000Z'),
+			closesInPhrase(closes, '2026-08-27T04:48:00.000Z'),
+			closesInPhrase(closes, '2026-08-27T08:23:00.000Z'),
+			closesInPhrase(closes, '2026-08-27T08:59:23.000Z'),
+			closesInPhrase(closes, closes),
+			closesInPhrase('nonsense', closes)
+		]).toEqual([
+			'1d 0h left',
+			'4h 12m left',
+			'37m left',
+			'less than a minute left',
+			'no time left',
+			'an unknown time left'
+		]);
+	});
+});
+
+// --- Story 3.1: expiry-as-authority, in one derivation ---------------------
+
+describe('hasExpired — the ONE comparison expiry-as-authority is made through', () => {
+	const CLOSES = '2026-08-27T09:00:00.000Z';
+
+	it('passes one millisecond before the close', () => {
+		expect(hasExpired(CLOSES, '2026-08-27T08:59:59.999Z')).toBe(false);
+	});
+
+	it('EXPIRES at exactly the close instant', () => {
+		// `now >= closesAt`, not `>`: Story 3.5 hands each Auction its own
+		// nominal expiry as `now`, so a Bid at that instant must not beat the
+		// close it is being compared against.
+		expect(hasExpired(CLOSES, CLOSES)).toBe(true);
+	});
+
+	it('expires one millisecond after, and identically thirty days after', () => {
+		expect(hasExpired(CLOSES, '2026-08-27T09:00:00.001Z')).toBe(true);
+		expect(hasExpired(CLOSES, '2026-09-26T09:00:00.000Z')).toBe(true);
+	});
+
+	it('passes when there is no clock at all — nominated, nobody has bid', () => {
+		expect(hasExpired(null, '2026-09-26T09:00:00.000Z')).toBe(false);
+		expect(hasExpired(null, '')).toBe(false);
+	});
+
+	it('reads an unreadable close instant as EXPIRED', () => {
+		// `readPayload`'s own stated direction: an Auction whose close cannot
+		// be read reads as already due rather than as running forever.
+		expect(hasExpired('nonsense', CLOSES)).toBe(true);
+		expect(hasExpired('2026-02-30T09:00:00.000Z', CLOSES)).toBe(true);
+		expect(hasExpired('', CLOSES)).toBe(true);
+	});
+
+	it('reads an unreadable or empty `now` as NOT expired', () => {
+		// The opposite direction, on purpose: `now` is the shell's to supply,
+		// and AD-1 makes a shell bug a throw rather than a returned refusal.
+		// Refusing here would swallow `decide()`'s TypeError into a
+		// Manager-facing statement that is not true.
+		expect(hasExpired(CLOSES, '')).toBe(false);
+		expect(hasExpired(CLOSES, 'nonsense')).toBe(false);
+		expect(hasExpired(CLOSES, '2026-02-30T09:00:00.000Z')).toBe(false);
+	});
+
+	it('is pure — the same two instants always give the same answer', () => {
+		const once = hasExpired(CLOSES, '2026-08-27T10:00:00.000Z');
+		expect(hasExpired(CLOSES, '2026-08-27T10:00:00.000Z')).toBe(once);
+	});
+});
+
+describe('AUCTION_EXPIRED — the one sentence the board states', () => {
+	it('is a complete sentence a surface prints verbatim', () => {
+		expect(AUCTION_EXPIRED).toBe('This Auction expired.');
+	});
+
+	it('quotes no figure of any kind', () => {
+		expect(AUCTION_EXPIRED).not.toMatch(/\d/);
+		expect(AUCTION_EXPIRED).not.toContain('$');
 	});
 });

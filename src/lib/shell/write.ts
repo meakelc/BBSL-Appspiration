@@ -132,6 +132,34 @@ const ROLLBACK_SQL = 'rollback';
  */
 const LOCK_AND_CLOCK_SQL = 'select pg_advisory_xact_lock($1::bigint) as locked, now() as now';
 
+/**
+ * The database clock, validated — the one place a `now` column read off a
+ * result row becomes a `Date` this codebase will act on.
+ *
+ * **The VALIDATION is shared; the QUERY deliberately is not.** This module
+ * must read the clock in the SAME round trip as the lock
+ * (`LOCK_AND_CLOCK_SQL`), because `pg_advisory_xact_lock` has to run before
+ * any state is read (AD-6) and a second statement would be a second round
+ * trip for a value one already returns. `server/auction-page.ts` takes no
+ * lock at all and issues a bare `select now()`. Two different statements,
+ * one identical question about what came back — so the statement stays with
+ * each caller and only the check lives here. `server/` already depends on
+ * `shell/`, so importing it there is the existing direction and not an
+ * inversion.
+ *
+ * `instanceof Date` alone is NOT enough: `new Date('nonsense')` is a `Date`,
+ * and calling `toISOString()` on one throws a bare `RangeError` instead of
+ * the stated error below. A driver that hands back an unparseable timestamp
+ * is the same class of failure as one that hands back nothing, and both must
+ * arrive as this message rather than as a stack trace from a formatter.
+ */
+export function requireDatabaseClock(value: unknown): Date {
+	if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
+		throw new Error('the database clock read returned no usable "now" value');
+	}
+	return value;
+}
+
 const INSERT_EVENT_SQL = `
 	insert into auction_events
 		(occurred_at, schema_version, core_version, manager_id, team_id,
@@ -190,10 +218,7 @@ export async function runTransactionalWrite<TState>(input: {
 
 		// lock, before any state is read (AD-6).
 		const lockResult = await client.query(LOCK_AND_CLOCK_SQL, [GLOBAL_WRITE_LOCK_KEY.toString()]);
-		const now = lockResult.rows[0]?.['now'];
-		if (!(now instanceof Date)) {
-			throw new Error('the database clock read returned no usable "now" value');
-		}
+		const now = requireDatabaseClock(lockResult.rows[0]?.['now']);
 
 		// load
 		const state = await input.load(client);

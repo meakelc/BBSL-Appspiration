@@ -17,7 +17,7 @@ import {
 	MINOR_LEAGUE_SLOTS,
 	SALARY_CAP
 } from '../../src/lib/core/constants.ts';
-import { BID_PLACED_EVENT } from '../../src/lib/core/projection/auctions.ts';
+import { AUCTION_EXPIRED, BID_PLACED_EVENT } from '../../src/lib/core/projection/auctions.ts';
 import type { Auction, Bid } from '../../src/lib/core/projection/auctions.ts';
 import { parseMoney } from '../../src/lib/core/money.ts';
 import {
@@ -118,12 +118,19 @@ function command(amount: number, teamId = 't-2'): PlaceBid {
 // --- AC1: the shape of the two entry points --------------------------------
 
 describe('evaluate — total, and the gate set is fixed per command type (AC1)', () => {
-	it('declares exactly six gates for PlaceBid, in one place', () => {
-		// Four in Story 2.5, five in 2.6, six in 2.7. The list is asserted
-		// literally rather than by length so ADDING a gate is a deliberate
-		// edit here as well as in `core/types.ts` — which is the whole point
-		// of it living in one place. Story 3.1 adds `expiry`.
+	it('declares exactly seven gates for PlaceBid, in one place and in one order', () => {
+		// Four in Story 2.5, five in 2.6, six in 2.7, seven in 3.1. The list
+		// is asserted literally rather than by length so ADDING a gate is a
+		// deliberate edit here as well as in `core/types.ts` — which is the
+		// whole point of it living in one place.
+		//
+		// The ORDER is asserted too, and this is the one place it is
+		// recorded. `allGatesPassed`, `failedGates`, `bidRefusalDelta` and
+		// `bidGateReport` all iterate this list, so it is the order a Manager
+		// reads the refusal panel in — and `expiry` is first because a clock
+		// that has run out is the frame every other question sits inside.
 		expect([...PLACE_BID_GATES]).toEqual([
+			'expiry',
 			'opening',
 			'selfBid',
 			'increment',
@@ -1881,5 +1888,277 @@ describe('off-grid figures — rendered, never thrown on', () => {
 
 		expect(control.blocked).toBe(true);
 		expect(control.detail.length).toBeGreaterThan(20);
+	});
+});
+
+// --- Story 3.1: expiry is authoritative for validation ---------------------
+
+/**
+ * The same fixture shape `standardAt` builds, with the Auction's close
+ * instant chosen by the test rather than inherited from the leading Bid.
+ *
+ * Built through `bidStateFor` for the reason every fixture in this file is:
+ * these tests must exercise the bridge `server/bidding.ts` and
+ * `server/auction-page.ts` take, not a hand-assembled shape that could drift
+ * from it.
+ */
+function auctionClosingAt(closesAt: string, amount = 8_000_000, teamId = 't-1'): BidState {
+	const bid = leading(amount, teamId);
+	const auction: Auction = {
+		fantraxPlayerId: 'p-1',
+		contention: 'standard',
+		leadingBid: { ...bid, closesAt },
+		closesAt,
+		bids: [{ ...bid, closesAt }]
+	};
+	return bidStateFor(auction, RICH, false);
+}
+
+/** The close instant every boundary below is measured against. */
+const CLOSES = '2026-08-27T09:00:00.000Z';
+
+/** A legal raise over the $8.0M fixture — refused by nothing but the clock. */
+const RAISE = command(8_500_000);
+
+describe('expiry — the persisted close instant is the authority (AC2, AC3)', () => {
+	it('passes one millisecond before the close, and the other six decide the Bid', () => {
+		const gates = evaluate(auctionClosingAt(CLOSES), RAISE, '2026-08-27T08:59:59.999Z');
+		expect(gates.expiry.passed).toBe(true);
+		expect(allGatesPassed(gates)).toBe(true);
+		expect(decide(auctionClosingAt(CLOSES), RAISE, '2026-08-27T08:59:59.999Z', null).kind).toBe(
+			'accepted'
+		);
+	});
+
+	it('REFUSES at exactly the close instant', () => {
+		// Story 3.5 supplies each Auction its own nominal expiry as `now`, so
+		// a Bid at that instant must not beat the close.
+		const gates = evaluate(auctionClosingAt(CLOSES), RAISE, CLOSES);
+		expect(gates.expiry.passed).toBe(false);
+		expect(failedGates(gates)).toEqual(['expiry']);
+	});
+
+	it('refuses one millisecond after, and identically thirty days after', () => {
+		for (const now of ['2026-08-27T09:00:00.001Z', '2026-09-26T09:00:00.000Z']) {
+			const gates = evaluate(auctionClosingAt(CLOSES), RAISE, now);
+			// No gate's answer drifts with the size of the gap: a sweep
+			// stalled for a month refuses exactly as one stalled for a
+			// millisecond does, and nothing was accepted in the interim.
+			expect(failedGates(gates), now).toEqual(['expiry']);
+			expect(gates.expiry.closesAt, now).toBe(CLOSES);
+			expect(gates.expiry.evaluatedAt, now).toBe(now);
+		}
+	});
+
+	it('passes when nobody has bid — no Opening Bid, so no clock to run out', () => {
+		const gates = evaluate(NO_BIDS, command(1_500_000), '2099-01-01T00:00:00.000Z');
+		expect(gates.expiry).toEqual({
+			passed: true,
+			closesAt: null,
+			evaluatedAt: '2099-01-01T00:00:00.000Z'
+		});
+		// The `opening` gate is what decides such a Bid, and it does.
+		expect(failedGates(evaluate(NO_BIDS, command(500_000), NOW))).toEqual(['opening']);
+	});
+
+	it('reads an unreadable close instant as expired', () => {
+		const gates = evaluate(auctionClosingAt('nonsense'), RAISE, NOW);
+		expect(gates.expiry.passed).toBe(false);
+		expect(gates.expiry.closesAt).toBe('nonsense');
+	});
+
+	it('PASSES on an empty or unreadable `now`, and decide() still throws its TypeError', () => {
+		// A clock the shell failed to supply is a bug, and AD-1 makes a shell
+		// bug a throw rather than a returned refusal. Refusing here would
+		// swallow that throw into a Manager-facing statement that is not true.
+		for (const now of ['', 'nonsense']) {
+			const gates = evaluate(auctionClosingAt(CLOSES), RAISE, now);
+			expect(gates.expiry.passed, now).toBe(true);
+			expect(allGatesPassed(gates), now).toBe(true);
+			expect(() => decide(auctionClosingAt(CLOSES), RAISE, now, null), now).toThrow(TypeError);
+		}
+	});
+
+	it('never reads whether a projection still holds the Auction — only the two instants', () => {
+		// The IDENTICAL state, folded and still present in `OpenAuctions`,
+		// with no `AuctionClosed` anywhere: accepted before its close and
+		// refused after it. That is AD-12's "never reads a projection's open
+		// flag as authority", stated as a behaviour rather than as a claim.
+		const state = auctionClosingAt(CLOSES);
+		expect(decide(state, RAISE, '2026-08-27T08:59:59.999Z', null).kind).toBe('accepted');
+		expect(decide(state, RAISE, '2026-08-27T09:00:00.001Z', null).kind).toBe('rejected');
+	});
+
+	it('carries the two instants, and no money field and no count', () => {
+		const outcome = evaluate(auctionClosingAt(CLOSES), RAISE, '2026-08-27T11:00:00.000Z').expiry;
+		expect(Object.keys(outcome).sort()).toEqual(['closesAt', 'evaluatedAt', 'passed']);
+		expect(outcome).toEqual({
+			passed: false,
+			closesAt: CLOSES,
+			evaluatedAt: '2026-08-27T11:00:00.000Z'
+		});
+	});
+
+	it('reports both grounds, in PLACE_BID_GATES order, when the clock AND the cap refuse', () => {
+		const poor: TeamMoneyState = {
+			capSpace: parseMoney(9_000_000),
+			rosterCount: 9,
+			leading: [],
+			eligibleLeading: [],
+			minorLeagueOccupied: 0
+		};
+		const bid = leading(8_000_000);
+		const state = bidStateFor(
+			{
+				fantraxPlayerId: 'p-1',
+				contention: 'standard',
+				leadingBid: { ...bid, closesAt: CLOSES },
+				closesAt: CLOSES,
+				bids: [{ ...bid, closesAt: CLOSES }]
+			},
+			poor,
+			false
+		);
+		// A $30.0M offer is far over whatever this Team's Maximum Bid is, and
+		// the Auction is two hours past its close as well.
+		const gates = evaluate(state, command(30_000_000), '2026-08-27T11:00:00.000Z');
+		expect(failedGates(gates)).toEqual(['expiry', 'cap']);
+		const delta = bidRefusalDelta({ kind: 'gates', gates });
+		// The clock's sentence comes FIRST — the reading order is the
+		// declared order — and each ground states its own arithmetic.
+		expect(delta.indexOf(AUCTION_EXPIRED)).toBe(0);
+		expect(delta).toContain('exceeds your Maximum Bid');
+	});
+});
+
+describe('expiry — the sentence, the figure and the chip (AC2)', () => {
+	const expiredGates = () => evaluate(auctionClosingAt(CLOSES), RAISE, '2026-08-27T11:00:00.000Z');
+
+	it('names a clock and an elapsed time, and quotes no money figure and no count', () => {
+		const delta = bidRefusalDelta({ kind: 'gates', gates: expiredGates() });
+		expect(delta).toContain(AUCTION_EXPIRED);
+		expect(delta).toContain('Auction Clock');
+		expect(delta).toContain('2 hours ago');
+		// No money anywhere in it, and no roster count either: this Bid was
+		// not too large and the roster was not too full — the Auction was
+		// over, and a refusal quoting a ground it did not decide on would be
+		// the defect AD-7 names.
+		expect(delta).not.toContain('$');
+		expect(delta).not.toContain('Maximum Bid');
+		expect(delta).not.toContain('Roster Count');
+		expect(delta).not.toContain('Roster Capacity');
+	});
+
+	it('says "at an unknown time" rather than inventing a second wording for an unreadable close', () => {
+		const gates = evaluate(auctionClosingAt('nonsense'), RAISE, NOW);
+		expect(bidRefusalDelta({ kind: 'gates', gates })).toContain('at an unknown time');
+	});
+
+	it('labels the chip with the glossary term, so it cannot be read as Cap or Slots', () => {
+		const row = bidGateReport(expiredGates()).find((entry) => entry.gate === 'expiry');
+		expect(row?.label).toBe('Auction Clock');
+		expect(row?.chip).toBe('Auction Clock · Refused');
+	});
+
+	it('reports the row FIRST, above the cap and the slots rows', () => {
+		const rows = bidGateReport(expiredGates());
+		expect(rows.map((row) => row.gate)).toEqual([...PLACE_BID_GATES]);
+		expect(rows[0]?.gate).toBe('expiry');
+	});
+
+	it('states one figure for passed and refused alike — the clock left, from closesInPhrase', () => {
+		const refused = bidGateReport(expiredGates()).find((row) => row.gate === 'expiry');
+		expect(refused?.figure).toBe('no time left');
+
+		const running = bidGateReport(
+			evaluate(auctionClosingAt(CLOSES), RAISE, '2026-08-27T04:48:00.000Z')
+		).find((row) => row.gate === 'expiry');
+		expect(running?.chip).toBe('Auction Clock · Passed');
+		expect(running?.figure).toBe('4h 12m left');
+	});
+
+	it('states an unreadable close time rather than contradicting its own chip', () => {
+		// `hasExpired` fails CLOSED on an instant it cannot read, so the chip
+		// says Refused. `closesInPhrase` answers `an unknown time left` for
+		// that same input, and printing THAT beside a Refused chip would say
+		// time may still remain next to a verdict saying it does not. The
+		// figure is therefore keyed on readability, and the two agree.
+		const row = bidGateReport(evaluate(auctionClosingAt('nonsense'), RAISE, NOW)).find(
+			(entry) => entry.gate === 'expiry'
+		);
+		expect(row?.chip).toBe('Auction Clock · Refused');
+		expect(row?.figure).toBe('the close time cannot be read');
+		expect(row?.figure).not.toContain('left');
+	});
+
+	it('agrees between chip and figure in EVERY expiry case', () => {
+		// The property the branch above exists to hold: a row saying Refused
+		// never carries a figure that implies time remains, and a row saying
+		// Passed never carries one that implies it does not.
+		const cases: Array<[state: BidState, now: string]> = [
+			[auctionClosingAt(CLOSES), '2026-08-27T04:48:00.000Z'],
+			[auctionClosingAt(CLOSES), '2026-08-27T08:59:59.999Z'],
+			[auctionClosingAt(CLOSES), CLOSES],
+			[auctionClosingAt(CLOSES), '2026-09-26T09:00:00.000Z'],
+			[auctionClosingAt('nonsense'), NOW],
+			[NO_BIDS, NOW]
+		];
+		// The two figures that mean "this clock is done". Anything else on the
+		// row asserts a quantity of time still to come.
+		const statesNoTimeRemains = (figure: string) =>
+			figure === 'no time left' || figure === 'the close time cannot be read';
+		for (const [state, now] of cases) {
+			const row = bidGateReport(evaluate(state, RAISE, now)).find(
+				(entry) => entry.gate === 'expiry'
+			);
+			const refused = row?.chip === 'Auction Clock · Refused';
+			const label = `${String(row?.figure)} / ${now}`;
+			// Refused rows say the clock is done; passed rows never do.
+			expect(statesNoTimeRemains(String(row?.figure)), label).toBe(refused);
+		}
+	});
+
+	it('states there is no Auction Clock at all when nobody has bid', () => {
+		const row = bidGateReport(evaluate(NO_BIDS, command(1_500_000), NOW)).find(
+			(entry) => entry.gate === 'expiry'
+		);
+		expect(row?.chip).toBe('Auction Clock · Passed');
+		expect(row?.figure).toBe('no Bids yet, so no Auction Clock');
+	});
+
+	it('words nothing for a gate that passed', () => {
+		const gates = evaluate(auctionClosingAt(CLOSES), RAISE, '2026-08-27T04:48:00.000Z');
+		expect(bidRefusalDelta({ kind: 'gates', gates })).toBe('');
+	});
+});
+
+describe('expiry — the control the surface disables (AC6)', () => {
+	it('blocks the control once the clock has run out, worded by the core', () => {
+		const control = bidControlState({
+			state: auctionClosingAt(CLOSES),
+			fantraxPlayerId: 'p-1',
+			viewerTeamId: 't-2',
+			amountText: '8500000',
+			confirmed: true,
+			now: '2026-08-27T11:00:00.000Z'
+		});
+
+		expect(control.blocked).toBe(true);
+		expect(control.refusingGates).toEqual(['expiry']);
+		expect(control.detail).toContain(AUCTION_EXPIRED);
+	});
+
+	it('leaves the same control live one millisecond earlier', () => {
+		const control = bidControlState({
+			state: auctionClosingAt(CLOSES),
+			fantraxPlayerId: 'p-1',
+			viewerTeamId: 't-2',
+			amountText: '8500000',
+			confirmed: true,
+			now: '2026-08-27T08:59:59.999Z'
+		});
+
+		expect(control.blocked).toBe(false);
+		expect(control.detail).toBe(BID_READY);
 	});
 });

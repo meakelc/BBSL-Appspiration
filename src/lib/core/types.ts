@@ -449,6 +449,36 @@ export type SlotsGateOutcome = GateOutcome & {
 };
 
 /**
+ * The expiry gate: an Auction whose Auction Clock has run out takes no
+ * further Bid (Story 3.1, AD-12).
+ *
+ * **Two instants and nothing else.** `closesAt` is the persisted absolute
+ * close instant the `BidPlaced` payload carried and `auctionsReducer`
+ * folded; `evaluatedAt` is the `now` the shell injected and it was compared
+ * against. There is no `offered` field, no money field and no count on this
+ * shape at all — the same structural discipline `SlotsGateOutcome` uses to
+ * keep a capacity refusal from being read as a cap refusal, applied to a
+ * refusal that is about neither. A gate that cannot see an amount cannot
+ * quote one.
+ *
+ * **The pair is what makes a refusal checkable.** A Manager reading "this
+ * Auction expired two hours ago" can see both the instant it was due and the
+ * instant it was judged at, which is the same reason `CapGateOutcome`
+ * carries its terms rather than only its verdict.
+ *
+ * `closesAt` is `null` for a nominated Player nobody has bid on — no Opening
+ * Bid, so no clock — and the gate PASSES in that case. `evaluatedAt` is
+ * never null: it is whatever string the caller passed, including the empty
+ * one, because reporting what was compared is the point.
+ */
+export type ExpiryGateOutcome = GateOutcome & {
+	/** The persisted absolute close instant, or `null` when no Bid leads. */
+	readonly closesAt: string | null;
+	/** The injected `now` this gate compared against. Never derived here. */
+	readonly evaluatedAt: string;
+};
+
+/**
  * The gate set for `PlaceBid`, **fixed per command type** (AD-1).
  *
  * Declared here, in one place, so a later story adds a gate with a single
@@ -457,13 +487,23 @@ export type SlotsGateOutcome = GateOutcome & {
  * added `cap` and Story 2.7 added `slots` — each was that one edit, and each
  * is what made every consumer stop compiling until it handled the new gate.
  * Story 2.8 added NONE: Minors Exposure widened `cap`'s and `slots`'
- * arithmetic and left this list exactly as it was. 3.1 adds `expiry`.
+ * arithmetic and left this list exactly as it was. Story 3.1 added `expiry`,
+ * and it cost the same ONE edit — the list below, plus the key on
+ * `PlaceBidGateResults`; every consumer, the refusal panel's seventh chip
+ * included, followed from it.
+ *
+ * **The ORDER is the reading order.** `allGatesPassed`, `failedGates`,
+ * `bidRefusalDelta` and `bidGateReport` all iterate this list, so it is the
+ * order a Manager reads the refusal panel in. `expiry` is FIRST because a
+ * clock that has run out is the frame every other question sits inside:
+ * offering, raising and affording are all moot once it has.
  *
  * Frozen at runtime as well as `as const`, because this list is what
  * `evaluate()`'s totality is asserted against — a caller that could splice
  * an entry out of it could make a partial result look complete.
  */
 export const PLACE_BID_GATES = Object.freeze([
+	'expiry',
 	'opening',
 	'selfBid',
 	'increment',
@@ -472,7 +512,7 @@ export const PLACE_BID_GATES = Object.freeze([
 	'slots'
 ] as const);
 
-/** One of the six gate names above. */
+/** One of the seven gate names above. */
 export type PlaceBidGate = (typeof PLACE_BID_GATES)[number];
 
 /**
@@ -484,6 +524,7 @@ export type PlaceBidGate = (typeof PLACE_BID_GATES)[number];
  * record it has to guess at.
  */
 export type PlaceBidGateResults = {
+	readonly expiry: ExpiryGateOutcome;
 	readonly opening: OpeningGateOutcome;
 	readonly selfBid: SelfBidGateOutcome;
 	readonly increment: IncrementGateOutcome;

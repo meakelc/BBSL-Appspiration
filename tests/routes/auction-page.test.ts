@@ -25,6 +25,8 @@ import { join } from 'node:path';
 import { isHttpError } from '@sveltejs/kit';
 
 import { classifyDeviceClass } from '../../src/lib/core/device-class.ts';
+import { formatInstant, parseInstant } from '../../src/lib/core/instant.ts';
+import { hasExpired } from '../../src/lib/core/projection/auctions.ts';
 import { parseMoney } from '../../src/lib/core/money.ts';
 import {
 	BID_READY,
@@ -360,7 +362,7 @@ describe('the Auction page — the bid control (AC7)', () => {
 	});
 
 	it('disables the field itself, not just the submit, on a standing condition', () => {
-		expect(PAGE).toMatch(/disabled=\{!control\.available\}/);
+		expect(PAGE).toMatch(/disabled=\{!control\.available \|\| expired\}/);
 		expect(PAGE).toMatch(/disabled=\{blocked\}/);
 	});
 
@@ -401,6 +403,136 @@ describe('the Auction page — the bid control (AC7)', () => {
 
 	it('omits the minimum-legal line rather than printing an unrenderable figure', () => {
 		expect(PAGE).toMatch(/\{#if control\.minimumLegalSentence !== null\}/);
+	});
+});
+
+describe('the Auction page — the clock it counts down on (Story 3.1)', () => {
+	it('anchors its instant on the SERVER’s, never on the device’s', () => {
+		// NFR §5: a skewed client must neither see a different close time nor
+		// bid after expiry. Both hold only if the ORIGIN is the server's
+		// instant and the device contributes nothing but elapsed time.
+		expect(PAGE).toMatch(/parseInstant\(control\.figuresAt\)/);
+		expect(PAGE).toMatch(/formatInstant\(anchor \+ elapsedMs\)/);
+		// The page used to derive `now` from the device, which froze at load
+		// because `$derived(new Date())` depends on nothing reactive. Neither
+		// spelling survives.
+		expect(PAGE_CODE).not.toMatch(/\$derived\(new Date\(\)/);
+		expect(PAGE_CODE).not.toMatch(/new Date\(\)\.toISOString\(\)/);
+	});
+
+	it('uses Date.now() for the elapsed DELTA and nothing else', () => {
+		// Two readings of the same clock make a duration, which is the one
+		// thing a client clock may be trusted with (AD-3, AD-29). Both
+		// occurrences are inside the tick, and both are subtracted.
+		const uses = [...PAGE_CODE.matchAll(/Date\.now\(\)/g)];
+		expect(uses).toHaveLength(2);
+		expect(PAGE).toMatch(/const startedAt = Date\.now\(\)/);
+		expect(PAGE).toMatch(/elapsedMs = Math\.max\(0, Date\.now\(\) - startedAt\)/);
+	});
+
+	it('ticks once a second inside an $effect, and clears the interval', () => {
+		const intervals = [...PAGE_CODE.matchAll(/setInterval\(/g)];
+		expect(intervals).toHaveLength(1);
+		// Inside an effect, so it never runs during SSR — and cleaned up by
+		// the function the effect returns, so a re-run cannot leave two.
+		const effectStart = PAGE.search(/\$effect\(\(\) => \{\s*void control\.figuresAt;/);
+		expect(effectStart).toBeGreaterThan(-1);
+		expect(PAGE.indexOf('setInterval(')).toBeGreaterThan(effectStart);
+		expect(PAGE).toMatch(/return \(\) => \{\s*clearInterval\(ticking\);\s*\}/);
+		// A named constant, not a bare literal buried in the call.
+		expect(PAGE).toMatch(/const TICK_MS = 1000/);
+		expect(PAGE).toMatch(/\}, TICK_MS\)/);
+	});
+
+	it('re-anchors on a fresh server instant rather than adding it to an old count', () => {
+		// A refused submit reloads, and `figuresAt` moves with it. The effect
+		// depends on it and resets the measurement, so the page can never run
+		// ahead of the server by however long the tab had been open.
+		expect(PAGE).toMatch(/void control\.figuresAt;\s*elapsedMs = 0;/);
+	});
+
+	it('feeds that one instant to both gate calls, and passes the empty string to neither', () => {
+		expect(PAGE).toMatch(/now: nowIso/);
+		expect(PAGE_CODE).not.toMatch(/now: ''/);
+		// `liveGates` takes it positionally as `evaluate`'s third argument, and
+		// the page passes `nowIso` exactly twice: once named, once positional.
+		expect([...PAGE_CODE.matchAll(/nowIso/g)].length).toBeGreaterThanOrEqual(2);
+		expect(PAGE_CODE).toMatch(/nowIso\s*\)\s*\);/);
+	});
+
+	it('disables the amount FIELD as the clock runs out, not only the submit', () => {
+		// `control.available` is the server's answer at LOAD and cannot change
+		// in place, so the field alone would stay typable on the exact case
+		// AC6 is about: a tab left open that crosses its close with no update.
+		// The submit already follows `nowIso` through `blocked`; the field has
+		// to name `expired` to move with it. A clock that has run out is a
+		// standing condition no amount will change, which is what that
+		// binding is for.
+		expect(PAGE).toMatch(/disabled=\{!control\.available \|\| expired\}/);
+		// Both controls, and both reachable from the ticking instant: `expired`
+		// and `blocked` are each derived from `nowIso`.
+		expect(PAGE).toMatch(/disabled=\{blocked\}/);
+		expect(PAGE).toMatch(/const blocked = \$derived\(typed\.blocked\)/);
+		expect(PAGE).toMatch(/const expired = \$derived\(hasExpired\(auction\.closesAt, nowIso\)\)/);
+	});
+
+	it('clamps the elapsed delta at zero, so a backward clock cannot revive an expired Auction', () => {
+		// `Date.now()` is a wall clock: an NTP correction or a user changing
+		// the system time mid-interval yields a negative delta, which would
+		// pull `nowIso` BEHIND the server's anchor and let an expired Auction
+		// read as live. The page may run late, never early.
+		expect(PAGE).toMatch(/elapsedMs = Math\.max\(0, Date\.now\(\) - startedAt\)/);
+
+		// The same expression the page evaluates, exercised directly: a
+		// negative raw delta clamps to the anchor itself, never before it.
+		const figuresAt = '2026-08-27T09:00:00.000Z';
+		const anchor = parseInstant(figuresAt);
+		expect(anchor).not.toBeNull();
+		const nowIsoFor = (rawDeltaMs: number) =>
+			formatInstant((anchor ?? 0) + Math.max(0, rawDeltaMs));
+		expect(nowIsoFor(-3_600_000)).toBe(figuresAt);
+		expect(nowIsoFor(-1)).toBe(figuresAt);
+		expect(nowIsoFor(0)).toBe(figuresAt);
+		// And an Auction already expired at the anchor stays expired however
+		// far the device's clock is wound back.
+		expect(hasExpired(figuresAt, nowIsoFor(-86_400_000))).toBe(true);
+		expect(hasExpired(figuresAt, nowIsoFor(1000))).toBe(true);
+	});
+
+	it('ships the absolute close instant into the gate state — never a duration', () => {
+		expect(PAGE).toMatch(/closesAt: auction\.closesAt/);
+		expect(PAGE_CODE).not.toMatch(/remainingMs|secondsLeft|remainingSeconds/i);
+	});
+
+	it('states expiry on the Auction Clock panel, in the core’s words, for every viewer', () => {
+		// `hasExpired` is the core's one derivation — the same function the
+		// gate calls — and `AUCTION_EXPIRED` is the core's sentence, printed.
+		// The statement sits on the panel rather than on the control, so a
+		// viewer bound to no Team reads it too.
+		expect(PAGE).toMatch(/const expired = \$derived\(hasExpired\(auction\.closesAt, nowIso\)\)/);
+		expect(PAGE).toContain('{#if expired}');
+		expect(PAGE).toContain('id="auction-expired">{AUCTION_EXPIRED}');
+		// Not worded here: the sentence is imported, never spelled.
+		expect(PAGE_CODE).not.toMatch(/This Auction expired/);
+		// The statement is inside the Auction Clock panel, which is itself
+		// conditional on a close instant existing — no clock, no expiry.
+		expect(PAGE.indexOf('{#if auction.closesAt !== null}')).toBeLessThan(
+			PAGE.indexOf('{#if expired}')
+		);
+	});
+
+	it('still words no gate — the core hands it every sentence (§Verification)', () => {
+		// The seventh gate reached the refusal panel by `PLACE_BID_GATES`
+		// growing, exactly as the sixth did, so the vocabulary guards below
+		// hold unweakened. This page names no gate field and no gate name.
+		for (const forbidden of [
+			/evaluatedAt/,
+			/Auction Clock ·/,
+			/ran out/i,
+			/expiry gate/i
+		]) {
+			expect(PAGE_CODE, String(forbidden)).not.toMatch(forbidden);
+		}
 	});
 });
 
@@ -977,7 +1109,10 @@ describe('the refusal panel — the only surface with a dedicated anatomy', () =
 		);
 
 		expect(rows).toHaveLength(PLACE_BID_GATES.length);
-		expect(rows).toHaveLength(6);
+		// Seven since Story 3.1. The literal is kept beside the derived length
+		// deliberately: it is what notices a gate arriving without anybody
+		// deciding to add one.
+		expect(rows).toHaveLength(7);
 		expect(rows.map((row) => row.gate)).toEqual([...PLACE_BID_GATES]);
 		// The refusing row is filled — `class:refused={!row.passed}` — and
 		// every other row is outlined and carries its own figure.
@@ -1048,6 +1183,10 @@ describe('the Maximum Bid breakdown on the page', () => {
 describe('the bid action — a refusal carries the figures it was judged against', () => {
 	/** A gate set shaped as the locked transaction would return it. */
 	const REFUSED_GATES = {
+		// Story 3.1's seventh gate, passing: this Auction's clock has not run
+		// out, and the money is the only obstacle. The route passes the whole
+		// set through untouched whatever is in it.
+		expiry: { passed: true, closesAt: '2026-08-28T02:14:00.000Z', evaluatedAt: '2026-08-27T02:14:00.000Z' },
 		opening: {
 			passed: true,
 			opening: 'not_an_opening',

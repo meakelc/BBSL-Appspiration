@@ -1,7 +1,7 @@
 /**
- * The bidding gate: the two entry points AD-1 fixes, the six gates they
+ * The bidding gate: the two entry points AD-1 fixes, the seven gates they
  * decide through, the one sentence each refusal has, and the arithmetic the
- * refusal panel prints. Pure (Stories 2.5, 2.6, 2.7).
+ * refusal panel prints. Pure (Stories 2.5, 2.6, 2.7, 3.1).
  *
  * **Two entry points and no others.**
  *
@@ -33,12 +33,22 @@
  * says so outright). Granularity earns its keep where the increment rule does
  * not apply — §10 example 26's `$1,000,001` in a Minimum-Bid Contention.
  *
- * **The gate set grew by one gate, twice, exactly as designed.** Story 2.5 owned
- * four and said 2.6 would add `cap`, 2.7 `slots` and 3.1 `expiry`. Both
- * `cap` and `slots` are here now, and adding each was the single edit to
- * `PLACE_BID_GATES` in `core/types.ts` that the design promised. `expiry` is
- * not: this module still does not compare `now` to a close instant. A gate
- * this story does not own is not stubbed, not half-written and not named.
+ * **The gate set grew by one gate, three times, exactly as designed.** Story
+ * 2.5 owned four and said 2.6 would add `cap`, 2.7 `slots` and 3.1 `expiry`.
+ * All three are here now, and adding each was the single edit to
+ * `PLACE_BID_GATES` in `core/types.ts` that the design promised.
+ *
+ * **`expiry` is Story 3.1's, and it is the only gate that asks what time it
+ * is.** It compares the injected `now` against the PERSISTED absolute close
+ * instant the `BidPlaced` payload carried and `auctionsReducer` folded
+ * (AD-12), through the one `hasExpired` derivation in
+ * `projection/auctions.ts`. It never reads whether a projection still holds
+ * an Auction row, never reads a contention state and never reads the
+ * nomination fold: an Auction whose close has passed refuses a Bid whether
+ * or not Story 3.5's sweep has got round to recording the close, which is
+ * what makes a stalled sweep produce LATE closes rather than wrong ones. It
+ * goes FIRST in `PLACE_BID_GATES` because a clock that has run out is the
+ * frame every other question sits inside.
  *
  * **What the two gates may see.** Story 2.6 gave this module a Team's Cap
  * Space, its Roster Count and the open Auctions it leads, because Maximum
@@ -101,7 +111,9 @@
  * This module is part of the PURE core: no I/O, no clock, no randomness,
  * stdlib only, relative .ts imports only so Deno can load it (AD-2). It reads
  * no clock: `now` is an argument, and the only thing done with it is instant
- * arithmetic through `core/instant.ts`.
+ * arithmetic through `core/instant.ts` and `projection/auctions.ts`. That
+ * sentence was true before `expiry` existed and is true with it — the gate
+ * has a consumer for `now` now, and still no source for one.
  */
 
 import {
@@ -111,8 +123,16 @@ import {
 	MINIMUM_INCREMENT,
 	MINOR_LEAGUE_SLOTS
 } from '../constants.ts';
+import { parseInstant, relativePhrase } from '../instant.ts';
 import type { Auction, OpenAuctions } from '../projection/auctions.ts';
-import { BID_PLACED_EVENT, auctionForPlayer, closeInstantFor } from '../projection/auctions.ts';
+import {
+	AUCTION_EXPIRED,
+	BID_PLACED_EVENT,
+	auctionForPlayer,
+	closeInstantFor,
+	closesInPhrase,
+	hasExpired
+} from '../projection/auctions.ts';
 import type { Money } from '../money.ts';
 import {
 	addMoney,
@@ -129,6 +149,7 @@ import type {
 	CapGateOutcome,
 	Decided,
 	EventEnvelope,
+	ExpiryGateOutcome,
 	ExposingBid,
 	GranularityGateOutcome,
 	IncrementGateOutcome,
@@ -160,10 +181,19 @@ const INCREMENT: Money = parseMoney(MINIMUM_INCREMENT);
  * The leading Bid, as every gate in `PLACE_BID_GATES` needs it: who holds it
  * and for how much, and nothing else.
  *
- * Narrower than `projection/auctions.ts`'s `Bid` on purpose. A gate that
- * cannot see a Bid's `seq`, its instant or its close time cannot come to
- * depend on one, which keeps expiry-as-authority (Story 3.1) genuinely
- * outside this module rather than merely unwritten.
+ * Narrower than `projection/auctions.ts`'s `Bid` on purpose, and it stays
+ * narrow now that `expiry` exists. A gate that cannot see a Bid's `seq` or
+ * its own instant cannot come to depend on one.
+ *
+ * **The close instant deliberately did NOT arrive here.** Story 3.1 owns
+ * expiry-as-authority, and the narrowing this header used to justify by
+ * saying no gate could reach a close time still holds for the reason it was
+ * made: an Auction's close is a fact about the AUCTION, not about whichever
+ * Bid happens to lead it, and a gate reading it off the leading Bid would be
+ * reading it out of a projection row. So `closesAt` went onto `BidState` —
+ * one field, beside the other facts the gates decide from — and this shape
+ * is unchanged. The `selfBid` gate still sees a Team and an amount and
+ * nothing else.
  */
 export type LeadingBid = {
 	readonly teamId: string;
@@ -173,12 +203,14 @@ export type LeadingBid = {
 /**
  * Everything the bidding gates decide from — and it really is everything.
  *
- * Two fields, and together the smallest shape that answers all five gates:
- * the leading Bid — `null` when the Player is nominated and nobody has bid —
- * and the bidding Team's own money facts.
+ * The smallest shape that answers every gate: the leading Bid — `null` when
+ * the Player is nominated and nobody has bid — the Auction's own persisted
+ * close instant, and the bidding Team's money facts.
  * Whether an Auction is OPEN at all is not asked here — that is the
  * nomination fold, and `server/bidding.ts` answers it under the lock before
- * `decide()` is ever called.
+ * `decide()` is ever called. Whether it has RUN OUT is asked here, and only
+ * from `closesAt` below: the two questions are different, and AD-12 is the
+ * rule that keeps the second from being answered with the first.
  *
  * **Minimal because two callers must be able to build it.** The transaction
  * builds it from the fold under the lock; the SURFACE builds it from what the
@@ -208,6 +240,17 @@ export type LeadingBid = {
  */
 export type BidState = {
 	readonly leadingBid: LeadingBid | null;
+	/**
+	 * The Auction's persisted absolute close instant, exactly as the
+	 * `BidPlaced` payload carried it and `auctionsReducer` folded it — never
+	 * recomputed here, and never derived from the leading Bid's own instant.
+	 *
+	 * `null` is a nominated Player nobody has bid on: no Opening Bid, so no
+	 * Auction Clock, so nothing for `expiry` to run out. It is the ONE input
+	 * to expiry-as-authority (AD-12), which is why it sits on the state both
+	 * the transaction and the SURFACE build rather than on `LeadingBid`.
+	 */
+	readonly closesAt: string | null;
 	readonly team: TeamMoneyState | null;
 	/**
 	 * Whether the Player being bid on is Minor League Eligible — the fold of
@@ -313,15 +356,23 @@ export type TeamMoneyState = {
  * is deliberate: adding it made every caller a compile error, which is how a
  * fact that changes what a gate decides is supposed to arrive. A default of
  * `false` would have let a caller silently keep the pre-2.8 behaviour.
+ *
+ * Story 3.1 changed NO caller signature: `closesAt` comes off the `Auction`
+ * this function already receives, so the transaction needed no plumbing at
+ * all to give `expiry` its authority. The `null`-Auction branch passes
+ * `null` through, which is the no-clock state rather than a missing one.
  */
 export function bidStateFor(
 	auction: Auction | null,
 	team: TeamMoneyState | null,
 	playerIsMinorLeagueEligible: boolean
 ): BidState {
-	if (auction === null) return { leadingBid: null, team, playerIsMinorLeagueEligible };
+	if (auction === null) {
+		return { leadingBid: null, closesAt: null, team, playerIsMinorLeagueEligible };
+	}
 	return {
 		leadingBid: { teamId: auction.leadingBid.teamId, amount: auction.leadingBid.amount },
+		closesAt: auction.closesAt,
 		team,
 		playerIsMinorLeagueEligible
 	};
@@ -1061,6 +1112,46 @@ function evaluateSlots(state: BidState): SlotsGateOutcome {
 }
 
 /**
+ * The expiry gate: an Auction whose Auction Clock has run out takes no
+ * further Bid (Story 3.1, FR-13, AD-12).
+ *
+ * **It derives nothing itself.** The whole comparison is `hasExpired` in
+ * `projection/auctions.ts`, beside the fold that owns `closesAt` — so the
+ * gate, the transaction and the Auction page all read ONE derivation and
+ * cannot disagree about whether a given Auction has run out. There is no
+ * second `parseInstant` comparison written inline here, and that absence is
+ * the design rather than a coincidence.
+ *
+ * **Authority is the persisted absolute instant and nothing else.** This
+ * function is handed a `BidState` and a `now`; it reads no `OpenAuctions`,
+ * no nomination and no contention state. AD-12's "never reads a projection's
+ * open flag as authority" is therefore a property of what is in scope. A
+ * sweep that has stalled for a month leaves the Auction sitting in the fold
+ * looking open, and this gate still refuses — a late close is Story 3.5's
+ * problem to record, and nothing may be accepted in the gap it leaves.
+ *
+ * At the close instant itself the Auction is closed (`now >= closesAt`), and
+ * `hasExpired`'s own header states why: 3.5 hands each Auction its own
+ * nominal expiry as `now`.
+ *
+ * `closesAt` `null` passes — no Opening Bid, so no clock — and the `opening`
+ * gate is the one that decides such a Bid. An unreadable `now` passes too,
+ * so `decide()` still reaches its `TypeError` at `closeInstantFor` rather
+ * than converting a shell bug into a Manager-facing refusal.
+ *
+ * The outcome carries the two instants and no third thing: no amount, no
+ * money field and no count. A refusal that quoted a figure would be
+ * describing a ground it did not decide on (AD-7).
+ */
+function evaluateExpiry(state: BidState, now: string): ExpiryGateOutcome {
+	return {
+		passed: !hasExpired(state.closesAt, now),
+		closesAt: state.closesAt,
+		evaluatedAt: now
+	};
+}
+
+/**
  * Every gate for a `PlaceBid`, always all of them, whatever the state.
  *
  * Total. It never throws, never short-circuits, and returns exactly the keys
@@ -1068,17 +1159,21 @@ function evaluateSlots(state: BidState): SlotsGateOutcome {
  * identical gate set and no caller is ever handed a partial record it has to
  * guess at (AD-1).
  *
- * `now` is declared because AD-1 and the epic AC fix the signature at
- * `evaluate(state, command, now)` and because Story 3.1's `expiry` gate is
- * the consumer that will need it: expiry-as-authority compares the injected
- * `now` against the persisted absolute close instant (AD-12), and none of
- * the six gates below asks what time it is. Nothing here reads a clock; if
- * this parameter were dropped now, 3.1 would have to change a signature both
- * runtimes and the read path already depend on.
+ * `now` was declared from Story 2.5 onward against the day a gate would need
+ * it, because AD-1 and the epic AC fix the signature at
+ * `evaluate(state, command, now)` and changing it later would have moved a
+ * signature both runtimes and the read path already depend on. Story 3.1 is
+ * that day: `expiry` is the ONE gate that asks what time it is, and it is
+ * the only one this parameter is handed to. Nothing here reads a clock — the
+ * instant is injected, and the six gates below still decide from committed
+ * state alone.
  */
 export function evaluate(state: BidState, command: PlaceBid, now: string): PlaceBidGateResults {
-	void now;
 	return {
+		// First in `PLACE_BID_GATES` and first here, so the declared order and
+		// the construction order agree on sight. It is handed `now` and the
+		// others are not: expiry is the only time question in the set.
+		expiry: evaluateExpiry(state, now),
 		opening: evaluateOpening(state, command.amount),
 		selfBid: evaluateSelfBid(state, command.teamId),
 		increment: evaluateIncrement(state, command.amount),
@@ -1127,7 +1222,7 @@ export function failedGates(gates: PlaceBidGateResults): readonly PlaceBidGate[]
  * Why a Bid was refused.
  *
  * `gates` is the ordinary case: the pure gate set, refused by one or more of
- * the six. The other six are decided OUTSIDE the gate set, exactly as
+ * the seven. The other six are decided OUTSIDE the gate set, exactly as
  * `NominationRefusal`'s `unconfirmed`/`unbound_actor`/`unrecorded` are, and
  * for the same reasons:
  *
@@ -1178,6 +1273,29 @@ export type BidRefusal =
  */
 function gateSentence(gates: PlaceBidGateResults, gate: PlaceBidGate): string | null {
 	switch (gate) {
+		case 'expiry': {
+			const outcome = gates.expiry;
+			// `closesAt` cannot be null on a refusal — `hasExpired` passes a
+			// null clock — but the narrowing is what lets the phrase below be
+			// built from a string rather than from a check a reader has to
+			// take on trust.
+			if (outcome.passed || outcome.closesAt === null) return null;
+			// `AUCTION_EXPIRED` verbatim, then the elapsed time. The phrase
+			// comes from `relativePhrase`, which answers `at an unknown time`
+			// for an instant it cannot read — so the unparseable close needs
+			// no second wording, and the sentence stays true either way.
+			//
+			// It names a CLOCK and an elapsed time and quotes no money figure
+			// and no count, which is what keeps it from reading as a cap or a
+			// capacity refusal: this Bid was not too large and the roster was
+			// not too full, the Auction was simply over.
+			return (
+				`${AUCTION_EXPIRED} Its Auction Clock ran out ` +
+				`${relativePhrase(outcome.closesAt, outcome.evaluatedAt)}, and a Bid at or after the ` +
+				'close instant is not accepted however long ago that instant was. You may bid on any ' +
+				'Auction that is still running.'
+			);
+		}
 		case 'opening': {
 			const outcome = gates.opening;
 			if (outcome.passed) return null;
@@ -1556,6 +1674,33 @@ export function describeAmount(amount: Money): string {
  */
 function gateFigure(gates: PlaceBidGateResults, gate: PlaceBidGate): string {
 	switch (gate) {
+		case 'expiry': {
+			const outcome = gates.expiry;
+			if (outcome.closesAt === null) return 'no Bids yet, so no Auction Clock';
+			// **Keyed on READABILITY, never on the verdict.** `hasExpired`
+			// fails CLOSED on a close instant it cannot read — an Auction
+			// whose close cannot be read reads as already due — while
+			// `closesInPhrase` answers `an unknown time left` for that same
+			// input. Printing that phrase beside a `Refused` chip would put
+			// "time may still remain" next to a verdict saying it does not,
+			// on the one surface in the product that may never contradict
+			// itself. So an unreadable instant gets its own figure, stating
+			// the fact the chip was actually decided from.
+			//
+			// This is the only `parseInstant` in this module, and it is a
+			// RENDERING test rather than a second expiry comparison: the
+			// close instant is never compared to `now` here, and
+			// `evaluateExpiry` still reaches its answer through `hasExpired`
+			// alone.
+			if (parseInstant(outcome.closesAt) === null) return 'the close time cannot be read';
+			// For every clock that IS readable, ONE branch serves passed and
+			// refused alike, which is the `slots` figure's discipline: the row
+			// states the arithmetic and the chip beside it states the outcome,
+			// so a second branch would be a second place for the two to
+			// disagree. `closesInPhrase` answers `no time left` once a clock
+			// has run out, which agrees with a `Refused` chip exactly.
+			return closesInPhrase(outcome.closesAt, outcome.evaluatedAt);
+		}
 		case 'opening': {
 			const outcome = gates.opening;
 			switch (outcome.opening) {
@@ -1684,6 +1829,9 @@ export function figuresAtCaption(renderedInstant: string): string {
 
 /** The name a gate goes by on the refusal panel. */
 const GATE_LABELS: Readonly<Record<PlaceBidGate, string>> = Object.freeze({
+	// The glossary term, so the chip reads `Auction Clock · Refused` and
+	// cannot be mistaken for `Cap · Refused` or `Slots · Refused`.
+	expiry: 'Auction Clock',
 	opening: 'Opening Bid',
 	selfBid: 'Self-bid',
 	increment: 'Minimum Increment',

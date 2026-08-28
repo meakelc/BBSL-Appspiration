@@ -10,10 +10,18 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
-import { BID_PLACED_EVENT } from '../../src/lib/core/projection/auctions.ts';
+import { AUCTION_EXPIRED, BID_PLACED_EVENT } from '../../src/lib/core/projection/auctions.ts';
 import { AUCTION_CLOSED_EVENT, NOMINATION_PLACED_EVENT } from '../../src/lib/core/projection/nominations.ts';
-import { BID_READY, bidRefusalDetail } from '../../src/lib/core/rules/bidding.ts';
+import { parseMoney } from '../../src/lib/core/money.ts';
+import {
+	BID_READY,
+	bidRefusalDetail,
+	bidStateFor,
+	evaluate
+} from '../../src/lib/core/rules/bidding.ts';
 import { loadAuctionPage } from '../../src/lib/server/auction-page.ts';
 import type { ConnectionGateway, QueryResultRow, TransactionalClient } from '../../src/lib/shell/write.ts';
 
@@ -111,6 +119,23 @@ function fakeGateway(options: {
 	teams?: string[];
 	/** The viewer Team's `team_rosters` rows. Defaults to nine $1.0M contracts. */
 	roster?: QueryResultRow[];
+	/**
+	 * What `select now()` answers — the DATABASE clock (Story 3.1).
+	 *
+	 * A fixture, not a real clock: the `expiry` gate is decided against this
+	 * instant, so a test that let the wall clock in would start refusing
+	 * every Auction in this file the moment its fixtures aged. The default
+	 * sits after the latest Bid below and comfortably before its close.
+	 */
+	now?: string;
+	/**
+	 * The rows `select now()` returns, overriding `now` entirely.
+	 *
+	 * The only way to reach `requireDatabaseClock`'s throw: the handler below
+	 * otherwise always answers a valid `Date`, which would leave that branch
+	 * unreachable and therefore unproven.
+	 */
+	clock?: QueryResultRow[];
 }) {
 	const order: string[] = [];
 	let committed = false;
@@ -132,6 +157,7 @@ function fakeGateway(options: {
 	const teams =
 		options.teams ??
 		events.map((row) => String((row['payload'] as Record<string, unknown>)?.['teamId'] ?? ''));
+	const now = new Date(options.now ?? '2026-08-26T13:00:00.000Z');
 
 	const client: TransactionalClient & { release(): void } = {
 		async query(text: string, params: readonly unknown[] = []) {
@@ -143,6 +169,15 @@ function fakeGateway(options: {
 			if (/^select \* from auction_events/i.test(sql)) {
 				order.push('read-log');
 				return { rows: events };
+			}
+			// The ONE database clock read (Story 3.1). A label, not a loosened
+			// fake: an unrecognised statement still throws below, so a second
+			// clock read — or a Node clock quietly standing in for this one —
+			// fails the suite rather than passing unnoticed. No lock: this
+			// module deliberately takes none, and `now()` needs none.
+			if (/^select now\(\) as now/i.test(sql)) {
+				order.push('read-clock');
+				return { rows: options.clock ?? [{ now }] };
 			}
 			if (/^select player_name, positions, nba_team\s+from free_agent_players/i.test(sql)) {
 				order.push('read-reference');
@@ -213,6 +248,7 @@ function fakeGateway(options: {
 
 	return {
 		gateway,
+		now,
 		order,
 		state: {
 			get committed() {
@@ -398,6 +434,11 @@ describe('loadAuctionPage — an open Auction', () => {
 		expect(harness.order).toEqual([
 			'begin',
 			'read-log',
+			// Story 3.1's ONE database clock read, taken where the figures are
+			// read and with no lock: it is both the `expiry` gate's `now` and
+			// the `figuresAt` caption, so the two cannot describe different
+			// moments. Exactly one appears in this list, on every path.
+			'read-clock',
 			// Story 2.6's read of the VIEWER's Cap figures. Still no
 			// open_nominations and no `free_agent_players.minor_league_eligible`
 			// — eligibility is folded from the events already read, so one
@@ -549,6 +590,7 @@ describe('loadAuctionPage — the Auction with Bids on it (AC6)', () => {
 		expect(harness.order).toEqual([
 			'begin',
 			'read-log',
+			'read-clock',
 			'read-roster',
 			'read-reference',
 			'read-manager',
@@ -659,6 +701,16 @@ describe('loadAuctionPage — the bid control is evaluate() on the read path (AC
 			bidRefusalDetail({
 				kind: 'gates',
 				gates: {
+					// Story 3.1's seventh gate, and the first in the list. It
+					// passes: the leading Bid closes at noon on the 27th and the
+					// fake's database clock reads 13:00 on the 26th. The two
+					// instants are stated because they are the whole of what the
+					// gate decides from — no amount, no money and no count.
+					expiry: {
+						passed: true,
+						closesAt: '2026-08-27T12:00:00.000Z',
+						evaluatedAt: '2026-08-26T13:00:00.000Z'
+					},
 					opening: {
 						passed: true,
 						opening: 'not_an_opening',
@@ -939,5 +991,250 @@ describe('loadAuctionPage — the viewer Team money state (Story 2.6)', () => {
 		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
 
 		expect(auction?.bidControl.available).toBe(true);
+	});
+});
+
+// --- Story 3.1: one database clock, two consumers -------------------------
+
+describe('loadAuctionPage — the clock the expiry gate is decided against (Story 3.1)', () => {
+	it('reads the DATABASE clock exactly once, with no lock', async () => {
+		const harness = contestedAuction();
+
+		await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+
+		// Exactly one, and no `pg_advisory_xact_lock` anywhere: the read path
+		// deliberately takes no lock, and `now()` needs none — it is
+		// Postgres' transaction-start timestamp.
+		expect(harness.order.filter((statement) => statement === 'read-clock')).toHaveLength(1);
+		expect(harness.order).not.toContain('lock');
+	});
+
+	it('uses that ONE instant for both the caption and the gate', async () => {
+		const harness = contestedAuction();
+
+		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+
+		// The caption's instant IS the database's, not Node's.
+		expect(auction?.bidControl.figuresAt).toBe(harness.now.toISOString());
+		// And it is the instant the gate was evaluated at. A caption and a
+		// gate describing two different moments is precisely what one read
+		// makes unreachable — the disabled control and the figures above it
+		// are one evaluation.
+		const gates = evaluate(
+			bidStateFor(
+				{
+					fantraxPlayerId: 'p-1',
+					contention: 'standard',
+					leadingBid: {
+						seq: '3',
+						teamId: 't-2',
+						teamName: 'Rockets',
+						managerId: 'm-2',
+						amount: parseMoney(8_500_000),
+						occurredAt: '2026-08-26T12:00:00.000Z',
+						closesAt: '2026-08-27T12:00:00.000Z'
+					},
+					closesAt: '2026-08-27T12:00:00.000Z',
+					bids: []
+				},
+				null,
+				false
+			),
+			{
+				kind: 'PlaceBid',
+				fantraxPlayerId: 'p-1',
+				teamId: VIEWER_TEAM,
+				teamName: '',
+				managerId: '',
+				amount: parseMoney(9_000_000)
+			},
+			String(auction?.bidControl.figuresAt)
+		);
+		expect(gates.expiry.evaluatedAt).toBe(auction?.bidControl.figuresAt);
+		expect(gates.expiry.passed).toBe(true);
+	});
+
+	it('disables the control on the board once the Auction Clock has run out', async () => {
+		// The sweep has NOT run: no `AuctionClosed` is in the log, so the
+		// nomination fold still holds the Player and the Auction fold still
+		// holds its price. The close instant is nonetheless past, and that is
+		// the only authority (AD-12).
+		const harness = fakeGateway({
+			events: [
+				nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1', NOMINATED_AT),
+				bidPlaced(
+					2,
+					'p-1',
+					't-1',
+					'Lakers',
+					'm-1',
+					8_000_000,
+					'2026-08-26T09:00:00.000Z',
+					'2026-08-27T09:00:00.000Z'
+				)
+			],
+			freeAgents: [],
+			managers: [{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' }],
+			now: '2026-08-27T11:00:00.000Z'
+		});
+
+		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+
+		expect(auction?.bidControl.available).toBe(false);
+		// The core's sentence, and no other ground: the money and the roster
+		// are both fine here.
+		expect(auction?.bidControl.detail).toContain(AUCTION_EXPIRED);
+		expect(auction?.bidControl.detail).not.toContain('Maximum Bid');
+		// The Auction is still open as far as the folds are concerned — the
+		// page renders, the price stands and the close instant is shipped.
+		expect(auction?.price).toBe('$8.0M');
+		expect(auction?.closesAt).toBe('2026-08-27T09:00:00.000Z');
+	});
+
+	it('leaves the control live for the same Auction one millisecond earlier', async () => {
+		const harness = fakeGateway({
+			events: [
+				nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1', NOMINATED_AT),
+				bidPlaced(
+					2,
+					'p-1',
+					't-1',
+					'Lakers',
+					'm-1',
+					8_000_000,
+					'2026-08-26T09:00:00.000Z',
+					'2026-08-27T09:00:00.000Z'
+				)
+			],
+			freeAgents: [],
+			managers: [{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' }],
+			now: '2026-08-27T08:59:59.999Z'
+		});
+
+		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+
+		expect(auction?.bidControl.available).toBe(true);
+		expect(auction?.bidControl.detail).toBe(BID_READY);
+	});
+
+	it('serialises no derived expired flag and no remaining duration', async () => {
+		// The counterpart of the AD-7 money check above, applied to a clock.
+		// What crosses the wire is the absolute close instant and the
+		// server's instant; expiry is DERIVED from those two by the core, in
+		// the browser and inside the lock alike, on every tick. A transported
+		// verdict would be the check (AD-9), and "seconds remaining" is the
+		// shape AD-3 forbids outright.
+		const harness = fakeGateway({
+			events: [
+				nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1', NOMINATED_AT),
+				bidPlaced(
+					2,
+					'p-1',
+					't-1',
+					'Lakers',
+					'm-1',
+					8_000_000,
+					'2026-08-26T09:00:00.000Z',
+					'2026-08-27T09:00:00.000Z'
+				)
+			],
+			freeAgents: [],
+			managers: [{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' }],
+			now: '2026-08-27T11:00:00.000Z'
+		});
+
+		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+
+		// Checked as KEYS rather than as raw text, because the core's own
+		// refusal sentence legitimately contains the word "expired" — it is
+		// the wording a Manager reads, not a flag a client could compare
+		// against. What may never appear is a FIELD carrying the verdict.
+		const keys = (value: unknown): string[] =>
+			typeof value !== 'object' || value === null
+				? []
+				: Object.entries(value).flatMap(([key, child]) => [key, ...keys(child)]);
+		const shipped = keys(auction);
+		for (const forbidden of [
+			'expired',
+			'hasExpired',
+			'remainingMs',
+			'remaining',
+			'secondsLeft',
+			'closesIn',
+			'timeLeft'
+		]) {
+			expect(shipped, `${forbidden} leaked onto the wire`).not.toContain(forbidden);
+		}
+		// The two facts that DO cross, and nothing derived from them.
+		expect(auction?.closesAt).toBe('2026-08-27T09:00:00.000Z');
+		expect(auction?.bidControl.figuresAt).toBe('2026-08-27T11:00:00.000Z');
+	});
+});
+
+describe('loadAuctionPage — an unusable database clock (Story 3.1)', () => {
+	/** The one message both clock readers state, shared from `shell/write.ts`. */
+	const CLOCK_ERROR = 'the database clock read returned no usable "now" value';
+
+	const withClock = (clock: QueryResultRow[]) =>
+		fakeGateway({
+			events: [nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1', NOMINATED_AT)],
+			freeAgents: [],
+			managers: [{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' }],
+			clock
+		});
+
+	it('throws the stated error when the clock read returns no row at all', async () => {
+		const harness = withClock([]);
+		await expect(loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM)).rejects.toThrow(
+			CLOCK_ERROR
+		);
+	});
+
+	it('throws the stated error when the column is absent or not a Date', async () => {
+		for (const clock of [[{}], [{ now: '2026-08-26T13:00:00.000Z' }], [{ now: null }]]) {
+			const harness = withClock(clock);
+			await expect(loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM)).rejects.toThrow(
+				CLOCK_ERROR
+			);
+		}
+	});
+
+	it('throws the stated error — not a bare RangeError — on an INVALID Date', async () => {
+		// `instanceof Date` alone passes `new Date('nonsense')`, and
+		// `.toISOString()` on one throws `RangeError: Invalid time value`.
+		// A driver handing back an unparseable timestamp is the same class of
+		// failure as one handing back nothing, and must arrive as the same
+		// message rather than as a stack trace from a formatter.
+		const harness = withClock([{ now: new Date('nonsense') }]);
+		const failure = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM).catch(
+			(error: unknown) => error
+		);
+		expect(failure).toBeInstanceOf(Error);
+		expect(failure).not.toBeInstanceOf(RangeError);
+		expect((failure as Error).message).toBe(CLOCK_ERROR);
+	});
+
+	it('rolls back and releases the connection when the clock is unusable', async () => {
+		// The `catch` in `loadAuctionPage` owns this: a throw between `begin`
+		// and `rollback` must not leave a transaction open on a pooled client.
+		const harness = withClock([{}]);
+		await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM).catch(() => undefined);
+
+		expect(harness.order).toContain('rollback');
+		expect(harness.state.committed).toBe(false);
+		expect(harness.state.released).toBe(1);
+	});
+
+	it('states the SAME message the locked write path states', async () => {
+		// The validation is shared (`requireDatabaseClock`); only the query
+		// differs, because `shell/write.ts` must read the clock in the same
+		// round trip as the lock and this module takes no lock at all.
+		const source = readFileSync(
+			fileURLToPath(new URL('../../src/lib/server/auction-page.ts', import.meta.url)),
+			'utf8'
+		);
+		expect(source).toContain('requireDatabaseClock(');
+		// The message is not restated here — it is imported with the check.
+		expect(source).not.toContain(CLOCK_ERROR);
 	});
 });
