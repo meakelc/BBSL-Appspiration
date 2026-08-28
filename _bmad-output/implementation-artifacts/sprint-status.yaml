@@ -61,7 +61,7 @@ development_status:
   epic-2-retrospective: optional
 
   epic-3: in-progress
-  3-1-expiry-is-authoritative-for-validation: review
+  3-1-expiry-is-authoritative-for-validation: done
   3-2-enter-and-join-a-minimum-bid-contention: backlog
   3-3-dissolve-a-minimum-bid-contention: backlog
   3-4-close-an-auction-and-place-the-player: backlog
