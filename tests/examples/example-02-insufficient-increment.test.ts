@@ -47,7 +47,11 @@ import type { PlaceBid } from '../../src/lib/core/types.ts';
 const RICH: TeamMoneyState = {
 	capSpace: parseMoney(SALARY_CAP),
 	rosterCount: 9,
-	leading: []
+	leading: [],
+	// Story 2.8: no eligible leads and no occupied Minor League
+	// Slots, so `N` is the bid alone and `M` is the full three.
+	eligibleLeading: [],
+	minorLeagueOccupied: 0
 };
 
 /** The same auction as example 1: Team A leading at $8,000,000. */
@@ -67,7 +71,7 @@ const AUCTION: Auction = {
 	bids: []
 };
 
-const STATE: BidState = bidStateFor(AUCTION, RICH);
+const STATE: BidState = bidStateFor(AUCTION, RICH, false);
 
 const OFF_GRID_UNDER_INCREMENT: PlaceBid = {
 	kind: 'PlaceBid',

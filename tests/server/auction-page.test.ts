@@ -269,7 +269,19 @@ describe('loadAuctionPage — an open Auction', () => {
 				// Maximum Bid: AD-7 forbids a derived money figure being cached
 				// client-side for validation, so the surface gets the inputs and
 				// re-derives through the same `evaluate()` the lock calls.
-				team: { capSpace: 156_000_000, rosterCount: 9, leading: [] },
+				// The fold's answer about this Player, serialised as a FACT so the
+				// surface rebuilds the same `BidState` the lock will.
+				playerIsMinorLeagueEligible: false,
+				team: {
+					capSpace: 156_000_000,
+					rosterCount: 9,
+					leading: [],
+					// Story 2.8's two Team facts. Note what is NOT here: `M`,
+					// Overflow Count, Minors Exposure and Maximum Bid are all
+					// derived, and a derived figure never crosses the wire.
+					eligibleLeading: [],
+					minorLeagueOccupied: 0
+				},
 				figuresAt: expect.any(String)
 			}
 		});
@@ -675,12 +687,33 @@ describe('loadAuctionPage — the bid control is evaluate() on the read path (AC
 						rosterCount: 9,
 						projectedAdditions: 1,
 						rosterReserve: 2_000_000 as never,
-						maximumBid: 154_000_000 as never
+						maximumBid: 154_000_000 as never,
+						// Story 2.8's exposure arithmetic, reported on a PASSING
+						// gate exactly as every other figure is: this Player is
+						// not Minor League Eligible, so `N` is 0 against a full
+						// three Free Minor League Slots, nothing overflows, and
+						// Maximum Bid binds in the ordinary way.
+						freeMinorLeagueSlots: 3,
+						eligibleLeadingBids: 0,
+						overflowCount: 0,
+						unbounded: false,
+						exposingBids: [],
+						exposureIncludesThisBid: false
 					},
 					// And so does the capacity gate (Story 2.7), with its OWN
 					// copy of the two counts rather than a pointer at `cap`'s:
 					// nine held plus the one being bid is ten of twelve.
-					slots: { passed: true, rosterCount: 9, projectedAdditions: 1, ceiling: 12 }
+					slots: {
+						passed: true,
+						rosterCount: 9,
+						projectedAdditions: 1,
+						ceiling: 12,
+						// Counts only — the capacity gate still carries no money
+						// field and no `offered` (FR-37).
+						freeMinorLeagueSlots: 3,
+						eligibleLeadingBids: 0,
+						overflowCount: 0
+					}
 				}
 			})
 		);
@@ -804,7 +837,19 @@ describe('loadAuctionPage — the viewer Team money state (Story 2.6)', () => {
 		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
 		const control = auction?.bidControl as Record<string, unknown>;
 
-		expect(control['team']).toEqual({ capSpace: 156_000_000, rosterCount: 9, leading: [] });
+		expect(control['team']).toEqual({
+			capSpace: 156_000_000,
+			rosterCount: 9,
+			leading: [],
+			eligibleLeading: [],
+			minorLeagueOccupied: 0
+		});
+		// Story 2.8's derived figures are absent for the same reason the 2.6
+		// ones are: a transported figure the surface could compare against
+		// would BE the check (AD-7).
+		expect(control['minorsExposure']).toBeUndefined();
+		expect(control['overflowCount']).toBeUndefined();
+		expect(control['freeMinorLeagueSlots']).toBeUndefined();
 		// A derived money figure cached client-side for validation is exactly
 		// what AD-7 forbids, and the surface is a client.
 		expect(control['maximumBid']).toBeUndefined();

@@ -1,6 +1,7 @@
 /**
- * The two roster figures the money gate cannot fold from the log: a Team's
- * Cap Space and its Roster Count. Server-only (Story 2.6).
+ * The roster figures the money and capacity gates cannot fold from the log:
+ * a Team's Cap Space, its Roster Count and how many Minor League Slots it
+ * occupies. Server-only (Stories 2.6, 2.8).
  *
  * **Why this is a table read and not a projection.** `team_rosters` is
  * mutable reference data promoted by the import, explicitly NOT an
@@ -18,9 +19,12 @@
  * figure a control is disabled against and the figure a Bid is refused
  * against cannot be computed two different ways.
  *
- * Nothing derived is stored. This module returns two numbers computed from
- * rows read a moment ago; Committed Bids, Roster Reserve and Maximum Bid are
- * the core's, on every evaluation (AD-7).
+ * Nothing derived is stored. This module returns three numbers computed from
+ * rows read a moment ago; Committed Bids, Roster Reserve, Maximum Bid, Free
+ * Minor League Slots and Minors Exposure are the core's, on every evaluation
+ * (AD-7). Note which side of that line `minorLeagueOccupied` sits on: the
+ * OCCUPANCY is a fact about `team_rosters`, and `M = max(0, 3 - occupied)`
+ * is a derivation the core runs — this module never computes `M`.
  */
 
 import { computeCapSpace } from '../core/rules/roster-import.ts';
@@ -47,6 +51,22 @@ export type TeamRosterFigures = {
 	 * second.
 	 */
 	readonly rosterCount: number;
+	/**
+	 * Minor League rows, counted (Story 2.8) — the raw occupancy `M` is
+	 * derived from, never `M` itself.
+	 *
+	 * The same loop that produces `rosterCount` produces this, from the same
+	 * `roster_slot_kind` column and the same single statement: two counters
+	 * over one read rather than a second query, because the two facts are
+	 * about the same rows at the same instant and a second read could see
+	 * them a moment apart.
+	 *
+	 * Story 1.7 enforces the ceiling of three on IMPORT. Nothing here does:
+	 * a Commissioner override can legitimately leave this above three, and
+	 * the core's clamp is what stops that from handing a Team extra spending
+	 * power.
+	 */
+	readonly minorLeagueOccupied: number;
 };
 
 /**
@@ -86,9 +106,11 @@ export async function loadTeamRoster(
 	}));
 
 	let rosterCount = 0;
+	let minorLeagueOccupied = 0;
 	for (const row of rows) {
 		if (row.rosterSlotKind === 'active_bench') rosterCount += 1;
+		if (row.rosterSlotKind === 'minor_league') minorLeagueOccupied += 1;
 	}
 
-	return { capSpace: computeCapSpace(rows).capSpace, rosterCount };
+	return { capSpace: computeCapSpace(rows).capSpace, rosterCount, minorLeagueOccupied };
 }

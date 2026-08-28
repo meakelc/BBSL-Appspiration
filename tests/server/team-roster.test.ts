@@ -42,7 +42,7 @@ const row = (capHit: string | number, kind: string): QueryResultRow => ({
 	roster_slot_kind: kind
 });
 
-describe('loadTeamRoster — Cap Space and Roster Count from one statement', () => {
+describe('loadTeamRoster — Cap Space, Roster Count and minors occupancy from one statement', () => {
 	it('reads one statement, keyed on the Team', async () => {
 		const harness = fakeClient([]);
 
@@ -59,7 +59,8 @@ describe('loadTeamRoster — Cap Space and Roster Count from one statement', () 
 
 		expect(await loadTeamRoster(harness.client, 't-7')).toEqual({
 			capSpace: SALARY_CAP,
-			rosterCount: 0
+			rosterCount: 0,
+			minorLeagueOccupied: 0
 		});
 	});
 
@@ -71,7 +72,9 @@ describe('loadTeamRoster — Cap Space and Roster Count from one statement', () 
 
 		expect(await loadTeamRoster(harness.client, 't-7')).toEqual({
 			capSpace: SALARY_CAP - 7_000_000,
-			rosterCount: 1
+			rosterCount: 1,
+			// An IR row occupies no Minor League Slot either.
+			minorLeagueOccupied: 0
 		});
 	});
 
@@ -83,7 +86,11 @@ describe('loadTeamRoster — Cap Space and Roster Count from one statement', () 
 
 		expect(await loadTeamRoster(harness.client, 't-7')).toEqual({
 			capSpace: SALARY_CAP - 4_000_000,
-			rosterCount: 1
+			rosterCount: 1,
+			// ...and it is the one kind that DOES occupy a Minor League Slot,
+			// which is the fact `M = max(0, 3 - occupied)` is derived from
+			// (Story 2.8). Counted from the same rows, in the same loop.
+			minorLeagueOccupied: 1
 		});
 	});
 
@@ -106,7 +113,9 @@ describe('loadTeamRoster — Cap Space and Roster Count from one statement', () 
 
 		expect(await loadTeamRoster(harness.client, 't-7')).toEqual({
 			capSpace: SALARY_CAP - 4_000_000,
-			rosterCount: 0
+			rosterCount: 0,
+			// Nor does it silently consume one of the three.
+			minorLeagueOccupied: 0
 		});
 	});
 });

@@ -50,7 +50,11 @@ import type { PlaceBid } from '../../src/lib/core/types.ts';
 const RICH: TeamMoneyState = {
 	capSpace: parseMoney(SALARY_CAP),
 	rosterCount: 9,
-	leading: []
+	leading: [],
+	// Story 2.8: no eligible leads and no occupied Minor League
+	// Slots, so `N` is the bid alone and `M` is the full three.
+	eligibleLeading: [],
+	minorLeagueOccupied: 0
 };
 
 const NOW = '2026-08-26T12:00:00.000Z';
@@ -87,7 +91,7 @@ function bidOf(amount: number): PlaceBid {
 
 // --- 26a: Standard Contention, off-grid, and it CLEARS the increment -------
 
-const STANDARD_AT_SIX: BidState = bidStateFor(auctionAt(6_000_000, 'standard'), RICH);
+const STANDARD_AT_SIX: BidState = bidStateFor(auctionAt(6_000_000, 'standard'), RICH, false);
 
 describe('§10 example 26a — $6,750,000 over a $6,000,000 high', () => {
 	it('refuses on granularity', () => {
@@ -134,7 +138,7 @@ describe('§10 example 26a — $6,750,000 over a $6,000,000 high', () => {
 // --- 26b: a Minimum-Bid Contention, off-grid by one dollar -----------------
 
 const LOTTERY_AUCTION: Auction = auctionAt(MINIMUM_BID, 'minimum_bid');
-const LOTTERY: BidState = bidStateFor(LOTTERY_AUCTION, RICH);
+const LOTTERY: BidState = bidStateFor(LOTTERY_AUCTION, RICH, false);
 
 describe('§10 example 26b — $1,000,001 in a Minimum-Bid Contention', () => {
 	it('is a Minimum-Bid Contention state literal, not one this story created', () => {
@@ -143,7 +147,7 @@ describe('§10 example 26b — $1,000,001 in a Minimum-Bid Contention', () => {
 		// And the gate refuses to CREATE one: an Opening Bid of exactly
 		// $1,000,000 is named and refused, so nothing here can produce this
 		// state through the rules.
-		const opening = evaluate(bidStateFor(null, RICH), bidOf(MINIMUM_BID), NOW);
+		const opening = evaluate(bidStateFor(null, RICH, false), bidOf(MINIMUM_BID), NOW);
 		expect(opening.opening.passed).toBe(false);
 		expect(opening.opening.opening).toBe('at_the_minimum');
 	});
@@ -170,7 +174,7 @@ describe('§10 example 26b — $1,000,001 in a Minimum-Bid Contention', () => {
 		// no bids at all, Standard Contention, and the lottery above. The gate
 		// reads the amount and nothing else, so all three agree exactly.
 		const offGrid = 1_000_001;
-		const states: BidState[] = [bidStateFor(null, RICH), STANDARD_AT_SIX, LOTTERY];
+		const states: BidState[] = [bidStateFor(null, RICH, false), STANDARD_AT_SIX, LOTTERY];
 		for (const state of states) {
 			expect(evaluate(state, bidOf(offGrid), NOW).granularity).toEqual({
 				passed: false,

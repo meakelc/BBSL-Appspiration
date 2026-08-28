@@ -21,6 +21,7 @@ import {
 	AUCTION_CLOSED_EVENT,
 	NOMINATION_PLACED_EVENT
 } from '../../src/lib/core/projection/nominations.ts';
+import { MINOR_LEAGUE_ELIGIBILITY_SET } from '../../src/lib/core/projection/eligibility.ts';
 import { parseMoney } from '../../src/lib/core/money.ts';
 import { bidRefusalDetail } from '../../src/lib/core/rules/bidding.ts';
 import type { BidPlacedPayload } from '../../src/lib/core/rules/bidding.ts';
@@ -166,13 +167,24 @@ function logEvent(
 	};
 }
 
-function nominated(seq = 1, fantraxPlayerId = 'p-1'): QueryResultRow {
+function nominated(
+	seq = 1,
+	fantraxPlayerId = 'p-1',
+	/** The name a refusal says out loud — `playerNameFor`'s source (Story 2.8). */
+	playerName = 'Jalen Green',
+	/**
+	 * The NOMINATING Team, which must differ per Player: `nominationsReducer`
+	 * drops a second nomination from a Team that already holds one, so two
+	 * Players on the board need two nominators.
+	 */
+	teamId = 't-9'
+): QueryResultRow {
 	return logEvent(seq, NOMINATION_PLACED_EVENT, {
 		fantraxPlayerId,
-		playerName: 'Jalen Green',
-		teamId: 't-9',
-		teamName: 'Celtics',
-		managerId: 'm-9'
+		playerName,
+		teamId,
+		teamName: teamId === 't-9' ? 'Celtics' : 'Bulls',
+		managerId: teamId === 't-9' ? 'm-9' : 'm-8'
 	});
 }
 
@@ -564,7 +576,19 @@ describe('loadBidState — three folds over ONE read of the log, plus one roster
 		// fifth. Nothing derived — no Committed Bids, no Maximum Bid (AD-7).
 		expect(loaded.bid).toEqual({
 			leadingBid: { teamId: 't-1', amount: 8_000_000 },
-			team: { capSpace: 156_000_000, rosterCount: 9, leading: [] }
+			team: {
+				capSpace: 156_000_000,
+				rosterCount: 9,
+				leading: [],
+				// Story 2.8's two Team facts, off the same single roster read
+				// and the same single log read. Raw occupancy, never `M`.
+				eligibleLeading: [],
+				minorLeagueOccupied: 0
+			},
+			// The eligibility FOLD's answer about the Player being bid on —
+			// no `select minor_league_eligible` was issued, which is why the
+			// statement order below is still exactly two reads.
+			playerIsMinorLeagueEligible: false
 		});
 		// The log is read once and the roster once, and BOTH after the lock —
 		// which is what makes the figures the gate decides from unable to move
@@ -620,7 +644,154 @@ describe('loadBidState — three folds over ONE read of the log, plus one roster
 		expect(loaded.bid.team).toEqual({
 			capSpace: SALARY_CAP,
 			rosterCount: 0,
-			leading: []
+			leading: [],
+			eligibleLeading: [],
+			minorLeagueOccupied: 0
 		});
+	});
+});
+
+// --- Story 2.8: an overflow refusal under the lock -------------------------
+
+describe('placeBid — Minors Exposure refuses under the lock, and writes nothing', () => {
+	/**
+	 * A roster of nine $1.0M Active/Bench contracts PLUS two Minor League
+	 * rows, so `minorLeagueOccupied` is 2 and `M = 3 − 2 = 1`.
+	 *
+	 * The Minor League contracts carry a real Cap Hit in the file and count
+	 * against neither the Cap nor Roster Count — `computeCapSpace` owns the
+	 * first half and `loadTeamRoster`'s counter the second — so $50,000,000
+	 * of stashed salary moves neither figure. What they change is occupancy,
+	 * which is the only new fact this story reads.
+	 *
+	 * The eleven Active/Bench contracts are example 19's own setup, arriving
+	 * through the table rather than as a literal: Roster Count 11 and
+	 * $2,000,000 of room.
+	 */
+	const TWO_STASHED: QueryResultRow[] = [
+		...Array.from({ length: 10 }, () => ({
+			cap_hit: '1000000',
+			roster_slot_kind: 'active_bench'
+		})),
+		{ cap_hit: '153000000', roster_slot_kind: 'active_bench' },
+		{ cap_hit: '30000000', roster_slot_kind: 'minor_league' },
+		{ cap_hit: '20000000', roster_slot_kind: 'minor_league' }
+	];
+
+	/** $165.0M − $163.0M of Active/Bench Cap Hits — example 19's own room. */
+	const CAP_SPACE = SALARY_CAP - 163_000_000;
+
+	/** `t-2` is Minor League Eligible on both Players, by fold and not by column. */
+	function eligible(seq: number, fantraxPlayerId: string): QueryResultRow {
+		return logEvent(seq, MINOR_LEAGUE_ELIGIBILITY_SET, {
+			fantraxPlayerId,
+			playerName: fantraxPlayerId === 'p-stash' ? 'Ausar Bright' : 'Second Prospect',
+			before: false,
+			after: true
+		});
+	}
+
+	/**
+	 * The log Team `t-2` bids into: it already leads an OPEN eligible Auction
+	 * at $30.0M, and a second eligible Player is nominated with no Bid yet.
+	 */
+	const OVERFLOWING: QueryResultRow[] = [
+		nominated(1, 'p-stash', 'Ausar Bright', 't-9'),
+		nominated(2, 'p-second', 'Second Prospect', 't-8'),
+		eligible(3, 'p-stash'),
+		eligible(4, 'p-second'),
+		logEvent(
+			5,
+			BID_PLACED_EVENT,
+			{
+				fantraxPlayerId: 'p-stash',
+				teamId: 't-2',
+				teamName: 'Rockets',
+				managerId: 'm-2',
+				amount: 30_000_000,
+				closesAt: '2026-08-27T09:00:00.000Z'
+			},
+			'2026-08-26T09:00:00.000Z',
+			{ managerId: 'm-2', teamId: 't-2' }
+		)
+	];
+
+	it('folds the eligible lead and the roster occupancy from the same locked read', async () => {
+		const harness = fakeGateway({ events: OVERFLOWING, roster: TWO_STASHED });
+		await harness.client.query('begin');
+
+		const loaded = await loadBidState(harness.client, 'p-second', 't-2');
+
+		// The eligible lead is PARTITIONED, not dropped: it is out of
+		// `leading` and into `eligibleLeading`, carrying the name a refusal
+		// will use.
+		expect(loaded.bid.team?.leading).toEqual([]);
+		expect(loaded.bid.team?.eligibleLeading).toEqual([
+			{ fantraxPlayerId: 'p-stash', playerName: 'Ausar Bright', amount: 30_000_000 }
+		]);
+		// Occupancy from `team_rosters`; Cap Space and Roster Count unmoved by
+		// the two Minor League contracts.
+		expect(loaded.bid.team?.minorLeagueOccupied).toBe(2);
+		expect(loaded.bid.team?.capSpace).toBe(CAP_SPACE);
+		expect(loaded.bid.team?.rosterCount).toBe(11);
+		// The Auction's own eligibility, from the same fold.
+		expect(loaded.bid.playerIsMinorLeagueEligible).toBe(true);
+		// Still ONE log read and ONE roster read, both after the lock.
+		expect(harness.order).toEqual(['begin', 'read-log', 'read-roster']);
+	});
+
+	it('refuses the later Bid with the transaction’s own gate set and clock', async () => {
+		const harness = fakeGateway({ events: OVERFLOWING, roster: TWO_STASHED });
+
+		const outcome = await placeBid(
+			harness.gateway,
+			ACTOR,
+			'p-second',
+			parseMoney(1_500_000),
+			DEVICE_CLASS
+		);
+
+		const rejection = rejectionOf(outcome);
+		expect(rejection.refusal.kind).toBe('gates');
+		// FR-13: the figures the Bid was actually judged against, at the
+		// instant the lock held them — not the ones some page rendered.
+		expect(rejection.at).toBe(NOW.toISOString());
+		expect(rejection.gates).not.toBeNull();
+		expect(rejection.gates?.cap.overflowCount).toBe(1);
+		expect(rejection.gates?.cap.freeMinorLeagueSlots).toBe(1);
+		expect(rejection.gates?.cap.eligibleLeadingBids).toBe(2);
+		expect(rejection.gates?.cap.minorsExposure).toBe(30_000_000);
+		expect(rejection.gates?.cap.maximumBid).toBe(CAP_SPACE - 30_000_000);
+		expect(rejection.gates?.cap.passed).toBe(false);
+		// Capacity is NOT the ground — 11 + 1 = 12 — which is what isolates
+		// Minors Exposure, and is reported beside the refusal rather than
+		// left for a reader to wonder about.
+		expect(rejection.gates?.slots.passed).toBe(true);
+		expect(rejection.gates?.slots.overflowCount).toBe(1);
+		// The sentence names the earlier Auction by Player and amount.
+		expect(rejection.detail).toContain('Ausar Bright');
+		expect(rejection.detail).toContain('$30.0M');
+
+		// The roster and the folds were read AFTER the lock, and nothing was
+		// appended: the log holds only what it held before.
+		expect(harness.order.slice(0, 4)).toEqual(['begin', 'lock', 'read-log', 'read-roster']);
+		expect(harness.order).not.toContain('append-event');
+		expect(harness.appendedEvents).toHaveLength(0);
+		expect(harness.state.committed).toBe(false);
+	});
+
+	it('leaves the earlier accepted Bid exactly where it was', async () => {
+		const harness = fakeGateway({ events: OVERFLOWING, roster: TWO_STASHED });
+
+		await placeBid(harness.gateway, ACTOR, 'p-second', parseMoney(1_500_000), DEVICE_CLASS);
+
+		// An accepted Bid is never retroactively invalidated: only the new one
+		// is refused. Re-loading proves the $30.0M lead is untouched, and that
+		// it is still exactly what the exposure was computed from.
+		await harness.client.query('begin');
+		const loaded = await loadBidState(harness.client, 'p-second', 't-2');
+		expect(loaded.bid.team?.eligibleLeading).toEqual([
+			{ fantraxPlayerId: 'p-stash', playerName: 'Ausar Bright', amount: 30_000_000 }
+		]);
 	});
 });
