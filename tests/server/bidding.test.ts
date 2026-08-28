@@ -25,6 +25,7 @@ import {
 } from '../../src/lib/core/projection/nominations.ts';
 import { MINOR_LEAGUE_ELIGIBILITY_SET } from '../../src/lib/core/projection/eligibility.ts';
 import { parseMoney } from '../../src/lib/core/money.ts';
+import { hash } from '../../src/lib/core/hash.ts';
 import { bidRefusalDetail } from '../../src/lib/core/rules/bidding.ts';
 import type { BidPlacedPayload } from '../../src/lib/core/rules/bidding.ts';
 import { PLACE_BID_GATES } from '../../src/lib/core/types.ts';
@@ -64,6 +65,14 @@ function fakeGateway(
 	const order: string[] = [];
 	const params: unknown[][] = [];
 	const appendedEvents: QueryResultRow[] = [];
+	/**
+	 * The sealed seed rows this transaction wrote (Story 3.2).
+	 *
+	 * Recorded rather than merely tolerated, so "no seed row on a raise" is
+	 * observable rather than assumed — the fake throws on any statement it
+	 * does not recognise, which is what makes the absence provable.
+	 */
+	let seedRows: unknown[][] = [];
 	let seq = 40;
 	let released = 0;
 	let committed = false;
@@ -88,6 +97,11 @@ function fakeGateway(
 				order.push('read-roster');
 				params.push([...queryParams]);
 				return { rows: options.roster ?? NINE_CHEAP_PLAYERS };
+			}
+			if (/^insert into auction_contention_seeds/i.test(sql)) {
+				order.push('append-seed');
+				seedRows.push([...queryParams]);
+				return { rows: [] };
 			}
 			if (/^insert into auction_events/i.test(sql)) {
 				order.push('append-event');
@@ -118,8 +132,12 @@ function fakeGateway(
 				order.push('rollback');
 				rolledBack = true;
 				// A real ROLLBACK discards every uncommitted write; the fake must
-				// too, or "nothing was written" would be trivially true.
+				// too, or "nothing was written" would be trivially true. The
+				// seed row is discarded on the same terms: it is written
+				// inside the appending transaction, so it cannot survive one
+				// that rolls back.
 				appendedEvents.length = 0;
+				seedRows = [];
 				return { rows: [] };
 			}
 			throw new Error(`unexpected statement: ${sql}`);
@@ -137,6 +155,9 @@ function fakeGateway(
 		order,
 		params,
 		appendedEvents,
+		get seedRows() {
+			return seedRows;
+		},
 		state: {
 			get released() {
 				return released;
@@ -396,6 +417,7 @@ describe('placeBid — the gate refuses (AC1, AC2, AC3)', () => {
 
 		expect(Object.keys(rejection.refusal.gates).sort()).toEqual([
 			'cap',
+			'contention',
 			'expiry',
 			'granularity',
 			'increment',
@@ -441,19 +463,27 @@ describe('placeBid — the gate refuses (AC1, AC2, AC3)', () => {
 		expect(harness.appendedEvents).toHaveLength(0);
 	});
 
-	it('refuses an Opening Bid of exactly $1,000,000 — no contention is created', async () => {
-		const harness = fakeGateway({ events: [nominated()] });
+	it('refuses a CONVERSION into a live contention, by name and appending nothing', async () => {
+		// Story 2.5 refused the opening at exactly $1,000,000 here, because no
+		// lottery could be run. Story 3.2 runs one — so the refusal by name
+		// moved to the conversion, which is the half that cannot be done yet:
+		// dissolution releases every Contender and reveals the seed (3.3).
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, 1_000_000, 't-1', 'm-1')]
+		});
 
 		const outcome = await placeBid(
 			harness.gateway,
 			ACTOR,
 			'p-1',
-			parseMoney(1_000_000),
+			parseMoney(2_000_000),
 			DEVICE_CLASS
 		);
 
 		expect(rejectionOf(outcome).detail).toContain('Minimum-Bid Contention');
+		expect(rejectionOf(outcome).detail).toContain('convert');
 		expect(harness.appendedEvents).toHaveLength(0);
+		expect(harness.seedRows).toHaveLength(0);
 	});
 
 	it('refuses when the Player’s Auction is not open — re-derived under the lock', async () => {
@@ -585,6 +615,12 @@ describe('loadBidState — three folds over ONE read of the log, plus one roster
 			// why expiry-as-authority cost this transaction no second query
 			// and no plumbing at all.
 			closesAt: '2026-08-27T09:00:00.000Z',
+			// Story 3.2: the fold's own contention state and Contender list,
+			// off the SAME log read again. An $8.0M lead is Standard
+			// Contention and has no Contenders, so the list is genuinely
+			// empty rather than absent.
+			contention: 'standard',
+			contenders: [],
 			team: {
 				capSpace: 156_000_000,
 				rosterCount: 9,
@@ -959,7 +995,7 @@ describe('placeBid — an expired Auction is refused under the lock (AC7)', () =
 			.replace(/\/\*[\s\S]*?\*\//g, '')
 			.replace(/(^|[^:])\/\/.*$/gm, '$1');
 
-		expect(code).toContain('decide(state.bid, command, now.toISOString(), null)');
+		expect(code).toContain('decide(state.bid, command, now.toISOString(), seed)');
 		expect(code).toContain('bidStateFor(');
 		// The whole vocabulary of the gate this module never learned about.
 		// If any of it appears in executable code here, expiry stopped being
@@ -984,5 +1020,187 @@ describe('placeBid — an expired Auction is refused under the lock (AC7)', () =
 		// become a no-op if the comments are ever moved.
 		expect(source).toMatch(/\bexpiry\b/i);
 		expect(code.length).toBeLessThan(source.length);
+	});
+});
+
+// --- Story 3.2: the seed, sealed in the same transaction as the event ------
+
+describe('placeBid — the lottery seed (AC5, AD-14)', () => {
+	it('writes ONE seed row in the same transaction as the opening event', async () => {
+		const harness = fakeGateway({ events: [nominated()] });
+
+		const outcome = await placeBid(
+			harness.gateway,
+			ACTOR,
+			'p-1',
+			parseMoney(1_000_000),
+			DEVICE_CLASS
+		);
+
+		expect(outcome.kind).toBe('accepted');
+		expect(harness.appendedEvents).toHaveLength(1);
+		expect(harness.seedRows).toHaveLength(1);
+		// **Inside the transaction, before the commit.** The seed row and the
+		// event commit together or neither does (AD-5), so a published
+		// commitment with no seed behind it is unreachable by construction.
+		expect(harness.order).toEqual([
+			'begin',
+			'lock',
+			'read-log',
+			'read-roster',
+			'append-event',
+			'append-seed',
+			'commit'
+		]);
+	});
+
+	it('keys the seed row on the Player and stamps it with the EVENT’s own instant', async () => {
+		const harness = fakeGateway({ events: [nominated()] });
+
+		await placeBid(harness.gateway, ACTOR, 'p-1', parseMoney(1_000_000), DEVICE_CLASS);
+
+		const [fantraxPlayerId, seed, createdAt] = harness.seedRows[0] ?? [];
+		expect(fantraxPlayerId).toBe('p-1');
+		// 32 random bytes as lowercase hex — the alphabet a Manager verifying
+		// the reveal by hand will be reading in.
+		expect(seed).toMatch(/^[0-9a-f]{64}$/);
+		// The database's transaction-start clock (AD-3), never a second read.
+		expect(createdAt).toBe(NOW.toISOString());
+	});
+
+	it('publishes hash(seed) on the payload and the seed itself in NO event', async () => {
+		const harness = fakeGateway({ events: [nominated()] });
+
+		const outcome = await placeBid(
+			harness.gateway,
+			ACTOR,
+			'p-1',
+			parseMoney(1_000_000),
+			DEVICE_CLASS
+		);
+		if (outcome.kind !== 'accepted') throw new Error('the Opening Bid was refused');
+
+		const seed = String(harness.seedRows[0]?.[1]);
+		const payload = outcome.events[0]?.payload as BidPlacedPayload;
+		expect(payload.seedHash).toBe(hash(seed));
+
+		// **The assertion AD-14 lives or dies on**, made against the whole
+		// appended log rather than one field: the raw seed appears nowhere in
+		// anything that reaches `auction_events`.
+		expect(JSON.stringify(outcome.events)).not.toContain(seed);
+		expect(JSON.stringify(harness.appendedEvents)).not.toContain(seed);
+	});
+
+	it('generates a DIFFERENT seed for every contention', async () => {
+		const seeds = new Set<string>();
+		for (let attempt = 0; attempt < 5; attempt += 1) {
+			const harness = fakeGateway({ events: [nominated()] });
+			await placeBid(harness.gateway, ACTOR, 'p-1', parseMoney(1_000_000), DEVICE_CLASS);
+			seeds.add(String(harness.seedRows[0]?.[1]));
+		}
+		expect(seeds.size).toBe(5);
+	});
+
+	it('writes NO seed row on an ordinary opening, a raise or a join', async () => {
+		const cases: Array<[label: string, events: QueryResultRow[], amount: number]> = [
+			['an opening above the minimum', [nominated()], 1_500_000],
+			['a raise', [nominated(), bidLogged(2, 8_000_000)], 8_500_000],
+			// A join into a contention another Team opened. It is accepted,
+			// and it publishes nothing: the commitment was made when the
+			// lottery opened and cannot be replaced.
+			['a join', [nominated(), bidLogged(2, 1_000_000)], 1_000_000]
+		];
+		for (const [label, events, amount] of cases) {
+			const harness = fakeGateway({ events });
+			const outcome = await placeBid(
+				harness.gateway,
+				ACTOR,
+				'p-1',
+				parseMoney(amount),
+				DEVICE_CLASS
+			);
+
+			expect(outcome.kind, label).toBe('accepted');
+			expect(harness.appendedEvents, label).toHaveLength(1);
+			expect(harness.seedRows, label).toHaveLength(0);
+			expect(harness.order, label).not.toContain('append-seed');
+			const payload = harness.appendedEvents[0]?.['payload'] as BidPlacedPayload;
+			expect(Object.keys(payload), label).not.toContain('seedHash');
+		}
+	});
+
+	it('writes NO seed row when the Bid is refused — the transaction rolled back', async () => {
+		// A conversion into a live contention: refused on `contention`, so
+		// `decide()` never reaches the payload and the projection never runs.
+		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 1_000_000)] });
+
+		const outcome = await placeBid(
+			harness.gateway,
+			ACTOR,
+			'p-1',
+			parseMoney(2_000_000),
+			DEVICE_CLASS
+		);
+
+		expect(outcome.kind).toBe('rejected');
+		expect(harness.seedRows).toHaveLength(0);
+		expect(harness.state.committed).toBe(false);
+	});
+
+	it('stamps the contention’s OWN close instant on a join, never a fresh one', async () => {
+		// PRD §10 example 7, at the transaction. The contention opened at
+		// 09:00 on the 26th and closes at 09:00 on the 27th; this join is
+		// decided at the fake's clock of 12:00 on the 26th, and a fresh
+		// 24-hour clock would have said 12:00 on the 27th.
+		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 1_000_000)] });
+
+		const outcome = await placeBid(
+			harness.gateway,
+			ACTOR,
+			'p-1',
+			parseMoney(1_000_000),
+			DEVICE_CLASS
+		);
+		if (outcome.kind !== 'accepted') throw new Error('the join was refused');
+
+		const payload = outcome.events[0]?.payload as BidPlacedPayload;
+		expect(payload.closesAt).toBe('2026-08-27T09:00:00.000Z');
+		expect(payload.closesAt).not.toBe(
+			new Date(NOW.getTime() + AUCTION_CLOCK).toISOString()
+		);
+	});
+
+	it('computes a FRESH close for an opening and a raise, as it always has', async () => {
+		for (const [label, events, amount] of [
+			['an opening', [nominated()], 1_500_000],
+			['a raise', [nominated(), bidLogged(2, 8_000_000)], 8_500_000]
+		] as Array<[string, QueryResultRow[], number]>) {
+			const harness = fakeGateway({ events });
+			const outcome = await placeBid(
+				harness.gateway,
+				ACTOR,
+				'p-1',
+				parseMoney(amount),
+				DEVICE_CLASS
+			);
+			if (outcome.kind !== 'accepted') throw new Error(`${label} was refused`);
+			const payload = outcome.events[0]?.payload as BidPlacedPayload;
+			expect(Date.parse(payload.closesAt) - NOW.getTime(), label).toBe(AUCTION_CLOCK);
+		}
+	});
+
+	it('never reads the seed table — it is written and never selected from', () => {
+		// `recordContentionSeed` is a WRITE-SIDE statement, exactly as
+		// `claimNomination` is. Story 3.6's draw is the first reader, and it
+		// reaches the row through the direct connection rather than through
+		// this module.
+		const source = readFileSync(
+			fileURLToPath(new URL('../../src/lib/server/bidding.ts', import.meta.url)),
+			'utf8'
+		);
+		const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+		expect(code).toContain('insert into ${CONTENTION_SEEDS_TABLE}');
+		expect(code).not.toMatch(/select[\s\S]{0,80}auction_contention_seeds/i);
+		expect(code).not.toMatch(/CONTENTION_SEEDS_TABLE[\s\S]{0,40}select/i);
 	});
 });

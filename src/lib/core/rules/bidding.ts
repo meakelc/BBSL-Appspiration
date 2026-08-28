@@ -1,7 +1,7 @@
 /**
- * The bidding gate: the two entry points AD-1 fixes, the seven gates they
+ * The bidding gate: the two entry points AD-1 fixes, the eight gates they
  * decide through, the one sentence each refusal has, and the arithmetic the
- * refusal panel prints. Pure (Stories 2.5, 2.6, 2.7, 3.1).
+ * refusal panel prints. Pure (Stories 2.5, 2.6, 2.7, 3.1, 3.2).
  *
  * **Two entry points and no others.**
  *
@@ -33,10 +33,22 @@
  * says so outright). Granularity earns its keep where the increment rule does
  * not apply — §10 example 26's `$1,000,001` in a Minimum-Bid Contention.
  *
- * **The gate set grew by one gate, three times, exactly as designed.** Story
+ * **The gate set grew by one gate, four times, exactly as designed.** Story
  * 2.5 owned four and said 2.6 would add `cap`, 2.7 `slots` and 3.1 `expiry`.
- * All three are here now, and adding each was the single edit to
- * `PLACE_BID_GATES` in `core/types.ts` that the design promised.
+ * All three are here, and 3.2 added `contention` — each was the single edit
+ * to `PLACE_BID_GATES` in `core/types.ts` that the design promised, and each
+ * time every consumer was a compile error until it handled the new gate.
+ *
+ * **`contention` is Story 3.2's, and it owns every amount question INSIDE a
+ * lottery.** Joining, joining twice, the dead zone between the two thresholds
+ * and the conversion this story deliberately does not build are one
+ * classification of one amount, so they are one gate rather than four. It
+ * sits immediately after `opening` because the two are one reading — what an
+ * amount means when nothing leads, and what it means once a Minimum-Bid
+ * Contention is running — and because `increment` steps aside entirely in a
+ * lottery: there is no ascending raise to be short of when every Contender
+ * holds the identical $1,000,000. `granularity` does NOT step aside, and
+ * still reads the amount and nothing else.
  *
  * **`expiry` is Story 3.1's, and it is the only gate that asks what time it
  * is.** It compares the injected `now` against the PERSISTED absolute close
@@ -95,18 +107,30 @@
  * the cheap bid on money (§10 example 19) and the fourth stash on capacity
  * (§10 example 25) without either gate learning the other's ground.
  *
- * **No Minimum-Bid Contention is ever produced.** An Opening Bid of exactly
- * `MINIMUM_BID` is refused by the named `opening` gate, because the Contender
- * list, seed table, fixed clock and draw that make a lottery work are Stories
- * 3.2/3.3. The `minimum_bid` state literal exists in
- * `projection/auctions.ts` so a lottery can be FOLDED and reasoned about —
- * never so one can be created here.
+ * **A Minimum-Bid Contention is created here now, and dissolved nowhere.**
+ * An Opening Bid of exactly `MINIMUM_BID` PASSES the `opening` gate and opens
+ * one; `decide()` publishes `hash(seed)` on that Bid's payload and the shell
+ * seals the seed in a table no role can read (AD-14). A Bid of $1,500,000 or
+ * more into a live contention is REFUSED by name on `contention`, exactly as
+ * 2.5 refused `at_the_minimum` by name rather than half-doing it: the
+ * Contender release, the seed reveal and `ContentionDissolved` are Story 3.3,
+ * and a conversion that silently released commitments while leaving the seed
+ * sealed is the one outcome AD-14 forbids.
  *
- * `seed` is declared on `decide()` and never read. AD-1 and the epic AC fix
- * that signature, and Story 3.6's draw is its first consumer — the same
- * ship-it-declared-and-unused discipline `releaseNomination` already follows.
- * Declaring it now means the draw does not change a signature every caller
- * in two runtimes already depends on.
+ * **`seed` is read by `decide()` since Story 3.2**, through the fourth
+ * parameter AD-1 fixed and 2.5 shipped declared-and-unused. It is never
+ * generated here — the core reads no randomness (AD-2), so the shell makes it
+ * and passes it in — and never stored here: the ONE thing done with it is
+ * `hash(seed)`, which is `core/hash.ts`'s pure SHA-256 so that Node, Deno and
+ * a Manager with `sha256sum` all compute the same commitment.
+ *
+ * **The fixed clock is `decide()`'s, not the fold's.** A join's `BidPlaced`
+ * payload carries the contention's EXISTING `closesAt` verbatim; a fresh
+ * `closeInstantFor(now, AUCTION_CLOCK)` is computed only for an opening or a
+ * raise. That the fold also preserves the clock — a join is never strictly
+ * higher, so it never becomes `leadingBid` — is a second guarantee resting on
+ * an unrelated invariant, and a persisted payload claiming a join closes 24
+ * hours from itself is a lie Story 3.5's sweep would act on.
  *
  * This module is part of the PURE core: no I/O, no clock, no randomness,
  * stdlib only, relative .ts imports only so Deno can load it (AD-2). It reads
@@ -123,14 +147,17 @@ import {
 	MINIMUM_INCREMENT,
 	MINOR_LEAGUE_SLOTS
 } from '../constants.ts';
+import { hash } from '../hash.ts';
 import { parseInstant, relativePhrase } from '../instant.ts';
-import type { Auction, OpenAuctions } from '../projection/auctions.ts';
+import type { Auction, ContentionState, OpenAuctions } from '../projection/auctions.ts';
 import {
 	AUCTION_EXPIRED,
 	BID_PLACED_EVENT,
+	MINIMUM_BID_CONTENTION_LABEL,
 	auctionForPlayer,
 	closeInstantFor,
 	closesInPhrase,
+	contentionForAmount,
 	hasExpired
 } from '../projection/auctions.ts';
 import type { Money } from '../money.ts';
@@ -147,6 +174,7 @@ import { PLACE_BID_GATES } from '../types.ts';
 import type {
 	Accepted,
 	CapGateOutcome,
+	ContentionGateOutcome,
 	Decided,
 	EventEnvelope,
 	ExpiryGateOutcome,
@@ -251,6 +279,31 @@ export type BidState = {
 	 * the transaction and the SURFACE build rather than on `LeadingBid`.
 	 */
 	readonly closesAt: string | null;
+	/**
+	 * Which contention this Auction is in, as `auctionsReducer` folded it —
+	 * `awaiting_opening_bid` for a nominated Player nobody has bid on.
+	 *
+	 * Story 3.2's addition, and it is READ off the fold rather than re-derived
+	 * from `leadingBid.amount` here. The reducer decides an Auction's
+	 * contention through `contentionForAmount`, and a gate that re-derived it
+	 * from the leading amount would be a second answer to a question the fold
+	 * already answers — the drift AD-5 makes the fold the authority to
+	 * prevent.
+	 */
+	readonly contention: ContentionState;
+	/**
+	 * The Teams already on the Contender list, in ascending join `seq`
+	 * (AD-14) — ids only.
+	 *
+	 * Ids and not names, for `LeadingBid`'s reason: the `contention` gate
+	 * matches an acting Team against this list and reads nothing else off it,
+	 * so a gate that cannot see a Team's NAME cannot come to depend on one.
+	 * The Auction page names the Contenders out loud from the fold's own
+	 * `Contender[]`, which carries both.
+	 *
+	 * Empty for every Auction that is not a Minimum-Bid Contention.
+	 */
+	readonly contenders: readonly string[];
 	readonly team: TeamMoneyState | null;
 	/**
 	 * Whether the Player being bid on is Minor League Eligible — the fold of
@@ -361,6 +414,13 @@ export type TeamMoneyState = {
  * this function already receives, so the transaction needed no plumbing at
  * all to give `expiry` its authority. The `null`-Auction branch passes
  * `null` through, which is the no-clock state rather than a missing one.
+ *
+ * Story 3.2 changed none either, for the same reason twice over: the
+ * contention state and the Contender list are both already on the `Auction`
+ * this function receives, so the `contention` gate cost the transaction and
+ * the read path no plumbing at all. The `null`-Auction branch answers
+ * `awaiting_opening_bid` and an empty list, which is what a nominated Player
+ * nobody has bid on genuinely is.
  */
 export function bidStateFor(
 	auction: Auction | null,
@@ -368,11 +428,22 @@ export function bidStateFor(
 	playerIsMinorLeagueEligible: boolean
 ): BidState {
 	if (auction === null) {
-		return { leadingBid: null, closesAt: null, team, playerIsMinorLeagueEligible };
+		return {
+			leadingBid: null,
+			closesAt: null,
+			contention: 'awaiting_opening_bid',
+			contenders: [],
+			team,
+			playerIsMinorLeagueEligible
+		};
 	}
 	return {
 		leadingBid: { teamId: auction.leadingBid.teamId, amount: auction.leadingBid.amount },
 		closesAt: auction.closesAt,
+		contention: auction.contention,
+		// Ids alone, in the fold's own order. The narrowing is what keeps the
+		// gate from reaching a Contender's name or join instant.
+		contenders: auction.contenders.map((contender) => contender.teamId),
 		team,
 		playerIsMinorLeagueEligible
 	};
@@ -413,9 +484,19 @@ export function bidStateFor(
  * written ONCE, before the routing, so it applies to an eligible contention
  * exactly as it does to a non-eligible one: an eligible Minimum-Bid
  * Contention contributes an Eligible Leading Bid of $1,000,000, and commits
- * nothing at all while a Free Minor League Slot absorbs it. Only the leader
- * is visible in today's fold; Story 3.2 introduces the Contender list and
- * must extend this one expression.
+ * nothing at all while a Free Minor League Slot absorbs it.
+ *
+ * **Story 3.2 widens the LEADER filter to every Contender, and that one
+ * change is §10 examples 21 and 22.** Until 3.2 a Team's capital was held
+ * only where it held `leadingBid`, which in a lottery is whichever Team
+ * opened it — so three Teams who joined a contention showed no commitment at
+ * all while the opener showed the whole $1,000,000. Any Contender may win,
+ * so every Contender commits, and the amount each commits is the same flat
+ * `MINIMUM_OPENING_BID` the substitution below already produced. The
+ * partition by eligibility is untouched: an eligible contention still routes
+ * into `eligibleLeading` through the single existing branch, which is what
+ * makes §10 example 21's join commit nothing while a Free Minor League Slot
+ * can absorb it and §10 example 22's overflowing join commit $5,000,000.
  *
  * `playerNameFor` answers what a Player is called, because §10 example 19's
  * refusal names an Auction and an id is not a name. It is a function rather
@@ -445,7 +526,15 @@ export function teamMoneyStateFor(input: {
 		if (playerId === input.fantraxPlayerId) continue;
 		const auction = auctionForPlayer(input.auctions, playerId);
 		if (auction === null) continue;
-		if (auction.leadingBid.teamId !== input.teamId) continue;
+		// The Team commits where it LEADS, and — since Story 3.2 — where it
+		// CONTENDS. The two are the same question asked of two contention
+		// states: in Standard Contention exactly one Team can win, and in a
+		// Minimum-Bid Contention any Contender can. `contenders` is empty for
+		// every Auction that is not a lottery, so this reads as the leader
+		// filter it used to be wherever no lottery is running.
+		const leads = auction.leadingBid.teamId === input.teamId;
+		const contends = auction.contenders.some((contender) => contender.teamId === input.teamId);
+		if (!leads && !contends) continue;
 		const entry: LeadingBidElsewhere = {
 			fantraxPlayerId: playerId,
 			playerName: input.playerNameFor(playerId),
@@ -496,17 +585,39 @@ function minimumRaise(leading: LeadingBid): Money {
  * function's own.** `evaluateIncrement` reports `minimumLegal: null` for an
  * opening, because the increment rule genuinely does not apply to one and
  * stating a minimum raise over a high that does not exist would be inventing
- * arithmetic. The opening minimum is instead derived from the two gates that
- * DO apply: the `opening` gate refuses anything at or below `MINIMUM_BID`
- * (exactly `MINIMUM_BID` opens a lottery this story cannot create), and
- * `granularity` refuses anything off the `MINIMUM_INCREMENT` grid. The
- * smallest value satisfying both is `MINIMUM_BID + MINIMUM_INCREMENT` —
- * $1,500,000. `tests/core/bidding.test.ts` asserts the derivation rather than
- * the constant, by checking that every state's pre-fill passes every gate.
+ * arithmetic. The opening minimum is instead derived from the gates that DO
+ * apply: `opening` refuses anything BELOW `MINIMUM_BID`, `contention` has
+ * nothing to decide before a lottery exists, and `granularity` refuses
+ * anything off the `MINIMUM_INCREMENT` grid. The smallest value satisfying
+ * all three is `MINIMUM_BID` itself.
+ *
+ * **It was `MINIMUM_BID + MINIMUM_INCREMENT` until Story 3.2, and the
+ * derivation is what changed rather than the constant.** The opening gate
+ * used to refuse exactly `MINIMUM_BID` by name, because no Contender list,
+ * seed or fixed clock existed to run the lottery it opens; all three exist
+ * now, the gate passes that amount, and the pre-fill follows the gates rather
+ * than being adjusted to match them. `tests/core/bidding.test.ts` asserts the
+ * derivation rather than the constant, by checking that every state's
+ * pre-fill passes every gate.
+ *
+ * **Inside a live contention the figure is `MINIMUM_BID`**, which is the join
+ * amount and the ONLY amount `contention` accepts: a raise does not exist in
+ * a lottery, so `minimumRaise` would pre-fill a conversion the gate refuses.
+ *
+ * **One state has no legal amount at all, and this function still answers.**
+ * A Team already on the Contender list is refused at `$1,000,000` on
+ * `already_contending` and at everything above it on `converts` — there is no
+ * figure that passes every gate for them until Story 3.3 builds dissolution.
+ * The pre-fill is still the join amount, because a field pre-filled with the
+ * amount the contention actually takes, beside a control disabled with the
+ * reason, is the honest rendering; inventing a figure that passes nothing
+ * would not be.
  */
 export function minimumLegalBid(state: BidState): Money {
+	// A lottery takes exactly one amount, whoever is asking.
+	if (state.contention === 'minimum_bid') return MINIMUM_OPENING_BID;
 	const leading = state.leadingBid;
-	if (leading === null) return addMoney(MINIMUM_OPENING_BID, INCREMENT);
+	if (leading === null) return MINIMUM_OPENING_BID;
 	return minimumRaise(leading);
 }
 
@@ -565,19 +676,28 @@ export function readBidAmount(text: string): BidAmountReading {
 /**
  * The Opening Bid gate.
  *
- * Three questions in one, discriminated by `opening` so the wording and the
+ * Four questions in one, discriminated by `opening` so the wording and the
  * tests read a field rather than re-deriving a comparison:
  *
  *  - a Bid already leads → `not_an_opening`, passes. The increment gate owns
- *    the raise, and an opening rule applied to a raise would double-refuse.
+ *    the raise in Standard Contention and the `contention` gate owns the
+ *    amount in a lottery; an opening rule applied to either would
+ *    double-refuse.
  *  - above `MINIMUM_BID` → `above_the_minimum`, passes: Standard Contention.
- *  - exactly `MINIMUM_BID` → `at_the_minimum`, REFUSED. This is the amount
- *    that opens a Minimum-Bid Contention, and no Contender list, seed table,
- *    fixed clock or draw exists to run one (Stories 3.2/3.3). Refusing by
- *    name is the honest answer; silently promoting it to $1,500,000 or
- *    quietly accepting it into a lottery that cannot be drawn are both worse.
+ *  - exactly `MINIMUM_BID` → `at_the_minimum`, PASSES since Story 3.2: this
+ *    is the amount that opens a Minimum-Bid Contention, and the Contender
+ *    list, the seed and the fixed clock that make one work all exist now.
+ *    `decide()` is what stamps `hash(seed)` onto this Bid's payload; nothing
+ *    is decided about the lottery HERE, because this gate asks one question
+ *    and it is about the minimum.
  *  - below `MINIMUM_BID` → `below_the_minimum`, refused: PRD §3, "Opening
  *    Bid — Minimum $1,000,000".
+ *
+ * **The comparison is unchanged and only the verdict moved**, which is what
+ * makes this a one-line edit rather than a rewrite. `at_the_minimum` still
+ * names itself, so the panel's figure still says which case this was, and a
+ * later story that needed to refuse it again would have the branch to do it
+ * in.
  */
 function evaluateOpening(state: BidState, amount: Money): OpeningGateOutcome {
 	const base = { offered: amount, minimumOpening: MINIMUM_OPENING_BID };
@@ -586,8 +706,91 @@ function evaluateOpening(state: BidState, amount: Money): OpeningGateOutcome {
 	}
 	const order = compareMoney(amount, MINIMUM_OPENING_BID);
 	if (order > 0) return { ...base, passed: true, opening: 'above_the_minimum' };
-	if (order === 0) return { ...base, passed: false, opening: 'at_the_minimum' };
+	if (order === 0) return { ...base, passed: true, opening: 'at_the_minimum' };
 	return { ...base, passed: false, opening: 'below_the_minimum' };
+}
+
+/**
+ * The amount at which a Bid stops joining a Minimum-Bid Contention and starts
+ * trying to convert it — `MINIMUM_BID + MINIMUM_INCREMENT`, $1,500,000.
+ *
+ * Branded once here, from the two constants it is made of, rather than
+ * written as a literal: it is the SAME expression `minimumLegalBid` used for
+ * an opening before Story 3.2, and a second spelling of the sum is a second
+ * value that could drift from the grid it sits on.
+ */
+const CONVERSION_AMOUNT: Money = addMoney(MINIMUM_OPENING_BID, INCREMENT);
+
+/**
+ * The Minimum-Bid Contention gate: every amount question inside a lottery
+ * (Story 3.2, FR-18, AD-14).
+ *
+ * **It owns the amount once a lottery is running, and `increment` steps
+ * aside.** There is no ascending raise in a Minimum-Bid Contention to be
+ * short of — every Contender holds the identical $1,000,000 — so the
+ * increment rule reports that no rule applies, exactly as it already does for
+ * an opening, and this gate classifies the offered amount instead.
+ *
+ * Four outcomes and one pass:
+ *
+ *  - no lottery → `not_a_contention`, passes with no Contenders. Every
+ *    Auction on the board that is not at exactly $1,000,000 reads this, and
+ *    every other gate behaves exactly as it did before this one existed.
+ *  - exactly the join amount, from a Team not yet in → `joins`, passes.
+ *  - exactly the join amount, from a Team already in → `already_contending`,
+ *    REFUSED. A Team joins once: every Contender holds the same amount, so a
+ *    second join would commit nothing new and buy a second chance at a draw
+ *    whose ordered Contender list is an input to the winner (AD-14).
+ *  - at or above the conversion amount → `converts`, REFUSED and named as
+ *    Story 3.3's. Accepting it as an ordinary raise would produce most of
+ *    dissolution for free — the fold would go `standard`, the clock would
+ *    reset, and every Contender's commitment would quietly release, because
+ *    `teamMoneyStateFor` would stop seeing them — while leaving the seed
+ *    sealed forever. AD-14's "no unopened commitment is left behind" is
+ *    precisely what that silently breaks.
+ *  - strictly between the two → `neither`, refused. §10 example 10's dead
+ *    zone: too high to join, too low to convert. Under the $500,000 grid it
+ *    contains no on-grid amount at all, so `granularity` refuses every
+ *    member of it too and the two grounds are reported together.
+ *
+ * **The acting Team is matched by id and nothing else**, which is
+ * `evaluateSelfBid`'s discipline for the same reason: a co-managed Team is
+ * one Contender, so the second Manager submitting $1,000,000 for a Team
+ * already in gets the same refusal the first would.
+ *
+ * Reads no clock, no Cap figure and no roster. A Bid can be refused here with
+ * unlimited Cap Space and accepted here with none — `cap` is the gate that
+ * decides whether a Team can afford the join, and it reports its own
+ * arithmetic beside this one whichever way each of them goes.
+ */
+function evaluateContention(
+	state: BidState,
+	amount: Money,
+	actingTeamId: string
+): ContentionGateOutcome {
+	const base = {
+		offered: amount,
+		joinAmount: MINIMUM_OPENING_BID,
+		conversionAmount: CONVERSION_AMOUNT
+	};
+	// The fold's own state literal, read rather than re-derived from the
+	// leading amount — `auctionsReducer` decides this through
+	// `contentionForAmount` and AD-5 makes that answer the answer.
+	if (state.contention !== 'minimum_bid') {
+		return { ...base, passed: true, entry: 'not_a_contention', contenderCount: 0 };
+	}
+
+	const contenderCount = state.contenders.length;
+	if (compareMoney(amount, MINIMUM_OPENING_BID) === 0) {
+		if (state.contenders.includes(actingTeamId)) {
+			return { ...base, passed: false, entry: 'already_contending', contenderCount };
+		}
+		return { ...base, passed: true, entry: 'joins', contenderCount };
+	}
+	if (compareMoney(amount, CONVERSION_AMOUNT) >= 0) {
+		return { ...base, passed: false, entry: 'converts', contenderCount };
+	}
+	return { ...base, passed: false, entry: 'neither', contenderCount };
 }
 
 /**
@@ -610,10 +813,20 @@ function evaluateSelfBid(state: BidState, actingTeamId: string): SelfBidGateOutc
 /**
  * The Minimum Increment gate: at least `current high + MINIMUM_INCREMENT`.
  *
- * With no leading Bid the rule does not apply and both figures are `null`:
- * there is no current high to exceed, and stating a minimum legal raise over
- * a high that does not exist would be inventing arithmetic a refusal panel
- * would then print. The opening gate owns that case.
+ * **Two states report that no rule applies, and both null their figures
+ * together.** With no leading Bid there is no current high to exceed; inside
+ * a Minimum-Bid Contention there is no ascending raise at all, because every
+ * Contender holds the identical $1,000,000 and joining is not raising. In
+ * either case stating a minimum legal raise over a high that does not
+ * function as one would be inventing arithmetic a refusal panel would then
+ * print. The `opening` gate owns the first case and the `contention` gate
+ * owns the second.
+ *
+ * **`currentHigh` is nulled in a contention even though a leading Bid
+ * exists**, and that is the honest report rather than a convenience: the
+ * figure's meaning is "the amount you must beat", and in a lottery there is
+ * no amount to beat. Reporting $1,000,000 there would put a number on the
+ * panel that no comparison was made against.
  *
  * "At least" — a Bid exactly one increment above the high is legal; a Bid AT
  * the high or below it is not, which is the same comparison and needs no
@@ -621,7 +834,7 @@ function evaluateSelfBid(state: BidState, actingTeamId: string): SelfBidGateOutc
  */
 function evaluateIncrement(state: BidState, amount: Money): IncrementGateOutcome {
 	const leading = state.leadingBid;
-	if (leading === null) {
+	if (leading === null || state.contention === 'minimum_bid') {
 		return { passed: true, offered: amount, currentHigh: null, minimumLegal: null };
 	}
 	// The SAME expression `minimumLegalBid` pre-fills the control with.
@@ -1175,6 +1388,12 @@ export function evaluate(state: BidState, command: PlaceBid, now: string): Place
 		// others are not: expiry is the only time question in the set.
 		expiry: evaluateExpiry(state, now),
 		opening: evaluateOpening(state, command.amount),
+		// Immediately after `opening` here as well as in `PLACE_BID_GATES`, so
+		// the declared order and the construction order agree on sight. It is
+		// handed the acting Team because "are you already a Contender" is the
+		// one question in the set that is about WHO is bidding as well as how
+		// much — the same pair `selfBid` reads, for a different rule.
+		contention: evaluateContention(state, command.amount, command.teamId),
 		selfBid: evaluateSelfBid(state, command.teamId),
 		increment: evaluateIncrement(state, command.amount),
 		granularity: evaluateGranularity(command.amount),
@@ -1222,7 +1441,7 @@ export function failedGates(gates: PlaceBidGateResults): readonly PlaceBidGate[]
  * Why a Bid was refused.
  *
  * `gates` is the ordinary case: the pure gate set, refused by one or more of
- * the seven. The other six are decided OUTSIDE the gate set, exactly as
+ * the eight. The other six are decided OUTSIDE the gate set, exactly as
  * `NominationRefusal`'s `unconfirmed`/`unbound_actor`/`unrecorded` are, and
  * for the same reasons:
  *
@@ -1256,6 +1475,21 @@ export type BidRefusal =
 	| { readonly kind: 'unbound_actor' }
 	| { readonly kind: 'no_open_auction' }
 	| { readonly kind: 'unrecorded' };
+
+/**
+ * How many Contenders there are, as a fragment a sentence can carry.
+ *
+ * `projection/auctions.ts`'s `contenderCountSentence` is the finished
+ * sentence the Auction page prints; this is the clause a refusal embeds, and
+ * it is written here rather than reused from there because the two sit in
+ * different grammar and a sentence spliced into the middle of another
+ * sentence reads as a defect. The singular is written out for the same reason
+ * it is there: "1 Contenders" is what tells a Manager at 4am that nobody
+ * proof-read the thing they are being asked to trust.
+ */
+function contenderPhrase(count: number): string {
+	return count === 1 ? 'one Contender in total' : `${String(count)} Contenders in total`;
+}
 
 /**
  * The one sentence for a single failed gate, with that gate's own arithmetic
@@ -1309,6 +1543,40 @@ function gateSentence(gates: PlaceBidGateResults, gate: PlaceBidGate): string | 
 			return (
 				`An Opening Bid is at least ${formatMoney(outcome.minimumOpening)}. ` +
 				`You offered ${describeAmount(outcome.offered)}.`
+			);
+		}
+		case 'contention': {
+			const outcome = gates.contention;
+			if (outcome.passed) return null;
+			if (outcome.entry === 'already_contending') {
+				// The count is stated because it is the fact a Manager reading
+				// "you are already in" needs beside it, and because it is the
+				// one figure this gate has that is not a threshold.
+				return (
+					`Your Team is already a Contender in this ${MINIMUM_BID_CONTENTION_LABEL}, and a ` +
+					`Team joins once. Your ${formatMoney(outcome.joinAmount)} already stands, alongside ` +
+					`${contenderPhrase(outcome.contenderCount)}. Every Contender holds the same amount, ` +
+					'so there is nothing further to offer here.'
+				);
+			}
+			if (outcome.entry === 'converts') {
+				// Named as deferred, in words, rather than accepted as a raise.
+				// Story 2.5 made exactly this trade for the opening at
+				// $1,000,000, and for the same reason: the machinery that makes
+				// the outcome correct does not exist yet, and half-doing it is
+				// worse than saying so.
+				return (
+					`${describeAmount(outcome.offered)} would convert this ` +
+					`${MINIMUM_BID_CONTENTION_LABEL} into Standard Contention, releasing every ` +
+					`Contender's commitment, and this Auction cannot do that yet. Joining takes ` +
+					`exactly ${formatMoney(outcome.joinAmount)}.`
+				);
+			}
+			return (
+				`${describeAmount(outcome.offered)} is neither a join nor a conversion. Joining this ` +
+				`${MINIMUM_BID_CONTENTION_LABEL} takes exactly ${formatMoney(outcome.joinAmount)}, and ` +
+				`converting it takes at least ${formatMoney(outcome.conversionAmount)} — there is no ` +
+				'amount between the two this Auction will take.'
 			);
 		}
 		case 'selfBid': {
@@ -1710,8 +1978,38 @@ function gateFigure(gates: PlaceBidGateResults, gate: PlaceBidGate): string {
 					return `above the ${formatMoney(outcome.minimumOpening)} minimum`;
 				case 'at_the_minimum':
 					return `exactly ${formatMoney(outcome.minimumOpening)}, which opens a contention`;
+				// (unchanged wording, and it is now a PASSING row: the figure
+				// states what the amount is, and the chip beside it states the
+				// outcome — the one-branch discipline `slots` already keeps.)
 				case 'below_the_minimum':
 					return `under the ${formatMoney(outcome.minimumOpening)} minimum`;
+			}
+			break;
+		}
+		case 'contention': {
+			const outcome = gates.contention;
+			switch (outcome.entry) {
+				case 'not_a_contention':
+					return 'no Minimum-Bid Contention is running';
+				case 'joins':
+					// The count is the one BEFORE this Bid, because that is what
+					// the gate was decided against — a row claiming the Bid had
+					// already landed would be a figure nothing was judged from.
+					return `joins at ${formatMoney(outcome.joinAmount)}, ${contenderPhrase(
+						outcome.contenderCount
+					)} so far`;
+				case 'already_contending':
+					return `your Team is already a Contender, ${contenderPhrase(outcome.contenderCount)}`;
+				case 'converts':
+					return (
+						`at or above ${formatMoney(outcome.conversionAmount)}, which would convert the ` +
+						'contention'
+					);
+				case 'neither':
+					return (
+						`between ${formatMoney(outcome.joinAmount)} and ` +
+						`${formatMoney(outcome.conversionAmount)}, which is neither a join nor a conversion`
+					);
 			}
 			break;
 		}
@@ -1833,6 +2131,11 @@ const GATE_LABELS: Readonly<Record<PlaceBidGate, string>> = Object.freeze({
 	// cannot be mistaken for `Cap · Refused` or `Slots · Refused`.
 	expiry: 'Auction Clock',
 	opening: 'Opening Bid',
+	// The glossary term verbatim, from the fold that owns the wording — so the
+	// chip, the accent bar's label on the Auction page and the sentence a
+	// refusal states all name ONE thing, and the row cannot be mistaken for
+	// `Opening Bid · Refused` beside it.
+	contention: MINIMUM_BID_CONTENTION_LABEL,
 	selfBid: 'Self-bid',
 	increment: 'Minimum Increment',
 	granularity: 'Granularity',
@@ -2207,6 +2510,23 @@ export type BidPlacedPayload = {
 	readonly managerId: string;
 	readonly amount: number;
 	readonly closesAt: string;
+	/**
+	 * `hash(seed)` — the COMMIT half of AD-14's commit-reveal, present on
+	 * exactly one Bid per Minimum-Bid Contention: the one that opened it.
+	 *
+	 * Optional rather than nullable, because the overwhelming majority of
+	 * `BidPlaced` events have no seed to commit to and a `"seedHash": null`
+	 * on every one of them would be a field claiming an absence rather than
+	 * simply not being there. `auctionsReducer` reads it defensively either
+	 * way.
+	 *
+	 * **The raw seed is never here**, and this is the only thing derived from
+	 * it that ever reaches `auction_events`. The seed itself lands in
+	 * `auction_contention_seeds`, in the same transaction, behind a table that
+	 * grants no Postgres role anything — and reaches the log only at the draw
+	 * (Story 3.6), where the reveal is checked against this string.
+	 */
+	readonly seedHash?: string;
 };
 
 /**
@@ -2224,8 +2544,25 @@ export type BidPlacedPayload = {
  * event's timestamp and its `closesAt` are exactly `AUCTION_CLOCK` apart by
  * construction.
  *
- * `seed` is declared and never read (see the module header). A `PlaceBid` has
- * no randomness in it; Story 3.6's draw is the first command that does.
+ * **`seed` is read since Story 3.2**, through the fourth parameter AD-1 fixed
+ * and 2.5 shipped declared-and-`void`ed. Nothing here generates it — the core
+ * reads no randomness (AD-2) — and nothing here stores it: the ONE thing done
+ * with it is `hash(seed)` onto the payload of the Bid that OPENS a
+ * Minimum-Bid Contention. The raw string never appears in an event, and the
+ * shell writes it to `auction_contention_seeds` in the same transaction by
+ * reading the `seedHash` this function published, never by re-deriving the
+ * rule.
+ *
+ * **A `null` seed on such an opening THROWS**, and that is AD-1's distinction
+ * rather than strictness for its own sake: a shell that failed to supply a
+ * seed is a bug, not something a Manager did, and a Manager-facing refusal
+ * would send them away to fix something that is not theirs. Every other Bid
+ * ignores the parameter entirely, so a caller with genuinely no randomness in
+ * hand — a test of a raise, say — passes `null` and is unaffected.
+ *
+ * **The close instant is the contention's own on a join.** A join stamps
+ * `state.closesAt` verbatim; an opening or a raise computes a fresh
+ * `closeInstantFor(now, AUCTION_CLOCK)`. See the fixed-clock note below.
  *
  * A malformed `now` THROWS rather than returning a refusal, and that is the
  * AD-1 distinction rather than an oversight: a rule violation is a returned
@@ -2240,8 +2577,6 @@ export function decide(
 	now: string,
 	seed: string | null
 ): Decided<readonly EventEnvelope[], PlaceBidGateResults> {
-	void seed;
-
 	const gates = evaluate(state, command, now);
 
 	if (!allGatesPassed(gates)) {
@@ -2249,10 +2584,48 @@ export function decide(
 		return rejected;
 	}
 
-	const closesAt = closeInstantFor(now, AUCTION_CLOCK);
+	// **The fixed clock is enforced HERE, and this is the rule.**
+	// `auctionsReducer` also keeps `closesAt` on a join, because a join is
+	// never strictly higher than the leading Bid and so never becomes
+	// `leadingBid` — but that is true by way of an unrelated invariant, and if
+	// a later story ever makes joins visible in the lead the clock would
+	// silently start moving. Stamping the contention's EXISTING close instant
+	// onto the join's own payload makes the persisted log honest on its own
+	// terms: every `BidPlaced` in a contention states the same close instant,
+	// and Story 3.5's sweep — which reads persisted instants and nothing else
+	// (AD-12) — cannot be handed a join claiming to close 24 hours after
+	// itself.
+	//
+	// An opening or a raise computes a fresh one, which is the 24-hour restart
+	// `BID_CONSEQUENCE` promises.
+	const closesAt =
+		gates.contention.entry === 'joins'
+			? state.closesAt
+			: closeInstantFor(now, AUCTION_CLOCK);
 	if (closesAt === null) {
+		// Two unreachable-together causes, one message: an unreadable `now`,
+		// or a join into a contention with no persisted close. The second
+		// cannot arise — `contention` reads `minimum_bid` only off a folded
+		// Auction, and an Auction that exists has a close — and both are shell
+		// bugs rather than anything a Manager did (AD-1).
 		throw new TypeError(
 			`decide: "now" must be an ISO-8601 UTC instant, received ${JSON.stringify(now)}`
+		);
+	}
+
+	// Does this Bid OPEN a Minimum-Bid Contention? Asked through the same
+	// `contentionForAmount` the reducer folds with, so the published
+	// commitment and the contention state the fold arrives at are one
+	// judgement rather than two that must agree. `leadingBid === null` is the
+	// opening half; the `contention` gate cannot answer this, because it
+	// reports on the contention already running rather than the one about to
+	// start.
+	const opensContention =
+		state.leadingBid === null && contentionForAmount(command.amount) === 'minimum_bid';
+	if (opensContention && seed === null) {
+		throw new TypeError(
+			'decide: an Opening Bid that opens a Minimum-Bid Contention requires a seed; the ' +
+				'shell must supply one (AD-14)'
 		);
 	}
 
@@ -2262,7 +2635,10 @@ export function decide(
 		teamName: command.teamName,
 		managerId: command.managerId,
 		amount: command.amount,
-		closesAt
+		closesAt,
+		// `hash(seed)` and never the seed. Spread rather than set to `null`,
+		// so the overwhelming majority of Bids carry no such key at all.
+		...(opensContention && seed !== null ? { seedHash: hash(seed) } : {})
 	};
 
 	const accepted: Accepted<readonly EventEnvelope[]> = {

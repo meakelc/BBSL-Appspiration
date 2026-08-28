@@ -70,17 +70,48 @@ export const BID_PLACED_EVENT = 'BidPlaced';
  * is the ordinary case: one Leading Bidder, raises of at least the Minimum
  * Increment, a 24-hour clock from the latest Bid.
  *
- * **`minimum_bid` is a state literal this story can fold but never
- * produces.** An Opening Bid of exactly `MINIMUM_BID` opens a Minimum-Bid
- * Contention, whose Contender list, seed table, fixed clock and draw are
- * Stories 3.2/3.3 — so `rules/bidding.ts`'s opening gate refuses that amount
- * outright and no path in this codebase writes a `BidPlaced` at it. The
- * literal exists because a reducer must be total over any log it is handed,
- * and because PRD §10 example 26's second half needs a lottery state to
- * submit `$1,000,001` into: `tests/examples/example-26-off-grid-everywhere.test.ts`
- * builds one directly, which is exactly what AD-25 means by "a state literal".
+ * **`minimum_bid` is produced for real since Story 3.2.** An Opening Bid of
+ * exactly `MINIMUM_BID` opens a Minimum-Bid Contention: the `opening` gate
+ * passes it, the `contention` gate owns every amount question inside it, and
+ * `contenders` below is the Contender list folded from the Bids this log
+ * already holds. Until 3.2 the literal existed only so the fold could be
+ * total over a log carrying one — the opening gate refused the amount by name
+ * and no path wrote a `BidPlaced` at it. That is no longer true, and the
+ * state is now reached the ordinary way.
+ *
+ * A conversion OUT of it — a Bid of `MINIMUM_BID + MINIMUM_INCREMENT` or more
+ * into a live contention — is still refused by name, because dissolution
+ * releases every Contender's commitment and reveals the seed, and both are
+ * Story 3.3's.
  */
 export type ContentionState = 'awaiting_opening_bid' | 'standard' | 'minimum_bid';
+
+/**
+ * One Contender in a Minimum-Bid Contention (Story 3.2, AD-14).
+ *
+ * **Ordered by ascending join `seq`, and that order is an input to the
+ * winner**, not a rendering preference — AD-14 pins it outright, because the
+ * seed→winner derivation has to be reproducible by hand from the published
+ * commitment and a list whose order could differ between two readings would
+ * make the draw uncheckable. `seq` is the log's own ordering column, assigned
+ * by the database and never reissued, so it is the one ordering that cannot
+ * drift.
+ *
+ * Carried here rather than derived by each caller for the reason every other
+ * fact on this shape is: the gate, the read path and the Auction page all
+ * read ONE derivation, and a second `filter(...).sort(...)` somewhere else
+ * could disagree about which Bids counted.
+ *
+ * `teamName` rides along because the Auction page names the Contenders out
+ * loud — there is no anonymity at any point — while `teamId` is what the
+ * `contention` gate matches an acting Team against.
+ */
+export type Contender = {
+	/** The joining Bid's own log position. The order AD-14 pins. */
+	readonly seq: string;
+	readonly teamId: string;
+	readonly teamName: string;
+};
 
 /** One Bid, as the history line and the Leading Bidder both need it. */
 export type Bid = {
@@ -98,6 +129,17 @@ export type Bid = {
 	readonly occurredAt: string;
 	/** `AUCTION_CLOCK` after `occurredAt`, absolute, as the payload persisted it. */
 	readonly closesAt: string;
+	/**
+	 * `hash(seed)` — the commit half of AD-14's commit-reveal — present only
+	 * on the Bid that OPENED a Minimum-Bid Contention, and `null` on every
+	 * other Bid in the log.
+	 *
+	 * The raw seed is never here and never anywhere in `auction_events`: it is
+	 * sealed in `auction_contention_seeds`, which grants no Postgres role
+	 * anything. This is the published commitment a Manager checks the reveal
+	 * against at the draw (Story 3.6).
+	 */
+	readonly seedHash: string | null;
 };
 
 /**
@@ -121,6 +163,31 @@ export type Auction = {
 	readonly closesAt: string;
 	/** Every Bid, oldest first. Ordered by `seq`, never by `occurredAt` (AD-5). */
 	readonly bids: readonly Bid[];
+	/**
+	 * The Contenders in a Minimum-Bid Contention, in ascending join `seq`
+	 * (AD-14) — folded from the Bids this log already holds, deduplicated on
+	 * `teamId` keeping the EARLIEST join.
+	 *
+	 * Empty for an Auction that is not a lottery. Nothing is stored: a
+	 * Contender is a Bid of exactly `MINIMUM_BID`, which the log already
+	 * records, so a `contenders` table would only have to be undone (AD-5).
+	 *
+	 * The dedup keeps the earliest because a Team joins ONCE — the
+	 * `contention` gate refuses a second join by name — and because AD-14
+	 * makes the order an input to the winner: a Team that somehow appeared
+	 * twice in a historical log must not get two chances at the draw.
+	 */
+	readonly contenders: readonly Contender[];
+	/**
+	 * The published `hash(seed)` for this contention, off the opening Bid's
+	 * payload — `null` for an Auction that is not a lottery, and `null` for
+	 * one whose opening event predates the commitment or carries a malformed
+	 * one.
+	 *
+	 * The FIRST one seen wins, which is what makes replay converge: a fold of
+	 * the same log twice cannot swap one commitment for another.
+	 */
+	readonly seedHash: string | null;
 };
 
 /** Every Auction that has seen a Bid, keyed on the Player. */
@@ -170,9 +237,10 @@ export function contentionOf(auction: Auction | null): ContentionState {
  * `DESIGN.md` assigns ambient states a plain label, and the one attention
  * colour in the product marks Outbid and refusal and nothing else.
  *
- * `minimum_bid` is worded even though nothing in this story can produce it,
- * for `ContentionState`'s own reason: the fold is total over a log that
- * carries one, so a surface rendering that fold must be too.
+ * `minimum_bid` is a state this codebase produces since Story 3.2, and the
+ * Auction page prints THIS sentence above the lottery's own label, accent
+ * bar, Contender count and list — the sentence states which contention is
+ * running; `MINIMUM_BID_CONTENTION_LABEL` names it beside the icon.
  */
 export function contentionSentence(state: ContentionState): string {
 	switch (state) {
@@ -186,15 +254,130 @@ export function contentionSentence(state: ContentionState): string {
 }
 
 /**
- * Which contention a leading Bid puts an Auction in.
+ * The Minimum-Bid Contention's own label — the WORD that rides beside the
+ * icon and the `lottery` accent bar on the Auction page.
+ *
+ * The PRD §3 glossary term verbatim, and worded here rather than in
+ * `+page.svelte` for `contentionSentence`'s reason: a synonym in UI copy is a
+ * defect, the same as a synonym in code (`EXPERIENCE.md`), and a second
+ * spelling in a `.svelte` file is exactly where one would appear. It is the
+ * label rather than the sentence because the panel already carries
+ * `contentionSentence` above it, and a chip that ended in a full stop would
+ * read as prose.
+ *
+ * It is also the name the `contention` gate goes by on the refusal panel, so
+ * the chip and the accent bar name one thing.
+ */
+export const MINIMUM_BID_CONTENTION_LABEL = 'Minimum-Bid Contention';
+
+/**
+ * The statement, in words, that joining does not restart the Auction Clock.
+ *
+ * `EXPERIENCE.md` asks for it by name — the lottery's card "states in words
+ * that the clock will not reset on a join" — and DESIGN.md's rule that no
+ * state may be conveyed by colour alone is why it is words rather than the
+ * absence of a moving countdown. A Manager watching a lottery has to be able
+ * to tell "the clock did not move" from "the page did not update", and only a
+ * sentence does that.
+ *
+ * It quotes the clock's LENGTH but no instant: the absolute close renders
+ * beside it from the fold's own `closesAt`, and a duration stated here that
+ * disagreed with the persisted instant would be the invented figure the
+ * refusal design exists to prevent.
+ */
+export const CONTENTION_CLOCK_UNMOVED =
+	'The Auction Clock will not reset on a join. It closes 24 hours after the Opening Bid ' +
+	'that started this contention, however many Teams join and however late they join.';
+
+/**
+ * What the published commitment IS, in words — the sentence the Auction page
+ * prints above `hash(seed)` itself.
+ *
+ * A 64-character hex string on a page with no explanation beside it is a
+ * figure a Manager cannot act on. This says what it commits to, that the
+ * value behind it is sealed, and what they will be able to do with it at the
+ * draw — which is the whole of why AD-14 publishes it this early.
+ *
+ * It quotes NO figure: the digest renders beside it from the fold's own
+ * `seedHash`, so a sentence that named one would be a second copy of a value
+ * that must be checkable character by character.
+ */
+export const SEED_COMMITMENT =
+	'The seed for this draw was generated when the contention opened and sealed where no role ' +
+	'can read it. Only its SHA-256 is published, and it is published now rather than at the ' +
+	'draw — so when the seed is revealed you can hash it yourself and check it against this ' +
+	'value.';
+
+/**
+ * How many Teams have joined, as a finished sentence.
+ *
+ * A count is a figure, and `EXPERIENCE.md` requires the lottery's card to
+ * carry one — so it is worded here beside the fold that derives the list,
+ * rather than left to a surface to interpolate into prose of its own. The
+ * singular is written out because "1 Contenders" is the kind of sentence that
+ * tells a Manager at 4am that nobody proof-read the thing they are being
+ * asked to trust.
+ *
+ * Zero is a real state a total function must answer for: an Auction that is
+ * not a lottery has no Contenders, and so — briefly, in a log this codebase
+ * cannot write — would a lottery whose only Bids were malformed.
+ */
+export function contenderCountSentence(count: number): string {
+	if (count === 0) return 'No Teams have joined this contention yet.';
+	if (count === 1) return 'One Contender so far.';
+	return `${String(count)} Contenders so far.`;
+}
+
+/**
+ * Which contention an amount puts an Auction in.
  *
  * Exactly `MINIMUM_BID` is a Minimum-Bid Contention; anything above it is
  * Standard. Derived from the leading amount rather than stored on the event,
  * because a stored contention state could disagree with the price beside it
  * and AD-5 makes the fold the answer.
+ *
+ * **Exported since Story 3.2, and the export is the point.** `decide()` has
+ * to know whether the Bid it is authorising OPENS a contention, because that
+ * is the one Bid that carries `hash(seed)` and the one opening that writes a
+ * seed row. Asking this function is what keeps the payload's commitment and
+ * the fold's contention state from being two independent judgements about the
+ * same amount — a rule stated in `rules/bidding.ts` and re-stated here could
+ * drift, and a contention that folded without a published commitment is
+ * exactly the state AD-14 cannot survive.
+ *
+ * Takes an AMOUNT rather than a `Bid`, so the caller that has only a
+ * prospective amount can ask it as easily as the reducer that has a folded
+ * one.
  */
-function contentionFor(leading: Bid): ContentionState {
-	return compareMoney(leading.amount, parseMoney(MINIMUM_BID)) === 0 ? 'minimum_bid' : 'standard';
+export function contentionForAmount(amount: Money): ContentionState {
+	return compareMoney(amount, parseMoney(MINIMUM_BID)) === 0 ? 'minimum_bid' : 'standard';
+}
+
+/**
+ * The Contenders a Bid history yields, in ascending `seq`, one per Team.
+ *
+ * A Contender is a Bid of EXACTLY `MINIMUM_BID` — the join amount — and
+ * nothing else. A malformed historical `BidPlaced` at `$1,000,001` on a
+ * lottery folds into `bids` and into the visible history exactly as it does
+ * today, and is NOT a Contender: it did not join, and AD-14's draw runs over
+ * the Teams that did.
+ *
+ * `bids` is already in `seq` order by construction — `fold()` guarantees it
+ * (AD-5) and this reducer appends in fold order — so nothing here sorts. The
+ * dedup keeps the earliest join per Team, which is both what "ascending join
+ * `seq`" means and what stops a Team appearing twice in the ordered list the
+ * winner is derived from.
+ */
+function contendersFor(bids: readonly Bid[]): readonly Contender[] {
+	const contenders: Contender[] = [];
+	const joined = new Set<string>();
+	for (const bid of bids) {
+		if (contentionForAmount(bid.amount) !== 'minimum_bid') continue;
+		if (joined.has(bid.teamId)) continue;
+		joined.add(bid.teamId);
+		contenders.push({ seq: bid.seq, teamId: bid.teamId, teamName: bid.teamName });
+	}
+	return contenders;
 }
 
 /**
@@ -255,6 +438,15 @@ function readPayload(
 			? rawClosesAt
 			: event.occurredAt;
 
+	// The commit half of AD-14, read DEFENSIVELY: absent is `null`, and so is
+	// anything that is not a non-empty string. It is never validated as a
+	// digest and never re-derived here — this fold has no seed to hash and no
+	// business deciding whether a published commitment is well formed. A
+	// malformed one is a fact about the log for Story 3.6's reveal to refuse,
+	// not a reason for the price and the Leading Bidder to stop folding.
+	const rawSeedHash = record['seedHash'];
+	const seedHash = typeof rawSeedHash === 'string' && rawSeedHash !== '' ? rawSeedHash : null;
+
 	return {
 		fantraxPlayerId,
 		bid: {
@@ -268,7 +460,8 @@ function readPayload(
 			managerId,
 			amount,
 			occurredAt: event.occurredAt,
-			closesAt
+			closesAt,
+			seedHash
 		}
 	};
 }
@@ -312,10 +505,12 @@ export const auctionsReducer: Reducer<OpenAuctions> = (state, event) => {
 			if (existing === null) {
 				const auction: Auction = {
 					fantraxPlayerId,
-					contention: contentionFor(bid),
+					contention: contentionForAmount(bid.amount),
 					leadingBid: bid,
 					closesAt: bid.closesAt,
-					bids: [bid]
+					bids: [bid],
+					contenders: contendersFor([bid]),
+					seedHash: bid.seedHash
 				};
 				return { byPlayer: { ...state.byPlayer, [fantraxPlayerId]: auction } };
 			}
@@ -331,16 +526,33 @@ export const auctionsReducer: Reducer<OpenAuctions> = (state, event) => {
 			const leadingBid =
 				compareMoney(bid.amount, existing.leadingBid.amount) > 0 ? bid : existing.leadingBid;
 
+			// Appended in fold order, which `fold()` guarantees is `seq` order
+			// (AD-5) — so the history is chronological by construction and
+			// nothing here sorts by `occurredAt`, which under the global lock
+			// can run backwards relative to commit order.
+			const bids = [...existing.bids, bid];
+
 			const auction: Auction = {
 				fantraxPlayerId,
-				contention: contentionFor(leadingBid),
+				contention: contentionForAmount(leadingBid.amount),
 				leadingBid,
 				closesAt: leadingBid.closesAt,
-				// Appended in fold order, which `fold()` guarantees is `seq` order
-				// (AD-5) — so the history is chronological by construction and
-				// nothing here sorts by `occurredAt`, which under the global lock
-				// can run backwards relative to commit order.
-				bids: [...existing.bids, bid]
+				bids,
+				// **A join never moves the lead, so it never moves the clock —
+				// and that is a second guarantee, not the rule.** A Bid of
+				// exactly `MINIMUM_BID` into a live contention is not strictly
+				// higher than the `MINIMUM_BID` already leading, so `leadingBid`
+				// and `closesAt` above are unchanged by construction. Story 3.2
+				// does not rely on that: `decide()` stamps the contention's
+				// EXISTING `closesAt` onto every join's own payload, so the
+				// persisted log states one close instant per contention whether
+				// or not this fold happens to preserve it.
+				contenders: contendersFor(bids),
+				// The FIRST commitment seen, kept. A second `seedHash` in the
+				// same Auction cannot replace the published one — replay would
+				// otherwise be able to swap the commitment a Manager already
+				// checked.
+				seedHash: existing.seedHash ?? bid.seedHash
 			};
 			return { byPlayer: { ...state.byPlayer, [fantraxPlayerId]: auction } };
 		}

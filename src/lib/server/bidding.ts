@@ -1,15 +1,25 @@
 /**
  * The bidding gate's one transaction: lock, load, decide, append one
- * `BidPlaced`. Server-only (Story 2.5).
+ * `BidPlaced`. Server-only (Stories 2.5, 3.2).
  *
- * **Nothing here is stored but the event.** There is no migration in this
- * story, no `auctions` table, no `bids` table and — unlike `placeNomination`
- * — no `projections` hook of any kind. The price, the Leading Bidder, the
- * contention state, the absolute close instant, the whole Bid history and the
- * League Clock reset are all folds of `auction_events`
- * (`core/projection/auctions.ts`, `core/projection/league-clock.ts`). A claim
- * row would be a write-side constraint for a uniqueness rule bidding does not
- * have: two Bids on one Auction are not a collision, they are an auction.
+ * **Almost nothing here is stored but the event.** The price, the Leading
+ * Bidder, the contention state, the Contender list, the absolute close
+ * instant, the whole Bid history and the League Clock reset are all folds of
+ * `auction_events` (`core/projection/auctions.ts`,
+ * `core/projection/league-clock.ts`). There is no `auctions` table, no `bids`
+ * table and no `contenders` table, and there is no claim row: a claim row
+ * would be a write-side constraint for a uniqueness rule bidding does not
+ * have, because two Bids on one Auction are not a collision, they are an
+ * auction.
+ *
+ * **The one exception is the lottery SEED, and it is an exception because it
+ * is the one fact that must never be foldable.** AD-14 requires it stored
+ * outside the league-readable log, in a table no manager-facing role can
+ * read; only `hash(seed)` is published, on the opening `BidPlaced` payload.
+ * So `placeBid` generates the seed HERE — the shell may read randomness, the
+ * core may not — hands it to `decide()`, and registers ONE `ProjectionUpdater`
+ * that writes the row inside the appending transaction (AD-5), keyed on the
+ * `seedHash` the core itself published.
  *
  * **The race is settled by the price, not by a constraint.** PRD §10 example
  * 15 — both Managers of one Team bidding within the same second — resolves
@@ -31,9 +41,9 @@
  * never the check (AD-9).
  *
  * **Whether the Auction EXISTS is asked here, not by a gate.**
- * `PLACE_BID_GATES` is fixed at seven — `expiry`, `opening`, `selfBid`,
- * `increment`, `granularity`, `cap` and `slots` — and none of them is "does
- * this Auction exist" — that is `nominationsReducer`'s fold, the identical
+ * `PLACE_BID_GATES` is fixed at eight — `expiry`, `opening`, `contention`,
+ * `selfBid`, `increment`, `granularity`, `cap` and `slots` — and none of them
+ * is "does this Auction exist" — that is `nominationsReducer`'s fold, the identical
  * accessor `server/auction-page.ts` and `server/nomination.ts` already use.
  * It is answered before `decide()` is called, exactly as the route answers
  * `unconfirmed` and `unbound_actor` before this function is called: a
@@ -58,8 +68,11 @@
  * A refusal is a returned value, never a throw (AD-1).
  */
 
+import { randomBytes } from 'node:crypto';
+
 import { fold } from '../core/projection/fold.ts';
 import {
+	BID_PLACED_EVENT,
 	INITIAL_AUCTIONS,
 	auctionForPlayer,
 	auctionsReducer
@@ -77,10 +90,15 @@ import {
 import type { Money } from '../core/money.ts';
 import type { OpenNomination } from '../core/projection/nominations.ts';
 import { bidRefusalDetail, bidStateFor, decide, teamMoneyStateFor } from '../core/rules/bidding.ts';
-import type { BidRefusal, BidState } from '../core/rules/bidding.ts';
+import type { BidPlacedPayload, BidRefusal, BidState } from '../core/rules/bidding.ts';
 import type { EventEnvelope, PlaceBid, PlaceBidGateResults } from '../core/types.ts';
 import { runTransactionalWrite } from '../shell/write.ts';
-import type { ConnectionGateway, TransactionalClient, WriteOutcome } from '../shell/write.ts';
+import type {
+	ConnectionGateway,
+	ProjectionUpdater,
+	TransactionalClient,
+	WriteOutcome
+} from '../shell/write.ts';
 import { loadEventsViaClient } from './event-log.ts';
 import { loadTeamRoster } from './team-roster.ts';
 
@@ -200,6 +218,94 @@ export async function loadBidState(
 	};
 }
 
+/** The sealed seed table (`20260828000000_contention_seeds.sql`). */
+const CONTENTION_SEEDS_TABLE = 'auction_contention_seeds';
+
+/**
+ * How many random bytes a lottery seed is. 32 — a full 256 bits, matching the
+ * digest that commits to it, so the commitment is never the narrower half of
+ * the pair.
+ */
+const SEED_BYTES = 32;
+
+/**
+ * A fresh lottery seed: 32 random bytes as lowercase hex.
+ *
+ * **Generated in the SHELL because the core may not read randomness** (AD-2,
+ * and `scripts/check-core-purity.js` enforces it by refusing `crypto` in
+ * `core/`). `decide()` receives it as an argument, exactly as it receives
+ * `now` — the same discipline for the same reason: a pure function's output
+ * must be a function of its inputs, and both a clock and a random source are
+ * ambient state.
+ *
+ * `randomBytes` and not `Math.random`: this value is what stands between a
+ * Commissioner who is also a rival and a lottery nobody can trust (AD-14), so
+ * it has to be unpredictable rather than merely arbitrary.
+ *
+ * Hex rather than base64, because the seed is revealed at the draw and
+ * verified by hand — `printf %s "<seed>" | sha256sum` against the published
+ * `hash(seed)` — and hex is the alphabet a Manager will be reading in.
+ */
+function generateSeed(): string {
+	return randomBytes(SEED_BYTES).toString('hex');
+}
+
+/**
+ * Insert the sealed seed row for a `BidPlaced` that OPENED a Minimum-Bid
+ * Contention, on the appending transaction's own client (Story 3.2, AD-14).
+ *
+ * `claimNomination`'s shape and `claimNomination`'s discipline: a WRITE-SIDE
+ * statement, never a read — nothing in this codebase selects from
+ * `auction_contention_seeds` until Story 3.6's draw — registered through
+ * `runTransactionalWrite`'s `projections` hook because that is the one seam
+ * that persists INSIDE the appending transaction (AD-5). The seed row and the
+ * opening event therefore commit together or neither does, and a contention
+ * whose commitment was published without a seed behind it is unreachable by
+ * construction.
+ *
+ * **It keys on the core's own output, and re-derives no rule.** The condition
+ * is "this payload carries a `seedHash`", which `decide()` put there and only
+ * puts there on the Bid that opens a contention. Asking the question a second
+ * way here — comparing the amount to `MINIMUM_BID`, or re-folding the
+ * Auction — would be two judgements about one event, and the failure mode is
+ * silent: a row written for a Bid whose payload published nothing, or a
+ * published commitment with no seed to reveal.
+ *
+ * Deliberately NOT `on conflict do nothing`. The primary key is one seed per
+ * Player's contention, and a collision means an opening was accepted for an
+ * Auction that already had one — a state the gates make unreachable. Swallowing
+ * it would leave the published commitment pointing at the WRONG seed, which is
+ * the one failure AD-14 cannot survive; aborting the transaction refuses the
+ * Bid instead.
+ *
+ * A factory rather than a bare `ProjectionUpdater` because the seed is per
+ * transaction: `placeBid` generates one, passes it to `decide()` and closes
+ * over it here, so the value hashed into the payload and the value stored are
+ * the same string by construction rather than by two calls that agree.
+ */
+export function recordContentionSeed(seed: string): ProjectionUpdater {
+	return async (client, appended) => {
+		for (const event of appended) {
+			if (event.type !== BID_PLACED_EVENT) continue;
+			// The payload `decide()` built three lines earlier in this same
+			// transaction, so — unlike `releaseNomination`'s close, which
+			// arrives from elsewhere — it is known to be well formed. The
+			// narrowing below is what keeps the insert from firing on a
+			// payload shape a later story changes.
+			const payload = event.payload as BidPlacedPayload;
+			if (typeof payload.seedHash !== 'string' || payload.seedHash === '') continue;
+			await client.query(
+				`insert into ${CONTENTION_SEEDS_TABLE}
+					(fantrax_player_id, seed, created_at)
+				values ($1, $2, $3)`,
+				// The EVENT's own instant, not a second clock read: the row and
+				// the event it belongs to state the same moment (AD-3).
+				[payload.fantraxPlayerId, seed, event.occurredAt]
+			);
+		}
+	};
+}
+
 /**
  * Place a Bid: one transaction appending exactly one `BidPlaced` event, or
  * nothing at all.
@@ -216,9 +322,13 @@ export async function loadBidState(
  * `closesAt` the core computed from it are exactly `AUCTION_CLOCK` apart by
  * construction rather than by two clock reads that could differ.
  *
- * `seed` is passed as `null`: a `PlaceBid` has no randomness in it. The
- * parameter exists because AD-1 fixes `decide()`'s signature and Story 3.6's
- * draw is its first consumer.
+ * **A seed is generated on every call and stored on almost none.** It is
+ * cheap, and generating it unconditionally is what keeps the SHELL from
+ * deciding whether a lottery is opening: `decide()` makes that judgement,
+ * publishes `hash(seed)` when it is true, and `recordContentionSeed` writes
+ * the row by reading that output. A shell that decided for itself would be a
+ * second statement of the rule, and the two could disagree about the one
+ * event that matters.
  *
  * Returns the pipeline's own `WriteOutcome`: `accepted` with the single
  * appended event, or `rejected` carrying a `BidRejection`.
@@ -230,11 +340,21 @@ export async function placeBid(
 	amount: Money,
 	deviceClass: string
 ): Promise<WriteOutcome> {
+	// Generated before the transaction opens and used in exactly two places:
+	// hashed into the payload by `decide()`, and stored raw by the projection
+	// below. One value, so the published commitment and the sealed seed are
+	// the same string by construction.
+	const seed = generateSeed();
+
 	return await runTransactionalWrite<LoadedBidState>({
 		gateway,
 		load: (client) => loadBidState(client, fantraxPlayerId, actor.teamId),
-		// No `projections` array, deliberately: nothing derived is stored, and
-		// there is no uniqueness constraint for a Bid to collide with.
+		// The ONE projection, and it fires only when the core published a
+		// `seedHash` — which is only on the Bid that opens a Minimum-Bid
+		// Contention. Nothing else derived is stored: there is still no
+		// `auctions` table, no `bids` table and no claim row, because there is
+		// still no uniqueness constraint for an ordinary Bid to collide with.
+		projections: [recordContentionSeed(seed)],
 		decide: ({ state, now }) => {
 			// Asked before `decide()`, never as a gate: "is there an open
 			// Auction" is the nomination fold's question, and `PLACE_BID_GATES`
@@ -265,7 +385,7 @@ export async function placeBid(
 				amount
 			};
 
-			const decided = decide(state.bid, command, now.toISOString(), null);
+			const decided = decide(state.bid, command, now.toISOString(), seed);
 
 			if (decided.kind === 'rejected') {
 				const refusal: BidRefusal = { kind: 'gates', gates: decided.gates };

@@ -203,18 +203,20 @@ describe('§10 example 20 — a resolved win stops being exposure', () => {
 		expect(slots.passed).toBe(true);
 	});
 
-	it('leaves only the Minimum-Bid Contention refusal Epic 3 owns', () => {
-		// Both grounds this story owns pass, exactly as the example says. The
-		// one gate that refuses is `opening`, because $1,000,000 exactly would
-		// open a Minimum-Bid Contention and no Contender list, seed table,
-		// fixed clock or draw exists to run one (Stories 3.2/3.3). That is
-		// Story 2.5's deliberate refusal, unchanged and unrelated to exposure.
+	it('leaves NO refusal at all — the lottery opening is legal since Story 3.2', () => {
+		// Both grounds this story owns pass, exactly as the example says. Until
+		// Story 3.2 one gate still refused: `opening`, because $1,000,000
+		// exactly would open a Minimum-Bid Contention and no Contender list,
+		// seed or fixed clock existed to run one. All three exist now, the
+		// opening passes, and this Bid is accepted outright — which is what the
+		// example always meant by "the $1,000,000 bid is permitted".
 		const gates = evaluate(AFTER, bidOf(1_000_000), NOW);
 
 		expect(gates.cap.passed).toBe(true);
 		expect(gates.slots.passed).toBe(true);
-		expect(failedGates(gates)).toEqual(['opening']);
+		expect(failedGates(gates)).toEqual([]);
 		expect(gates.opening.opening).toBe('at_the_minimum');
+		expect(gates.opening.passed).toBe(true);
 	});
 
 	it('prints the exposure inside Committed Bids, and no "no cap limit" row', () => {

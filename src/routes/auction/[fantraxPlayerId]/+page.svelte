@@ -43,7 +43,16 @@
 	// follows identically. `$lib/core` is a different matter: it is the pure
 	// core, it is what AD-2 says both runtimes load, and the helpers below
 	// are the same ones the server calls.
-	import { AUCTION_EXPIRED, closesInPhrase, hasExpired } from '$lib/core/projection/auctions.ts';
+	import {
+		AUCTION_EXPIRED,
+		CONTENTION_CLOCK_UNMOVED,
+		MINIMUM_BID_CONTENTION_LABEL,
+		SEED_COMMITMENT,
+		closesInPhrase,
+		contenderCountSentence,
+		hasExpired
+	} from '$lib/core/projection/auctions.ts';
+	import type { ContentionState } from '$lib/core/projection/auctions.ts';
 	import { formatInstant, parseInstant, relativePhrase } from '$lib/core/instant.ts';
 	import { parseMoney } from '$lib/core/money.ts';
 	import {
@@ -111,6 +120,12 @@
 		readonly minimumLegalSentence: string | null;
 		readonly leadingAmount: number | null;
 		readonly leadingTeamId: string | null;
+		// The two contention FACTS the gates decide from — the fold's own
+		// state literal and the Contender Teams by id. Not a derived flag:
+		// nothing on this wire says "this is a lottery" or "you are in it",
+		// because both are one comparison the core makes on every keystroke.
+		readonly contention: ContentionState;
+		readonly contenderTeamIds: readonly string[];
 		readonly viewerTeamId: string | null;
 		// A fact about this Auction that the gates decide from, carried so the
 		// browser rebuilds exactly the state the locked transaction will.
@@ -126,6 +141,11 @@
 		readonly nominatingTeam: string;
 		readonly nominatedAt: string;
 		readonly contention: string;
+		// Team names in join order, and the count. The ORDER is the server's
+		// and is never re-sorted here: AD-14 makes it an input to the winner.
+		readonly contenders: readonly string[];
+		readonly contenderCount: number;
+		readonly seedHash: string | null;
 		readonly price: string | null;
 		readonly leadingBidder: string | null;
 		readonly closesAt: string | null;
@@ -294,6 +314,11 @@
 		// same string the fold holds and the lock will re-read. Nothing here
 		// recomputes it, and no remaining duration is ever sent (AD-3).
 		closesAt: auction.closesAt,
+		// The fold's own contention state and Contender ids, straight off the
+		// wire. Nothing here decides whether a lottery is running — the core
+		// does, from these two facts, exactly as the locked transaction will.
+		contention: control.contention,
+		contenders: control.contenderTeamIds,
 		team: teamMoney,
 		playerIsMinorLeagueEligible: control.playerIsMinorLeagueEligible
 	});
@@ -459,6 +484,13 @@
 	// unbound Manager is a different and standing one.
 	const expired = $derived(hasExpired(auction.closesAt, nowIso));
 
+	// Whether a lottery is running: the FOLD's own state literal, compared
+	// against, not a rule re-derived here and not a boolean the server sent.
+	// The server decided this when it folded the log and serialised the
+	// literal; the page is asking which of three named states it is in, the
+	// same way it asks whether `auction.closesAt` is null.
+	const isContention = $derived(gateState.contention === 'minimum_bid');
+
 	// The absolute stamps are NOT safe to derive during SSR.
 	// `Intl.DateTimeFormat(undefined, ...)` resolves `undefined` to the
 	// timezone of whatever machine formats it, and this route is
@@ -587,9 +619,59 @@
 			{/if}
 		</p>
 		<!-- The contention state, worded by the fold that decides it. A plain
-		     label and no chip: `DESIGN.md` gives ambient states a plain
-		     label, and the one attention colour marks Outbid and refusal. -->
-		<p class="prose" id="auction-contention">{auction.contention}</p>
+		     label and no chip for the ambient states: `DESIGN.md` gives those
+		     a plain label, and the one attention colour marks Outbid and
+		     refusal.
+
+		     A lottery is the ONE exception `DESIGN.md:162` grants — the 3px
+		     left accent bar in `lottery`, which no other element on any
+		     surface may borrow. It carries an icon AND a word beside the
+		     colour, because no state on this page may be conveyed by colour
+		     alone: a greyscale screenshot has to read identically, and the
+		     word is what makes it.
+
+		     Every string here is the core's. The label is the glossary term
+		     from the fold, the count and the clock statement are sentences
+		     from the same module, and this file spells none of them. -->
+		<div class="contention" class:lottery={isContention}>
+			<p class="prose" id="auction-contention">
+				{#if isContention}
+					<span class="contention-icon" aria-hidden="true">&#9670;</span>
+					<span class="contention-label">{MINIMUM_BID_CONTENTION_LABEL}</span>
+				{/if}
+				{auction.contention}
+			</p>
+			{#if isContention}
+				<!-- The count, then the Teams, then the clock. The list is the
+				     fold's own order — ascending join `seq` — and is never
+				     re-sorted here: AD-14 makes that order an input to the
+				     winner, so a surface that reordered it would be showing a
+				     list the draw will not run over. Keyed on the position
+				     rather than the name, because two Teams may legitimately
+				     share a display name and a duplicate key is a render
+				     error. -->
+				<p class="prose" id="auction-contender-count">
+					{contenderCountSentence(auction.contenderCount)}
+				</p>
+				{#if auction.contenders.length > 0}
+					<ul class="contenders" id="auction-contenders">
+						{#each auction.contenders as contender, position (position)}
+							<li class="prose">{contender}</li>
+						{/each}
+					</ul>
+				{/if}
+				<p class="prose" id="auction-contention-clock">{CONTENTION_CLOCK_UNMOVED}</p>
+				<!-- The commit half of the commit-reveal, published from the
+				     moment the lottery opens so a Manager can record it now
+				     and check the reveal against it at the draw. The seed
+				     itself is in a table no role can read, and nothing on this
+				     page has ever seen it. -->
+				{#if auction.seedHash !== null}
+					<p class="prose" id="auction-seed-commitment">{SEED_COMMITMENT}</p>
+					<p class="prose seed-hash" id="auction-seed-hash">{auction.seedHash}</p>
+				{/if}
+			{/if}
+		</div>
 	</section>
 
 	<!-- The Auction Clock. Absent until the first Bid, because until then
@@ -878,6 +960,57 @@
 	.history-when {
 		color: var(--color-text-tertiary);
 		font-size: var(--size-12-5);
+	}
+
+	/*
+	 * The contention block inside the Price panel. Flow layout with the page's
+	 * own row gap, so it reads as part of the panel rather than a panel of its
+	 * own — there is no second background and no second border.
+	 */
+	.contention {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-row-gap);
+	}
+
+	/*
+	 * The 3px left accent bar marking a Minimum-Bid Contention — DESIGN.md's
+	 * one structural exception, and no other element may borrow the device.
+	 * It never carries the state ALONE: the icon and the label beside it are
+	 * what make a greyscale screenshot read identically.
+	 */
+	.lottery {
+		border-left: var(--accent-bar-width) solid var(--color-lottery);
+		padding-left: var(--space-panel-padding);
+	}
+
+	.contention-icon {
+		color: var(--color-lottery);
+	}
+
+	.contention-label {
+		color: var(--color-lottery-text);
+	}
+
+	.contenders {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-row-gap);
+		list-style: none;
+	}
+
+	/*
+	 * 64 hex characters have no word boundary in them, so they must be told to
+	 * wrap or the panel scrolls sideways at 375px. `break-all` rather than
+	 * `break-word`: every character of a commitment is load-bearing, and a
+	 * hash that wraps mid-run is still checkable while one that overflows the
+	 * viewport is not.
+	 */
+	.seed-hash {
+		color: var(--color-text-secondary);
+		font-size: var(--size-12-5);
+		font-variant-numeric: var(--numerals);
+		word-break: break-all;
 	}
 
 </style>

@@ -7,15 +7,19 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { AUCTION_CLOCK } from '../src/lib/core/constants.ts';
+import { AUCTION_CLOCK, MINIMUM_BID } from '../src/lib/core/constants.ts';
 import {
 	AUCTION_EXPIRED,
 	BID_PLACED_EVENT,
+	CONTENTION_CLOCK_UNMOVED,
 	INITIAL_AUCTIONS,
+	MINIMUM_BID_CONTENTION_LABEL,
 	auctionForPlayer,
 	auctionsReducer,
 	closeInstantFor,
 	closesInPhrase,
+	contenderCountSentence,
+	contentionForAmount,
 	contentionOf,
 	hasExpired
 } from '../src/lib/core/projection/auctions.ts';
@@ -54,6 +58,8 @@ function bid(
 		managerId?: string;
 		occurredAt?: string;
 		closesAt?: string;
+		/** Story 3.2: `hash(seed)`, on the Bid that opened a contention. */
+		seedHash?: unknown;
 	} = {}
 ): AppendedEvent {
 	const occurredAt = options.occurredAt ?? '2026-08-26T09:00:00.000Z';
@@ -66,11 +72,19 @@ function bid(
 			teamName: options.teamName ?? 'Lakers',
 			managerId: options.managerId ?? 'm-1',
 			amount,
-			closesAt: options.closesAt ?? closeInstantFor(occurredAt, AUCTION_CLOCK)
+			closesAt: options.closesAt ?? closeInstantFor(occurredAt, AUCTION_CLOCK),
+			// Spread so the key is genuinely ABSENT unless a test supplies
+			// one: `seedHash: undefined` and no key at all are different
+			// payloads once they have been through JSON, and the reducer's
+			// defensive read has to answer for the second.
+			...('seedHash' in options ? { seedHash: options.seedHash } : {})
 		},
 		occurredAt
 	);
 }
+
+/** The opening Bid of a Minimum-Bid Contention, with its published commitment. */
+const SEED_HASH = 'f'.repeat(64);
 
 const at = (log: readonly AppendedEvent[], id = 'p-1') =>
 	auctionForPlayer(fold(INITIAL_AUCTIONS, log, auctionsReducer), id);
@@ -403,5 +417,203 @@ describe('AUCTION_EXPIRED — the one sentence the board states', () => {
 	it('quotes no figure of any kind', () => {
 		expect(AUCTION_EXPIRED).not.toMatch(/\d/);
 		expect(AUCTION_EXPIRED).not.toContain('$');
+	});
+});
+
+// --- Story 3.2: the Contender list, folded from the Bids the log holds -----
+
+describe('contendersFor — ascending join seq, one per Team (AD-14)', () => {
+	it('makes the opener of a lottery its first Contender', () => {
+		const auction = at([bid(1, MINIMUM_BID, { teamId: 't-1', teamName: 'Lakers' })]);
+		expect(auction?.contention).toBe('minimum_bid');
+		expect(auction?.contenders).toEqual([{ seq: '1', teamId: 't-1', teamName: 'Lakers' }]);
+	});
+
+	it('orders Contenders by ascending seq and by nothing else', () => {
+		// The joins are folded in seq order — `fold()` guarantees it (AD-5) —
+		// and their own `occurredAt` runs BACKWARDS relative to it here, which
+		// is legitimate under the global lock. AD-14 pins the order to `seq`,
+		// so the list must follow the log rather than the wall clock.
+		const auction = at([
+			bid(1, MINIMUM_BID, { teamId: 't-1', teamName: 'Lakers', occurredAt: '2026-08-26T09:00:00.000Z' }),
+			bid(2, MINIMUM_BID, { teamId: 't-2', teamName: 'Rockets', occurredAt: '2026-08-26T20:00:00.000Z' }),
+			bid(3, MINIMUM_BID, { teamId: 't-3', teamName: 'Bulls', occurredAt: '2026-08-26T14:00:00.000Z' })
+		]);
+		expect(auction?.contenders.map((contender) => contender.teamId)).toEqual([
+			't-1',
+			't-2',
+			't-3'
+		]);
+		expect(auction?.contenders.map((contender) => contender.seq)).toEqual(['1', '2', '3']);
+	});
+
+	it('deduplicates on Team, keeping the EARLIEST join', () => {
+		// The gate refuses a second join by name, so this is a log this
+		// codebase cannot write — but the order is an input to the winner, and
+		// a Team appearing twice would get two chances at the draw.
+		const auction = at([
+			bid(1, MINIMUM_BID, { teamId: 't-1', teamName: 'Lakers' }),
+			bid(2, MINIMUM_BID, { teamId: 't-2', teamName: 'Rockets' }),
+			bid(3, MINIMUM_BID, { teamId: 't-1', teamName: 'Lakers' })
+		]);
+		expect(auction?.contenders).toEqual([
+			{ seq: '1', teamId: 't-1', teamName: 'Lakers' },
+			{ seq: '2', teamId: 't-2', teamName: 'Rockets' }
+		]);
+	});
+
+	it('does NOT count a $1,000,001 Bid — it folds into history but never joined', () => {
+		// A malformed historical row on a lottery. It is a Bid that happened,
+		// so it is in `bids` and in the visible history; it is not a join, so
+		// the draw does not run over it.
+		const auction = at([
+			bid(1, MINIMUM_BID, { teamId: 't-1', teamName: 'Lakers' }),
+			bid(2, 1_000_001, { teamId: 't-2', teamName: 'Rockets' })
+		]);
+		expect(auction?.bids).toHaveLength(2);
+		expect(auction?.contenders.map((contender) => contender.teamId)).toEqual(['t-1']);
+	});
+
+	it('is empty for an Auction in Standard Contention', () => {
+		expect(at([bid(1, 8_000_000)])?.contenders).toEqual([]);
+	});
+});
+
+describe('a join moves neither the lead nor the clock', () => {
+	const OPENED = '2026-08-26T09:00:00.000Z';
+	const CLOSES = '2026-08-27T09:00:00.000Z';
+
+	it('keeps the opener leading and the close instant unmoved after three joins', () => {
+		// PRD §10 example 7, at the fold. Each join carries the CONTENTION's
+		// close instant on its own payload — which is what `decide()` stamps —
+		// so the fold has nothing to preserve by accident.
+		const auction = at([
+			bid(1, MINIMUM_BID, { teamId: 't-e', teamName: 'Team E', occurredAt: OPENED }),
+			bid(2, MINIMUM_BID, {
+				teamId: 't-f',
+				teamName: 'Team F',
+				occurredAt: '2026-08-26T14:00:00.000Z',
+				closesAt: CLOSES
+			}),
+			bid(3, MINIMUM_BID, {
+				teamId: 't-g',
+				teamName: 'Team G',
+				occurredAt: '2026-08-26T20:00:00.000Z',
+				closesAt: CLOSES
+			}),
+			bid(4, MINIMUM_BID, {
+				teamId: 't-h',
+				teamName: 'Team H',
+				occurredAt: '2026-08-27T08:55:00.000Z',
+				closesAt: CLOSES
+			})
+		]);
+
+		expect(auction?.closesAt).toBe(CLOSES);
+		expect(auction?.leadingBid.teamId).toBe('t-e');
+		expect(auction?.leadingBid.amount).toBe(MINIMUM_BID);
+		expect(auction?.contention).toBe('minimum_bid');
+		expect(auction?.contenders.map((contender) => contender.teamName)).toEqual([
+			'Team E',
+			'Team F',
+			'Team G',
+			'Team H'
+		]);
+	});
+
+	it('is unmoved even by a join whose payload claims a LATER close', () => {
+		// The fold's second guarantee, tested on its own terms: a join is
+		// never strictly higher, so it never becomes the leading Bid and its
+		// `closesAt` never becomes the Auction's. `decide()` is what stops
+		// such a payload being written; this is what stops one already in the
+		// log from moving the clock.
+		const auction = at([
+			bid(1, MINIMUM_BID, { teamId: 't-1', occurredAt: OPENED }),
+			bid(2, MINIMUM_BID, {
+				teamId: 't-2',
+				occurredAt: '2026-08-26T20:00:00.000Z',
+				closesAt: '2026-08-30T00:00:00.000Z'
+			})
+		]);
+		expect(auction?.closesAt).toBe(CLOSES);
+	});
+});
+
+describe('seedHash — read defensively, and the FIRST one wins', () => {
+	it('folds the commitment off the opening Bid', () => {
+		const auction = at([bid(1, MINIMUM_BID, { seedHash: SEED_HASH })]);
+		expect(auction?.seedHash).toBe(SEED_HASH);
+		expect(auction?.bids[0]?.seedHash).toBe(SEED_HASH);
+	});
+
+	it('is null when the key is absent, and never a throw', () => {
+		const auction = at([bid(1, MINIMUM_BID)]);
+		expect(auction?.seedHash).toBeNull();
+		expect(auction?.bids[0]?.seedHash).toBeNull();
+	});
+
+	it('is null for every malformed shape, and the Bid still folds', () => {
+		for (const malformed of [null, 42, {}, [], true, '']) {
+			const auction = at([bid(1, MINIMUM_BID, { seedHash: malformed })]);
+			expect(auction?.seedHash, JSON.stringify(malformed)).toBeNull();
+			// The price, the Leading Bidder and the Contender list are all
+			// still there: a corrupt commitment in an insert-only log is not
+			// this fold's to crash over.
+			expect(auction?.leadingBid.amount, JSON.stringify(malformed)).toBe(MINIMUM_BID);
+			expect(auction?.contenders, JSON.stringify(malformed)).toHaveLength(1);
+		}
+	});
+
+	it('keeps the FIRST commitment when a later Bid carries another', () => {
+		// Replay must converge, and a second `seedHash` must not be able to
+		// swap the commitment a Manager already recorded.
+		const auction = at([
+			bid(1, MINIMUM_BID, { teamId: 't-1', seedHash: SEED_HASH }),
+			bid(2, MINIMUM_BID, { teamId: 't-2', seedHash: 'a'.repeat(64) })
+		]);
+		expect(auction?.seedHash).toBe(SEED_HASH);
+	});
+
+	it('is null on a Standard Contention, which publishes no commitment', () => {
+		expect(at([bid(1, 8_000_000)])?.seedHash).toBeNull();
+	});
+});
+
+describe('contentionForAmount — the ONE derivation the reducer and decide() share', () => {
+	it('is minimum_bid at exactly the minimum and standard everywhere above it', () => {
+		expect(contentionForAmount(MINIMUM_BID as never)).toBe('minimum_bid');
+		expect(contentionForAmount(1_000_001 as never)).toBe('standard');
+		expect(contentionForAmount(1_500_000 as never)).toBe('standard');
+		expect(contentionForAmount(8_000_000 as never)).toBe('standard');
+	});
+
+	it('agrees with the fold for every amount the fold could see', () => {
+		for (const amount of [MINIMUM_BID, 1_000_001, 1_500_000, 40_000_000]) {
+			expect(at([bid(1, amount)])?.contention, String(amount)).toBe(
+				contentionForAmount(amount as never)
+			);
+		}
+	});
+});
+
+describe('the lottery’s own wording, beside the fold that decides it', () => {
+	it('names the contention with the glossary term and no full stop', () => {
+		expect(MINIMUM_BID_CONTENTION_LABEL).toBe('Minimum-Bid Contention');
+		expect(MINIMUM_BID_CONTENTION_LABEL).not.toContain('.');
+	});
+
+	it('states in WORDS that the clock will not reset on a join', () => {
+		expect(CONTENTION_CLOCK_UNMOVED).toContain('will not reset');
+		expect(CONTENTION_CLOCK_UNMOVED).toContain('24 hours');
+		// A fact about the clock, and no money figure on it.
+		expect(CONTENTION_CLOCK_UNMOVED).not.toMatch(/\$/);
+	});
+
+	it('words the Contender count, singular and plural alike', () => {
+		expect(contenderCountSentence(0)).toBe('No Teams have joined this contention yet.');
+		expect(contenderCountSentence(1)).toBe('One Contender so far.');
+		expect(contenderCountSentence(4)).toBe('4 Contenders so far.');
+		// Never "1 Contenders".
+		expect(contenderCountSentence(1)).not.toContain('Contenders');
 	});
 });
