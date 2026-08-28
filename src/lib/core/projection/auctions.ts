@@ -376,10 +376,13 @@ const MS_PER_DAY = 86_400_000;
  * being re-worded in a `.svelte` file where a second definition could drift.
  *
  * **This is a rendering, not authority.** AD-12 makes the persisted absolute
- * close instant the thing validation compares `now` against, and no gate in
- * `PLACE_BID_GATES` reads this function: Story 3.1 owns expiry-as-authority.
- * The phrase carries no urgency styling and no pressure — it is one plain
- * sentence fragment, and the absolute stamp renders beside it regardless.
+ * close instant the thing validation compares `now` against, and `hasExpired`
+ * below is the ONE derivation that makes that comparison — Story 3.1's
+ * `expiry` gate reads it, and so does the Auction page. This function is
+ * still only a rendering: it words how much clock is left, and no gate in
+ * `PLACE_BID_GATES` decides anything from the phrase it returns. The phrase
+ * carries no urgency styling and no pressure — it is one plain sentence
+ * fragment, and the absolute stamp renders beside it regardless.
  *
  * Either instant failing to parse returns a stated phrase rather than
  * throwing, which is `relativePhrase`'s discipline for the same input: a
@@ -409,6 +412,61 @@ export function closesInPhrase(closesAt: string, now: string): string {
 	const days = Math.floor(remaining / MS_PER_DAY);
 	const hours = Math.floor((remaining % MS_PER_DAY) / MS_PER_HOUR);
 	return `${String(days)}d ${String(hours)}h left`;
+}
+
+/**
+ * The one sentence the board states about an Auction whose clock has run out.
+ *
+ * Worded here, beside the fold that owns `closesAt` and beside `hasExpired`
+ * which decides it, so the gate's refusal and the Auction page's panel
+ * compose from ONE string rather than spelling the same fact twice — the way
+ * `bidPlacedNotice()` composes from `BID_CONSEQUENCE`. A complete sentence,
+ * so a surface prints it verbatim and words nothing itself.
+ *
+ * It quotes no figure of any kind. An expiry is a fact about a clock, and a
+ * money figure or a count on this sentence would be the invented figure the
+ * refusal design exists to prevent.
+ */
+export const AUCTION_EXPIRED = 'This Auction expired.';
+
+/**
+ * Whether an Auction's persisted absolute close instant has been reached, as
+ * of `now` — the ONE derivation of expiry-as-authority (AD-12).
+ *
+ * **The persisted instant is the authority and nothing else.** This function
+ * is handed two instants and reads no projection, no contention state and no
+ * nomination: an Auction whose close has passed is expired whether or not a
+ * fold still holds a row for it, which is exactly AD-12's "never reads a
+ * projection's open flag as authority". Story 3.5's sweep records the close
+ * LATE when it stalls; nothing may be accepted in the gap it leaves.
+ *
+ * **At the close instant the Auction is closed.** `now >= closesAt`, not `>`:
+ * Story 3.5 hands each Auction its own nominal expiry as `now`, so a Bid at
+ * that exact instant must not beat the close it is being compared against.
+ *
+ * `null` PASSES — it is a nominated Player nobody has bid on, and no clock
+ * exists until an Opening Bid starts one (`EXPERIENCE.md`'s Awaiting Opening
+ * Bid card has no clock at all).
+ *
+ * **The two unreadable cases go opposite ways, deliberately.** An unreadable
+ * `closesAt` reads as EXPIRED, which is the trade `readPayload` above already
+ * makes in words: "an Auction whose close cannot be read reads as already due
+ * rather than as running forever". An unreadable or empty `now` reads as NOT
+ * expired, because `now` is the shell's to supply and AD-1 makes a shell bug
+ * a throw rather than a returned refusal — passing keeps `decide()`'s
+ * existing `TypeError` at `closeInstantFor` reachable, where refusing would
+ * swallow it into a Manager-facing statement that is not true.
+ *
+ * Pure: the same two instants always give the same answer, and nothing here
+ * reads a clock.
+ */
+export function hasExpired(closesAt: string | null, now: string): boolean {
+	if (closesAt === null) return false;
+	const close = parseInstant(closesAt);
+	if (close === null) return true;
+	const current = parseInstant(now);
+	if (current === null) return false;
+	return current >= close;
 }
 
 /**

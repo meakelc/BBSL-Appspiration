@@ -149,6 +149,7 @@ import { formatTeamManager } from '../core/team-identity.ts';
 import { loadEventsViaClient } from './event-log.ts';
 import { loadTeamRoster } from './team-roster.ts';
 import type { ConnectionGateway } from '../shell/write.ts';
+import { requireDatabaseClock } from '../shell/write.ts';
 
 const FREE_AGENT_PLAYERS_TABLE = 'free_agent_players';
 const TEAMS_TABLE = 'teams';
@@ -255,12 +256,19 @@ export type AuctionPageBidControl = {
 	 * When these figures were computed, ISO-8601 — the arithmetic's timestamp
 	 * caption ("Your figures at 2:14 AM Wed").
 	 *
-	 * A rendering fact, not a rule input: nothing compares it to anything.
-	 * The read path takes no lock and reads no database clock, so this is the
-	 * server's own instant at the moment the roster and the folds were read,
-	 * which is exactly what the caption claims it is. A refused SUBMIT
-	 * replaces it with the transaction's clock, because those figures are the
-	 * ones that Bid was actually judged against (FR-13).
+	 * **The DATABASE's instant, and the same one the `expiry` gate was
+	 * evaluated at** (Story 3.1). The read path still takes no lock, but it
+	 * now reads `now()` once — because a gate that decides on time must be
+	 * handed a clock, and AD-3 makes that the server's, never Node's and
+	 * never the viewer's. One instant serves both, so the caption and the
+	 * gate can never describe two different moments.
+	 *
+	 * It remains a rendering fact on THIS shape: nothing compares it to
+	 * anything here, and the surface anchors its own ticking `now` on it so a
+	 * skewed device measures elapsed time without moving a close time
+	 * (NFR §5). A refused SUBMIT replaces it with the transaction's clock,
+	 * because those figures are the ones that Bid was actually judged
+	 * against (FR-13).
 	 */
 	readonly figuresAt: string;
 };
@@ -398,13 +406,28 @@ export async function loadAuctionPage(
 		const auction = auctionForPlayer(auctions, fantraxPlayerId);
 		const eligibility = fold(INITIAL_ELIGIBILITY, events, eligibilityReducer);
 
-		// The viewer's own Cap figures. Skipped entirely for a viewer bound to
-		// no Team — there is no roster to read and no arithmetic to show, and
-		// a query keyed on `null` would be a statement asking nothing.
+		// The DATABASE clock, read exactly once and with no lock — this module
+		// deliberately takes none, and `now()` needs none: it is Postgres'
+		// transaction-start timestamp, so it is the same instant for every
+		// statement in this transaction whenever it is asked for.
+		//
+		// ONE instant, two jobs (Story 3.1): it is the `expiry` gate's `now`
+		// and it is the `figuresAt` caption. Reading Node's clock for the
+		// caption and the database's for the gate would let the caption and
+		// the gate describe two different moments, and the caption is the
+		// line that claims the figures beside it held then.
+		//
 		// Stamped HERE, beside the reads it describes, rather than at the end
-		// of the load: the caption claims these figures held at this instant,
-		// and three further statements run before the page state is built.
-		const figuresAt = new Date().toISOString();
+		// of the load: three further statements run before the page state is
+		// built.
+		// The check is `shell/write.ts`'s, imported rather than copied: the
+		// STATEMENT differs (that module reads the clock in the same round
+		// trip as the lock, this one takes no lock at all), but "is what came
+		// back a usable instant" is one question and must have one answer.
+		// `server/` already depends on `shell/`, so this is the existing
+		// direction of the dependency and not an inversion.
+		const clockResult = await client.query('select now() as now');
+		const figuresAt = requireDatabaseClock(clockResult.rows[0]?.['now']).toISOString();
 		const team =
 			viewerTeamId === null
 				? null
@@ -557,13 +580,18 @@ export async function loadAuctionPage(
  * merely because a checkbox has not been ticked yet would say the Auction
  * refused something it did not.
  *
- * `now` is passed as the empty string, and that is safe rather than sloppy:
- * `evaluate()` is total and reads no clock, no gate in `PLACE_BID_GATES`
- * looks at `now` — including Story 2.6's `cap`, whose arithmetic is a
- * question about committed state and not about time — and this module has no database clock in
- * hand — the read path deliberately takes no lock and reads no `now()`. Story
- * 3.1's `expiry` gate is the first that will need one, and it will have to
- * source it here rather than invent one, which is the correct pressure.
+ * **`now` is the database's instant, and it is the same one the caption
+ * carries** (Story 3.1). Until `expiry` existed this argument was the empty
+ * string, on the stated grounds that no gate in `PLACE_BID_GATES` looked at
+ * it and this module had no clock in hand. The gate exists now, so the
+ * argument had to become real — and the pressure landed exactly where it was
+ * meant to: `loadAuctionPage` sources it from `select now()` rather than
+ * inventing one from Node, because AD-3 makes the server's clock the only
+ * one a rule may be decided against.
+ *
+ * `figuresAt` is therefore not merely the caption's instant any more; it is
+ * the instant this evaluation happened at, and passing it twice is what
+ * makes the disabled control and the caption above it describe one moment.
  */
 function readBidControl(
 	auction: Auction | null,
@@ -584,7 +612,7 @@ function readBidControl(
 		viewerTeamId,
 		amountText: String(minimumLegal),
 		confirmed: true,
-		now: ''
+		now: figuresAt
 	});
 
 	return {
@@ -597,9 +625,13 @@ function readBidControl(
 		viewerTeamId,
 		playerIsMinorLeagueEligible,
 		team,
-		// Not a rule input and never compared to anything — the caption's
-		// instant, taken where the figures were actually read. The core may
-		// not name `Date`; this module may.
+		// The database's instant, taken where the figures were actually read
+		// and handed to `evaluate()` above as its `now`. Serialised as the
+		// caption AND as the anchor the surface measures elapsed time from —
+		// but never as a derived verdict: no `expired` flag and no remaining
+		// duration crosses this wire, for AD-7's reason applied to a clock.
+		// The surface re-derives expiry from `closesAt` and this instant on
+		// every tick, exactly as it re-derives Maximum Bid on every keystroke.
 		figuresAt
 	};
 }

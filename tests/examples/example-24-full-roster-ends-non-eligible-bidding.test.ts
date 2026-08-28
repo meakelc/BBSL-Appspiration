@@ -142,7 +142,8 @@ describe('§10 example 24 — a full roster ends non-eligible bidding', () => {
 		expect(figureFor('cap')?.chip).toBe('Cap · Passed');
 		expect(figureFor('cap')?.figure).toContain('Maximum Bid $40.0M');
 		// Every gate has a row, none behind a disclosure.
-		expect(rows).toHaveLength(6);
+		// Seven since Story 3.1 added `expiry` to `PLACE_BID_GATES`.
+		expect(rows).toHaveLength(7);
 		for (const row of rows) {
 			expect(row.figure.length, row.gate).toBeGreaterThan(0);
 		}
