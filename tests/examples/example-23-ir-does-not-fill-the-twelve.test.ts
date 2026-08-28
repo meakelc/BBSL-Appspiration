@@ -51,10 +51,14 @@ const rosterCountOf = (rows: readonly CapHitRow[]): number =>
 const TEAM_N: TeamMoneyState = {
 	capSpace: computeCapSpace(TEAM_N_ROWS).capSpace,
 	rosterCount: rosterCountOf(TEAM_N_ROWS),
-	leading: []
+	leading: [],
+	// Story 2.8: no eligible leads and no occupied Minor League
+	// Slots, so `N` is the bid alone and `M` is the full three.
+	eligibleLeading: [],
+	minorLeagueOccupied: 0
 };
 
-const STATE: BidState = bidStateFor(null, TEAM_N);
+const STATE: BidState = bidStateFor(null, TEAM_N, false);
 
 function bidOf(amount: number): PlaceBid {
 	return {
@@ -94,8 +98,12 @@ describe('§10 example 23 — IR does not fill the twelve', () => {
 			bidStateFor(null, {
 				capSpace: computeCapSpace(withTwoIr).capSpace,
 				rosterCount: rosterCountOf(withTwoIr),
-				leading: []
-			}),
+				leading: [],
+				// Story 2.8: no eligible leads and no occupied Minor League
+				// Slots, so `N` is the bid alone and `M` is the full three.
+				eligibleLeading: [],
+				minorLeagueOccupied: 0
+			}, false),
 			bidOf(1_500_000),
 			NOW
 		);

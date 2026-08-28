@@ -57,11 +57,15 @@ const NOW = '2026-08-27T09:00:00.000Z';
 const TEAM_R: TeamMoneyState = {
 	capSpace: parseMoney(40_000_000),
 	rosterCount: 12,
-	leading: []
+	leading: [],
+	// Story 2.8: no eligible leads and no occupied Minor League
+	// Slots, so `N` is the bid alone and `M` is the full three.
+	eligibleLeading: [],
+	minorLeagueOccupied: 0
 };
 
 /** A nominated Player nobody has bid on, so `opening` is the live gate. */
-const STATE: BidState = bidStateFor(null, TEAM_R);
+const STATE: BidState = bidStateFor(null, TEAM_R, false);
 
 function bidOf(amount: number): PlaceBid {
 	return {
@@ -168,7 +172,7 @@ describe('§10 example 24 — a full roster ends non-eligible bidding', () => {
 		// none". The example picks $40.0M; the verdict is the same at any
 		// figure, which is what makes capacity a genuinely separate ground.
 		for (const capSpace of [0, 40_000_000, 400_000_000]) {
-			const state = bidStateFor(null, { ...TEAM_R, capSpace: parseMoney(capSpace) });
+			const state = bidStateFor(null, { ...TEAM_R, capSpace: parseMoney(capSpace) }, false);
 			const slots = evaluate(state, bidOf(5_000_000), NOW).slots;
 			expect(slots.passed, String(capSpace)).toBe(false);
 			expect(slots.rosterCount, String(capSpace)).toBe(12);

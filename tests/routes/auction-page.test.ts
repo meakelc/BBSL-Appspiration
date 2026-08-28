@@ -474,10 +474,11 @@ describe('the Auction page — what it never renders', () => {
 		// this check is about what these two route files say for themselves.
 		// The sixth chip reached the panel by `PLACE_BID_GATES` growing, with
 		// no markup change here, which is exactly what these assertions prove
-		// by still holding. What remains unbuilt is the exposure branch (2.8);
-		// a page that said "no cap limit" today would state a rule nothing in
-		// the codebase enforces, which is the precise failure the refusal
-		// design exists to prevent.
+		// by still holding. Story 2.8 then built the exposure branch, so "no
+		// cap limit" IS now a real wording — and it is the core's, reached
+		// through `capBreakdown()`. That is precisely why this check survived
+		// 2.8 unweakened: the rule exists, and these two files still do not
+		// state it.
 		// `Overflow Count`, not bare "overflow": the CSS property is not the
 		// domain term, and a check that cannot tell them apart would have to
 		// be either loosened or worked around the first time a panel needed to
@@ -957,8 +958,12 @@ describe('the refusal panel — the only surface with a dedicated anatomy', () =
 				bidStateFor(null, {
 					capSpace: parseMoney(40_000_000),
 					rosterCount: 12,
-					leading: []
-				}),
+					leading: [],
+					// Story 2.8: no eligible leads and no occupied Minor League
+					// Slots, so `N` is the bid alone and `M` is the full three.
+					eligibleLeading: [],
+					minorLeagueOccupied: 0
+				}, false),
 				{
 					kind: 'PlaceBid',
 					fantraxPlayerId: 'p-1',
@@ -1067,12 +1072,27 @@ describe('the bid action — a refusal carries the figures it was judged against
 			rosterCount: 9,
 			projectedAdditions: 1,
 			rosterReserve: 2_000_000,
-			maximumBid: 10_000_000
+			maximumBid: 10_000_000,
+			// Story 2.8's exposure figures, present on the shape the
+			// transaction returns whether or not anything overflowed.
+			freeMinorLeagueSlots: 3,
+			eligibleLeadingBids: 0,
+			overflowCount: 0,
+			unbounded: false,
+			exposingBids: []
 		},
 		// The capacity gate passes and reports anyway (Story 2.7): the money
 		// is the only obstacle, and the panel says so rather than leaving a
 		// reader to wonder what else was not checked.
-		slots: { passed: true, rosterCount: 9, projectedAdditions: 1, ceiling: 12 }
+		slots: {
+			passed: true,
+			rosterCount: 9,
+			projectedAdditions: 1,
+			ceiling: 12,
+			freeMinorLeagueSlots: 3,
+			eligibleLeadingBids: 0,
+			overflowCount: 0
+		}
 	};
 
 	const TRANSACTION_CLOCK = '2026-08-27T02:14:00.000Z';

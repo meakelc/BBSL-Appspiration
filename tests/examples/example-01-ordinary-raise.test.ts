@@ -55,7 +55,11 @@ import type { AppendedEvent, PlaceBid } from '../../src/lib/core/types.ts';
 const RICH: TeamMoneyState = {
 	capSpace: parseMoney(SALARY_CAP),
 	rosterCount: 9,
-	leading: []
+	leading: [],
+	// Story 2.8: no eligible leads and no occupied Minor League
+	// Slots, so `N` is the bid alone and `M` is the full three.
+	eligibleLeading: [],
+	minorLeagueOccupied: 0
 };
 
 /** Team A's $8,000,000, already leading — as the fold produced it. */
@@ -76,7 +80,7 @@ const AUCTION: Auction = {
 };
 
 /** ...narrowed to what the gates decide from, through the core's own bridge. */
-const STATE: BidState = bidStateFor(AUCTION, RICH);
+const STATE: BidState = bidStateFor(AUCTION, RICH, false);
 
 /** Team B's raise, at exactly one Minimum Increment above the high. */
 const RAISE: PlaceBid = {

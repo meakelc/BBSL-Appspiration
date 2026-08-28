@@ -87,10 +87,21 @@
 	 * are the inputs, and `evaluate()` derives the figure again on every
 	 * keystroke from the same core function the locked transaction calls.
 	 */
+	type LeadElsewhere = {
+		readonly fantraxPlayerId: string;
+		readonly playerName: string;
+		readonly amount: number;
+	};
+
 	type TeamMoney = {
 		readonly capSpace: number;
 		readonly rosterCount: number;
-		readonly leading: readonly { readonly fantraxPlayerId: string; readonly amount: number }[];
+		readonly leading: readonly LeadElsewhere[];
+		// The eligible half of the same partition, and the raw count of
+		// occupied minors slots. Both are facts the server read; every figure
+		// they imply is derived in the core, here, on every keystroke.
+		readonly eligibleLeading: readonly LeadElsewhere[];
+		readonly minorLeagueOccupied: number;
 	};
 
 	type BidControl = {
@@ -101,6 +112,9 @@
 		readonly leadingAmount: number | null;
 		readonly leadingTeamId: string | null;
 		readonly viewerTeamId: string | null;
+		// A fact about this Auction that the gates decide from, carried so the
+		// browser rebuilds exactly the state the locked transaction will.
+		readonly playerIsMinorLeagueEligible: boolean;
 		readonly team: TeamMoney | null;
 		readonly figuresAt: string;
 	};
@@ -176,16 +190,21 @@
 	 * serialised. `Money` is branded, so the integer dollars that came over
 	 * the wire are re-parsed at this boundary rather than cast (AD-8).
 	 */
+	const reBrand = (lead: LeadElsewhere) => ({
+		fantraxPlayerId: lead.fantraxPlayerId,
+		playerName: lead.playerName,
+		amount: parseMoney(lead.amount)
+	});
+
 	const teamMoney: TeamMoneyState | null = $derived(
 		control.team === null
 			? null
 			: {
 					capSpace: parseMoney(control.team.capSpace),
 					rosterCount: control.team.rosterCount,
-					leading: control.team.leading.map((lead) => ({
-						fantraxPlayerId: lead.fantraxPlayerId,
-						amount: parseMoney(lead.amount)
-					}))
+					leading: control.team.leading.map(reBrand),
+					eligibleLeading: control.team.eligibleLeading.map(reBrand),
+					minorLeagueOccupied: control.team.minorLeagueOccupied
 				}
 	);
 
@@ -194,7 +213,8 @@
 			control.leadingAmount === null || control.leadingTeamId === null
 				? null
 				: { teamId: control.leadingTeamId, amount: parseMoney(control.leadingAmount) },
-		team: teamMoney
+		team: teamMoney,
+		playerIsMinorLeagueEligible: control.playerIsMinorLeagueEligible
 	});
 
 	/**

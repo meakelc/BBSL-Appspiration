@@ -31,7 +31,8 @@
  * never the check (AD-9).
  *
  * **Whether the Auction is open is asked here, not by a gate.**
- * `PLACE_BID_GATES` is fixed at four and none of them is "does this Auction
+ * `PLACE_BID_GATES` is fixed at six — `opening`, `selfBid`, `increment`,
+ * `granularity`, `cap` and `slots` — and none of them is "does this Auction
  * exist" — that is `nominationsReducer`'s fold, the identical accessor
  * `server/auction-page.ts` and `server/nomination.ts` already use. It is
  * answered before `decide()` is called, exactly as the route answers
@@ -165,9 +166,25 @@ export async function loadBidState(
 				fantraxPlayerId,
 				capSpace: roster.capSpace,
 				rosterCount: roster.rosterCount,
+				// Story 2.8's third roster fact, off the SAME read — the raw
+				// occupancy `M` is derived from, never `M`.
+				minorLeagueOccupied: roster.minorLeagueOccupied,
 				auctions,
-				isMinorLeagueEligible: (playerId) => isEligible(eligibility, playerId)
-			})
+				isMinorLeagueEligible: (playerId) => isEligible(eligibility, playerId),
+				// The Player's name for an exposing Auction, from the fold
+				// that already holds it. An Auction is open exactly when a
+				// nomination is (Epic 3 owns closing), so every Auction in
+				// `auctions` has a nomination to name it; the id is the
+				// fallback for a state that fold cannot produce today rather
+				// than an invented name.
+				playerNameFor: (playerId) =>
+					nominationForPlayer(nominations, playerId)?.playerName ?? playerId
+			}),
+			// The eligibility FOLD's answer about the Player being bid on —
+			// the same fold `teamMoneyStateFor` partitions the leads with, so
+			// the Auction and the Team's leads cannot disagree about what
+			// "eligible" means inside one transaction.
+			isEligible(eligibility, fantraxPlayerId)
 		),
 		nomination: nominationForPlayer(nominations, fantraxPlayerId)
 	};
@@ -210,7 +227,7 @@ export async function placeBid(
 		// there is no uniqueness constraint for a Bid to collide with.
 		decide: ({ state, now }) => {
 			// Asked before `decide()`, never as a gate: `PLACE_BID_GATES` is fixed
-			// at four and "is there an open Auction" is the nomination fold's
+			// at six and "is there an open Auction" is the nomination fold's
 			// question. A Player whose Auction closed between the render and this
 			// submit lands here.
 			if (state.nomination === null) {

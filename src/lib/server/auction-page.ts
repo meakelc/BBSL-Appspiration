@@ -47,6 +47,18 @@
  * this module's. Roster Count is a serialised FACT, never a derived figure
  * the surface compares against instead of re-deriving.
  *
+ * **Story 2.8's exposure branch is built, and it is three more FACTS.** The
+ * eligible Auctions the viewer's Team leads, how many Minor League Slots its
+ * roster occupies, and whether THIS Player is Minor League Eligible — all
+ * three off reads this module already made, narrowed through the same
+ * `teamMoneyStateFor`. What is still not serialised is every figure derived
+ * from them: not `minorsExposure`, not `overflowCount`, not
+ * `freeMinorLeagueSlots`, not `maximumBid`. `M = max(0, 3 − occupied)` is a
+ * derivation, so the occupancy crosses the wire and `M` does not — which is
+ * what lets an eligible Auction arrive on the board with "no cap limit"
+ * already shown and still leaves the browser deriving it from the same
+ * `evaluate()` the lock calls.
+ *
  * **Reference fields come from `free_agent_players` and nothing else** — no
  * salary or contract-length column exists on that table
  * (`20260824020000_live_reference_tables.sql:94-125`), which is exactly why
@@ -209,11 +221,24 @@ export type AuctionPageBidControl = {
 	/** The viewer's own Team, from the session and nothing else (AD-4). */
 	readonly viewerTeamId: string | null;
 	/**
-	 * The viewer Team's money FACTS — Cap Space, Roster Count, and the open
-	 * Auctions it leads. `null` for a viewer bound to no Team.
+	 * Whether the Player this page is about is Minor League Eligible — the
+	 * fold's answer, serialised so the surface can rebuild `BidState` and
+	 * re-evaluate a typed amount against the same eligibility the lock will.
+	 *
+	 * A FACT about the Auction, not a figure: it is the fold of
+	 * `MinorLeagueEligibilitySet`, and everything it implies — Free Minor
+	 * League Slots, Overflow Count, whether Maximum Bid binds at all — is
+	 * derived from it in the core on every evaluation.
+	 */
+	readonly playerIsMinorLeagueEligible: boolean;
+	/**
+	 * The viewer Team's money FACTS — Cap Space, Roster Count, the open
+	 * Auctions it leads (eligible and not, partitioned), and how many Minor
+	 * League Slots its roster occupies. `null` for a viewer bound to no Team.
 	 *
 	 * **Facts, never the derived figure.** Maximum Bid, Committed Bids,
-	 * Available Cap Space and Roster Reserve are deliberately NOT here: AD-7
+	 * Available Cap Space, Roster Reserve, Minors Exposure, Free Minor League
+	 * Slots and Overflow Count are deliberately NOT here: AD-7
 	 * forbids a derived money figure being cached client-side for validation,
 	 * and the surface is a client. Shipping it `maximumBid` and letting it
 	 * compare would make the transported number the check. Shipping these
@@ -386,9 +411,17 @@ export async function loadAuctionPage(
 				: teamMoneyStateFor({
 						teamId: viewerTeamId,
 						fantraxPlayerId,
+						// The spread carries Story 2.8's `minorLeagueOccupied`
+						// through with the two figures 2.6 added, so the new fact
+						// reached the core with no third call site.
 						...(await loadTeamRoster(client, viewerTeamId)),
 						auctions,
-						isMinorLeagueEligible: (playerId) => isEligible(eligibility, playerId)
+						isMinorLeagueEligible: (playerId) => isEligible(eligibility, playerId),
+						// The name an exposing Auction is refused by, from the fold
+						// that already holds it — the identical expression
+						// `server/bidding.ts` uses under the lock.
+						playerNameFor: (playerId) =>
+							nominationForPlayer(nominations, playerId)?.playerName ?? playerId
 					});
 
 		const referenceResult = await client.query(
@@ -492,7 +525,14 @@ export async function loadAuctionPage(
 				amount: describeAmount(bid.amount),
 				occurredAt: bid.occurredAt
 			})),
-			bidControl: readBidControl(auction, team, viewerTeamId, nomination.fantraxPlayerId, figuresAt)
+			bidControl: readBidControl(
+				auction,
+				team,
+				viewerTeamId,
+				nomination.fantraxPlayerId,
+				figuresAt,
+				isEligible(eligibility, fantraxPlayerId)
+			)
 		};
 	} catch (error) {
 		await client.query('rollback').catch(() => {
@@ -531,9 +571,11 @@ function readBidControl(
 	viewerTeamId: string | null,
 	fantraxPlayerId: string,
 	/** When the roster and the folds were read — the caption's instant. */
-	figuresAt: string
+	figuresAt: string,
+	/** The eligibility fold's answer about THIS Player (Story 2.8). */
+	playerIsMinorLeagueEligible: boolean
 ): AuctionPageBidControl {
-	const state: BidState = bidStateFor(auction, team);
+	const state: BidState = bidStateFor(auction, team, playerIsMinorLeagueEligible);
 	const minimumLegal = minimumLegalBid(state);
 
 	const control = bidControlState({
@@ -553,6 +595,7 @@ function readBidControl(
 		leadingAmount: state.leadingBid?.amount ?? null,
 		leadingTeamId: state.leadingBid?.teamId ?? null,
 		viewerTeamId,
+		playerIsMinorLeagueEligible,
 		team,
 		// Not a rule input and never compared to anything — the caption's
 		// instant, taken where the figures were actually read. The core may

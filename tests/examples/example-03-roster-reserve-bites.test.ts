@@ -41,7 +41,11 @@ const TEAM_C: TeamMoneyState = {
 	rosterCount: 9,
 	// "no leading bids" — so Committed Bids is $0 and Projected Active/Bench
 	// Additions is the prospective bid alone.
-	leading: []
+	leading: [],
+	// Story 2.8: no eligible leads and no occupied Minor League
+	// Slots, so `N` is the bid alone and `M` is the full three.
+	eligibleLeading: [],
+	minorLeagueOccupied: 0
 };
 
 /**
@@ -52,7 +56,7 @@ const TEAM_C: TeamMoneyState = {
  * with no leader, `increment` does not apply and every amount here is on the
  * grid. What is left is `cap`, which is the point.
  */
-const STATE: BidState = bidStateFor(null, TEAM_C);
+const STATE: BidState = bidStateFor(null, TEAM_C, false);
 
 function bidOf(amount: number): PlaceBid {
 	return {

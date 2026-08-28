@@ -39,12 +39,17 @@ const TEAM_C: TeamMoneyState = {
 	capSpace: parseMoney(12_000_000),
 	rosterCount: 9,
 	leading: [
-		{ fantraxPlayerId: 'p-lead-a', amount: parseMoney(3_000_000) },
-		{ fantraxPlayerId: 'p-lead-b', amount: parseMoney(2_000_000) }
-	]
+		{ fantraxPlayerId: 'p-lead-a', playerName: 'Lead A', amount: parseMoney(3_000_000) },
+		{ fantraxPlayerId: 'p-lead-b', playerName: 'Lead B', amount: parseMoney(2_000_000) }
+	],
+	// Story 2.8: neither lead is Minor League Eligible and no Minor League
+	// Slot is occupied, so the exposure arithmetic is inert here — which is
+	// what keeps this example about Roster Reserve alone.
+	eligibleLeading: [],
+	minorLeagueOccupied: 0
 };
 
-const STATE: BidState = bidStateFor(null, TEAM_C);
+const STATE: BidState = bidStateFor(null, TEAM_C, false);
 
 function bidOf(amount: number): PlaceBid {
 	return {
@@ -90,7 +95,7 @@ describe('§10 example 4 — Reserve clears as commitments accumulate', () => {
 		// unclamped reserve would then go NEGATIVE and hand that Team extra
 		// spending power as a reward for the override.
 		const overridden: TeamMoneyState = { ...TEAM_C, rosterCount: 14 };
-		const gates = evaluate(bidStateFor(null, overridden), bidOf(1_500_000), NOW);
+		const gates = evaluate(bidStateFor(null, overridden, false), bidOf(1_500_000), NOW);
 
 		expect(gates.cap.rosterReserve).toBe(0);
 		expect(gates.cap.maximumBid).toBe(7_000_000);

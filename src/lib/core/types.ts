@@ -31,6 +31,12 @@
  * the surface each stopped compiling until they handled the money gate,
  * which is precisely the property the single list was bought for.
  *
+ * **Story 2.8 spends nothing of it, and that is the point.** Minors Exposure
+ * is not a seventh gate: it is arithmetic the `cap` gate already named and
+ * the `slots` gate already needed, so 2.8 widens two outcome shapes and
+ * leaves `PLACE_BID_GATES` untouched. A gate list that grew for every rule
+ * would stop being the thing a caller can be made to handle exhaustively.
+ *
  * Still true, and deliberately: **no domain EVENT type is named in this
  * file.** `NominationPlaced`, `AuctionClosed` and `BidPlaced` are each
  * declared beside the reducer that gives them meaning
@@ -283,6 +289,27 @@ export type GranularityGateOutcome = GateOutcome & {
 };
 
 /**
+ * One earlier Auction whose leading amount is inside Minors Exposure —
+ * carried so a refusal can NAME it (Story 2.8, PRD §10 example 19).
+ *
+ * The Player's NAME is on it, not only the id: §10 example 19 says "the
+ * message names the $30,000,000 auction as the cause", and an id is not a
+ * name a Manager recognises at 4am. The amount is the one actually held
+ * against the Cap for that Auction — the leading amount, or the flat
+ * `MINIMUM_BID` where a Minimum-Bid Contention is running.
+ *
+ * Only the OVERFLOWING Auctions appear, and only the earlier ones: the
+ * prospective Bid may itself be the amount exposure sums (§10 example 20),
+ * but naming the Auction a Manager is looking at as the cause of its own
+ * refusal would be a sentence that explains nothing.
+ */
+export type ExposingBid = {
+	readonly fantraxPlayerId: string;
+	readonly playerName: string;
+	readonly amount: Money;
+};
+
+/**
  * The money gate: a Bid may not exceed its Team's Maximum Bid (Story 2.6).
  *
  * Every figure the refusal panel prints is here, and they are here rather
@@ -297,14 +324,33 @@ export type GranularityGateOutcome = GateOutcome & {
  * `minorsExposure`. Every one sits on the $500,000 grid, which is what makes
  * the abbreviated `$14.5M` rendering add up as displayed (AD-8).
  *
- * **All nine figures are `null` together, and only when the acting party is
- * bound to no Team.** There is no cap arithmetic for a Manager who has no
- * Team, and stating `$0` would be an invented figure a refusal panel would
- * then print — the same reason `IncrementGateOutcome` nulls its two figures
- * on an opening. The gate PASSES in that case: the real refusal is
- * `unbound_actor`, raised by the route before any transaction opens, and
- * `server/bidding.ts` always has a bound actor, so the null case is
- * reachable only on the read path.
+ * **All eleven nullable figures are `null` together, and only when the
+ * acting party is bound to no Team.** There is no cap arithmetic for a
+ * Manager who has no Team, and stating `$0` would be an invented figure a
+ * refusal panel would then print — the same reason `IncrementGateOutcome`
+ * nulls its two figures on an opening. The gate PASSES in that case: the
+ * real refusal is `unbound_actor`, raised by the route before any
+ * transaction opens, and `server/bidding.ts` always has a bound actor, so
+ * the null case is reachable only on the read path. `unbounded` is `false`
+ * there and `exposingBids` is empty, because neither is a figure — a
+ * boolean that is absent and a boolean that is false are the same false, and
+ * a list of Auctions nobody leads is genuinely empty.
+ *
+ * **Story 2.8's four exposure figures.** `freeMinorLeagueSlots` is `M`,
+ * `eligibleLeadingBids` is `N` on the POST-BID basis, `overflowCount` is
+ * `max(0, N − M)`, and `minorsExposure` — already named here since 2.6 — is
+ * finally the sum of the `Overflow Count` largest amounts in that post-bid
+ * set rather than a frozen zero. `exposingBids` names the earlier Auctions
+ * that sum ran over, so §10 example 19's refusal can say which one.
+ *
+ * **`unbounded` is a flag beside the arithmetic, not a discriminated
+ * `maximumBid`.** When a Free Minor League Slot absorbs this Player at a $0
+ * Cap Hit (FR-35, PRD §3) the offered amount is compared to nothing at all,
+ * and the figure is rendered IN WORDS — "no cap limit" — never as a number.
+ * `maximumBid` still carries the ordinary subtraction, because unbounded is
+ * not a waiver: `availableCapSpace − rosterReserve ≥ 0` still decides, which
+ * is PRD §3's "provided Roster Reserve remains coverable" and FR-13's "only
+ * the Roster Reserve check and the ordinary increment rules apply there".
  *
  * `rosterCount` and `projectedAdditions` are counts, not money, and are the
  * two inputs to `rosterReserve`. Story 2.7's `slots` gate refuses on those
@@ -323,6 +369,32 @@ export type CapGateOutcome = GateOutcome & {
 	readonly projectedAdditions: number | null;
 	readonly rosterReserve: Money | null;
 	readonly maximumBid: Money | null;
+	/** Free Minor League Slots (`M`) — `max(0, 3 − occupied)`. */
+	readonly freeMinorLeagueSlots: number | null;
+	/** Eligible Leading Bids (`N`), counting the Bid being placed. */
+	readonly eligibleLeadingBids: number | null;
+	/** `max(0, N − M)` — how many eligible wins have nowhere to land. */
+	readonly overflowCount: number | null;
+	/**
+	 * Whether Maximum Bid does not bound the offered amount at all: a Free
+	 * Minor League Slot absorbs this Player at a $0 Cap Hit. Rendered in
+	 * words, never as a number — and never a waiver of Roster Reserve.
+	 */
+	readonly unbounded: boolean;
+	/** The EARLIER Auctions inside Minors Exposure. Empty when there are none. */
+	readonly exposingBids: readonly ExposingBid[];
+	/**
+	 * Whether the Bid being placed is itself one of the amounts Minors
+	 * Exposure summed.
+	 *
+	 * The refusal never NAMES this Auction — telling a Manager that the
+	 * Auction they are looking at causes its own refusal explains nothing —
+	 * but it must still ACCOUNT for it. When the overflow slice holds both
+	 * this Bid and an earlier lead, naming only the earlier one prints a
+	 * figure the named amounts do not add up to, and a breakdown that does
+	 * not sum is the one thing the panel may never be.
+	 */
+	readonly exposureIncludesThisBid: boolean;
 };
 
 /**
@@ -345,17 +417,35 @@ export type CapGateOutcome = GateOutcome & {
  * gates can never disagree about the count while agreeing they describe the
  * same roster.
  *
- * `rosterCount` and `projectedAdditions` are `null` together, and only for
- * an actor bound to no Team — exactly as `CapGateOutcome`'s nine are, and
- * for the same reason: stating `0` would be an invented figure a refusal
- * panel would then print. The gate PASSES in that case, because the real
- * refusal is `unbound_actor`. `ceiling` is never null: `ACTIVE_BENCH_SLOTS`
- * is a league constant, true of a Team that does not exist.
+ * **Story 2.8 adds three COUNTS and no money, which is what lets the
+ * capacity gate see Minors Exposure without seeing a dollar.** An eligible
+ * win that overflows has to land in an Active/Bench Slot, so
+ * `projectedAdditions` includes `overflowCount` — and `Overflow Count` is
+ * `max(0, N − M)`, two integers. `freeMinorLeagueSlots` and
+ * `eligibleLeadingBids` ride along so a capacity refusal can name the
+ * overflow in counts alone (§10 example 25). There is still no `offered`
+ * field and still no money field on this shape, so FR-37's "fails with
+ * unlimited Cap Space, passes with none" remains a property of the
+ * signature rather than a claim to verify by reading.
+ *
+ * `rosterCount`, `projectedAdditions` and the three counts are `null`
+ * together, and only for an actor bound to no Team — exactly as
+ * `CapGateOutcome`'s nullable figures are, and for the same reason: stating
+ * `0` would be an invented figure a refusal panel would then print. The gate
+ * PASSES in that case, because the real refusal is `unbound_actor`.
+ * `ceiling` is never null: `ACTIVE_BENCH_SLOTS` is a league constant, true
+ * of a Team that does not exist.
  */
 export type SlotsGateOutcome = GateOutcome & {
 	readonly rosterCount: number | null;
 	readonly projectedAdditions: number | null;
 	readonly ceiling: number;
+	/** Free Minor League Slots (`M`). A count — this gate reads no amount. */
+	readonly freeMinorLeagueSlots: number | null;
+	/** Eligible Leading Bids (`N`), counting the Bid being placed. */
+	readonly eligibleLeadingBids: number | null;
+	/** `max(0, N − M)` — the eligible wins that must land in Active/Bench. */
+	readonly overflowCount: number | null;
 };
 
 /**
@@ -366,7 +456,8 @@ export type SlotsGateOutcome = GateOutcome & {
  * "Fixed" means fixed at any given commit, not frozen forever: Story 2.6
  * added `cap` and Story 2.7 added `slots` — each was that one edit, and each
  * is what made every consumer stop compiling until it handled the new gate.
- * 3.1 adds `expiry`.
+ * Story 2.8 added NONE: Minors Exposure widened `cap`'s and `slots`'
+ * arithmetic and left this list exactly as it was. 3.1 adds `expiry`.
  *
  * Frozen at runtime as well as `as const`, because this list is what
  * `evaluate()`'s totality is asserted against — a caller that could splice
