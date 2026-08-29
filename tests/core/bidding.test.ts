@@ -698,6 +698,26 @@ describe('the dead zone — PRD §10 example 10, as two grounds together', () =>
 			'granularity'
 		]);
 	});
+
+	it('refuses an expired lottery on expiry FIRST, with contention still reporting', () => {
+		// The I/O matrix's own row: expiry is unchanged by Story 3.2, and a
+		// join into a contention whose clock has run out is refused on it —
+		// while `contention` still states its own outcome rather than being
+		// suppressed by the earlier refusal (AD-1 forbids short-circuiting).
+		const state = contentionWith(['t-3']);
+		const gates = evaluate(state, command(MINIMUM_BID, 't-2'), '2026-08-27T09:00:00.000Z');
+		expect(gates.expiry.passed).toBe(false);
+		expect(failedGates(gates)).toEqual(['expiry']);
+		// `contention` reports a JOIN — a true answer to its own question,
+		// which expiry then overrides. The gate does not go quiet.
+		expect(gates.contention.passed).toBe(true);
+		expect(gates.contention.entry).toBe('joins');
+		expect(gates.contention.contenderCount).toBe(2);
+		// And an ALREADY-contending Team on an expired lottery reports both
+		// grounds, in `PLACE_BID_GATES` order.
+		const twice = evaluate(state, command(MINIMUM_BID, 't-3'), '2026-08-27T09:00:00.000Z');
+		expect(failedGates(twice)).toEqual(['expiry', 'contention']);
+	});
 });
 
 describe('the increment gate steps aside in a lottery, and granularity does not', () => {
@@ -743,6 +763,37 @@ describe('the contention chip and its figure', () => {
 		expect(rows[0]?.figure).toBe('no Minimum-Bid Contention is running');
 		expect(rows[2]?.figure).toContain('already a Contender');
 		expect(rows[2]?.figure).toContain('2 Contenders');
+	});
+
+	it('states the RIGHT interval — an amount below the join is not "between"', () => {
+		// `neither` covers every amount that is not a join and not a
+		// conversion, which includes amounts BELOW the join as well as the
+		// dead zone. A figure states what the gate was judged from, so the
+		// row must not claim an interval the offer does not sit in.
+		const below = rowFor(evaluate(contentionWith(['t-3']), command(500_000, 't-2'), NOW));
+		expect(below?.figure).toBe('below the $1.0M it takes to join');
+		expect(below?.figure).not.toContain('between');
+
+		const dead = rowFor(evaluate(contentionWith(['t-3']), command(1_200_000, 't-2'), NOW));
+		expect(dead?.figure).toBe(
+			'between $1.0M and $1.5M, which is neither a join nor a conversion'
+		);
+	});
+
+	it('does not let the increment row claim "no current high" while $1.0M leads', () => {
+		// Both increment figures are null inside a lottery, but the REASON is
+		// that no raise applies — not that nothing is leading. Awaiting an
+		// Opening Bid is the case where nothing leads, and it keeps its own
+		// wording.
+		const inLottery = bidGateReport(
+			evaluate(contentionWith(['t-3']), command(1_200_000, 't-2'), NOW)
+		).find((row) => row.gate === 'increment');
+		expect(inLottery?.figure).toBe('no raise applies in a Minimum-Bid Contention');
+
+		const awaiting = bidGateReport(evaluate(NO_BIDS, command(1_500_000), NOW)).find(
+			(row) => row.gate === 'increment'
+		);
+		expect(awaiting?.figure).toBe('no current high to raise');
 	});
 
 	it('quotes no Cap figure and no roster count in its sentence', () => {
@@ -1460,6 +1511,32 @@ describe('evaluateCap — Maximum Bid, derived on every evaluation (AD-7)', () =
 		expect(
 			[...money.leading, ...money.eligibleLeading].map((lead) => lead.fantraxPlayerId).sort()
 		).toEqual(['p-eligible', 'p-flat']);
+	});
+
+	it('commits NOTHING for a Contender once the Auction is no longer a lottery', () => {
+		// `contendersFor` folds every Bid at `MINIMUM_BID` the log holds and
+		// never clears the list, so a dissolved contention (Story 3.3) keeps
+		// its Contenders while committing nobody. The contention state is the
+		// authority here, not the list being empty — without that test a
+		// released Contender would stay committed at ANOTHER Team's leading
+		// amount, on an Auction it does not lead.
+		const stale = {
+			...auctionLiteral('p-was-a-lottery', 't-9', 8_000_000, 'standard'),
+			contenders: [{ seq: '2', teamId: 't-2', teamName: 'Rockets' }]
+		};
+		const money = teamMoneyStateFor({
+			teamId: 't-2',
+			fantraxPlayerId: 'p-new',
+			capSpace: parseMoney(12_000_000),
+			rosterCount: 9,
+			auctions: { byPlayer: { 'p-was-a-lottery': stale } },
+			minorLeagueOccupied: 0,
+			isMinorLeagueEligible: () => false,
+			playerNameFor: (id) => id
+		});
+
+		expect(money.leading).toEqual([]);
+		expect(money.eligibleLeading).toEqual([]);
 	});
 
 	it('commits a flat $1.0M for a Minimum-Bid Contention, not the leading amount', () => {

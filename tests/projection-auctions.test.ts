@@ -540,6 +540,22 @@ describe('a join moves neither the lead nor the clock', () => {
 });
 
 describe('seedHash — read defensively, and the FIRST one wins', () => {
+	it('never adopts a LATER Bid’s commitment when the opener published none', () => {
+		// The opening Bid is the only Bid `decide()` ever stamps, so an
+		// Auction whose opener carries no readable `seedHash` HAS no
+		// commitment. Taking a later Bid's would let a replay supply one
+		// after the fact — the precise swap AD-14's commit half exists to
+		// prevent.
+		const auction = at([
+			bid(1, MINIMUM_BID, { teamId: 't-1' }),
+			bid(2, MINIMUM_BID, { teamId: 't-2', seedHash: SEED_HASH })
+		]);
+		expect(auction?.seedHash).toBeNull();
+		// The Bid's own field still reads what the payload said — only the
+		// Auction-level commitment is refused.
+		expect(auction?.bids[1]?.seedHash).toBe(SEED_HASH);
+	});
+
 	it('folds the commitment off the opening Bid', () => {
 		const auction = at([bid(1, MINIMUM_BID, { seedHash: SEED_HASH })]);
 		expect(auction?.seedHash).toBe(SEED_HASH);

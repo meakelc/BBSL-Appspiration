@@ -170,6 +170,11 @@ describe('§10 example 10 — the dead zone', () => {
 		expect(figureFor('granularity')?.chip).toBe('Granularity · Refused');
 		// The increment row states the fact it was decided from, not a raise.
 		expect(figureFor('increment')?.chip).toBe('Minimum Increment · Passed');
-		expect(figureFor('increment')?.figure).toBe('no current high to raise');
+		// NOT "no current high to raise": a $1,000,000 Bid IS leading here.
+		// Both figures are null because the rule does not apply, which is a
+		// different fact, and the panel states that one.
+		expect(figureFor('increment')?.figure).toBe(
+			'no raise applies in a Minimum-Bid Contention'
+		);
 	});
 });

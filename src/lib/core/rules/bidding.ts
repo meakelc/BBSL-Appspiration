@@ -529,11 +529,16 @@ export function teamMoneyStateFor(input: {
 		// The Team commits where it LEADS, and — since Story 3.2 — where it
 		// CONTENDS. The two are the same question asked of two contention
 		// states: in Standard Contention exactly one Team can win, and in a
-		// Minimum-Bid Contention any Contender can. `contenders` is empty for
-		// every Auction that is not a lottery, so this reads as the leader
-		// filter it used to be wherever no lottery is running.
+		// Minimum-Bid Contention any Contender can. `contenders` is folded from
+		// every Bid at `MINIMUM_BID` the log holds and is NOT cleared when a
+		// contention ends, so the contention state is TESTED here rather than
+		// inferred from the list being empty. A dissolved contention (3.3)
+		// keeps its Contenders — the draw and the reveal are derived from them
+		// — while committing nobody, and this is the line that makes that safe.
 		const leads = auction.leadingBid.teamId === input.teamId;
-		const contends = auction.contenders.some((contender) => contender.teamId === input.teamId);
+		const contends =
+			auction.contention === 'minimum_bid' &&
+			auction.contenders.some((contender) => contender.teamId === input.teamId);
 		if (!leads && !contends) continue;
 		const entry: LeadingBidElsewhere = {
 			fantraxPlayerId: playerId,
@@ -2006,10 +2011,15 @@ function gateFigure(gates: PlaceBidGateResults, gate: PlaceBidGate): string {
 						'contention'
 					);
 				case 'neither':
-					return (
-						`between ${formatMoney(outcome.joinAmount)} and ` +
-						`${formatMoney(outcome.conversionAmount)}, which is neither a join nor a conversion`
-					);
+					// `neither` is EVERY amount that is not a join and not a
+					// conversion, which includes amounts below the join as well as
+					// the dead zone between the two thresholds. A figure states
+					// what the gate was judged from, so it cannot claim an
+					// interval the offered amount does not sit in.
+					return compareMoney(outcome.offered, outcome.joinAmount) < 0
+						? `below the ${formatMoney(outcome.joinAmount)} it takes to join`
+						: `between ${formatMoney(outcome.joinAmount)} and ` +
+							`${formatMoney(outcome.conversionAmount)}, which is neither a join nor a conversion`;
 			}
 			break;
 		}
@@ -2021,7 +2031,14 @@ function gateFigure(gates: PlaceBidGateResults, gate: PlaceBidGate): string {
 		case 'increment': {
 			const outcome = gates.increment;
 			if (outcome.minimumLegal === null || outcome.currentHigh === null) {
-				return 'no current high to raise';
+				// Both figures are nulled for two different reasons and the row
+				// must state the right one. Awaiting an Opening Bid there is
+				// genuinely no high; inside a Minimum-Bid Contention a
+				// `MINIMUM_BID` Bid IS leading, so "no current high" would be a
+				// falsehood on a panel whose whole purpose is to be true.
+				return gates.contention.entry === 'not_a_contention'
+					? 'no current high to raise'
+					: `no raise applies in a ${MINIMUM_BID_CONTENTION_LABEL}`;
 			}
 			return (
 				`least ${formatMoney(outcome.minimumLegal)} over a ` +

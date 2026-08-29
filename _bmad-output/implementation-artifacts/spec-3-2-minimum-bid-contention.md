@@ -2,7 +2,7 @@
 title: 'Story 3.2: Enter and join a Minimum-Bid Contention'
 type: 'feature'
 created: '2026-08-28'
-status: 'in-review'
+status: 'done'
 review_loop_iteration: 0
 baseline_commit: '78da0eccd237a9e1ba32a131f83ac82452c7324a'
 context: []
@@ -135,3 +135,21 @@ Slots         · Passed     Roster Count would be 10 of 12
 - `git diff --stat` changes no executable line in `src/lib/components/` or `+page.server.ts`, and adds exactly one migration. Anything more is a finding: say which and why.
 - `rg -n "class=\"[^\"]*\{" src/routes/auction/` returns nothing — the accent bar is applied by Svelte's `class:` directive, not a conditional class string.
 - `rg -c "<button" "src/routes/auction/[fantraxPlayerId]/+page.svelte"` is still `1`.
+
+## Review Findings
+
+Code review 2026-08-28 (`bmad-code-review`, four layers: blind-hunter, edge-case-hunter, verification-gap, acceptance-auditor on `bmad-reviewer-acceptance` — Tier B in `BMAD-EFFORT-TRIAGE.md` and the diff touches `src/lib/core/`). All three verification gates pass: `npm test` 1793 passed / 1 failed (the pre-existing `SUPABASE_DB_URL` case, not grown from baseline), `npm run check` 0 errors / 0 warnings, `npm run check:purity` clean. All seven of the spec's manual checks pass.
+
+- [x] [Review][Decision] `SEED_COMMITMENT` forward-declares Story 3.6's reveal in Manager-facing copy — The page renders `<p id="auction-seed-commitment">{SEED_COMMITMENT}</p>`, whose text ends "so when the seed is revealed you can hash it yourself and check it against this value" (`src/lib/core/projection/auctions.ts:305-309`). AC7 enumerates what the lottery renders — accent bar, icon, word, Contender list, count, clock statement — and the Code Map asks the page for `seedHash` itself, not a sentence explaining it. The Never list says "no reveal (3.6)". No reveal code exists, so this is copy rather than behaviour, and a bare hash with no explanation is arguably worse for the trust surface AD-14 is built on. The call is whether Manager-facing copy may promise a capability that does not exist yet. **Resolved 2026-08-28 (Meakel): keep as-is.** The commitment needs explaining for AD-14's trust surface to mean anything, and 3.6 is committed work. No code change.
+
+- [x] [Review][Patch] `tests/core/hash.test.ts` contains a raw NUL byte, making the file binary to git [tests/core/hash.test.ts:72]
+- [x] [Review][Patch] The `increment` panel figure says "no current high to raise" inside a live contention where $1,000,000 leads [src/lib/core/rules/bidding.ts:2021-2024]
+- [x] [Review][Patch] The `contention` panel figure asserts an offered amount is "between $1.0M and $1.5M" when it is below $1.0M [src/lib/core/rules/bidding.ts:2008-2012]
+- [x] [Review][Patch] `teamMoneyStateFor`'s comment claims `contenders` is empty off a lottery; `contendersFor` never consults contention state [src/lib/core/rules/bidding.ts:532-537]
+- [x] [Review][Patch] `seedHash: existing.seedHash ?? bid.seedHash` adopts a later Bid's commitment when the opener's is null, contradicting its own comment [src/lib/core/projection/auctions.ts:555]
+- [x] [Review][Patch] The I/O matrix row "A lottery that has expired" has no test anywhere in the diff [tests/core/bidding.test.ts]
+
+- [x] [Review][Defer] `auction_contention_seeds`' primary key collides if a Player's Auction is ever re-opened [supabase/migrations/20260828000000_contention_seeds.sql] — deferred, belongs to 3.3 / Epic 7
+- [x] [Review][Defer] A lottery whose `seedHash` folds to `null` renders no commitment block and no absence notice [src/routes/auction/[fantraxPlayerId]/+page.svelte:669-671] — deferred, unreachable until a corrupt log exists; 3.6 owns the verification surface
+
+**Review outcome (2026-08-28).** All 6 `patch` findings applied and the 1 `decision-needed` resolved (keep `SEED_COMMITMENT`). 2 findings deferred to `deferred-work.md`; 11 dismissed as noise. Gates after the patches: `npm test` 1798 passed / 1 failed — the pre-existing `SUPABASE_DB_URL` integration case, unchanged from the 1617/1 baseline — `npm run check` 0 errors / 0 warnings, `npm run check:purity` clean. Four tests were added alongside the fixes so every new branch and guard is asserted rather than merely applied.

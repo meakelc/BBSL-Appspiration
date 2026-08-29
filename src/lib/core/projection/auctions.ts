@@ -552,7 +552,7 @@ export const auctionsReducer: Reducer<OpenAuctions> = (state, event) => {
 				// same Auction cannot replace the published one — replay would
 				// otherwise be able to swap the commitment a Manager already
 				// checked.
-				seedHash: existing.seedHash ?? bid.seedHash
+				seedHash: existing.seedHash
 			};
 			return { byPlayer: { ...state.byPlayer, [fantraxPlayerId]: auction } };
 		}
