@@ -44,9 +44,13 @@ const AR2_DIRECTORIES: Array<[path: string, purpose: string]> = [
  * set: the lottery opening, three joins that do not move the clock, the dead
  * zone between the two thresholds, and the two capital examples that are the
  * whole of what widening `teamMoneyStateFor` from the leader to every
- * Contender changed. What remains of Epic 3's examples — 8, 9, 11, 13, 16, 17
- * and 27 — belongs to Stories 3.3 through 3.7: dissolution, the draw, the
- * sweep and the League Clock.
+ * Contender changed.
+ *
+ * **Story 3.3 added ONE — 9** — the dissolution: the conversion at
+ * $1,500,000 that releases every Contender, resets the clock, reveals the
+ * sealed seed and returns the Auction to ordinary ascending rules. What
+ * remains of Epic 3's examples — 8, 11, 13, 16, 17 and 27 — belongs to
+ * Stories 3.4 through 3.7: the draw, the sweep and the League Clock.
  */
 const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 	['example-01-ordinary-raise.test.ts', '1 — Ordinary raise'],
@@ -59,6 +63,7 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 		'example-07-lottery-grows-clock-unmoved.test.ts',
 		'7 — Lottery grows, clock unmoved'
 	],
+	['example-09-the-lottery-dissolves.test.ts', '9 — Lottery dissolves'],
 	['example-10-the-dead-zone.test.ts', '10 — The dead zone'],
 	['example-15-co-manager-race.test.ts', '15 — Co-manager race'],
 	['example-18-stashing-beats-the-cap.test.ts', '18 — Stashing beats the cap, on purpose'],

@@ -46,7 +46,12 @@ import {
 	minimumLegalBid,
 	teamMoneyStateFor
 } from '../../src/lib/core/rules/bidding.ts';
-import type { BidPlacedPayload, BidState, TeamMoneyState } from '../../src/lib/core/rules/bidding.ts';
+import type {
+	BidPlacedPayload,
+	BidState,
+	ContentionSeed,
+	TeamMoneyState
+} from '../../src/lib/core/rules/bidding.ts';
 import type { AppendedEvent, PlaceBid } from '../../src/lib/core/types.ts';
 
 /** 09:00 Monday — the instant Team E opens at. */
@@ -57,6 +62,9 @@ const CLOSES_AT = '2026-08-25T09:00:00.000Z';
 
 /** The seed the shell generates. Its VALUE is never published; its hash is. */
 const SEED = '9f2b7c14ad05e8613f9c2ad70b45e18c9f2b7c14ad05e8613f9c2ad70b45e18c';
+
+/** ...as `decide()` receives it: the FRESH half of the commit-reveal (3.3). */
+const FRESH: ContentionSeed = { kind: 'fresh', seed: SEED };
 
 /** Team E: nothing about the money is marginal, so nothing but the rule decides. */
 const TEAM_E: TeamMoneyState = {
@@ -96,11 +104,11 @@ describe('§10 example 6 — the lottery opens', () => {
 	});
 
 	it('is what the control pre-fills, so a Manager is handed the rule and not advice', () => {
-		expect(minimumLegalBid(AWAITING)).toBe(MINIMUM_BID);
+		expect(minimumLegalBid(AWAITING, 't-e')).toBe(MINIMUM_BID);
 	});
 
 	it('fixes the close at 09:00 Tuesday — 24 hours from the Opening Bid', () => {
-		const decided = decide(AWAITING, OPENING, OPENED_AT, SEED);
+		const decided = decide(AWAITING, OPENING, OPENED_AT, FRESH);
 		if (decided.kind !== 'accepted') throw new Error('the Opening Bid was refused');
 		const payload = decided.events[0]?.payload as BidPlacedPayload;
 
@@ -109,7 +117,7 @@ describe('§10 example 6 — the lottery opens', () => {
 	});
 
 	it('publishes hash(seed) on the payload, and the seed itself nowhere in the event', () => {
-		const decided = decide(AWAITING, OPENING, OPENED_AT, SEED);
+		const decided = decide(AWAITING, OPENING, OPENED_AT, FRESH);
 		if (decided.kind !== 'accepted') throw new Error('the Opening Bid was refused');
 		const payload = decided.events[0]?.payload as BidPlacedPayload;
 
@@ -129,7 +137,7 @@ describe('§10 example 6 — the lottery opens', () => {
 	});
 
 	it('folds to a Minimum-Bid Contention with the opener as Contender #1', () => {
-		const decided = decide(AWAITING, OPENING, OPENED_AT, SEED);
+		const decided = decide(AWAITING, OPENING, OPENED_AT, FRESH);
 		if (decided.kind !== 'accepted') throw new Error('the Opening Bid was refused');
 		const payload = decided.events[0]?.payload as BidPlacedPayload;
 
@@ -165,7 +173,7 @@ describe('§10 example 6 — the lottery opens', () => {
 		// Auction, which is where `teamMoneyStateFor` reads a Team's leads and
 		// contentions — the money held on the Auction being bid on is
 		// excluded, because the prospective Bid replaces it.
-		const decided = decide(AWAITING, OPENING, OPENED_AT, SEED);
+		const decided = decide(AWAITING, OPENING, OPENED_AT, FRESH);
 		if (decided.kind !== 'accepted') throw new Error('the Opening Bid was refused');
 		const payload = decided.events[0]?.payload as BidPlacedPayload;
 		const appended: AppendedEvent = {

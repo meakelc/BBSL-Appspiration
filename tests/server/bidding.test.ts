@@ -18,7 +18,11 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { AUCTION_CLOCK, SALARY_CAP } from '../../src/lib/core/constants.ts';
-import { AUCTION_EXPIRED, BID_PLACED_EVENT } from '../../src/lib/core/projection/auctions.ts';
+import {
+	AUCTION_EXPIRED,
+	BID_PLACED_EVENT,
+	CONTENTION_DISSOLVED_EVENT
+} from '../../src/lib/core/projection/auctions.ts';
 import {
 	AUCTION_CLOSED_EVENT,
 	NOMINATION_PLACED_EVENT
@@ -27,7 +31,10 @@ import { MINOR_LEAGUE_ELIGIBILITY_SET } from '../../src/lib/core/projection/elig
 import { parseMoney } from '../../src/lib/core/money.ts';
 import { hash } from '../../src/lib/core/hash.ts';
 import { bidRefusalDetail } from '../../src/lib/core/rules/bidding.ts';
-import type { BidPlacedPayload } from '../../src/lib/core/rules/bidding.ts';
+import type {
+	BidPlacedPayload,
+	ContentionDissolvedPayload
+} from '../../src/lib/core/rules/bidding.ts';
 import { PLACE_BID_GATES } from '../../src/lib/core/types.ts';
 import { loadBidState, placeBid } from '../../src/lib/server/bidding.ts';
 import type { BidRejection } from '../../src/lib/server/bidding.ts';
@@ -40,6 +47,16 @@ import type {
 const ACTOR = { managerId: 'm-2', teamId: 't-2', teamName: 'Rockets' };
 
 const NOW = new Date('2026-08-26T12:00:00.000Z');
+
+/**
+ * The seed a live Minimum-Bid Contention sealed, as `auction_contention_seeds`
+ * holds it (Story 3.3, AD-14).
+ *
+ * The commitment the log publishes is `hash(SEALED_SEED)`, DERIVED rather than
+ * written out beside it — so a dissolution tested against it verifies for the
+ * real reason rather than because two literals happened to be typed to match.
+ */
+const SEALED_SEED = '7b4e2a90c15d386f7b4e2a90c15d386f7b4e2a90c15d386f7b4e2a90c15d386f';
 
 const DEVICE_CLASS = 'mobile';
 
@@ -60,7 +77,18 @@ const NINE_CHEAP_PLAYERS: QueryResultRow[] = Array.from({ length: 9 }, () => ({
 }));
 
 function fakeGateway(
-	options: { events?: QueryResultRow[]; roster?: QueryResultRow[] } = {}
+	options: {
+		events?: QueryResultRow[];
+		roster?: QueryResultRow[];
+		/**
+		 * The SEALED seed row for this Player's contention (Story 3.3).
+		 *
+		 * `undefined` is a table with no row for them, which is what every
+		 * test that is not about a dissolution wants: the read still happens
+		 * inside a live contention and simply comes back empty.
+		 */
+		sealedSeed?: string;
+	} = {}
 ) {
 	const order: string[] = [];
 	const params: unknown[][] = [];
@@ -97,6 +125,15 @@ function fakeGateway(
 				order.push('read-roster');
 				params.push([...queryParams]);
 				return { rows: options.roster ?? NINE_CHEAP_PLAYERS };
+			}
+			if (/^select seed from auction_contention_seeds/i.test(sql)) {
+				// The sealed table's ONE reader (Story 3.3), on this same
+				// client — the connection that holds the lock and appends. It
+				// is recorded in `order` so "under the lock, before the
+				// decision" is observable rather than assumed.
+				order.push('read-seed');
+				params.push([...queryParams]);
+				return { rows: options.sealedSeed === undefined ? [] : [{ seed: options.sealedSeed }] };
 			}
 			if (/^insert into auction_contention_seeds/i.test(sql)) {
 				order.push('append-seed');
@@ -217,7 +254,16 @@ function bidLogged(
 	amount: number,
 	teamId = 't-1',
 	managerId = 'm-1',
-	occurredAt = '2026-08-26T09:00:00.000Z'
+	occurredAt = '2026-08-26T09:00:00.000Z',
+	/**
+	 * The published commitment, present only on the Bid that OPENED a
+	 * Minimum-Bid Contention (Story 3.2) — and the value a dissolution's
+	 * reveal is verified against (Story 3.3).
+	 *
+	 * Spread rather than set to `null`, so an ordinary Bid's payload carries
+	 * no such key at all, exactly as `decide()` builds it.
+	 */
+	seedHash?: string
 ): QueryResultRow {
 	return logEvent(
 		seq,
@@ -228,7 +274,8 @@ function bidLogged(
 			teamName: teamId === 't-1' ? 'Lakers' : 'Rockets',
 			managerId,
 			amount,
-			closesAt: '2026-08-27T09:00:00.000Z'
+			closesAt: '2026-08-27T09:00:00.000Z',
+			...(seedHash === undefined ? {} : { seedHash })
 		},
 		occurredAt,
 		{ managerId, teamId }
@@ -463,27 +510,27 @@ describe('placeBid — the gate refuses (AC1, AC2, AC3)', () => {
 		expect(harness.appendedEvents).toHaveLength(0);
 	});
 
-	it('refuses a CONVERSION into a live contention, by name and appending nothing', async () => {
+	it('THROWS on a dissolution whose sealed seed is missing, rather than refusing', async () => {
 		// Story 2.5 refused the opening at exactly $1,000,000 here, because no
-		// lottery could be run. Story 3.2 runs one — so the refusal by name
-		// moved to the conversion, which is the half that cannot be done yet:
-		// dissolution releases every Contender and reveals the seed (3.3).
+		// lottery could be run; Story 3.2 refused the conversion, because no
+		// lottery could yet be dissolved. Both are accepted now, so the only
+		// thing left to refuse at this amount is a SHELL BUG — a dissolution
+		// reached with no sealed seed in hand — and a bug is a throw rather
+		// than a Manager-facing refusal (AD-1). The transaction rolls back and
+		// nothing reaches the log, which is the outcome AD-14 requires: a
+		// contention is never released with its commitment still sealed.
 		const harness = fakeGateway({
-			events: [nominated(), bidLogged(2, 1_000_000, 't-1', 'm-1')]
+			events: [nominated(), bidLogged(2, 1_000_000, 't-1', 'm-1', undefined, hash(SEALED_SEED))]
 		});
 
-		const outcome = await placeBid(
-			harness.gateway,
-			ACTOR,
-			'p-1',
-			parseMoney(2_000_000),
-			DEVICE_CLASS
-		);
+		await expect(
+			placeBid(harness.gateway, ACTOR, 'p-1', parseMoney(2_000_000), DEVICE_CLASS)
+		).rejects.toThrow(TypeError);
 
-		expect(rejectionOf(outcome).detail).toContain('Minimum-Bid Contention');
-		expect(rejectionOf(outcome).detail).toContain('convert');
 		expect(harness.appendedEvents).toHaveLength(0);
 		expect(harness.seedRows).toHaveLength(0);
+		expect(harness.state.committed).toBe(false);
+		expect(harness.state.rolledBack).toBe(true);
 	});
 
 	it('refuses when the Player’s Auction is not open — re-derived under the lock', async () => {
@@ -620,6 +667,11 @@ describe('loadBidState — three folds over ONE read of the log, plus one roster
 			// Contention and has no Contenders, so the list is genuinely
 			// empty rather than absent.
 			contention: 'standard',
+			// Story 3.3: the published commitment, off the same log read
+			// again — `null` here because no lottery ever opened on this
+			// Auction. It is what `decide()` verifies a revealed seed
+			// against, and no gate reads it.
+			seedHash: null,
 			contenders: [],
 			team: {
 				capSpace: 156_000_000,
@@ -635,10 +687,61 @@ describe('loadBidState — three folds over ONE read of the log, plus one roster
 			// statement order below is still exactly two reads.
 			playerIsMinorLeagueEligible: false
 		});
+		// Story 3.3: no sealed seed, because this Auction is not a lottery —
+		// and the read is not issued at all, which is why the statement order
+		// below is unchanged.
+		expect(loaded.sealedSeed).toBeNull();
 		// The log is read once and the roster once, and BOTH after the lock —
 		// which is what makes the figures the gate decides from unable to move
 		// between the read and the decision (AD-6, AD-7).
 		expect(harness.order).toEqual(['begin', 'read-log', 'read-roster']);
+	});
+
+	it('reads the SEALED seed only inside a live contention, and on this same client', async () => {
+		// Story 3.3, AD-14. The seed table grants `anon`, `authenticated` and
+		// `service_role` nothing, so the direct connection this transaction
+		// already holds is the ONLY identity that can see a row — and reading
+		// it here, after the lock, is what makes the read and the append one
+		// atomic act.
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, 1_000_000)],
+			sealedSeed: 'c'.repeat(64)
+		});
+		await harness.client.query('begin');
+
+		const loaded = await loadBidState(harness.client, 'p-1', 't-2');
+
+		expect(loaded.bid.contention).toBe('minimum_bid');
+		expect(loaded.sealedSeed).toBe('c'.repeat(64));
+		// After the lock, and on the client that holds it.
+		expect(harness.order).toEqual(['begin', 'read-log', 'read-roster', 'read-seed']);
+	});
+
+	it('reads no seed at all when the Auction is not a lottery', async () => {
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, 8_000_000)],
+			sealedSeed: 'c'.repeat(64)
+		});
+		await harness.client.query('begin');
+
+		const loaded = await loadBidState(harness.client, 'p-1', 't-2');
+
+		expect(loaded.sealedSeed).toBeNull();
+		expect(harness.order).not.toContain('read-seed');
+	});
+
+	it('answers null for a live contention whose seed row is missing', async () => {
+		// A corrupt log rather than anything this codebase can write. A join
+		// is unaffected; a DISSOLUTION throws out of `decide()` rather than
+		// releasing every Contender with the commitment still sealed.
+		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 1_000_000)] });
+		await harness.client.query('begin');
+
+		const loaded = await loadBidState(harness.client, 'p-1', 't-2');
+
+		expect(loaded.bid.contention).toBe('minimum_bid');
+		expect(loaded.sealedSeed).toBeNull();
+		expect(harness.order).toContain('read-seed');
 	});
 
 	it('keys the roster read on the ACTING Team, never on the leading one', async () => {
@@ -995,7 +1098,7 @@ describe('placeBid — an expired Auction is refused under the lock (AC7)', () =
 			.replace(/\/\*[\s\S]*?\*\//g, '')
 			.replace(/(^|[^:])\/\/.*$/gm, '$1');
 
-		expect(code).toContain('decide(state.bid, command, now.toISOString(), seed)');
+		expect(code).toContain('decide(state.bid, command, now.toISOString(), contentionSeed)');
 		expect(code).toContain('bidStateFor(');
 		// The whole vocabulary of the gate this module never learned about.
 		// If any of it appears in executable code here, expiry stopped being
@@ -1130,9 +1233,33 @@ describe('placeBid — the lottery seed (AC5, AD-14)', () => {
 	});
 
 	it('writes NO seed row when the Bid is refused — the transaction rolled back', async () => {
-		// A conversion into a live contention: refused on `contention`, so
-		// `decide()` never reaches the payload and the projection never runs.
+		// A Bid in the dead zone: refused on `contention` and `granularity`,
+		// so `decide()` never reaches the payload and the projection never
+		// runs.
 		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 1_000_000)] });
+
+		const outcome = await placeBid(
+			harness.gateway,
+			ACTOR,
+			'p-1',
+			parseMoney(1_200_000),
+			DEVICE_CLASS
+		);
+
+		expect(outcome.kind).toBe('rejected');
+		expect(harness.seedRows).toHaveLength(0);
+		expect(harness.state.committed).toBe(false);
+	});
+
+	it('writes NO SECOND seed row on a dissolution, and reveals the sealed one (Story 3.3)', async () => {
+		// **The whole shape of a dissolution at the transaction.** The
+		// contention opened with a published commitment; the sealed seed sits
+		// in the table this transaction is the only reader of; a $2,000,000
+		// Bid converts it.
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, 1_000_000, 't-1', 'm-1', undefined, hash(SEALED_SEED))],
+			sealedSeed: SEALED_SEED
+		});
 
 		const outcome = await placeBid(
 			harness.gateway,
@@ -1141,10 +1268,65 @@ describe('placeBid — the lottery seed (AC5, AD-14)', () => {
 			parseMoney(2_000_000),
 			DEVICE_CLASS
 		);
+		if (outcome.kind !== 'accepted') throw new Error('the dissolution was refused');
 
-		expect(outcome.kind).toBe('rejected');
+		// TWO events, in ONE transaction, cause then consequence.
+		expect(outcome.events).toHaveLength(2);
+		expect(harness.appendedEvents).toHaveLength(2);
+		expect(harness.appendedEvents.map((row) => row['event_type'])).toEqual([
+			BID_PLACED_EVENT,
+			CONTENTION_DISSOLVED_EVENT
+		]);
+		expect(harness.order.filter((step) => step === 'append-event')).toHaveLength(2);
+		expect(harness.order.filter((step) => step === 'commit')).toHaveLength(1);
+		// The seed was READ under the lock, before anything was appended.
+		expect(harness.order.indexOf('read-seed')).toBeLessThan(
+			harness.order.indexOf('append-event')
+		);
+
+		// No second seed row: the converting `BidPlaced` publishes no
+		// commitment, which is the only thing `recordContentionSeed` fires on.
 		expect(harness.seedRows).toHaveLength(0);
+		expect(harness.order).not.toContain('append-seed');
+
+		// The raw seed is in the DISSOLUTION and in nothing else — never in a
+		// `BidPlaced` payload, at any depth.
+		const bidPayload = harness.appendedEvents[0]?.['payload'] as BidPlacedPayload;
+		expect(Object.keys(bidPayload)).not.toContain('seedHash');
+		expect(JSON.stringify(bidPayload)).not.toContain(SEALED_SEED);
+
+		const dissolved = harness.appendedEvents[1]?.['payload'] as ContentionDissolvedPayload;
+		expect(dissolved.seed).toBe(SEALED_SEED);
+		expect(dissolved.seedHash).toBe(hash(SEALED_SEED));
+		expect(dissolved.fantraxPlayerId).toBe('p-1');
+		expect(dissolved.convertingTeamId).toBe('t-2');
+		expect(dissolved.amount).toBe(2_000_000);
+		// The Contenders released, in the fold's own join order (AD-14).
+		expect(dissolved.formerContenders).toEqual(['t-1']);
+		// The measurement column rides BOTH envelopes, never a payload.
+		expect(harness.appendedEvents[1]?.['device_class']).toBe(DEVICE_CLASS);
+	});
+
+	it('THROWS rather than revealing a seed that does not match the commitment', async () => {
+		// The one failure AD-14 cannot survive: a reveal that contradicts the
+		// commitment a Manager already recorded. `decide()` hashes what it was
+		// handed and compares before it builds a payload, so nothing reaches
+		// the log at all.
+		const harness = fakeGateway({
+			events: [
+				nominated(),
+				bidLogged(2, 1_000_000, 't-1', 'm-1', undefined, hash('a different seed'))
+			],
+			sealedSeed: SEALED_SEED
+		});
+
+		await expect(
+			placeBid(harness.gateway, ACTOR, 'p-1', parseMoney(2_000_000), DEVICE_CLASS)
+		).rejects.toThrow(TypeError);
+
+		expect(harness.appendedEvents).toHaveLength(0);
 		expect(harness.state.committed).toBe(false);
+		expect(harness.state.rolledBack).toBe(true);
 	});
 
 	it('stamps the contention’s OWN close instant on a join, never a fresh one', async () => {
@@ -1189,18 +1371,26 @@ describe('placeBid — the lottery seed (AC5, AD-14)', () => {
 		}
 	});
 
-	it('never reads the seed table — it is written and never selected from', () => {
+	it('touches the seed table exactly twice: one insert and one select (Story 3.3)', () => {
 		// `recordContentionSeed` is a WRITE-SIDE statement, exactly as
-		// `claimNomination` is. Story 3.6's draw is the first reader, and it
-		// reaches the row through the direct connection rather than through
-		// this module.
+		// `claimNomination` is, and `readContentionSeed` is the table's one
+		// reader — added by dissolution, because a reveal has to open what
+		// the opening sealed. Both go through the transaction's own client,
+		// which is the only identity the migration grants anything at all.
 		const source = readFileSync(
 			fileURLToPath(new URL('../../src/lib/server/bidding.ts', import.meta.url)),
 			'utf8'
 		);
 		const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
 		expect(code).toContain('insert into ${CONTENTION_SEEDS_TABLE}');
-		expect(code).not.toMatch(/select[\s\S]{0,80}auction_contention_seeds/i);
-		expect(code).not.toMatch(/CONTENTION_SEEDS_TABLE[\s\S]{0,40}select/i);
+		expect(code).toContain('select seed from ${CONTENTION_SEEDS_TABLE}');
+		// Exactly three mentions: the const's own declaration, the insert and
+		// the select. A fourth is a statement nobody reviewed.
+		expect([...code.matchAll(/CONTENTION_SEEDS_TABLE/g)]).toHaveLength(3);
+		expect(code).not.toMatch(/update[\s\S]{0,80}CONTENTION_SEEDS_TABLE/i);
+		expect(code).not.toMatch(/delete[\s\S]{0,80}CONTENTION_SEEDS_TABLE/i);
+		// Both go through the transaction's own client — never through
+		// `server/supabase.ts`, whose roles hold nothing on this table.
+		expect(code).not.toContain('supabase.ts');
 	});
 });

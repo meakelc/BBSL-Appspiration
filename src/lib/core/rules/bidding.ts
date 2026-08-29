@@ -1,7 +1,7 @@
 /**
  * The bidding gate: the two entry points AD-1 fixes, the eight gates they
  * decide through, the one sentence each refusal has, and the arithmetic the
- * refusal panel prints. Pure (Stories 2.5, 2.6, 2.7, 3.1, 3.2).
+ * refusal panel prints. Pure (Stories 2.5, 2.6, 2.7, 3.1, 3.2, 3.3).
  *
  * **Two entry points and no others.**
  *
@@ -41,8 +41,8 @@
  *
  * **`contention` is Story 3.2's, and it owns every amount question INSIDE a
  * lottery.** Joining, joining twice, the dead zone between the two thresholds
- * and the conversion this story deliberately does not build are one
- * classification of one amount, so they are one gate rather than four. It
+ * and the conversion that dissolves the whole thing are one classification of
+ * one amount, so they are one gate rather than four. It
  * sits immediately after `opening` because the two are one reading — what an
  * amount means when nothing leads, and what it means once a Minimum-Bid
  * Contention is running — and because `increment` steps aside entirely in a
@@ -107,30 +107,54 @@
  * the cheap bid on money (§10 example 19) and the fourth stash on capacity
  * (§10 example 25) without either gate learning the other's ground.
  *
- * **A Minimum-Bid Contention is created here now, and dissolved nowhere.**
- * An Opening Bid of exactly `MINIMUM_BID` PASSES the `opening` gate and opens
- * one; `decide()` publishes `hash(seed)` on that Bid's payload and the shell
- * seals the seed in a table no role can read (AD-14). A Bid of $1,500,000 or
- * more into a live contention is REFUSED by name on `contention`, exactly as
- * 2.5 refused `at_the_minimum` by name rather than half-doing it: the
- * Contender release, the seed reveal and `ContentionDissolved` are Story 3.3,
- * and a conversion that silently released commitments while leaving the seed
- * sealed is the one outcome AD-14 forbids.
+ * **A Minimum-Bid Contention is both created and dissolved here.** An Opening
+ * Bid of exactly `MINIMUM_BID` PASSES the `opening` gate and opens one;
+ * `decide()` publishes `hash(seed)` on that Bid's payload and the shell seals
+ * the seed in a table no role can read (AD-14). A Bid of $1,500,000 or more
+ * into a live contention PASSES `contention` since Story 3.3 and dissolves it
+ * — the refusal by name that 2.5 gave `at_the_minimum` and 3.2 gave the
+ * conversion has now run out of stories to move to.
  *
- * **`seed` is read by `decide()` since Story 3.2**, through the fourth
- * parameter AD-1 fixed and 2.5 shipped declared-and-unused. It is never
- * generated here — the core reads no randomness (AD-2), so the shell makes it
- * and passes it in — and never stored here: the ONE thing done with it is
- * `hash(seed)`, which is `core/hash.ts`'s pure SHA-256 so that Node, Deno and
- * a Manager with `sha256sum` all compute the same commitment.
+ * **Dissolution is one written rule and three facts.** The written rule is the
+ * reveal: `decide()` emits `ContentionDissolved` beside the converting
+ * `BidPlaced`, carrying the sealed seed — and it VERIFIES before it reveals,
+ * throwing unless `hash(seed)` equals the `seedHash` the log already
+ * published, because a reveal contradicting the published commitment is the
+ * one outcome AD-14 cannot survive. The three facts are consequences of
+ * arithmetic that already existed: every Contender's capital releases because
+ * `teamMoneyStateFor` tests the contention STATE and the fold reads
+ * `standard` off the new leading amount; the Auction Clock restarts because a
+ * dissolution is not a join, so the existing branch below computes a fresh
+ * `closeInstantFor`; and the converting Team leads because its amount is
+ * strictly higher. None of the three cost this module a line.
+ *
+ * **`selfBid` steps aside inside a lottery, for `increment`'s reason.** A
+ * Minimum-Bid Contention has no Leading Bidder at all — the fold names one
+ * because some Bid has to be highest — so there is nobody to be bidding
+ * against, and FR-19's "a Team that was a Contender may itself be the
+ * converting bidder" would otherwise be false for the one Team whose money
+ * opened the lottery.
+ *
+ * **`seed` is read by `decide()` since Story 3.2, and is a `ContentionSeed`
+ * union since 3.3**, through the fourth parameter AD-1 fixed and 2.5 shipped
+ * declared-and-unused. It is never generated here — the core reads no
+ * randomness (AD-2), so the shell makes it, or reads the sealed one under the
+ * lock, and passes it in — and never stored here. Two things are done with
+ * it, and `kind` decides which: a `fresh` seed is hashed onto the opening
+ * Bid's payload, and a `sealed` one is verified and then REVEALED on
+ * `ContentionDissolved`, which is the only path by which a seed ever enters
+ * `auction_events`. Both go through `core/hash.ts`'s pure SHA-256, so that
+ * Node, Deno and a Manager with `sha256sum` all compute the same commitment.
  *
  * **The fixed clock is `decide()`'s, not the fold's.** A join's `BidPlaced`
  * payload carries the contention's EXISTING `closesAt` verbatim; a fresh
- * `closeInstantFor(now, AUCTION_CLOCK)` is computed only for an opening or a
- * raise. That the fold also preserves the clock — a join is never strictly
- * higher, so it never becomes `leadingBid` — is a second guarantee resting on
- * an unrelated invariant, and a persisted payload claiming a join closes 24
- * hours from itself is a lie Story 3.5's sweep would act on.
+ * `closeInstantFor(now, AUCTION_CLOCK)` is computed for everything that is
+ * not a join — an opening, a raise, and a dissolution, which is where FR-19's
+ * 24-hour reset comes from. That the fold also preserves the clock — a join
+ * is never strictly higher, so it never becomes `leadingBid` — is a second
+ * guarantee resting on an unrelated invariant, and a persisted payload
+ * claiming a join closes 24 hours from itself is a lie Story 3.5's sweep
+ * would act on.
  *
  * This module is part of the PURE core: no I/O, no clock, no randomness,
  * stdlib only, relative .ts imports only so Deno can load it (AD-2). It reads
@@ -153,6 +177,7 @@ import type { Auction, ContentionState, OpenAuctions } from '../projection/aucti
 import {
 	AUCTION_EXPIRED,
 	BID_PLACED_EVENT,
+	CONTENTION_DISSOLVED_EVENT,
 	MINIMUM_BID_CONTENTION_LABEL,
 	auctionForPlayer,
 	closeInstantFor,
@@ -291,6 +316,30 @@ export type BidState = {
 	 * prevent.
 	 */
 	readonly contention: ContentionState;
+	/**
+	 * The published `hash(seed)` for this Auction's contention, as
+	 * `auctionsReducer` folded it off the opening Bid's payload — `null` for
+	 * every Auction that never opened one, and `null` for one whose opening
+	 * event carried a malformed commitment.
+	 *
+	 * **Story 3.3's addition, and it is here so `decide()` can verify before
+	 * it reveals.** A dissolution publishes the sealed seed; between the
+	 * shell's read of it and the core's publication of it sits the only
+	 * failure AD-14 cannot survive, which is a reveal that does not match the
+	 * commitment a Manager already checked. `decide()` hashes what it was
+	 * handed and compares it against THIS value before building the payload,
+	 * so the mismatch is foreclosed structurally rather than tested for.
+	 *
+	 * It is a PUBLIC value — already serialised to the Auction page and
+	 * already printed on it — so carrying it on the state both the transaction
+	 * and the surface build costs nothing in secrecy. The raw seed never
+	 * appears on this shape and never could: it reaches `decide()` as an
+	 * argument, exactly as `now` does.
+	 *
+	 * No gate reads it. It is an input to the EVENT, not to a rule, which is
+	 * why nothing in `PLACE_BID_GATES` grew for it.
+	 */
+	readonly seedHash: string | null;
 	/**
 	 * The Teams already on the Contender list, in ascending join `seq`
 	 * (AD-14) — ids only.
@@ -432,6 +481,8 @@ export function bidStateFor(
 			leadingBid: null,
 			closesAt: null,
 			contention: 'awaiting_opening_bid',
+			// No Auction, so no opening Bid, so no commitment to publish.
+			seedHash: null,
 			contenders: [],
 			team,
 			playerIsMinorLeagueEligible
@@ -441,6 +492,10 @@ export function bidStateFor(
 		leadingBid: { teamId: auction.leadingBid.teamId, amount: auction.leadingBid.amount },
 		closesAt: auction.closesAt,
 		contention: auction.contention,
+		// The published commitment, straight off the fold — never re-derived
+		// and never hashed here. `decide()` is the one caller, and it compares
+		// rather than computes.
+		seedHash: auction.seedHash,
 		// Ids alone, in the fold's own order. The narrowing is what keeps the
 		// gate from reaching a Contender's name or join instant.
 		contenders: auction.contenders.map((contender) => contender.teamId),
@@ -605,22 +660,33 @@ function minimumRaise(leading: LeadingBid): Money {
  * derivation rather than the constant, by checking that every state's
  * pre-fill passes every gate.
  *
- * **Inside a live contention the figure is `MINIMUM_BID`**, which is the join
- * amount and the ONLY amount `contention` accepts: a raise does not exist in
- * a lottery, so `minimumRaise` would pre-fill a conversion the gate refuses.
+ * **Inside a live contention the figure depends on who is asking, and that is
+ * Story 3.3's change.** A lottery takes exactly two amounts, and which of
+ * them is legal for a given Team is a fact about that Team: one not yet on
+ * the Contender list can JOIN at `MINIMUM_BID`, and one already on it cannot
+ * — a second join is `already_contending` — but can DISSOLVE the contention
+ * at `CONVERSION_AMOUNT`. So the acting Team id is a parameter, sourced at
+ * the one production call site from the `viewerTeamId` the read path already
+ * holds. `null` — a viewer bound to no Team — is not on any list, so it reads
+ * the join amount; their control is refused as `unbound_actor` regardless,
+ * and the field states the amount the contention actually takes.
  *
- * **One state has no legal amount at all, and this function still answers.**
- * A Team already on the Contender list is refused at `$1,000,000` on
- * `already_contending` and at everything above it on `converts` — there is no
- * figure that passes every gate for them until Story 3.3 builds dissolution.
- * The pre-fill is still the join amount, because a field pre-filled with the
- * amount the contention actually takes, beside a control disabled with the
- * reason, is the honest rendering; inventing a figure that passes nothing
- * would not be.
+ * **The state with no legal amount at all is gone, and that is what 3.3
+ * reopened.** Until dissolution existed, a Team already contending was
+ * refused at `$1,000,000` on `already_contending` and at everything above it
+ * on `converts`, so no figure passed every gate for them; the pre-fill was
+ * the join amount beside a disabled control. `converts` passes now, so the
+ * general invariant — every state's pre-fill passes every gate — holds again
+ * without an exception carved out of it.
  */
-export function minimumLegalBid(state: BidState): Money {
-	// A lottery takes exactly one amount, whoever is asking.
-	if (state.contention === 'minimum_bid') return MINIMUM_OPENING_BID;
+export function minimumLegalBid(state: BidState, actingTeamId: string | null): Money {
+	if (state.contention === 'minimum_bid') {
+		// Already in: joining again is refused by name, and the only amount
+		// left to them is the one that dissolves the contention.
+		return actingTeamId !== null && state.contenders.includes(actingTeamId)
+			? CONVERSION_AMOUNT
+			: MINIMUM_OPENING_BID;
+	}
 	const leading = state.leadingBid;
 	if (leading === null) return MINIMUM_OPENING_BID;
 	return minimumRaise(leading);
@@ -746,13 +812,16 @@ const CONVERSION_AMOUNT: Money = addMoney(MINIMUM_OPENING_BID, INCREMENT);
  *    REFUSED. A Team joins once: every Contender holds the same amount, so a
  *    second join would commit nothing new and buy a second chance at a draw
  *    whose ordered Contender list is an input to the winner (AD-14).
- *  - at or above the conversion amount → `converts`, REFUSED and named as
- *    Story 3.3's. Accepting it as an ordinary raise would produce most of
- *    dissolution for free — the fold would go `standard`, the clock would
- *    reset, and every Contender's commitment would quietly release, because
- *    `teamMoneyStateFor` would stop seeing them — while leaving the seed
- *    sealed forever. AD-14's "no unopened commitment is left behind" is
- *    precisely what that silently breaks.
+ *  - at or above the conversion amount → `converts`, PASSES since Story 3.3:
+ *    this Bid dissolves the contention. Until then it was refused by name,
+ *    because accepting it as an ordinary raise would have produced most of
+ *    dissolution for free — the fold going `standard`, the clock resetting,
+ *    every Contender's commitment quietly releasing because
+ *    `teamMoneyStateFor` stops seeing them — while leaving the seed sealed
+ *    forever, which is precisely what AD-14's "no unopened commitment is left
+ *    behind" forbids. `decide()` appends `ContentionDissolved` beside the
+ *    converting `BidPlaced` and reveals the seed against the published
+ *    commitment, so nothing is left behind and the verdict could move.
  *  - strictly between the two → `neither`, refused. §10 example 10's dead
  *    zone: too high to join, too low to convert. Under the $500,000 grid it
  *    contains no on-grid amount at all, so `granularity` refuses every
@@ -792,8 +861,12 @@ function evaluateContention(
 		}
 		return { ...base, passed: true, entry: 'joins', contenderCount };
 	}
+	// The comparison is UNCHANGED from Story 3.2 and only the verdict moved,
+	// which is what makes dissolution a one-line edit here rather than a
+	// rewrite. `decide()` asks this gate whether a Bid dissolves a contention
+	// rather than re-deriving the comparison, so there is one judgement.
 	if (compareMoney(amount, CONVERSION_AMOUNT) >= 0) {
-		return { ...base, passed: false, entry: 'converts', contenderCount };
+		return { ...base, passed: true, entry: 'converts', contenderCount };
 	}
 	return { ...base, passed: false, entry: 'neither', contenderCount };
 }
@@ -805,9 +878,31 @@ function evaluateContention(
  * bidder, so the second Manager raising their own Team's leading Bid is the
  * same refusal as the first Manager doing it. Passes with no leading Bid,
  * which is what makes an opening need no special case here.
+ *
+ * **It steps aside inside a Minimum-Bid Contention, exactly as
+ * `evaluateIncrement` already does, and for the identical reason: a lottery
+ * has no Leading Bidder at all.** `auctionsReducer` reports one because some
+ * Bid has to be the highest and a join is never strictly higher than the
+ * `$1,000,000` already there — so `leadingBid` in a contention is a fold
+ * artifact rather than a Team holding the Auction against the field. Reading
+ * it as one would freeze exactly one Team out of dissolving: the Team whose
+ * money opened the lottery, which is Contender #1 and unavoidably the fold's
+ * leader, and which FR-19's own scenario ("a Team that was a Contender may
+ * itself be the converting bidder") is about.
+ *
+ * `leadingTeamId` is therefore reported as `null` there rather than as the
+ * opener's id, which is the honest report and not a convenience: the field's
+ * meaning is "the Team you would be bidding against", and in a lottery there
+ * is none. `evaluateIncrement` nulls `currentHigh` on the same grounds.
+ *
+ * The consequence is deliberate and visible: the opener re-bidding
+ * `$1,000,000` is now refused on `already_contending` ALONE, where Story 3.2
+ * refused it on `selfBid` as well. That is not a suppressed ground — it is a
+ * ground that was never true, reported because the gate could not yet see it.
  */
 function evaluateSelfBid(state: BidState, actingTeamId: string): SelfBidGateOutcome {
-	const leadingTeamId = state.leadingBid?.teamId ?? null;
+	const leadingTeamId =
+		state.contention === 'minimum_bid' ? null : (state.leadingBid?.teamId ?? null);
 	return {
 		passed: leadingTeamId === null || leadingTeamId !== actingTeamId,
 		actingTeamId,
@@ -1564,19 +1659,11 @@ function gateSentence(gates: PlaceBidGateResults, gate: PlaceBidGate): string | 
 					'so there is nothing further to offer here.'
 				);
 			}
-			if (outcome.entry === 'converts') {
-				// Named as deferred, in words, rather than accepted as a raise.
-				// Story 2.5 made exactly this trade for the opening at
-				// $1,000,000, and for the same reason: the machinery that makes
-				// the outcome correct does not exist yet, and half-doing it is
-				// worse than saying so.
-				return (
-					`${describeAmount(outcome.offered)} would convert this ` +
-					`${MINIMUM_BID_CONTENTION_LABEL} into Standard Contention, releasing every ` +
-					`Contender's commitment, and this Auction cannot do that yet. Joining takes ` +
-					`exactly ${formatMoney(outcome.joinAmount)}.`
-				);
-			}
+			// `converts` has no branch here at all since Story 3.3: it passes,
+			// and `if (outcome.passed) return null` above already covered it
+			// the moment the verdict moved. The branch that stood here worded
+			// the deferral, and a deferral that is over is a sentence no
+			// Manager can ever be shown again.
 			return (
 				`${describeAmount(outcome.offered)} is neither a join nor a conversion. Joining this ` +
 				`${MINIMUM_BID_CONTENTION_LABEL} takes exactly ${formatMoney(outcome.joinAmount)}, and ` +
@@ -2006,9 +2093,29 @@ function gateFigure(gates: PlaceBidGateResults, gate: PlaceBidGate): string {
 				case 'already_contending':
 					return `your Team is already a Contender, ${contenderPhrase(outcome.contenderCount)}`;
 				case 'converts':
+					// **States what this Bid DOES, not what it would do.** The
+					// row sits beside a `Passed` chip now, and a figure written
+					// in the conditional would read as a warning about an
+					// outcome that is in fact being authorised.
+					//
+					// **It claims NO release, and that is a correction rather
+					// than a trim.** `contenderCount` is the count BEFORE this
+					// Bid, so it INCLUDES the acting Team whenever a Contender
+					// converts its own lottery (FR-19 permits exactly that) —
+					// and that Team is not released, it becomes the Leading
+					// Bidder. "releasing 3 Contenders" is therefore false on
+					// the one surface in the product that may never be, and
+					// the count is not this row's to explain.
+					//
+					// It quotes the offered amount and the threshold it
+					// cleared, which is what its `neither` sibling does with
+					// the same two terms: a figure states the arithmetic the
+					// gate was judged from, and this gate's judgement is one
+					// comparison between exactly those two amounts.
 					return (
-						`at or above ${formatMoney(outcome.conversionAmount)}, which would convert the ` +
-						'contention'
+						`${describeAmount(outcome.offered)} is at or above the ` +
+						`${formatMoney(outcome.conversionAmount)} that dissolves this ` +
+						`${MINIMUM_BID_CONTENTION_LABEL}`
 					);
 				case 'neither':
 					// `neither` is EVERY amount that is not a join and not a
@@ -2025,7 +2132,19 @@ function gateFigure(gates: PlaceBidGateResults, gate: PlaceBidGate): string {
 		}
 		case 'selfBid': {
 			const outcome = gates.selfBid;
-			if (outcome.leadingTeamId === null) return 'no Team leads yet';
+			if (outcome.leadingTeamId === null) {
+				// Two reasons for one null, and the row must state the right
+				// one — `increment`'s discipline immediately below, for the
+				// same pair of causes. Awaiting an Opening Bid nobody leads
+				// yet; inside a Minimum-Bid Contention a `$1,000,000` Bid IS
+				// the fold's leader, so "no Team leads yet" would be a
+				// falsehood on a panel whose whole purpose is to be true. The
+				// question is asked of the gate that owns it rather than
+				// re-derived from an amount.
+				return gates.contention.entry === 'not_a_contention'
+					? 'no Team leads yet'
+					: `no Team leads a ${MINIMUM_BID_CONTENTION_LABEL}`;
+			}
 			return outcome.passed ? 'another Team leads' : 'your Team leads';
 		}
 		case 'increment': {
@@ -2547,6 +2666,120 @@ export type BidPlacedPayload = {
 };
 
 /**
+ * The `ContentionDissolved` payload: which Auction dissolved, the seed it
+ * reveals, the commitment that seed was published against, and who was in
+ * (Story 3.3, FR-19, AD-14).
+ *
+ * **The reveal is the reason this event exists.** A dissolved contention will
+ * never draw, so nothing later would ever open the envelope: the seed would
+ * stay sealed in a table no role can read, behind a commitment a Manager
+ * recorded and could never check. That is the one outcome AD-14 cannot
+ * survive. `decide()` therefore hashes the sealed seed it was handed and
+ * compares it against `state.seedHash` BEFORE building this payload — a
+ * mismatch throws and no event reaches the log.
+ *
+ * `seedHash` is restated here rather than left to be looked up on the opening
+ * `BidPlaced`: the reveal and the commitment it answers belong in one event,
+ * so a Manager checking the pair reads one row rather than joining two, and
+ * `null` states honestly that there was nothing to check against.
+ *
+ * **Three fields no reducer reads, on purpose.** `auctionsReducer` folds
+ * `fantraxPlayerId` and `seed` and nothing else. `formerContenders`,
+ * `convertingTeamId` and `amount` ride along because Epic 5's dispatcher must
+ * reach every Team that was in from ONE event without re-folding the log, and
+ * Story 3.6 will append the ordered list at expiry for the same reason. A
+ * field nothing reads yet is worth flagging; these are named so a reviewer
+ * sees the choice rather than the omission.
+ *
+ * `formerContenders` are Team IDS in ascending join `seq` — the fold's own
+ * order, which AD-14 pins as an input to a winner. Ids and not names because
+ * that is what a dispatcher resolves a destination from, and because
+ * `BidState` narrows the Contender list to ids precisely so no rule can come
+ * to depend on a Team's display name.
+ *
+ * **It is the whole list, unfiltered, and it is not a list of Teams that were
+ * released.** FR-19 permits a Contender to be the converting bidder, and that
+ * Team is on this list — it was not released, it became the Leading Bidder.
+ * The list is not filtered to exclude it, because what this field records is
+ * the Contender list as it STOOD when the contention dissolved: that is the
+ * historical record the reveal is about, it is the ordered list Story 3.6
+ * needs, and a list quietly missing whoever converted would not be the list
+ * anybody checks the commitment against. `convertingTeamId` beside it is how
+ * a consumer excludes the converter, so the two together answer both
+ * questions and neither field has to lie about the other.
+ */
+export type ContentionDissolvedPayload = {
+	readonly fantraxPlayerId: string;
+	/** The seed, revealed. The one place it ever enters `auction_events`. */
+	readonly seed: string;
+	/** The commitment it was published against, or `null` if none ever was. */
+	readonly seedHash: string | null;
+	/**
+	 * The Contender list as it stood when the contention dissolved, in
+	 * ascending join `seq` (AD-14) — ids, unfiltered.
+	 *
+	 * NOT "the Teams released": the converting Team is on it whenever a
+	 * Contender converts its own lottery, and that Team came out of this
+	 * leading rather than released. See the header above.
+	 */
+	readonly formerContenders: readonly string[];
+	/** The Team whose Bid dissolved it — the new Leading Bidder. */
+	readonly convertingTeamId: string;
+	/** The converting amount, in integer dollars (AD-8). */
+	readonly amount: number;
+};
+
+/**
+ * The seed `decide()` is handed, and which half of the commit-reveal it is
+ * for (Story 3.3).
+ *
+ * **A union, and not two adjacent nullable strings.** The two are never both
+ * meaningful: `fresh` is the seed a lottery-OPENING commits to and needs
+ * `leadingBid === null`, `sealed` is the seed a DISSOLUTION reveals and needs
+ * `contention === 'minimum_bid'`. Two parameters would have made "both
+ * supplied" and "the wrong one supplied" expressible states that `decide()`
+ * would then have had to rule out by hand; one discriminated value makes the
+ * question `kind` and nothing else.
+ *
+ * `null` is the third case and by far the commonest: an ordinary raise, an
+ * opening above the minimum, a join. Every call site that passed `null`
+ * before Story 3.3 still passes `null` and is unchanged, so the diff lands
+ * exactly where the rule changed.
+ *
+ * The shell chooses which: `server/bidding.ts` generates a fresh seed on
+ * every call and reads the sealed one under the lock when the folded Auction
+ * is a live contention. The core never generates and never stores — it
+ * hashes a `fresh` one onto the opening payload, and verifies then publishes
+ * a `sealed` one on a dissolution.
+ */
+export type ContentionSeed =
+	| { readonly kind: 'fresh'; readonly seed: string }
+	| { readonly kind: 'sealed'; readonly seed: string };
+
+/**
+ * The seed of the required kind, or a `TypeError` naming what was missing.
+ *
+ * The ONE narrowing from `ContentionSeed | null` to the `string` the two
+ * commit-reveal branches need, so neither branch below carries a `null` case
+ * the invariant has already ruled out — a dead branch hides the real
+ * invariant instead of stating it.
+ *
+ * It THROWS rather than returning `null`, and that is AD-1's distinction: a
+ * shell that reached an opening or a dissolution without the right seed in
+ * hand is a bug, not something a Manager did, and a Manager-facing refusal
+ * would send them away to fix something that is not theirs. The message names
+ * the kind that was required and the kind that arrived; neither is secret.
+ */
+function seedFor(seed: ContentionSeed | null, kind: ContentionSeed['kind'], what: string): string {
+	if (seed === null || seed.kind !== kind) {
+		throw new TypeError(
+			`decide: ${what} (AD-14); received ${seed === null ? 'null' : `kind "${seed.kind}"`}`
+		);
+	}
+	return seed.seed;
+}
+
+/**
  * Authorise a `PlaceBid`, or refuse it with the full gate set.
  *
  * **Every gate outcome comes from `evaluate()`**, called once, here. Nothing
@@ -2554,32 +2787,51 @@ export type BidPlacedPayload = {
  * "one evaluator, two consumers" holding structurally rather than by
  * convention.
  *
- * On acceptance it emits exactly ONE `BidPlaced` envelope. Its `occurredAt`
- * is not set here: `runTransactionalWrite` stamps every appended event with
- * the database's transaction-start clock (AD-3), and `now` — the same instant,
- * handed in as a string — is what the close instant is computed from, so the
- * event's timestamp and its `closesAt` are exactly `AUCTION_CLOCK` apart by
- * construction.
+ * On acceptance it emits ONE `BidPlaced` envelope — or, on a dissolution,
+ * TWO: the `BidPlaced` that caused it and the `ContentionDissolved` that
+ * follows from it, in that order. Cause then consequence, appended by the one
+ * `runTransactionalWrite` loop that has always supported N events. Their
+ * `occurredAt` is not set here: `runTransactionalWrite` stamps every appended
+ * event with the database's transaction-start clock (AD-3), and `now` — the
+ * same instant, handed in as a string — is what the close instant is computed
+ * from, so the event's timestamp and its `closesAt` are exactly
+ * `AUCTION_CLOCK` apart by construction.
  *
- * **`seed` is read since Story 3.2**, through the fourth parameter AD-1 fixed
- * and 2.5 shipped declared-and-`void`ed. Nothing here generates it — the core
- * reads no randomness (AD-2) — and nothing here stores it: the ONE thing done
- * with it is `hash(seed)` onto the payload of the Bid that OPENS a
- * Minimum-Bid Contention. The raw string never appears in an event, and the
- * shell writes it to `auction_contention_seeds` in the same transaction by
- * reading the `seedHash` this function published, never by re-deriving the
- * rule.
+ * **`seed` is read since Story 3.2 and is a `ContentionSeed` union since
+ * 3.3.** Nothing here generates it — the core reads no randomness (AD-2) —
+ * and nothing here stores it. Two things are done with it, and which one
+ * depends on `kind`:
  *
- * **A `null` seed on such an opening THROWS**, and that is AD-1's distinction
- * rather than strictness for its own sake: a shell that failed to supply a
- * seed is a bug, not something a Manager did, and a Manager-facing refusal
- * would send them away to fix something that is not theirs. Every other Bid
- * ignores the parameter entirely, so a caller with genuinely no randomness in
- * hand — a test of a raise, say — passes `null` and is unaffected.
+ *  - `fresh`, on the Bid that OPENS a Minimum-Bid Contention: `hash(seed)`
+ *    goes onto the payload and the raw string appears nowhere. The shell
+ *    writes it to `auction_contention_seeds` in the same transaction by
+ *    reading the `seedHash` this function published, never by re-deriving the
+ *    rule.
+ *  - `sealed`, on the Bid that DISSOLVES one: the seed is verified against
+ *    the published commitment and then REVEALED, on `ContentionDissolved`.
+ *    This is the only path by which a seed ever enters `auction_events`.
+ *
+ * **Verify, then reveal.** A dissolution whose seed does not hash to
+ * `state.seedHash` throws before any payload is built, so publishing a reveal
+ * that contradicts the commitment a Manager already checked is foreclosed
+ * structurally rather than merely tested for. A commitment that folded to
+ * `null` — a corrupt log — reveals anyway: there is nothing to verify
+ * against, and refusing would strand the Auction in a contention forever.
+ *
+ * **A missing or wrong-kinded seed THROWS**, on an opening and on a
+ * dissolution alike, and that is AD-1's distinction rather than strictness
+ * for its own sake: a shell that failed to supply a seed is a bug, not
+ * something a Manager did, and a Manager-facing refusal would send them away
+ * to fix something that is not theirs. Every other Bid ignores the parameter
+ * entirely, so a caller with genuinely no randomness in hand — a test of a
+ * raise, say — passes `null` and is unaffected.
  *
  * **The close instant is the contention's own on a join.** A join stamps
- * `state.closesAt` verbatim; an opening or a raise computes a fresh
- * `closeInstantFor(now, AUCTION_CLOCK)`. See the fixed-clock note below.
+ * `state.closesAt` verbatim; an opening, a raise or a DISSOLUTION computes a
+ * fresh `closeInstantFor(now, AUCTION_CLOCK)` — which is FR-19's "the Auction
+ * Clock is reset to 24 hours from the converting Bid", and it needed no line
+ * of its own, because a dissolution is not a join. See the fixed-clock note
+ * below.
  *
  * A malformed `now` THROWS rather than returning a refusal, and that is the
  * AD-1 distinction rather than an oversight: a rule violation is a returned
@@ -2592,7 +2844,7 @@ export function decide(
 	state: BidState,
 	command: PlaceBid,
 	now: string,
-	seed: string | null
+	seed: ContentionSeed | null
 ): Decided<readonly EventEnvelope[], PlaceBidGateResults> {
 	const gates = evaluate(state, command, now);
 
@@ -2613,8 +2865,11 @@ export function decide(
 	// (AD-12) — cannot be handed a join claiming to close 24 hours after
 	// itself.
 	//
-	// An opening or a raise computes a fresh one, which is the 24-hour restart
-	// `BID_CONSEQUENCE` promises.
+	// An opening, a raise or a DISSOLUTION computes a fresh one, which is the
+	// 24-hour restart `BID_CONSEQUENCE` promises — and which, for a
+	// dissolution, is FR-19's "the Auction Clock is reset to 24 hours from the
+	// converting Bid", arrived at with no branch of its own because a
+	// dissolution is simply not a join.
 	const closesAt =
 		gates.contention.entry === 'joins'
 			? state.closesAt
@@ -2639,11 +2894,59 @@ export function decide(
 	// start.
 	const opensContention =
 		state.leadingBid === null && contentionForAmount(command.amount) === 'minimum_bid';
-	if (opensContention && seed === null) {
-		throw new TypeError(
-			'decide: an Opening Bid that opens a Minimum-Bid Contention requires a seed; the ' +
-				'shell must supply one (AD-14)'
-		);
+	// **A missing or wrong-kinded seed is a shell bug and THROWS** (AD-1), on
+	// both halves of the commit-reveal. `seedFor` is the one narrowing, so the
+	// two branches below hold a `string` rather than a union nothing has ruled
+	// out — no dead `null` branch stands where an invariant should.
+	const freshSeed = opensContention
+		? seedFor(
+				seed,
+				'fresh',
+				'an Opening Bid that opens a Minimum-Bid Contention requires a fresh seed; the shell ' +
+					'must supply one'
+			)
+		: null;
+
+	// Does this Bid DISSOLVE a Minimum-Bid Contention? Asked off the gate that
+	// already classified the amount rather than re-derived from the two
+	// thresholds — `evaluateContention` owns every amount question inside a
+	// lottery, and a second comparison here would be a second judgement about
+	// one Bid. `converts` is only ever reported inside a live contention, so
+	// this is the whole test.
+	//
+	// A shell that reached here without the sealed seed is a bug, and the
+	// failure it would otherwise cause is the one AD-14 cannot survive: a
+	// contention released with its commitment never opened. The throw aborts
+	// the transaction and appends nothing.
+	const sealedSeed =
+		gates.contention.entry === 'converts'
+			? seedFor(
+					seed,
+					'sealed',
+					'a Bid that dissolves a Minimum-Bid Contention requires the sealed seed; the shell ' +
+						'must read it under the lock'
+				)
+			: null;
+
+	// **Verify, then reveal.** The published commitment is what a Manager
+	// recorded when the lottery opened; a reveal that does not hash to it is
+	// the failure the whole commit-reveal exists to make impossible, so it is
+	// refused HERE rather than detected later. Both digests are named, because
+	// the point of the message is to let whoever reads it see which value went
+	// wrong — and both are public, so naming them leaks nothing.
+	//
+	// A `null` `seedHash` on a live contention is a corrupt log, and the reveal
+	// proceeds regardless: there is nothing to verify against, and refusing
+	// would leave the Auction in a contention forever with nothing able to
+	// dissolve it. The page states that the reveal is unverifiable.
+	if (sealedSeed !== null && state.seedHash !== null) {
+		const revealed = hash(sealedSeed);
+		if (revealed !== state.seedHash) {
+			throw new TypeError(
+				'decide: the sealed seed does not match the published commitment; hash(seed) is ' +
+					`${revealed} and the log published ${state.seedHash} (AD-14)`
+			);
+		}
 	}
 
 	const payload: BidPlacedPayload = {
@@ -2653,17 +2956,53 @@ export function decide(
 		managerId: command.managerId,
 		amount: command.amount,
 		closesAt,
-		// `hash(seed)` and never the seed. Spread rather than set to `null`,
-		// so the overwhelming majority of Bids carry no such key at all.
-		...(opensContention && seed !== null ? { seedHash: hash(seed) } : {})
+		// `hash(seed)` and never the seed. Spread rather than set to `null`, so
+		// the overwhelming majority of Bids carry no such key at all — and a
+		// DISSOLUTION carries none either, which is what keeps
+		// `recordContentionSeed` from writing a second seed row for one.
+		...(freshSeed !== null ? { seedHash: hash(freshSeed) } : {})
+	};
+
+	const bidPlaced: EventEnvelope = {
+		type: BID_PLACED_EVENT,
+		payload,
+		managerId: command.managerId,
+		teamId: command.teamId
+	};
+
+	if (sealedSeed === null) {
+		const accepted: Accepted<readonly EventEnvelope[]> = { kind: 'accepted', events: [bidPlaced] };
+		return accepted;
+	}
+
+	// Cause, then consequence. `runTransactionalWrite` has always appended N
+	// events in order under one lock, so two is no new machinery — and the
+	// order is the rule: a log read in `seq` order states the Bid that
+	// dissolved the contention before it states the dissolution.
+	const dissolved: ContentionDissolvedPayload = {
+		fantraxPlayerId: command.fantraxPlayerId,
+		// The seed, revealed — the one place it ever enters the log, and only
+		// after the comparison above.
+		seed: sealedSeed,
+		seedHash: state.seedHash,
+		// The fold's own order, never re-sorted and never filtered: AD-14 makes
+		// it an input to a winner, and it is carried WHOLE so Epic 5 can reach
+		// every Team that was in without re-folding the log. A Contender that
+		// converted its own lottery is on it, and `convertingTeamId` below is
+		// how a consumer tells that Team apart from the ones that were
+		// released.
+		formerContenders: state.contenders,
+		convertingTeamId: command.teamId,
+		amount: command.amount
 	};
 
 	const accepted: Accepted<readonly EventEnvelope[]> = {
 		kind: 'accepted',
 		events: [
+			bidPlaced,
 			{
-				type: BID_PLACED_EVENT,
-				payload,
+				type: CONTENTION_DISSOLVED_EVENT,
+				payload: dissolved,
 				managerId: command.managerId,
 				teamId: command.teamId
 			}

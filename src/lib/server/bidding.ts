@@ -1,6 +1,7 @@
 /**
- * The bidding gate's one transaction: lock, load, decide, append one
- * `BidPlaced`. Server-only (Stories 2.5, 3.2).
+ * The bidding gate's one transaction: lock, load, decide, append the
+ * `BidPlaced` — and, on a dissolution, the `ContentionDissolved` beside it.
+ * Server-only (Stories 2.5, 3.2, 3.3).
  *
  * **Almost nothing here is stored but the event.** The price, the Leading
  * Bidder, the contention state, the Contender list, the absolute close
@@ -20,6 +21,18 @@
  * core may not — hands it to `decide()`, and registers ONE `ProjectionUpdater`
  * that writes the row inside the appending transaction (AD-5), keyed on the
  * `seedHash` the core itself published.
+ *
+ * **Story 3.3 adds the READ of that table, and it is the only one that
+ * exists.** A dissolution has to reveal what the opening sealed, so
+ * `loadBidState` point-reads the seed on the transaction's own client
+ * whenever the folded Auction is a live contention, and `placeBid` hands
+ * `decide()` a `ContentionSeed` saying which half of the commit-reveal is in
+ * play. The core verifies the seed against the published commitment before it
+ * publishes the reveal, and appends `ContentionDissolved` beside the
+ * converting `BidPlaced` — two events, one transaction, cause then
+ * consequence. A dissolution writes NO second seed row: its `BidPlaced`
+ * carries no `seedHash`, which is the only thing `recordContentionSeed` fires
+ * on.
  *
  * **The race is settled by the price, not by a constraint.** PRD §10 example
  * 15 — both Managers of one Team bidding within the same second — resolves
@@ -90,7 +103,12 @@ import {
 import type { Money } from '../core/money.ts';
 import type { OpenNomination } from '../core/projection/nominations.ts';
 import { bidRefusalDetail, bidStateFor, decide, teamMoneyStateFor } from '../core/rules/bidding.ts';
-import type { BidPlacedPayload, BidRefusal, BidState } from '../core/rules/bidding.ts';
+import type {
+	BidPlacedPayload,
+	BidRefusal,
+	BidState,
+	ContentionSeed
+} from '../core/rules/bidding.ts';
 import type { EventEnvelope, PlaceBid, PlaceBidGateResults } from '../core/types.ts';
 import { runTransactionalWrite } from '../shell/write.ts';
 import type {
@@ -124,6 +142,23 @@ export type BidActor = {
 export type LoadedBidState = {
 	readonly bid: BidState;
 	readonly nomination: OpenNomination | null;
+	/**
+	 * The SEALED seed for a live Minimum-Bid Contention, read on this same
+	 * transaction's client — `null` for every Auction that is not one, and
+	 * `null` for a contention with no seed row behind it (Story 3.3, AD-14).
+	 *
+	 * Deliberately NOT part of `BidState`, exactly as `nomination` is not: no
+	 * gate may see it and therefore none can come to depend on it. It reaches
+	 * the core as `decide()`'s fourth argument, the way `now` does — a value
+	 * the shell supplies rather than a fact the rules read.
+	 *
+	 * A `null` here on a Bid that turns out to DISSOLVE the contention is a
+	 * `TypeError` out of `decide()` (AD-1), which aborts the transaction and
+	 * appends nothing. That is the intended outcome: releasing a contention
+	 * without opening its commitment is the one failure AD-14 cannot survive,
+	 * so it must not be reachable by a Bid quietly succeeding.
+	 */
+	readonly sealedSeed: string | null;
 };
 
 /**
@@ -183,12 +218,34 @@ export async function loadBidState(
 
 	const roster = await loadTeamRoster(client, teamId);
 
+	const auction = auctionForPlayer(auctions, fantraxPlayerId);
+
+	// **The sealed seed, read under the SAME lock that will append** — a point
+	// read on the transaction's own client, exactly as `loadNominationState`
+	// reads the pool row and the contract holder beside its folds. It must go
+	// through THIS client and not `server/supabase.ts`, because
+	// `20260828000000_contention_seeds.sql` grants `anon`, `authenticated` and
+	// `service_role` nothing at all: the direct `SUPABASE_DB_URL` connection is
+	// the only identity that can see this table, and it is the one the write
+	// pipeline already holds.
+	//
+	// Asked ONLY inside a live contention, which is the only state a
+	// dissolution can arrive from. Every other Bid reads nothing here, so the
+	// overwhelming majority of Bids touch the sealed table not at all — and
+	// a join reads it and ignores it, which is cheaper than a second load
+	// after the core has decided.
+	//
+	// `fantrax_player_id` is the table's primary key, so this returns at most
+	// one row.
+	const sealedSeed =
+		auction?.contention === 'minimum_bid' ? await readContentionSeed(client, fantraxPlayerId) : null;
+
 	return {
 		// `bidStateFor` and `teamMoneyStateFor` are the ONE narrowing from the
 		// folds to the gates, shared with the read path, so the transaction and
 		// the render cannot narrow the same state two different ways.
 		bid: bidStateFor(
-			auctionForPlayer(auctions, fantraxPlayerId),
+			auction,
 			teamMoneyStateFor({
 				teamId,
 				fantraxPlayerId,
@@ -214,12 +271,51 @@ export async function loadBidState(
 			// "eligible" means inside one transaction.
 			isEligible(eligibility, fantraxPlayerId)
 		),
-		nomination: nominationForPlayer(nominations, fantraxPlayerId)
+		nomination: nominationForPlayer(nominations, fantraxPlayerId),
+		sealedSeed
 	};
 }
 
 /** The sealed seed table (`20260828000000_contention_seeds.sql`). */
 const CONTENTION_SEEDS_TABLE = 'auction_contention_seeds';
+
+/**
+ * The sealed seed for one Player's Minimum-Bid Contention, or `null` when the
+ * table holds none (Story 3.3, AD-14).
+ *
+ * **The first and only reader of `auction_contention_seeds` before the
+ * draw**, and it exists because a dissolution has to reveal what the opening
+ * sealed. Story 3.2 stated outright that nothing in this codebase selected
+ * from this table; that changes here and nowhere else.
+ *
+ * It takes the transaction's own `client` rather than reaching for
+ * `server/supabase.ts`, and that is not a style preference: the migration
+ * grants `anon`, `authenticated` and `service_role` NOTHING, so the direct
+ * `SUPABASE_DB_URL` connection is the only identity that can read a row at
+ * all. The same connection appends the events, which is what makes the read
+ * and the append one atomic act under the global lock (AD-6).
+ *
+ * `fantrax_player_id` is the primary key, so at most one row comes back. A
+ * missing row is `null` rather than a throw: the caller decides what an
+ * absent seed means, and only a DISSOLUTION treats it as the bug it is.
+ *
+ * The value never leaves the server except as the reveal `decide()`
+ * publishes, and only after `decide()` has hashed it against the commitment
+ * the log already carries.
+ */
+async function readContentionSeed(
+	client: TransactionalClient,
+	fantraxPlayerId: string
+): Promise<string | null> {
+	const result = await client.query(
+		`select seed from ${CONTENTION_SEEDS_TABLE} where fantrax_player_id = $1`,
+		[fantraxPlayerId]
+	);
+	const row = result.rows[0];
+	if (row === undefined) return null;
+	const seed = row['seed'];
+	return typeof seed === 'string' && seed !== '' ? seed : null;
+}
 
 /**
  * How many random bytes a lottery seed is. 32 — a full 256 bits, matching the
@@ -255,13 +351,21 @@ function generateSeed(): string {
  * Contention, on the appending transaction's own client (Story 3.2, AD-14).
  *
  * `claimNomination`'s shape and `claimNomination`'s discipline: a WRITE-SIDE
- * statement, never a read — nothing in this codebase selects from
- * `auction_contention_seeds` until Story 3.6's draw — registered through
- * `runTransactionalWrite`'s `projections` hook because that is the one seam
- * that persists INSIDE the appending transaction (AD-5). The seed row and the
- * opening event therefore commit together or neither does, and a contention
- * whose commitment was published without a seed behind it is unreachable by
- * construction.
+ * statement and nothing else — `readContentionSeed` above is the table's one
+ * reader, and it is a separate function on purpose so this hook cannot grow
+ * one — registered through `runTransactionalWrite`'s `projections` hook
+ * because that is the one seam that persists INSIDE the appending transaction
+ * (AD-5). The seed row and the opening event therefore commit together or
+ * neither does, and a contention whose commitment was published without a
+ * seed behind it is unreachable by construction.
+ *
+ * **A DISSOLUTION writes nothing here, and no `on conflict` was needed to
+ * arrange that.** The condition below is "this `BidPlaced` carries a
+ * `seedHash`", and `decide()` puts one there only on the Bid that OPENS a
+ * contention; the converting Bid carries none, so this loop simply does not
+ * fire for it. The seed a dissolution reveals is the one this row already
+ * holds — it is read, never re-written — so the primary key is never
+ * approached twice for one Player.
  *
  * **It keys on the core's own output, and re-derives no rule.** The condition
  * is "this payload carries a `seedHash`", which `decide()` put there and only
@@ -385,7 +489,25 @@ export async function placeBid(
 				amount
 			};
 
-			const decided = decide(state.bid, command, now.toISOString(), seed);
+			// **Which half of the commit-reveal this Bid needs, chosen from the
+			// state the lock just loaded.** Inside a live contention the only
+			// seed that can matter is the SEALED one — a dissolution reveals
+			// it, and a join ignores it. Everywhere else the only seed that
+			// can matter is the FRESH one, which an opening at exactly
+			// $1,000,000 commits to and every other Bid ignores.
+			//
+			// A live contention with no seed row passes `null`, and that is
+			// deliberate rather than defensive: a join is unaffected, and a
+			// dissolution throws out of `decide()` (AD-1) rather than
+			// releasing every Contender with the commitment still sealed.
+			const contentionSeed: ContentionSeed | null =
+				state.bid.contention === 'minimum_bid'
+					? state.sealedSeed === null
+						? null
+						: { kind: 'sealed', seed: state.sealedSeed }
+					: { kind: 'fresh', seed };
+
+			const decided = decide(state.bid, command, now.toISOString(), contentionSeed);
 
 			if (decided.kind === 'rejected') {
 				const refusal: BidRefusal = { kind: 'gates', gates: decided.gates };

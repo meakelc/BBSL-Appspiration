@@ -335,6 +335,23 @@ export type AuctionPageState = {
 	 * reachable from this process's queries at all.
 	 */
 	readonly seedHash: string | null;
+	/**
+	 * The REVEALED seed, off the `ContentionDissolved` event — `null` for
+	 * every Auction whose contention has not dissolved (Story 3.3).
+	 *
+	 * The reveal half of AD-14, and the counterpart of `seedHash` above: the
+	 * page prints the pair so a Manager who recorded the commitment when the
+	 * lottery opened can hash this value themselves and check it. It is the
+	 * fold's own value — nothing is hashed on this path and nothing is read
+	 * from `auction_contention_seeds`, which this connection's role holds no
+	 * privilege on. The seed reached the log through `decide()`, which
+	 * verified it against the commitment before publishing it.
+	 *
+	 * It rides `AuctionPageState` rather than `AuctionPageBidControl` because
+	 * no gate reads it: it is something the page STATES, not something the
+	 * browser decides from.
+	 */
+	readonly seed: string | null;
 	/** The current price, rendered, or `null` when there are no Bids. */
 	readonly price: string | null;
 	/** The Leading Bidder, Team spelled out with acting Manager, or `null`. */
@@ -593,6 +610,9 @@ export async function loadAuctionPage(
 			// commits to is in `auction_contention_seeds`, which this
 			// connection's role holds no privilege on.
 			seedHash: auction?.seedHash ?? null,
+			// The revealed seed, straight off the fold too. `null` until a
+			// `ContentionDissolved` is in the log for this Player.
+			seed: auction?.seed ?? null,
 			price: auction === null ? null : describeAmount(auction.leadingBid.amount),
 			leadingBidder:
 				auction === null
@@ -661,7 +681,14 @@ function readBidControl(
 	playerIsMinorLeagueEligible: boolean
 ): AuctionPageBidControl {
 	const state: BidState = bidStateFor(auction, team, playerIsMinorLeagueEligible);
-	const minimumLegal = minimumLegalBid(state);
+	// **The pre-fill depends on who is asking, since Story 3.3.** Inside a
+	// live Minimum-Bid Contention a Team not yet in can join at $1,000,000
+	// and a Team already in cannot — the only amount left to them is the one
+	// that dissolves it. `viewerTeamId` is already in hand here, so the
+	// figure follows the gates for the actual viewer rather than for a
+	// generic one; `null` is a viewer bound to no Team, refused as
+	// `unbound_actor` regardless.
+	const minimumLegal = minimumLegalBid(state, viewerTeamId);
 
 	const control = bidControlState({
 		state,

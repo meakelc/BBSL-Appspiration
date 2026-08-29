@@ -13,11 +13,16 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { AUCTION_EXPIRED, BID_PLACED_EVENT } from '../../src/lib/core/projection/auctions.ts';
+import {
+	AUCTION_EXPIRED,
+	BID_PLACED_EVENT,
+	CONTENTION_DISSOLVED_EVENT
+} from '../../src/lib/core/projection/auctions.ts';
 import { AUCTION_CLOSED_EVENT, NOMINATION_PLACED_EVENT } from '../../src/lib/core/projection/nominations.ts';
 import { parseMoney } from '../../src/lib/core/money.ts';
 import {
 	BID_READY,
+	bidControlState,
 	bidRefusalDetail,
 	bidStateFor,
 	evaluate
@@ -291,6 +296,9 @@ describe('loadAuctionPage — an open Auction', () => {
 			contenders: [],
 			contenderCount: 0,
 			seedHash: null,
+			// Story 3.3: nothing revealed either. No lottery ran here, so
+			// there is no dissolution and no seed to publish.
+			seed: null,
 			price: null,
 			leadingBidder: null,
 			closesAt: null,
@@ -1064,7 +1072,8 @@ describe('loadAuctionPage — the clock the expiry gate is decided against (Stor
 					closesAt: '2026-08-27T12:00:00.000Z',
 					bids: [],
 					contenders: [],
-					seedHash: null
+					seedHash: null,
+					seed: null
 				},
 				null,
 				false
@@ -1369,19 +1378,55 @@ describe('loadAuctionPage — a Minimum-Bid Contention (Story 3.2, AC7)', () => 
 		expect(auction?.bidControl.available).toBe(true);
 	});
 
-	it('disables the control for a Team that is ALREADY a Contender, with the reason', async () => {
+	it('pre-fills the CONVERSION amount for a Team already a Contender (Story 3.3)', async () => {
 		const harness = lotteryAuction();
 
-		// `t-2` joined at 10:00 and does not lead — so `contention` is the
-		// sole ground, and it is read on the BOARD rather than discovered at
-		// submission.
+		// `t-2` joined at 10:00. Joining again is refused by name, so the
+		// only amount left to them is the one that dissolves the contention —
+		// and the pre-fill follows the gates rather than being adjusted to
+		// match them. Story 3.2 disabled the control here, because there was
+		// no legal amount at all for a Team already in.
 		const auction = await loadAuctionPage(harness.gateway, 'p-1', 't-2');
 
-		expect(auction?.bidControl.available).toBe(false);
-		expect(auction?.bidControl.detail).toContain('already a Contender');
+		expect(auction?.bidControl.minimumLegal).toBe(1_500_000);
+		expect(auction?.bidControl.available).toBe(true);
+		expect(auction?.bidControl.detail).not.toContain('already a Contender');
 		// The Contender list still renders for them: the lottery is a fact
 		// about the Auction, not about who is looking at it.
 		expect(auction?.contenders).toEqual(['Lakers', 'Rockets', 'Bulls']);
+	});
+
+	it('still refuses a SECOND JOIN from that Team, typed rather than pre-filled', async () => {
+		// The pre-fill moved; the rule did not. `bidControlState` is the same
+		// function the surface calls on every keystroke, and $1,000,000 from
+		// a Team already in is still `already_contending`.
+		const harness = lotteryAuction();
+		const auction = await loadAuctionPage(harness.gateway, 'p-1', 't-2');
+		const control = auction?.bidControl;
+		if (control === undefined) throw new Error('no bid control');
+
+		const typed = bidControlState({
+			state: {
+				leadingBid:
+					control.leadingAmount === null || control.leadingTeamId === null
+						? null
+						: { teamId: control.leadingTeamId, amount: parseMoney(control.leadingAmount) },
+				closesAt: auction?.closesAt ?? null,
+				contention: control.contention,
+				seedHash: auction?.seedHash ?? null,
+				contenders: control.contenderTeamIds,
+				team: null,
+				playerIsMinorLeagueEligible: control.playerIsMinorLeagueEligible
+			},
+			fantraxPlayerId: 'p-1',
+			viewerTeamId: 't-2',
+			amountText: '1000000',
+			confirmed: true,
+			now: control.figuresAt
+		});
+
+		expect(typed.blocked).toBe(true);
+		expect(typed.detail).toContain('already a Contender');
 	});
 
 	it('renders the whole lottery for a viewer bound to NO Team', async () => {
@@ -1422,7 +1467,124 @@ describe('loadAuctionPage — a Minimum-Bid Contention (Story 3.2, AC7)', () => 
 		expect(auction?.contenders).toEqual([]);
 		expect(auction?.contenderCount).toBe(0);
 		expect(auction?.seedHash).toBeNull();
+		expect(auction?.seed).toBeNull();
 		expect(auction?.bidControl.contention).toBe('standard');
 		expect(auction?.bidControl.contenderTeamIds).toEqual([]);
+	});
+
+	it('reports no reveal at all while the contention is still LIVE', async () => {
+		// The seed is sealed in a table this read path holds no privilege on
+		// and never queries. Until a dissolution puts it in the log, there is
+		// nothing to serialise.
+		const harness = lotteryAuction();
+
+		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+
+		expect(auction?.seedHash).toBe('a'.repeat(64));
+		expect(auction?.seed).toBeNull();
+	});
+});
+
+// --- Story 3.3: the dissolved contention on the wire (AC5) -----------------
+
+/** The same lottery, converted by Team I at $1,500,000 and dissolved. */
+function dissolvedAuction() {
+	const opened = '2026-08-26T09:00:00.000Z';
+	const closes = '2026-08-27T09:00:00.000Z';
+	const convertedAt = '2026-08-26T12:30:00.000Z';
+	const resetClose = '2026-08-27T12:30:00.000Z';
+	return fakeGateway({
+		events: [
+			nominated(1, 'p-1', 'Jalen Green', 't-9', 'Celtics', 'm-9', NOMINATED_AT),
+			{
+				...bidPlaced(2, 'p-1', 't-1', 'Lakers', 'm-1', 1_000_000, opened, closes),
+				payload: {
+					fantraxPlayerId: 'p-1',
+					teamId: 't-1',
+					teamName: 'Lakers',
+					managerId: 'm-1',
+					amount: 1_000_000,
+					closesAt: closes,
+					seedHash: 'a'.repeat(64)
+				}
+			},
+			bidPlaced(3, 'p-1', 't-2', 'Rockets', 'm-2', 1_000_000, '2026-08-26T10:00:00.000Z', closes),
+			// The converting Bid: strictly higher, so it takes the lead and
+			// the fold reads `standard` off its amount.
+			bidPlaced(4, 'p-1', 't-3', 'Bulls', 'm-3', 1_500_000, convertedAt, resetClose),
+			logEvent(
+				5,
+				CONTENTION_DISSOLVED_EVENT,
+				{
+					fantraxPlayerId: 'p-1',
+					seed: 'the-revealed-seed',
+					seedHash: 'a'.repeat(64),
+					formerContenders: ['t-1', 't-2'],
+					convertingTeamId: 't-3',
+					amount: 1_500_000
+				},
+				convertedAt,
+				{ managerId: 'm-3', teamId: 't-3' }
+			)
+		],
+		freeAgents: [
+			{ fantraxPlayerId: 'p-1', playerName: 'Jalen Green', positions: 'SG', nbaTeam: 'HOU' }
+		],
+		managers: [
+			{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' },
+			{ id: 'm-2', teamId: 't-2', displayName: 'Sam' },
+			{ id: 'm-3', teamId: 't-3', displayName: 'Alex' }
+		]
+	});
+}
+
+describe('loadAuctionPage — a dissolved Minimum-Bid Contention (Story 3.3)', () => {
+	it('serialises the revealed seed beside the commitment it answers', async () => {
+		const auction = await loadAuctionPage(dissolvedAuction().gateway, 'p-1', VIEWER_TEAM);
+
+		expect(auction?.seed).toBe('the-revealed-seed');
+		expect(auction?.seedHash).toBe('a'.repeat(64));
+		// The state, the lead and the clock are the converting Bid's own
+		// arithmetic — the reveal wrote none of them.
+		expect(auction?.contention).toBe('Standard Contention.');
+		expect(auction?.leadingBidder).toBe('Bulls — Alex');
+		expect(auction?.price).toBe('$1.5M');
+		expect(auction?.closesAt).toBe('2026-08-27T12:30:00.000Z');
+	});
+
+	it('keeps the former Contenders on the wire, in join order', async () => {
+		// "The Contender list is discarded" is about commitment and the draw.
+		// The page names the Teams that were released beside the seed that
+		// will now never be drawn from.
+		const auction = await loadAuctionPage(dissolvedAuction().gateway, 'p-1', VIEWER_TEAM);
+
+		expect(auction?.contenders).toEqual(['Lakers', 'Rockets']);
+		expect(auction?.contenderCount).toBe(2);
+	});
+
+	it('renders the whole thing for a viewer bound to NO Team', async () => {
+		// A dissolution is a fact about the Auction, not about who is looking
+		// at it. The control is the only thing their session changes.
+		const auction = await loadAuctionPage(dissolvedAuction().gateway, 'p-1', null);
+
+		expect(auction?.seed).toBe('the-revealed-seed');
+		expect(auction?.seedHash).toBe('a'.repeat(64));
+		expect(auction?.contenders).toEqual(['Lakers', 'Rockets']);
+		expect(auction?.bidControl.available).toBe(false);
+		// The ACTUAL unbound refusal, from the core's own wording — not a
+		// substring almost any sentence in the panel's vocabulary satisfies.
+		expect(auction?.bidControl.detail).toBe(bidRefusalDetail({ kind: 'unbound_actor' }));
+	});
+
+	it('pre-fills one Minimum Increment over the converting amount', async () => {
+		// Ordinary ascending rules from here: $1.5M + $0.5M. A former
+		// Contender gets the identical figure — there is no lottery left for
+		// them to be already in.
+		for (const viewer of [VIEWER_TEAM, 't-1', 't-2']) {
+			const auction = await loadAuctionPage(dissolvedAuction().gateway, 'p-1', viewer);
+			expect(auction?.bidControl.minimumLegal, viewer).toBe(2_000_000);
+			expect(auction?.bidControl.contention, viewer).toBe('standard');
+			expect(auction?.bidControl.contenderTeamIds, viewer).toEqual(['t-1', 't-2']);
+		}
 	});
 });

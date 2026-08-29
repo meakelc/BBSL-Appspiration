@@ -261,10 +261,10 @@ export type OpeningGateOutcome = GateOutcome & {
  * arithmetic stops applying — there is no ascending raise to be short of, so
  * `increment` reports no rule applies — and what replaces it is a
  * classification of the offered amount against two fixed thresholds. Joining,
- * joining twice, the dead zone between the thresholds and the conversion this
- * story deliberately does not build are all the same question asked of the
- * same amount, and splitting them across four gates would let a caller be
- * handed three passes and one refusal about a single comparison.
+ * joining twice, the dead zone between the thresholds and the conversion that
+ * dissolves the whole thing are all the same question asked of the same
+ * amount, and splitting them across four gates would let a caller be handed
+ * three passes and one refusal about a single comparison.
  *
  * `entry` states which case this is, so the wording and the tests read one
  * field rather than re-deriving the comparisons:
@@ -278,12 +278,16 @@ export type OpeningGateOutcome = GateOutcome & {
  *    a Contender. Refused: a Team joins once, and every Contender holds the
  *    identical `$1,000,000`, so a second join would commit nothing new and
  *    buy a second chance at the draw.
- *  - `converts` — at or above `conversionAmount`. Refused, and named as
- *    deferred: dissolving a contention releases every Contender's commitment
- *    and reveals the seed (Story 3.3), and accepting this as an ordinary
- *    raise would do most of the first while leaving the seed sealed forever
- *    — which is exactly what AD-14's "no unopened commitment is left behind"
- *    forbids.
+ *  - `converts` — at or above `conversionAmount`. **PASSES since Story 3.3**:
+ *    this is the Bid that dissolves the contention. It was refused by name
+ *    until then, because accepting it as an ordinary raise would have
+ *    released every Contender's commitment while leaving the seed sealed
+ *    forever — exactly what AD-14's "no unopened commitment is left behind"
+ *    forbids. `decide()` now appends `ContentionDissolved` beside the
+ *    converting `BidPlaced`, revealing the seed against the published
+ *    commitment, so the objection no longer holds. The comparison did not
+ *    move and the case still names itself, so the panel's figure still says
+ *    which case this was and the chip beside it states the outcome.
  *  - `neither` — strictly between the two thresholds. Refused: too high to
  *    join, too low to convert. §10 example 10's dead zone, which under the
  *    $500,000 grid contains no on-grid amount at all, so `granularity`
@@ -305,7 +309,7 @@ export type ContentionGateOutcome = GateOutcome & {
 	readonly offered: Money;
 	/** Exactly this amount joins a contention — `MINIMUM_BID`. */
 	readonly joinAmount: Money;
-	/** At or above this converts one — `MINIMUM_BID + MINIMUM_INCREMENT` (3.3). */
+	/** At or above this dissolves one — `MINIMUM_BID + MINIMUM_INCREMENT`. */
 	readonly conversionAmount: Money;
 	/** How many Teams are Contenders already. `0` when no lottery is running. */
 	readonly contenderCount: number;

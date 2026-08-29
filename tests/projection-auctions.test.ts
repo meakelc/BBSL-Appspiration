@@ -12,8 +12,12 @@ import {
 	AUCTION_EXPIRED,
 	BID_PLACED_EVENT,
 	CONTENTION_CLOCK_UNMOVED,
+	CONTENTION_DISSOLVED,
+	CONTENTION_DISSOLVED_EVENT,
 	INITIAL_AUCTIONS,
 	MINIMUM_BID_CONTENTION_LABEL,
+	SEED_COMMITMENT_UNVERIFIABLE,
+	SEED_REVEALED,
 	auctionForPlayer,
 	auctionsReducer,
 	closeInstantFor,
@@ -21,7 +25,9 @@ import {
 	contenderCountSentence,
 	contentionForAmount,
 	contentionOf,
-	hasExpired
+	formerContenderSentence,
+	hasExpired,
+	wasDissolved
 } from '../src/lib/core/projection/auctions.ts';
 import { AUCTION_CLOSED_EVENT } from '../src/lib/core/projection/nominations.ts';
 import { fold } from '../src/lib/core/projection/fold.ts';
@@ -595,6 +601,207 @@ describe('seedHash — read defensively, and the FIRST one wins', () => {
 	});
 });
 
+/** One `ContentionDissolved`, as `decide()` builds its payload (Story 3.3). */
+function dissolved(
+	seq: number,
+	payload: unknown,
+	occurredAt = '2026-08-26T14:00:00.000Z'
+): AppendedEvent {
+	return event(seq, CONTENTION_DISSOLVED_EVENT, payload, occurredAt);
+}
+
+/** The payload of a well-formed reveal for `p-1`. */
+function reveal(seed: unknown = 'the-revealed-seed', fantraxPlayerId: unknown = 'p-1') {
+	return {
+		fantraxPlayerId,
+		seed,
+		seedHash: SEED_HASH,
+		formerContenders: ['t-1', 't-2'],
+		convertingTeamId: 't-3',
+		amount: 1_500_000
+	};
+}
+
+describe('ContentionDissolved — the reveal, folded and nothing else (Story 3.3)', () => {
+	it('records the revealed seed on the Auction the converting Bid dissolved', () => {
+		const auction = at([
+			bid(1, MINIMUM_BID, { teamId: 't-1', seedHash: SEED_HASH }),
+			bid(2, MINIMUM_BID, { teamId: 't-2' }),
+			bid(3, 1_500_000, { teamId: 't-3', teamName: 'Bulls' }),
+			dissolved(4, reveal())
+		]);
+
+		expect(auction?.seed).toBe('the-revealed-seed');
+		// ...and the contention, the lead and the clock are the CONVERTING
+		// BID's arithmetic, not this event's: the reveal writes nothing but
+		// the seed.
+		expect(auction?.contention).toBe('standard');
+		expect(auction?.leadingBid.teamId).toBe('t-3');
+		expect(auction?.seedHash).toBe(SEED_HASH);
+	});
+
+	it('is null until one is folded — almost every Auction has nothing revealed', () => {
+		expect(at([bid(1, 8_000_000)])?.seed).toBeNull();
+		expect(at([bid(1, MINIMUM_BID, { seedHash: SEED_HASH })])?.seed).toBeNull();
+	});
+
+	it('leaves the Contender list and the Bid history untouched', () => {
+		// **`contenders` is NOT cleared, and that is the rule.** "The
+		// Contender list is discarded" is about commitment and the draw:
+		// `teamMoneyStateFor` tests the contention STATE rather than the list
+		// being empty, so a dissolved contention commits nobody while keeping
+		// the history the reveal is about.
+		const log = [
+			bid(1, MINIMUM_BID, { teamId: 't-1', seedHash: SEED_HASH }),
+			bid(2, MINIMUM_BID, { teamId: 't-2', teamName: 'Rockets' }),
+			bid(3, 1_500_000, { teamId: 't-3', teamName: 'Bulls' })
+		];
+		const before = at(log);
+		const after = at([...log, dissolved(4, reveal())]);
+
+		expect(after?.contenders).toEqual(before?.contenders);
+		expect(after?.contenders.map((contender) => contender.teamId)).toEqual(['t-1', 't-2']);
+		expect(after?.bids).toEqual(before?.bids);
+		expect(after?.closesAt).toBe(before?.closesAt);
+	});
+
+	it('keeps the FIRST seed seen, so replay converges', () => {
+		const log = [
+			bid(1, MINIMUM_BID, { teamId: 't-1', seedHash: SEED_HASH }),
+			bid(2, 1_500_000, { teamId: 't-3' }),
+			dissolved(3, reveal('first')),
+			dissolved(4, reveal('second'))
+		];
+		expect(at(log)?.seed).toBe('first');
+		// Folding the same log twice converges on the same state.
+		expect(at([...log, ...log])?.seed).toBe('first');
+	});
+
+	it('is not erased by an ordinary Bid placed after the dissolution', () => {
+		const auction = at([
+			bid(1, MINIMUM_BID, { teamId: 't-1', seedHash: SEED_HASH }),
+			bid(2, 1_500_000, { teamId: 't-3' }),
+			dissolved(3, reveal()),
+			bid(4, 2_000_000, { teamId: 't-4', teamName: 'Heat' })
+		]);
+		expect(auction?.seed).toBe('the-revealed-seed');
+		expect(auction?.leadingBid.teamId).toBe('t-4');
+	});
+
+	it('nulls a malformed seed rather than throwing, and folds everything else', () => {
+		for (const malformed of [null, 42, {}, [], true, '']) {
+			const log = [
+				bid(1, MINIMUM_BID, { teamId: 't-1', seedHash: SEED_HASH }),
+				bid(2, 1_500_000, { teamId: 't-3' }),
+				dissolved(3, reveal(malformed))
+			];
+			const label = JSON.stringify(malformed) ?? 'undefined';
+			expect(() => at(log), label).not.toThrow();
+			expect(at(log)?.seed, label).toBeNull();
+			// The Auction is otherwise exactly where the converting Bid left
+			// it: a corrupt payload in an insert-only log is not this fold's
+			// to crash over.
+			expect(at(log)?.contention, label).toBe('standard');
+			expect(at(log)?.leadingBid.teamId, label).toBe('t-3');
+		}
+		// ...and the same for a payload with no `seed` key at all, which is a
+		// different JSON shape from one carrying `null`.
+		const noKey = [
+			bid(1, MINIMUM_BID, { teamId: 't-1', seedHash: SEED_HASH }),
+			bid(2, 1_500_000, { teamId: 't-3' }),
+			dissolved(3, { fantraxPlayerId: 'p-1', convertingTeamId: 't-3' })
+		];
+		expect(at(noKey)?.seed).toBeNull();
+		expect(at(noKey)?.contention).toBe('standard');
+	});
+
+	it('skips an event naming no Player, and one naming a Player with no Auction', () => {
+		const opened = [
+			bid(1, MINIMUM_BID, { teamId: 't-1', seedHash: SEED_HASH }),
+			bid(2, 1_500_000, { teamId: 't-3' })
+		];
+		for (const payload of [
+			null,
+			42,
+			'nonsense',
+			{},
+			reveal('s', ''),
+			reveal('s', 7),
+			reveal('s', 'p-nobody-bid-on')
+		]) {
+			const label = JSON.stringify(payload) ?? 'null';
+			expect(() => at([...opened, dissolved(3, payload)]), label).not.toThrow();
+			expect(at([...opened, dissolved(3, payload)])?.seed, label).toBeNull();
+		}
+		// ...and no Auction is invented for the Player it named.
+		expect(at([...opened, dissolved(3, reveal('s', 'p-9'))], 'p-9')).toBeNull();
+	});
+
+	it('records NOTHING on an Auction that never ran a lottery', () => {
+		// A hand-written or corrupt `ContentionDissolved` naming an ordinary
+		// Auction must not set `seed`: that would make `wasDissolved` true and
+		// put a dissolution block — former Contenders, a revealed seed, a
+		// published hash — on a page whose Auction had none of those things.
+		const ordinary = [bid(1, 8_000_000, { teamId: 't-1' }), bid(2, 9_000_000, { teamId: 't-2' })];
+		const auction = at([...ordinary, dissolved(3, reveal())]);
+
+		expect(auction?.seed).toBeNull();
+		expect(auction?.contenders).toEqual([]);
+		expect(auction === null ? true : wasDissolved(auction)).toBe(false);
+		// ...and the Auction is otherwise untouched.
+		expect(auction?.leadingBid.teamId).toBe('t-2');
+		expect(auction?.contention).toBe('standard');
+	});
+
+	it('is guarded on the CONTENDER LIST, not on the contention state', () => {
+		// The distinction is load-bearing. By the time this case runs the
+		// converting `BidPlaced` has already folded and moved the Auction to
+		// `standard`, so a guard on `contention !== 'minimum_bid'` would
+		// reject every genuine dissolution there is. `contenders` is never
+		// cleared, so a non-empty list is the one durable evidence that a
+		// lottery ran here — before and after the dissolution alike.
+		const log = [
+			bid(1, MINIMUM_BID, { teamId: 't-1', seedHash: SEED_HASH }),
+			bid(2, 1_500_000, { teamId: 't-3' })
+		];
+		// The state at the moment the reveal is folded is already `standard`...
+		expect(at(log)?.contention).toBe('standard');
+		// ...and the list is still there, which is why the reveal lands.
+		expect(at(log)?.contenders).toHaveLength(1);
+		expect(at([...log, dissolved(3, reveal())])?.seed).toBe('the-revealed-seed');
+	});
+
+	it('changes nothing at all when no Bid has been folded for that Player', () => {
+		const state = fold(INITIAL_AUCTIONS, [dissolved(1, reveal())], auctionsReducer);
+		expect(state.byPlayer).toEqual({});
+	});
+});
+
+describe('wasDissolved — the ONE derivation, so no surface assembles it', () => {
+	it('is true only for a standard Auction with a revealed seed', () => {
+		expect(wasDissolved({ contention: 'standard', seed: 'a-seed' })).toBe(true);
+		// A live lottery: the seed is still sealed, so the fold has none.
+		expect(wasDissolved({ contention: 'minimum_bid', seed: null })).toBe(false);
+		// An Auction that never ran one.
+		expect(wasDissolved({ contention: 'standard', seed: null })).toBe(false);
+		expect(wasDissolved({ contention: 'awaiting_opening_bid', seed: null })).toBe(false);
+		// Neither half alone is the answer.
+		expect(wasDissolved({ contention: 'minimum_bid', seed: 'a-seed' })).toBe(false);
+	});
+
+	it('agrees with the fold, end to end', () => {
+		const live = at([bid(1, MINIMUM_BID, { teamId: 't-1', seedHash: SEED_HASH })]);
+		expect(live === null ? false : wasDissolved(live)).toBe(false);
+
+		const gone = at([
+			bid(1, MINIMUM_BID, { teamId: 't-1', seedHash: SEED_HASH }),
+			bid(2, 1_500_000, { teamId: 't-3' }),
+			dissolved(3, reveal())
+		]);
+		expect(gone === null ? false : wasDissolved(gone)).toBe(true);
+	});
+});
+
 describe('contentionForAmount — the ONE derivation the reducer and decide() share', () => {
 	it('is minimum_bid at exactly the minimum and standard everywhere above it', () => {
 		expect(contentionForAmount(MINIMUM_BID as never)).toBe('minimum_bid');
@@ -631,5 +838,58 @@ describe('the lottery’s own wording, beside the fold that decides it', () => {
 		expect(contenderCountSentence(4)).toBe('4 Contenders so far.');
 		// Never "1 Contenders".
 		expect(contenderCountSentence(1)).not.toContain('Contenders');
+	});
+
+	it('words the FORMER Contender count in the past tense, never "so far"', () => {
+		// A dissolved contention takes no further join, so a sentence
+		// implying more may arrive would be false.
+		expect(formerContenderSentence(0)).toBe(
+			'No Teams had joined this contention when it dissolved.'
+		);
+		expect(formerContenderSentence(1)).toBe('One Team contended before this contention dissolved.');
+		expect(formerContenderSentence(4)).toBe('4 Teams contended before this contention dissolved.');
+		for (const count of [0, 1, 4]) {
+			expect(formerContenderSentence(count), String(count)).not.toContain('so far');
+		}
+	});
+
+	it('does not claim each of them was RELEASED — one of them may now lead', () => {
+		// FR-19 permits a Contender to be the converting bidder, and the count
+		// this sentence words is the whole list. On the page it sits above a
+		// Leading Bidder line that may name one of the very Teams it is
+		// describing, so a release claim would be false about one of them
+		// beside the evidence that it is false. What they have in common is
+		// that they contended.
+		for (const count of [0, 1, 4]) {
+			expect(formerContenderSentence(count), String(count)).not.toMatch(/releas/i);
+		}
+		expect(formerContenderSentence(4)).toContain('contended');
+	});
+
+	it('states what a dissolution IS, quoting no figure of any kind', () => {
+		expect(CONTENTION_DISSOLVED).toContain('dissolved');
+		expect(CONTENTION_DISSOLVED).toContain('Standard Contention');
+		expect(CONTENTION_DISSOLVED).toContain('Minimum Increment');
+		expect(CONTENTION_DISSOLVED).toContain('released');
+		// Every figure renders beside it from the fold's own values; one
+		// restated here would be a second copy that could disagree.
+		expect(CONTENTION_DISSOLVED).not.toMatch(/\$|\d/);
+	});
+
+	it('states what the revealed seed IS, and that no draw ran', () => {
+		expect(SEED_REVEALED).toContain('revealed');
+		expect(SEED_REVEALED).toContain('commitment');
+		// A revealed seed beside a Contender list would otherwise read as a
+		// draw result.
+		expect(SEED_REVEALED).toContain('No draw was run');
+		expect(SEED_REVEALED).not.toMatch(/\$/);
+	});
+
+	it('has its OWN sentence for a commitment that folded to null', () => {
+		expect(SEED_COMMITMENT_UNVERIFIABLE).toContain('No commitment was published');
+		expect(SEED_COMMITMENT_UNVERIFIABLE).toContain('nothing to check');
+		// The two are printed instead of one another, never together, so
+		// neither may claim what the other denies.
+		expect(SEED_COMMITMENT_UNVERIFIABLE).not.toContain('the two must match');
 	});
 });

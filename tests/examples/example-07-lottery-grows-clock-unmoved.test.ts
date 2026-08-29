@@ -43,7 +43,11 @@ import {
 	decide,
 	evaluate
 } from '../../src/lib/core/rules/bidding.ts';
-import type { BidPlacedPayload, TeamMoneyState } from '../../src/lib/core/rules/bidding.ts';
+import type {
+	BidPlacedPayload,
+	ContentionSeed,
+	TeamMoneyState
+} from '../../src/lib/core/rules/bidding.ts';
 import type { AppendedEvent, PlaceBid } from '../../src/lib/core/types.ts';
 
 /** 09:00 Monday, and the close it fixes: 09:00 Tuesday. */
@@ -58,6 +62,15 @@ const JOINS: ReadonlyArray<readonly [teamId: string, teamName: string, at: strin
 	// lottery by nearly a whole day, which is exactly what must not happen.
 	['t-h', 'Team H', '2026-08-25T08:55:00.000Z']
 ];
+
+/**
+ * The two seeds, as `decide()` receives them since Story 3.3: the FRESH
+ * half of the commit-reveal, which only an opening at exactly $1,000,000
+ * commits to. A join publishes nothing from either, which is half of what
+ * this file proves.
+ */
+const OPENING_SEED: ContentionSeed = { kind: 'fresh', seed: '1'.repeat(64) };
+const JOIN_SEED: ContentionSeed = { kind: 'fresh', seed: '2'.repeat(64) };
 
 const RICH: TeamMoneyState = {
 	capSpace: parseMoney(SALARY_CAP),
@@ -115,7 +128,7 @@ function runTheLottery(): {
 		bidStateFor(null, RICH, false),
 		joinCommand('t-e', 'Team E'),
 		OPENED_AT,
-		'1'.repeat(64)
+		OPENING_SEED
 	);
 	if (opening.kind !== 'accepted') throw new Error('the Opening Bid was refused');
 	const openingPayload = opening.events[0]?.payload as BidPlacedPayload;
@@ -131,7 +144,7 @@ function runTheLottery(): {
 			// A seed is supplied on every call, exactly as the shell does. A
 			// join publishes nothing from it, which is half of what this file
 			// proves.
-			'2'.repeat(64)
+			JOIN_SEED
 		);
 		if (decided.kind !== 'accepted') throw new Error(`${teamName}'s join was refused`);
 		const payload = decided.events[0]?.payload as BidPlacedPayload;
@@ -149,7 +162,7 @@ describe('§10 example 7 — the lottery grows and the clock does not move', () 
 			bidStateFor(null, RICH, false),
 			joinCommand('t-e', 'Team E'),
 			OPENED_AT,
-			'1'.repeat(64)
+			OPENING_SEED
 		);
 		if (opening.kind !== 'accepted') throw new Error('the Opening Bid was refused');
 		log.push(appended(1, OPENED_AT, opening.events[0]?.payload as BidPlacedPayload));
@@ -167,7 +180,7 @@ describe('§10 example 7 — the lottery grows and the clock does not move', () 
 			expect(gates.increment.currentHigh, teamName).toBeNull();
 			expect(gates.increment.minimumLegal, teamName).toBeNull();
 
-			const decided = decide(state, joinCommand(teamId, teamName), at, '2'.repeat(64));
+			const decided = decide(state, joinCommand(teamId, teamName), at, JOIN_SEED);
 			if (decided.kind !== 'accepted') throw new Error(`${teamName}'s join was refused`);
 			log.push(appended(index + 2, at, decided.events[0]?.payload as BidPlacedPayload));
 		}

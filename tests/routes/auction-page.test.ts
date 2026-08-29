@@ -599,14 +599,25 @@ describe('the Auction page — the lottery it renders', () => {
 	it('publishes the commitment with the core’s sentence and the fold’s digest', () => {
 		expect(PAGE).toContain('{SEED_COMMITMENT}');
 		expect(PAGE).toContain('{auction.seedHash}');
-		// The page never hashes anything, and the only seed-shaped value it
-		// can reach is the published DIGEST off the fold — the raw seed lives
-		// in a table this process holds no privilege on and never queries, so
-		// there is nothing here for it to name.
+		// The page never hashes anything, and every seed-shaped value it can
+		// reach is one the LOG already published: the commitment off the fold,
+		// and — once a contention has dissolved — the seed the reveal put
+		// there. A seed that is still sealed lives in a table this process
+		// holds no privilege on and never queries, so there is nothing here
+		// for it to name.
 		expect(PAGE_CODE).not.toMatch(/\bhash\(/);
-		expect(PAGE_CODE).not.toMatch(/\bseed\s*[:=]/i);
-		// Not worded here either: the sentence is imported, never spelled.
+		expect(PAGE_CODE).not.toMatch(/sha256|crypto|subtle/i);
+		// Every seed VALUE this file reads is a field off the wire and
+		// nothing else — `.seed` and `.seedHash`, both of them values the LOG
+		// already published. There is no third accessor, so there is nowhere
+		// for a derived or assembled one to appear. (`.seed-hash` is the CSS
+		// class, which the same two characters happen to start.)
+		for (const mention of PAGE_CODE.matchAll(/\.\s*seed[A-Za-z]*/g)) {
+			expect(['.seed', '.seedHash'], mention[0]).toContain(mention[0]);
+		}
+		// Not worded here either: the sentences are imported, never spelled.
 		expect(PAGE_CODE).not.toMatch(/sealed where no role/);
+		expect(PAGE_CODE).not.toMatch(/Hash the seed yourself/);
 	});
 
 	it('decides the lottery from the fold’s own state literal, not from a shipped flag', () => {
@@ -655,6 +666,96 @@ describe('the Auction page — the lottery it renders', () => {
 		const lottery = block.slice(0, end);
 		expect(lottery).not.toMatch(/viewerTeamId/);
 		expect(lottery).not.toMatch(/control\.available/);
+	});
+});
+
+// --- Story 3.3: the dissolution the same panel renders (AC5) ---------------
+
+describe('the Auction page — the dissolution it renders', () => {
+	it('decides it from the core’s ONE predicate, never by assembling the two facts', () => {
+		// A surface combining `seed !== null && contention === 'standard'`
+		// would be a second statement of what a dissolution IS, in the file
+		// furthest from the fold that produces it.
+		expect(PAGE).toContain('wasDissolved({');
+		expect(PAGE).toMatch(/const dissolved = \$derived\(/);
+		expect(PAGE_CODE).not.toMatch(/seed !== null && /);
+	});
+
+	it('shows no accent bar and no live Contender list once it has dissolved', () => {
+		// `isContention` is the fold's own state literal, and a dissolved
+		// Auction reads `standard` — so the bar, the icon, the label, the
+		// live count and the clock statement are all gone by construction
+		// rather than by a second condition.
+		expect(PAGE).toContain('class:lottery={isContention}');
+		const live = PAGE.slice(
+			PAGE.indexOf('{#if isContention}', PAGE.indexOf('class:lottery={isContention}'))
+		);
+		const liveEnd = live.indexOf('{#if dissolved}');
+		expect(liveEnd).toBeGreaterThan(0);
+		// The live half and the dissolved half are separate blocks: one is
+		// running or the other is over, never both.
+		expect(live.slice(0, liveEnd)).toContain('auction-contender-count');
+		expect(live.slice(0, liveEnd)).toContain('CONTENTION_CLOCK_UNMOVED');
+	});
+
+	it('states the dissolution, the former Contenders, the seed and the hash', () => {
+		const block = PAGE.slice(PAGE.indexOf('{#if dissolved}'));
+		expect(block).toContain('{CONTENTION_DISSOLVED}');
+		expect(block).toContain('formerContenderSentence(auction.contenderCount)');
+		expect(block).toContain('id="auction-former-contenders"');
+		expect(block).toContain('{auction.seed}');
+		expect(block).toContain('id="auction-published-hash">{auction.seedHash}');
+	});
+
+	it('renders the former Contenders in the server’s order, never re-sorted', () => {
+		// AD-14 makes the join order an input to a winner, so a surface that
+		// reordered it would be showing a list the draw would not have run
+		// over — which is exactly what the reveal beside it invites a Manager
+		// to check.
+		const block = PAGE.slice(PAGE.indexOf('{#if dissolved}'));
+		expect(block).toMatch(/\{#each auction\.contenders as contender, position \(position\)\}/);
+		expect(block).not.toMatch(/auction\.contenders\.(sort|reverse|toSorted)/);
+	});
+
+	it('prints ONE seed sentence or the other, never both', () => {
+		// A commitment that folded to null has nothing to check the reveal
+		// against. Two sentences making opposite claims about the same value
+		// is the one thing this page may not do.
+		const block = PAGE.slice(PAGE.indexOf('{#if dissolved}'));
+		expect(block).toMatch(
+			/auction\.seedHash === null \? SEED_COMMITMENT_UNVERIFIABLE : SEED_REVEALED/
+		);
+		// ...and neither is worded here.
+		expect(PAGE_CODE).not.toMatch(/nothing to check this/);
+		expect(PAGE_CODE).not.toMatch(/No draw was run/);
+		expect(PAGE_CODE).not.toMatch(/Minimum-Bid Contention dissolved/);
+	});
+
+	it('renders the whole block for every viewer — it hangs off no Team fact', () => {
+		// A dissolution is a fact about the Auction, not about who is looking
+		// at it. The block is conditional on `dissolved` alone.
+		const block = PAGE.slice(PAGE.indexOf('{#if dissolved}'));
+		const end = block.indexOf('</section>');
+		const dissolution = block.slice(0, end);
+		expect(dissolution).not.toMatch(/viewerTeamId/);
+		expect(dissolution).not.toMatch(/control\.available/);
+	});
+
+	it('adds no new CSS rule at all — it reuses `.contenders` and `.seed-hash`', () => {
+		// Every class the dissolution block uses already existed for the
+		// lottery. A new token or a new sizing literal is an Ask First item,
+		// and the exact-list guard below would fail on one anyway.
+		const style = PAGE.slice(PAGE.indexOf('<style>'));
+		for (const invented of ['.dissolved', '.dissolution', '.former-contenders', '.revealed-seed']) {
+			expect(style, invented).not.toContain(invented);
+		}
+	});
+
+	it('rebuilds the gate state with the published commitment, for the same evaluate()', () => {
+		// `BidState` gained `seedHash` so `decide()` can verify a reveal
+		// against it inside the lock. It is public and already on the wire,
+		// so the browser rebuilds exactly the state the transaction will.
+		expect(PAGE).toMatch(/seedHash: auction\.seedHash/);
 	});
 });
 
