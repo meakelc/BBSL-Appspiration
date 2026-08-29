@@ -20,6 +20,7 @@ import {
 import {
 	AUCTION_EXPIRED,
 	BID_PLACED_EVENT,
+	CONTENTION_DISSOLVED_EVENT,
 	contentionForAmount
 } from '../../src/lib/core/projection/auctions.ts';
 import type { Auction, Bid, Contender } from '../../src/lib/core/projection/auctions.ts';
@@ -51,6 +52,8 @@ import {
 import type {
 	BidPlacedPayload,
 	BidState,
+	ContentionDissolvedPayload,
+	ContentionSeed,
 	TeamMoneyState
 } from '../../src/lib/core/rules/bidding.ts';
 import { PLACE_BID_GATES } from '../../src/lib/core/types.ts';
@@ -87,6 +90,42 @@ const NOW = '2026-08-26T09:00:00.000Z';
  * is `hash(seed)`, and the raw string must never appear in an event.
  */
 const SEED = 'a3f19c0d5b7e2481a3f19c0d5b7e2481a3f19c0d5b7e2481a3f19c0d5b7e2481';
+
+/**
+ * `SEED`, as `decide()` receives it since Story 3.3: the FRESH half of the
+ * commit-reveal, which only an opening at exactly `MINIMUM_BID` commits to.
+ *
+ * A union rather than a bare string, because the two halves are never both
+ * meaningful — `fresh` needs `leadingBid === null`, `sealed` needs a live
+ * contention — and a shell that supplies the wrong one is a bug that throws.
+ */
+const FRESH: ContentionSeed = { kind: 'fresh', seed: SEED };
+
+/**
+ * The seed a live Minimum-Bid Contention sealed, and the commitment
+ * `contentionWith` publishes for it.
+ *
+ * The pair is derived rather than written out — `hash(LOTTERY_SEED)` is the
+ * fixture's `seedHash` — so a dissolution against it verifies for the real
+ * reason rather than because two literals were typed to match.
+ */
+const LOTTERY_SEED = '5c1de9074b2a38f65c1de9074b2a38f65c1de9074b2a38f65c1de9074b2a38f6';
+
+/** ...as `decide()` receives it on a dissolution: the SEALED half. */
+const SEALED: ContentionSeed = { kind: 'sealed', seed: LOTTERY_SEED };
+
+/**
+ * Which half `server/bidding.ts` would hand `decide()` for a given state.
+ *
+ * The shell's own rule, written out once here so a test that is about
+ * something else does not have to think about the seed: `sealed` inside a
+ * live contention, because a dissolution can only arrive from one, and
+ * `fresh` everywhere else, because only an opening at exactly `MINIMUM_BID`
+ * commits to one.
+ */
+function seedAsTheShellWould(state: BidState): ContentionSeed {
+	return state.contention === 'minimum_bid' ? SEALED : FRESH;
+}
 
 /** One leading Bid, as `auctionsReducer` would have folded it. */
 function leading(amount: number, teamId = 't-1'): Bid {
@@ -146,7 +185,9 @@ function standardAt(amount: number, teamId = 't-1'): BidState {
 		closesAt: bid.closesAt,
 		bids: [bid],
 		contenders: contendersOf([bid]),
-		seedHash: null
+		seedHash: null,
+		// Nothing revealed: no contention has dissolved on this fixture.
+		seed: null
 	};
 	// Narrowed through the core's own bridge, so these fixtures exercise the
 	// same path `server/bidding.ts` and `server/auction-page.ts` take.
@@ -171,8 +212,11 @@ function contentionWith(joiners: readonly string[] = []): BidState {
 		amount: parseMoney(MINIMUM_BID),
 		occurredAt: '2026-08-26T08:00:00.000Z',
 		closesAt: '2026-08-27T08:00:00.000Z',
-		// The published commitment rides the opening Bid and nothing else.
-		seedHash: 'f'.repeat(64)
+		// The published commitment rides the opening Bid and nothing else, and
+		// it is DERIVED from the sealed seed above rather than written out —
+		// so a dissolution tested against this fixture verifies for the real
+		// reason.
+		seedHash: hash(LOTTERY_SEED)
 	};
 	const bids: Bid[] = [opener];
 	joiners.forEach((teamId, index) => {
@@ -195,7 +239,10 @@ function contentionWith(joiners: readonly string[] = []): BidState {
 		closesAt: opener.closesAt,
 		bids,
 		contenders: contendersOf(bids),
-		seedHash: opener.seedHash
+		seedHash: opener.seedHash,
+		// The contention is LIVE: the seed is still sealed where no role can
+		// read it, so the fold has seen no reveal.
+		seed: null
 	};
 	return bidStateFor(auction, RICH, false);
 }
@@ -304,15 +351,17 @@ describe('decide — reaches its outcome only by calling evaluate (AC1)', () => 
 			// Story 3.2: a join, and a join by a Team already in.
 			[standardAt(1_000_000), 1_000_000, 't-2'],
 			[standardAt(1_000_000, 't-2'), 1_000_000, 't-2'],
+			// Story 3.3: the conversion, which now ACCEPTS and dissolves.
 			[standardAt(1_000_000), 2_000_000, 't-2']
 		];
 		for (const [state, amount, teamId] of cases) {
 			const gates = evaluate(state, command(amount, teamId), NOW);
-			// A seed is supplied for every case, because one of them opens a
-			// contention and a `null` seed there is a shell bug that throws
-			// rather than a refusal (AD-1). The seed is ignored by every
-			// other case.
-			const decided = decide(state, command(amount, teamId), NOW, SEED);
+			// The seed is chosen exactly as `server/bidding.ts` chooses it —
+			// `sealed` inside a live contention, `fresh` everywhere else —
+			// because a missing or wrong-kinded seed is a shell bug that
+			// THROWS rather than a refusal (AD-1), and this test is about
+			// which outcomes are accepted rather than about the seed.
+			const decided = decide(state, command(amount, teamId), NOW, seedAsTheShellWould(state));
 			expect(decided.kind, `${String(amount)} / ${teamId}`).toBe(
 				allGatesPassed(gates) ? 'accepted' : 'rejected'
 			);
@@ -338,7 +387,7 @@ describe('decide — reaches its outcome only by calling evaluate (AC1)', () => 
 
 	it('ignores the seed entirely — a PlaceBid has no randomness in it', () => {
 		const a = decide(standardAt(8_000_000), command(8_500_000), NOW, null);
-		const b = decide(standardAt(8_000_000), command(8_500_000), NOW, 'a-seed');
+		const b = decide(standardAt(8_000_000), command(8_500_000), NOW, FRESH);
 		expect(a).toEqual(b);
 	});
 });
@@ -402,7 +451,7 @@ describe('decide — the one BidPlaced it emits (AC4)', () => {
 	// --- Story 3.2: the seed, and the clock a join must not move ------------
 
 	it('publishes hash(seed) on the Bid that OPENS a contention, and the seed itself nowhere', () => {
-		const decided = decide(NO_BIDS, command(MINIMUM_BID), NOW, SEED);
+		const decided = decide(NO_BIDS, command(MINIMUM_BID), NOW, FRESH);
 		if (decided.kind !== 'accepted') throw new Error('expected acceptance');
 		const payload = decided.events[0]?.payload as BidPlacedPayload;
 
@@ -420,7 +469,7 @@ describe('decide — the one BidPlaced it emits (AC4)', () => {
 			['an opening above the minimum', NO_BIDS, 1_500_000],
 			['a join', contentionWith(['t-3']), MINIMUM_BID]
 		] as const) {
-			const decided = decide(state, command(amount, 't-2'), NOW, SEED);
+			const decided = decide(state, command(amount, 't-2'), NOW, FRESH);
 			if (decided.kind !== 'accepted') throw new Error(`expected acceptance: ${label}`);
 			const payload = decided.events[0]?.payload as BidPlacedPayload;
 			// Absent, not null: the overwhelming majority of Bids have no
@@ -452,7 +501,7 @@ describe('decide — the one BidPlaced it emits (AC4)', () => {
 		// instants and nothing else (AD-12).
 		const state = contentionWith(['t-3']);
 		const joinedAt = '2026-08-26T20:00:00.000Z';
-		const decided = decide(state, command(MINIMUM_BID, 't-2'), joinedAt, SEED);
+		const decided = decide(state, command(MINIMUM_BID, 't-2'), joinedAt, SEALED);
 		if (decided.kind !== 'accepted') throw new Error('expected acceptance');
 		const payload = decided.events[0]?.payload as BidPlacedPayload;
 
@@ -467,10 +516,133 @@ describe('decide — the one BidPlaced it emits (AC4)', () => {
 			['an opening', NO_BIDS, MINIMUM_BID],
 			['a raise', standardAt(8_000_000), 8_500_000]
 		] as const) {
-			const decided = decide(state, command(amount, 't-2'), NOW, SEED);
+			const decided = decide(state, command(amount, 't-2'), NOW, FRESH);
 			if (decided.kind !== 'accepted') throw new Error(`expected acceptance: ${label}`);
 			const payload = decided.events[0]?.payload as BidPlacedPayload;
 			expect(Date.parse(payload.closesAt) - Date.parse(NOW), label).toBe(AUCTION_CLOCK);
+		}
+	});
+
+	// --- Story 3.3: the dissolution, and the reveal it verifies first -------
+
+	it('emits TWO events on a dissolution, in the order BidPlaced then ContentionDissolved', () => {
+		const state = contentionWith(['t-3', 't-4']);
+		const decided = decide(state, command(1_500_000, 't-2'), NOW, SEALED);
+		if (decided.kind !== 'accepted') throw new Error('the dissolution was refused');
+
+		// Cause, then consequence: a log read in `seq` order states the Bid
+		// that dissolved the contention before it states the dissolution.
+		expect(decided.events).toHaveLength(2);
+		expect(decided.events[0]?.type).toBe(BID_PLACED_EVENT);
+		expect(decided.events[1]?.type).toBe(CONTENTION_DISSOLVED_EVENT);
+		// Both name the acting Manager and Team, so the log attributes the
+		// consequence to whoever caused it.
+		for (const event of decided.events) {
+			expect(event.managerId).toBe('m-2');
+			expect(event.teamId).toBe('t-2');
+		}
+	});
+
+	it('carries the reveal, the commitment and the ordered former Contenders on the second', () => {
+		const state = contentionWith(['t-3', 't-4']);
+		const decided = decide(state, command(1_500_000, 't-2'), NOW, SEALED);
+		if (decided.kind !== 'accepted') throw new Error('the dissolution was refused');
+
+		expect(decided.events[1]?.payload).toEqual({
+			fantraxPlayerId: 'p-1',
+			seed: LOTTERY_SEED,
+			seedHash: hash(LOTTERY_SEED),
+			// The fold's own order — the opener first, then each joiner
+			// (AD-14). Ids, because that is what a dispatcher resolves a
+			// destination from and what `BidState` narrows the list to.
+			formerContenders: ['t-1', 't-3', 't-4'],
+			convertingTeamId: 't-2',
+			amount: 1_500_000
+		} satisfies ContentionDissolvedPayload);
+	});
+
+	it('puts the raw seed in the DISSOLUTION and in no BidPlaced payload', () => {
+		const decided = decide(contentionWith(['t-3']), command(2_000_000, 't-2'), NOW, SEALED);
+		if (decided.kind !== 'accepted') throw new Error('the dissolution was refused');
+
+		const bid = decided.events[0]?.payload as BidPlacedPayload;
+		expect(Object.keys(bid)).not.toContain('seedHash');
+		expect(JSON.stringify(bid)).not.toContain(LOTTERY_SEED);
+		// ...and the converting Bid is an ordinary one in every other respect.
+		expect(bid.amount).toBe(2_000_000);
+	});
+
+	it('computes a FRESH close on a dissolution — the FR-19 24-hour reset, with no line for it', () => {
+		// A dissolution is not a join, so `decide()`'s existing branch already
+		// computes `closeInstantFor(now, AUCTION_CLOCK)` for it. This is a
+		// fact to test rather than code to write.
+		const state = contentionWith(['t-3']);
+		const decided = decide(state, command(1_500_000, 't-2'), NOW, SEALED);
+		if (decided.kind !== 'accepted') throw new Error('the dissolution was refused');
+		const payload = decided.events[0]?.payload as BidPlacedPayload;
+
+		expect(Date.parse(payload.closesAt) - Date.parse(NOW)).toBe(AUCTION_CLOCK);
+		// Emphatically NOT the contention's fixed close, which every join
+		// stamped.
+		expect(payload.closesAt).not.toBe(state.closesAt);
+	});
+
+	it('THROWS when a dissolution arrives with no sealed seed at all (AD-1)', () => {
+		// A shell that failed to read the seed is a bug, and the failure it
+		// would otherwise cause is the one AD-14 cannot survive: every
+		// Contender released with the commitment never opened.
+		const state = contentionWith(['t-3']);
+		expect(() => decide(state, command(1_500_000, 't-2'), NOW, null)).toThrow(TypeError);
+		// ...and a FRESH seed is not a sealed one. The kinds are not
+		// interchangeable, which is the whole reason the parameter is a union.
+		expect(() => decide(state, command(1_500_000, 't-2'), NOW, FRESH)).toThrow(TypeError);
+	});
+
+	it('THROWS when the sealed seed does not hash to the published commitment', () => {
+		const state = contentionWith(['t-3']);
+		const wrong: ContentionSeed = { kind: 'sealed', seed: 'not the sealed seed' };
+
+		expect(() => decide(state, command(1_500_000, 't-2'), NOW, wrong)).toThrow(TypeError);
+		// The message names BOTH digests, so whoever reads it can see which
+		// value went wrong. Both are public, so naming them leaks nothing.
+		try {
+			decide(state, command(1_500_000, 't-2'), NOW, wrong);
+			throw new Error('expected a throw');
+		} catch (error) {
+			const message = String(error);
+			expect(message).toContain(hash('not the sealed seed'));
+			expect(message).toContain(hash(LOTTERY_SEED));
+			// ...and the seed itself is not in it: a message is not a reveal.
+			expect(message).not.toContain(LOTTERY_SEED);
+		}
+	});
+
+	it('REVEALS against a commitment that folded to null rather than stranding the Auction', () => {
+		// A corrupt log: a live contention whose opening Bid published no
+		// commitment. There is nothing to verify against, and refusing would
+		// leave the Auction in a contention forever with nothing able to
+		// dissolve it. The page says the reveal is unverifiable.
+		const live = contentionWith(['t-3']);
+		const state: BidState = { ...live, seedHash: null };
+		const decided = decide(state, command(1_500_000, 't-2'), NOW, SEALED);
+		if (decided.kind !== 'accepted') throw new Error('the dissolution was refused');
+
+		const payload = decided.events[1]?.payload as ContentionDissolvedPayload;
+		expect(payload.seed).toBe(LOTTERY_SEED);
+		expect(payload.seedHash).toBeNull();
+	});
+
+	it('emits ONE event for every Bid that is not a dissolution', () => {
+		for (const [label, state, amount, seed] of [
+			['an opening at the minimum', NO_BIDS, MINIMUM_BID, FRESH],
+			['an opening above it', NO_BIDS, 1_500_000, FRESH],
+			['a raise', standardAt(8_000_000), 8_500_000, FRESH],
+			['a join', contentionWith(['t-3']), MINIMUM_BID, SEALED]
+		] as ReadonlyArray<readonly [string, BidState, number, ContentionSeed]>) {
+			const decided = decide(state, command(amount, 't-2'), NOW, seed);
+			if (decided.kind !== 'accepted') throw new Error(`expected acceptance: ${label}`);
+			expect(decided.events, label).toHaveLength(1);
+			expect(decided.events[0]?.type, label).toBe(BID_PLACED_EVENT);
 		}
 	});
 
@@ -485,7 +657,7 @@ describe('decide — the one BidPlaced it emits (AC4)', () => {
 			'2026-08-26T20:00:00.000Z',
 			'2026-08-27T07:55:00.000Z'
 		].entries()) {
-			const decided = decide(state, command(MINIMUM_BID, `t-${String(index + 2)}`), joinedAt, SEED);
+			const decided = decide(state, command(MINIMUM_BID, `t-${String(index + 2)}`), joinedAt, SEALED);
 			if (decided.kind !== 'accepted') throw new Error(`expected acceptance at ${joinedAt}`);
 			closes.add((decided.events[0]?.payload as BidPlacedPayload).closesAt);
 			state = contentionWith(['t-2', 't-3', 't-4'].slice(0, index + 1));
@@ -569,9 +741,12 @@ describe('the contention gate — every amount question inside a lottery', () =>
 			[MINIMUM_BID, 'joins', true],
 			[1_200_000, 'neither', false],
 			[1_499_999, 'neither', false],
-			[MINIMUM_BID + MINIMUM_INCREMENT, 'converts', false],
-			[2_000_000, 'converts', false],
-			[40_000_000, 'converts', false]
+			// Story 3.3: `converts` PASSES. The comparison did not move — the
+			// same two thresholds classify the same six amounts — and only
+			// the verdict on the third outcome did.
+			[MINIMUM_BID + MINIMUM_INCREMENT, 'converts', true],
+			[2_000_000, 'converts', true],
+			[40_000_000, 'converts', true]
 		];
 		for (const [amount, entry, passed] of cases) {
 			const outcome = evaluate(state, command(amount, 't-2'), NOW).contention;
@@ -601,33 +776,59 @@ describe('the contention gate — every amount question inside a lottery', () =>
 		expect(gates.slots.passed).toBe(true);
 	});
 
-	it('refuses the OPENER re-bidding on BOTH selfBid and contention, neither suppressed', () => {
-		// Two true grounds. AD-1 forbids short-circuiting, so both are
-		// reported, in `PLACE_BID_GATES` order — `contention` before
-		// `selfBid`, because the lottery's answer is the frame the ordinary
-		// auction's sits inside.
+	it('refuses the OPENER re-bidding on already_contending ALONE (Story 3.3)', () => {
+		// **A ground was removed, and it was removed because it was never
+		// true.** Story 3.2 reported this refusal on `contention` AND
+		// `selfBid`, because `auctionsReducer` names the opener as
+		// `leadingBid` — a fold artifact, since a join is never strictly
+		// higher than the $1,000,000 already there. A Minimum-Bid Contention
+		// has no Leading Bidder at all, so there is nobody for the opener to
+		// be bidding against, and `selfBid` steps aside exactly as
+		// `increment` already does.
+		//
+		// This is not a suppressed ground: AD-1 still forbids
+		// short-circuiting, and every other gate below reports its own
+		// arithmetic on the same refusal.
 		const gates = evaluate(contentionWith(['t-3']), command(MINIMUM_BID, 't-1'), NOW);
-		expect(failedGates(gates)).toEqual(['contention', 'selfBid']);
+		expect(failedGates(gates)).toEqual(['contention']);
 		expect(gates.contention.entry).toBe('already_contending');
-		expect(gates.selfBid.leadingTeamId).toBe('t-1');
+		expect(gates.selfBid.passed).toBe(true);
+		// Reported as `null` rather than as the opener's id: the field means
+		// "the Team you would be bidding against", and in a lottery there is
+		// none — `increment` nulls `currentHigh` on identical grounds.
+		expect(gates.selfBid.leadingTeamId).toBeNull();
 
 		const detail = bidRefusalDetail({ kind: 'gates', gates });
 		expect(detail).toContain('already a Contender');
-		expect(detail).toContain('does not bid against itself');
-		expect(detail.indexOf('already a Contender')).toBeLessThan(
-			detail.indexOf('does not bid against itself')
-		);
+		expect(detail).not.toContain('does not bid against itself');
 	});
 
-	it('names the conversion as deferred rather than accepting it as a raise', () => {
-		const gates = evaluate(contentionWith(['t-3']), command(2_000_000, 't-2'), NOW);
-		expect(failedGates(gates)).toEqual(['contention']);
-		const detail = bidRefusalDetail({ kind: 'gates', gates });
-		expect(detail).toContain('convert');
-		expect(detail).toContain('cannot do that yet');
-		// The commitments it would have released are named, because that is
-		// what makes the refusal honest rather than an arbitrary ceiling.
-		expect(detail).toContain("Contender's commitment");
+	it('ACCEPTS the conversion, and the opener may be the one who makes it (FR-19)', () => {
+		// FR-19 states it outright: "a Team that was a Contender may itself be
+		// the converting bidder". The opener is Contender #1 and the fold's
+		// leader, so this is the exact Team `selfBid` would have frozen out.
+		for (const teamId of ['t-1', 't-3', 't-2']) {
+			const gates = evaluate(contentionWith(['t-3']), command(2_000_000, teamId), NOW);
+			expect(allGatesPassed(gates), teamId).toBe(true);
+			expect(gates.contention.entry, teamId).toBe('converts');
+			expect(gates.contention.passed, teamId).toBe(true);
+			expect(gates.selfBid.passed, teamId).toBe(true);
+			// The increment rule still does not apply inside the contention
+			// the Bid is dissolving, and it still says so with both figures
+			// null rather than inventing a raise over $1,000,000.
+			expect(gates.increment.currentHigh, teamId).toBeNull();
+			expect(gates.increment.minimumLegal, teamId).toBeNull();
+			// Nothing to word: a passing gate set has no refusal.
+			expect(bidRefusalDelta({ kind: 'gates', gates }), teamId).toBe('');
+		}
+	});
+
+	it('accepts a conversion far above the threshold, with the same nulls', () => {
+		const gates = evaluate(contentionWith(['t-3']), command(8_000_000, 't-2'), NOW);
+		expect(allGatesPassed(gates)).toBe(true);
+		expect(gates.contention.entry).toBe('converts');
+		expect(gates.increment.currentHigh).toBeNull();
+		expect(gates.increment.minimumLegal).toBeNull();
 	});
 
 	it('matches on the Team and never on the Manager — a co-managed Team is one Contender', () => {
@@ -718,6 +919,21 @@ describe('the dead zone — PRD §10 example 10, as two grounds together', () =>
 		const twice = evaluate(state, command(MINIMUM_BID, 't-3'), '2026-08-27T09:00:00.000Z');
 		expect(failedGates(twice)).toEqual(['expiry', 'contention']);
 	});
+
+	it('refuses an expired CONVERSION on expiry alone, with contention still reporting', () => {
+		// Story 3.3's own row of the same matrix. `expiry` is unchanged by
+		// dissolution: a clock that has run out is the frame every other
+		// question sits inside, and a Bid that WOULD have dissolved a live
+		// contention dissolves nothing once the Auction is over.
+		const state = contentionWith(['t-3']);
+		const gates = evaluate(state, command(1_500_000, 't-2'), '2026-08-27T09:00:00.000Z');
+
+		expect(failedGates(gates)).toEqual(['expiry']);
+		// `contention` states its own true answer beside it rather than going
+		// quiet — AD-1 forbids short-circuiting in either direction.
+		expect(gates.contention.entry).toBe('converts');
+		expect(gates.contention.passed).toBe(true);
+	});
 });
 
 describe('the increment gate steps aside in a lottery, and granularity does not', () => {
@@ -805,6 +1021,83 @@ describe('the contention chip and its figure', () => {
 		expect(detail).not.toContain('Roster');
 		expect(detail).not.toContain('Cap Space');
 	});
+
+	it('states what a CONVERSION does, not what it would do (Story 3.3)', () => {
+		// The row sits beside a `Passed` chip now. A figure written in the
+		// conditional would read as a warning about an outcome that is in
+		// fact being authorised.
+		const row = rowFor(evaluate(contentionWith(['t-3', 't-4']), command(2_000_000, 't-2'), NOW));
+		expect(row?.chip).toBe('Minimum-Bid Contention · Passed');
+		expect(row?.figure).toBe(
+			'$2.0M is at or above the $1.5M that dissolves this Minimum-Bid Contention'
+		);
+		expect(row?.figure).not.toContain('would');
+	});
+
+	it('claims NO release on the conversion row, because the count includes the converter', () => {
+		// `contenderCount` is the count BEFORE this Bid, so when a Contender
+		// converts its own lottery — which FR-19 permits outright — the count
+		// includes the acting Team, and that Team is not released, it becomes
+		// the Leading Bidder. "releasing 3 Contenders" would be false about
+		// one of the three on the one surface that may never be.
+		for (const teamId of ['t-1', 't-3', 't-2']) {
+			const row = rowFor(evaluate(contentionWith(['t-3', 't-4']), command(2_000_000, teamId), NOW));
+			expect(row?.figure, teamId).not.toMatch(/releas/i);
+			// The count is not on this row at all — it is not this row's to
+			// explain, and stating it beside a release claim is what made it
+			// wrong.
+			expect(row?.figure, teamId).not.toContain('3 Contenders');
+			// A Contender converting reads identically to a stranger doing it:
+			// the gate's judgement is one comparison between two amounts.
+			expect(row?.figure, teamId).toBe(
+				'$2.0M is at or above the $1.5M that dissolves this Minimum-Bid Contention'
+			);
+		}
+	});
+
+	it('states BOTH its own thresholds’ terms, as its `neither` sibling does', () => {
+		// A figure states the arithmetic the gate was judged from. `neither`
+		// quotes the join amount and the conversion amount; `converts` quotes
+		// the offered amount and the threshold it cleared — the two terms of
+		// the one comparison that decided it.
+		const row = rowFor(evaluate(contentionWith(['t-3']), command(8_000_000, 't-2'), NOW));
+		expect(row?.figure).toContain('$8.0M');
+		expect(row?.figure).toContain('$1.5M');
+	});
+
+	it('gives the self-bid row its OWN figure inside a lottery, never "no Team leads yet"', () => {
+		// Two reasons for one null, and the row must state the right one.
+		// Awaiting an Opening Bid nobody leads yet; inside a contention a
+		// $1,000,000 Bid IS the fold's leader, so "no Team leads yet" would be
+		// a falsehood on a panel whose whole purpose is to be true.
+		const selfBidRow = (gates: ReturnType<typeof evaluate>) =>
+			bidGateReport(gates).find((row) => row.gate === 'selfBid');
+
+		const inLottery = selfBidRow(evaluate(contentionWith(['t-3']), command(2_000_000, 't-1'), NOW));
+		expect(inLottery?.chip).toBe('Self-bid · Passed');
+		expect(inLottery?.figure).toBe('no Team leads a Minimum-Bid Contention');
+
+		const awaiting = selfBidRow(evaluate(NO_BIDS, command(1_500_000), NOW));
+		expect(awaiting?.figure).toBe('no Team leads yet');
+
+		const standard = selfBidRow(evaluate(standardAt(8_000_000, 't-2'), command(8_500_000, 't-2'), NOW));
+		expect(standard?.figure).toBe('your Team leads');
+	});
+
+	it('reports EVERY gate as passed on a dissolution, each with its own figure', () => {
+		// The refusal panel's discipline applied to an acceptance: eight rows,
+		// every one of them stating the arithmetic it was decided from.
+		const report = bidGateReport(
+			evaluate(contentionWith(['t-3', 't-4']), command(1_500_000, 't-1'), NOW)
+		);
+		expect(report.map((row) => row.gate)).toEqual([...PLACE_BID_GATES]);
+		for (const row of report) {
+			expect(row.passed, row.gate).toBe(true);
+			expect(row.chip, row.gate).toContain('Passed');
+			expect(row.figure.length, row.gate).toBeGreaterThan(0);
+			expect(row.figure, row.gate).not.toContain('reported without a figure');
+		}
+	});
 });
 
 describe('the self-bid gate', () => {
@@ -883,63 +1176,66 @@ describe('the granularity gate', () => {
 
 describe('minimumLegalBid — the pre-filled figure the control shows', () => {
 	it('is the current high plus one increment in Standard Contention', () => {
-		expect(minimumLegalBid(standardAt(8_000_000))).toBe(8_500_000);
+		expect(minimumLegalBid(standardAt(8_000_000), 't-2')).toBe(8_500_000);
 	});
 
 	it('is $1,000,000 with no Bid — the least the opening gate will now take', () => {
 		// It was $1,500,000 until Story 3.2, because the opening gate refused
 		// exactly $1,000,000 by name. The gate passes that amount now, and the
 		// pre-fill follows the gates rather than being adjusted to match them.
-		expect(minimumLegalBid(NO_BIDS)).toBe(MINIMUM_BID);
+		expect(minimumLegalBid(NO_BIDS, 't-2')).toBe(MINIMUM_BID);
 	});
 
-	it('is the join amount inside a live contention, never a raise over it', () => {
+	it('is the join amount inside a live contention, for a Team not yet in', () => {
 		// A raise does not exist in a lottery: `minimumRaise` would pre-fill
-		// $1,500,000, which is the conversion `contention` refuses by name.
-		expect(minimumLegalBid(standardAt(MINIMUM_BID))).toBe(MINIMUM_BID);
+		// $1,500,000 for a Team whose only legal move is to join at
+		// $1,000,000.
+		expect(minimumLegalBid(standardAt(MINIMUM_BID), 't-2')).toBe(MINIMUM_BID);
+		expect(minimumLegalBid(contentionWith(['t-3']), 't-2')).toBe(MINIMUM_BID);
 	});
 
-	it('always passes every gate it was derived for', () => {
-		for (const state of [
-			NO_BIDS,
-			standardAt(8_000_000),
-			standardAt(MINIMUM_BID),
-			contentionWith(['t-3'])
-		]) {
-			const amount = minimumLegalBid(state);
-			const gates = evaluate(state, command(amount, 't-99'), NOW);
-			expect(allGatesPassed(gates), String(amount)).toBe(true);
-		}
-	});
-
-	it('has ONE state with no legal amount at all, and it is named rather than hidden', () => {
-		// **The invariant above is narrowed here, deliberately.** A Team
-		// already on the Contender list is refused at $1,000,000 on
-		// `already_contending` and at everything above it on `converts` —
-		// there is no amount that passes every gate for them, so the pre-fill
-		// cannot pass every gate either. The assertion above is scoped to a
-		// Team that is not yet a Contender rather than weakened to "usually
-		// passes", because a claim that admits exceptions silently is worth
-		// nothing.
-		//
-		// Story 3.3 is what reopens it: dissolution gives a Contender
-		// somewhere to go. Until then the honest rendering is the join amount
-		// in a disabled field, beside the reason — never a figure invented to
-		// satisfy an invariant.
+	it('is the CONVERSION amount for a Team already on the Contender list (Story 3.3)', () => {
+		// A Team joins once, so $1,000,000 is refused for them by name. The
+		// amount that IS legal is the one that dissolves the contention, and
+		// the pre-fill follows the gates rather than being adjusted to match
+		// them — the same derivation, asked of a different Team.
 		const state = contentionWith(['t-2']);
-		const amount = minimumLegalBid(state);
-		expect(amount).toBe(MINIMUM_BID);
+		expect(minimumLegalBid(state, 't-2')).toBe(MINIMUM_BID + MINIMUM_INCREMENT);
+		expect(minimumLegalBid(state, 't-1')).toBe(MINIMUM_BID + MINIMUM_INCREMENT);
+		// ...and a Team that is not in still sees the join amount.
+		expect(minimumLegalBid(state, 't-9')).toBe(MINIMUM_BID);
+	});
 
-		const gates = evaluate(state, command(amount, 't-2'), NOW);
-		expect(allGatesPassed(gates)).toBe(false);
-		expect(failedGates(gates)).toEqual(['contention']);
+	it('reads the join amount for a viewer bound to no Team — they are on no list', () => {
+		// `null` is a real state on the read path: a registered session with
+		// no Team. Their control is refused as `unbound_actor` regardless, and
+		// the field states the amount the contention actually takes rather
+		// than a conversion nobody is placed to make.
+		expect(minimumLegalBid(contentionWith(['t-2']), null)).toBe(MINIMUM_BID);
+		expect(minimumLegalBid(standardAt(8_000_000), null)).toBe(8_500_000);
+	});
 
-		// And nothing above it passes either, which is what makes this a state
-		// with no legal amount rather than a badly chosen pre-fill.
-		for (const higher of [1_500_000, 2_000_000, 40_000_000]) {
-			expect(allGatesPassed(evaluate(state, command(higher, 't-2'), NOW)), String(higher)).toBe(
-				false
-			);
+	it('always passes every gate it was derived for — with no exception (Story 3.3)', () => {
+		// **The general invariant, restored.** Story 3.2 had to narrow this to
+		// a Team not yet contending, because a Team already on the list was
+		// refused at $1,000,000 on `already_contending` and at everything
+		// above it on `converts`: no amount passed every gate for them.
+		// Dissolution is what gives them somewhere to go, so the claim holds
+		// again for every state and every acting Team.
+		const cases: ReadonlyArray<readonly [BidState, string]> = [
+			[NO_BIDS, 't-99'],
+			[standardAt(8_000_000), 't-99'],
+			[standardAt(MINIMUM_BID), 't-99'],
+			[contentionWith(['t-3']), 't-99'],
+			// The Team already in — the state that had no legal amount at all.
+			[contentionWith(['t-99']), 't-99'],
+			// ...and the OPENER, who is Contender #1 and the fold's leader.
+			[contentionWith(['t-3']), 't-1']
+		];
+		for (const [state, teamId] of cases) {
+			const amount = minimumLegalBid(state, teamId);
+			const gates = evaluate(state, command(amount, teamId), NOW);
+			expect(allGatesPassed(gates), `${String(amount)} / ${teamId}`).toBe(true);
 		}
 	});
 });
@@ -1014,16 +1310,16 @@ describe('bidRefusalDetail — one sentence per refusal, worded here and nowhere
 		expect(bidRefusalDelta({ kind: 'gates', gates })).toBe('');
 	});
 
-	it('names the lottery ground for a CONVERSION into a live contention', () => {
-		// The refusal by name moved rather than disappeared: 2.5 refused the
-		// opening at $1,000,000 because no lottery could be run, and 3.2
-		// refuses the conversion at $1,500,000 because no lottery can yet be
-		// dissolved. The same trade, one story on.
+	it('has no refusal at all for a CONVERSION into a live contention (Story 3.3)', () => {
+		// The refusal by name moved twice and has now run out of stories to
+		// move to. 2.5 refused the opening at $1,000,000 because no lottery
+		// could be run; 3.2 refused the conversion at $1,500,000 because no
+		// lottery could yet be dissolved. Dissolution exists, so there is no
+		// refusal left to word and the panel has nothing to draw.
 		const gates = evaluate(standardAt(MINIMUM_BID), command(2_000_000, 't-2'), NOW);
-		const detail = bidRefusalDetail({ kind: 'gates', gates });
 		expect(gates.contention.entry).toBe('converts');
-		expect(detail).toContain('Minimum-Bid Contention');
-		expect(detail).toContain('convert');
+		expect(allGatesPassed(gates)).toBe(true);
+		expect(bidRefusalDelta({ kind: 'gates', gates })).toBe('');
 	});
 
 	it('gives the self-bid its own distinct wording', () => {
@@ -1198,7 +1494,7 @@ describe('minimumLegalBid and the increment gate report the SAME figure', () => 
 	it('agrees with the gate’s minimumLegal in every Standard Contention state', () => {
 		for (const high of [1_500_000, 2_000_000, 8_000_000, 40_000_000]) {
 			const state = standardAt(high);
-			const pre = minimumLegalBid(state);
+			const pre = minimumLegalBid(state, 't-2');
 			const gate = evaluate(state, command(pre), NOW).increment;
 			expect(gate.minimumLegal, String(high)).toBe(pre);
 			expect(gate.passed, String(high)).toBe(true);
@@ -1209,9 +1505,9 @@ describe('minimumLegalBid and the increment gate report the SAME figure', () => 
 		// The increment rule does not apply to an Opening Bid, so the gate
 		// reports `null` rather than inventing a raise over a high that does
 		// not exist. The pre-fill is derived from the two gates that DO apply.
-		expect(evaluate(NO_BIDS, command(minimumLegalBid(NO_BIDS)), NOW).increment.minimumLegal)
+		expect(evaluate(NO_BIDS, command(minimumLegalBid(NO_BIDS, 't-2')), NOW).increment.minimumLegal)
 			.toBeNull();
-		expect(allGatesPassed(evaluate(NO_BIDS, command(minimumLegalBid(NO_BIDS)), NOW))).toBe(true);
+		expect(allGatesPassed(evaluate(NO_BIDS, command(minimumLegalBid(NO_BIDS, 't-2')), NOW))).toBe(true);
 		// And nothing smaller does. $500,000 is the next value down the grid,
 		// and it is below the opening minimum.
 		expect(allGatesPassed(evaluate(NO_BIDS, command(500_000), NOW))).toBe(false);
@@ -1350,7 +1646,7 @@ describe('bidControlState — one decision function for the read path and the su
 				const control = controlFor(state, typed);
 				const amount = readBidAmount(typed);
 				if (amount.kind !== 'usable') continue;
-				const decided = decide(state, command(Number(typed)), NOW, SEED);
+				const decided = decide(state, command(Number(typed)), NOW, FRESH);
 				expect(control.blocked, `${typed}`).toBe(decided.kind === 'rejected');
 				if (decided.kind === 'rejected') {
 					expect(control.detail).toBe(bidRefusalDetail({ kind: 'gates', gates: decided.gates }));
@@ -1416,7 +1712,8 @@ describe('evaluateCap — Maximum Bid, derived on every evaluation (AD-7)', () =
 			// A contention's opener is its first Contender (Story 3.2), which
 			// is what makes the money it holds visible to `teamMoneyStateFor`.
 			contenders: contention === 'minimum_bid' ? contendersOf([bid]) : [],
-			seedHash: null
+			seedHash: null,
+			seed: null
 		};
 	}
 
@@ -2210,7 +2507,8 @@ describe('the exposure arithmetic — M, N, Overflow Count and Minors Exposure',
 						closesAt: contender.closesAt,
 						bids: [contender],
 						contenders: [{ seq: contender.seq, teamId: 't-2', teamName: 'Rockets' }],
-						seedHash: null
+						seedHash: null,
+						seed: null
 					}
 				}
 			},
@@ -2498,6 +2796,7 @@ function auctionClosingAt(closesAt: string, amount = 8_000_000, teamId = 't-1'):
 		closesAt,
 		bids: [{ ...bid, closesAt }],
 		contenders: contendersOf([{ ...bid, closesAt }]),
+		seed: null,
 		seedHash: null
 	};
 	return bidStateFor(auction, RICH, false);
@@ -2605,7 +2904,8 @@ describe('expiry — the persisted close instant is the authority (AC2, AC3)', (
 				closesAt: CLOSES,
 				bids: [{ ...bid, closesAt: CLOSES }],
 				contenders: [],
-				seedHash: null
+				seedHash: null,
+				seed: null
 			},
 			poor,
 			false

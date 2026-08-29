@@ -14,7 +14,10 @@ import {
 	leagueClockExpiry,
 	leagueClockReducer
 } from '../../src/lib/core/projection/league-clock.ts';
-import { BID_PLACED_EVENT } from '../../src/lib/core/projection/auctions.ts';
+import {
+	BID_PLACED_EVENT,
+	CONTENTION_DISSOLVED_EVENT
+} from '../../src/lib/core/projection/auctions.ts';
 import { NOMINATION_PLACED_EVENT } from '../../src/lib/core/projection/nominations.ts';
 import { LEAGUE_CLOCK } from '../../src/lib/core/constants.ts';
 import { POOL_SOURCE_LABEL } from '../../src/lib/core/rules/pool-import.ts';
@@ -359,6 +362,64 @@ describe('leagueClockReducer — the BidPlaced reset', () => {
 		const log = [
 			event(1, AUCTION_OPENED_EVENT, {}, '2026-08-25T19:00:00.000Z'),
 			bidAt(2, '2026-08-26T12:00:00.000Z')
+		];
+		const once = fold(INITIAL_LEAGUE_CLOCK, log, leagueClockReducer);
+		expect(fold(once, log, leagueClockReducer)).toEqual(once);
+	});
+});
+
+describe('leagueClockReducer — ContentionDissolved does NOT reset it (Story 3.3)', () => {
+	// **AD-22 fixes the reset set at exactly two event types**, and a new one
+	// does not join it. `league-clock.ts`'s `default: return state` is what
+	// makes that true, so this is a fact to test rather than code to write —
+	// and it is tested here, beside the fold, because there is no
+	// `league-clock.test.ts` and a claim nobody asserts is a claim nobody
+	// keeps.
+	const dissolvedAt = (seq: number, occurredAt: string) =>
+		event(
+			seq,
+			CONTENTION_DISSOLVED_EVENT,
+			{ fantraxPlayerId: 'p-1', seed: 'a-seed', seedHash: null },
+			occurredAt
+		);
+
+	it('records the CONVERTING Bid’s instant and not the dissolution’s', () => {
+		// The two events land in one transaction, so they share a database
+		// clock in production. Here they deliberately do not, which is what
+		// makes it visible that only the Bid is read.
+		const state = fold(
+			INITIAL_LEAGUE_CLOCK,
+			[
+				event(1, AUCTION_OPENED_EVENT, {}, '2026-08-25T19:00:00.000Z'),
+				bidAt(2, '2026-08-26T12:00:00.000Z'),
+				dissolvedAt(3, '2026-08-27T23:00:00.000Z')
+			],
+			leagueClockReducer
+		);
+		expect(state.lastReset).toBe('2026-08-26T12:00:00.000Z');
+		expect(state.origin).toBe('2026-08-25T19:00:00.000Z');
+		expect(leagueClockExpiry(state)).toBe('2026-08-28T12:00:00.000Z');
+	});
+
+	it('cannot manufacture a reset on its own, with no Bid beside it', () => {
+		const state = fold(
+			INITIAL_LEAGUE_CLOCK,
+			[
+				event(1, AUCTION_OPENED_EVENT, {}, '2026-08-25T19:00:00.000Z'),
+				dissolvedAt(2, '2026-08-27T23:00:00.000Z')
+			],
+			leagueClockReducer
+		);
+		expect(state.lastReset).toBeNull();
+		// So the clock still expires 48 hours after the OPEN.
+		expect(leagueClockExpiry(state)).toBe('2026-08-27T19:00:00.000Z');
+	});
+
+	it('converges on a double replay', () => {
+		const log = [
+			event(1, AUCTION_OPENED_EVENT, {}, '2026-08-25T19:00:00.000Z'),
+			bidAt(2, '2026-08-26T12:00:00.000Z'),
+			dissolvedAt(3, '2026-08-27T23:00:00.000Z')
 		];
 		const once = fold(INITIAL_LEAGUE_CLOCK, log, leagueClockReducer);
 		expect(fold(once, log, leagueClockReducer)).toEqual(once);

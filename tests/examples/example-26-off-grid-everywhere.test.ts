@@ -82,7 +82,10 @@ function auctionAt(amount: number, contention: 'standard' | 'minimum_bid'): Auct
 			contention === 'minimum_bid'
 				? [{ seq: '2', teamId: 't-a', teamName: 'Team A' }]
 				: [],
-		seedHash: null
+		seedHash: null,
+		// Nothing revealed: the lottery half is LIVE, the standard half never
+		// ran one.
+		seed: null
 	};
 }
 

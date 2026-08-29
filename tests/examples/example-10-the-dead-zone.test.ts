@@ -40,7 +40,11 @@ import {
 	evaluate,
 	failedGates
 } from '../../src/lib/core/rules/bidding.ts';
-import type { BidState, TeamMoneyState } from '../../src/lib/core/rules/bidding.ts';
+import type {
+	BidState,
+	ContentionSeed,
+	TeamMoneyState
+} from '../../src/lib/core/rules/bidding.ts';
 import type { PlaceBid } from '../../src/lib/core/types.ts';
 
 const NOW = '2026-08-24T14:00:00.000Z';
@@ -73,7 +77,9 @@ const LOTTERY: Auction = {
 	closesAt: OPENING.closesAt,
 	bids: [OPENING],
 	contenders: [{ seq: '1', teamId: 't-e', teamName: 'Team E' }],
-	seedHash: OPENING.seedHash
+	seedHash: OPENING.seedHash,
+	// The contention is LIVE: the seed is still sealed, so nothing is revealed.
+	seed: null
 };
 
 const STATE: BidState = bidStateFor(LOTTERY, RICH, false);
@@ -148,7 +154,11 @@ describe('§10 example 10 — the dead zone', () => {
 	});
 
 	it('refuses through decide(), appending nothing and moving no clock', () => {
-		const decided = decide(STATE, bidOf(1_200_000), NOW, 'd'.repeat(64));
+		// The SEALED seed, which is what the shell hands `decide()` inside a
+		// live contention (Story 3.3). This Bid is refused before anything is
+		// done with it, which is the point: a refusal reveals nothing.
+		const sealed: ContentionSeed = { kind: 'sealed', seed: 'd'.repeat(64) };
+		const decided = decide(STATE, bidOf(1_200_000), NOW, sealed);
 
 		expect(decided.kind).toBe('rejected');
 		expect(decided).not.toHaveProperty('events');

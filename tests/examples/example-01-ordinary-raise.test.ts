@@ -80,9 +80,11 @@ const AUCTION: Auction = {
 	},
 	closesAt: '2026-08-27T08:00:00.000Z',
 	bids: [],
-	// Standard Contention has no Contenders and no published commitment.
+	// Standard Contention has no Contenders, no published commitment and
+	// nothing revealed: no lottery ever ran here.
 	contenders: [],
-	seedHash: null
+	seedHash: null,
+	seed: null
 };
 
 /** ...narrowed to what the gates decide from, through the core's own bridge. */

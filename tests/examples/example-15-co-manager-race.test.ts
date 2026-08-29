@@ -77,9 +77,11 @@ const OPENING_AUCTION: Auction = {
 	},
 	closesAt: '2026-08-27T08:00:00.000Z',
 	bids: [],
-	// Standard Contention has no Contenders and no published commitment.
+	// Standard Contention has no Contenders, no published commitment and
+	// nothing revealed: no lottery ever ran here.
 	contenders: [],
-	seedHash: null
+	seedHash: null,
+	seed: null
 };
 
 /** The two Managers of Team L, bidding the same amount in the same second. */

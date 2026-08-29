@@ -94,7 +94,9 @@ const LOTTERY: Auction = {
 	closesAt: OPENING.closesAt,
 	bids: [OPENING],
 	contenders: [{ seq: '1', teamId: 't-other', teamName: 'Team Other' }],
-	seedHash: OPENING.seedHash
+	seedHash: OPENING.seedHash,
+	// The contention is LIVE: the seed is still sealed, so nothing is revealed.
+	seed: null
 };
 
 /** Team Q's join, on a Minor League Eligible Player. */

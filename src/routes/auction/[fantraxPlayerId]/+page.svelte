@@ -46,11 +46,16 @@
 	import {
 		AUCTION_EXPIRED,
 		CONTENTION_CLOCK_UNMOVED,
+		CONTENTION_DISSOLVED,
 		MINIMUM_BID_CONTENTION_LABEL,
 		SEED_COMMITMENT,
+		SEED_COMMITMENT_UNVERIFIABLE,
+		SEED_REVEALED,
 		closesInPhrase,
 		contenderCountSentence,
-		hasExpired
+		formerContenderSentence,
+		hasExpired,
+		wasDissolved
 	} from '$lib/core/projection/auctions.ts';
 	import type { ContentionState } from '$lib/core/projection/auctions.ts';
 	import { formatInstant, parseInstant, relativePhrase } from '$lib/core/instant.ts';
@@ -146,6 +151,9 @@
 		readonly contenders: readonly string[];
 		readonly contenderCount: number;
 		readonly seedHash: string | null;
+		// The revealed seed, once the contention dissolved. `null` otherwise —
+		// and it is the fold's own value: nothing is hashed on this page.
+		readonly seed: string | null;
 		readonly price: string | null;
 		readonly leadingBidder: string | null;
 		readonly closesAt: string | null;
@@ -318,6 +326,10 @@
 		// wire. Nothing here decides whether a lottery is running — the core
 		// does, from these two facts, exactly as the locked transaction will.
 		contention: control.contention,
+		// The published commitment, off the wire. No gate reads it — it is
+		// what `decide()` verifies a revealed seed against inside the lock,
+		// and it is public, which is why it is already on this page.
+		seedHash: auction.seedHash,
 		contenders: control.contenderTeamIds,
 		team: teamMoney,
 		playerIsMinorLeagueEligible: control.playerIsMinorLeagueEligible
@@ -490,6 +502,16 @@
 	// literal; the page is asking which of three named states it is in, the
 	// same way it asks whether `auction.closesAt` is null.
 	const isContention = $derived(gateState.contention === 'minimum_bid');
+
+	// Whether a lottery ran here and dissolved, through the core's ONE
+	// predicate. The two facts it reads — a revealed seed and a `standard`
+	// contention — are both on the wire, but the page does not combine them
+	// itself: a surface assembling `seed !== null && contention === 'standard'`
+	// would be a second statement of what a dissolution IS, in the file
+	// furthest from the fold that produces it.
+	const dissolved = $derived(
+		wasDissolved({ contention: gateState.contention, seed: auction.seed })
+	);
 
 	// The absolute stamps are NOT safe to derive during SSR.
 	// `Intl.DateTimeFormat(undefined, ...)` resolves `undefined` to the
@@ -669,6 +691,45 @@
 				{#if auction.seedHash !== null}
 					<p class="prose" id="auction-seed-commitment">{SEED_COMMITMENT}</p>
 					<p class="prose seed-hash" id="auction-seed-hash">{auction.seedHash}</p>
+				{/if}
+			{/if}
+			<!-- The dissolution, in the same block and never beside the live
+			     one: a contention is running or it is over, and the two
+			     renderings are mutually exclusive by construction. There is
+			     no accent bar here and no `lottery` class — `isContention` is
+			     false once the fold reads `standard` — and no live Contender
+			     list, because nobody is contending any more.
+
+			     What it does show is what a Manager needs to check the thing
+			     they were asked to trust: who was in, in the fold's own join
+			     order; the seed that was sealed when the lottery opened; the
+			     commitment it was published against; and the statement that
+			     ordinary ascending rules apply from here. Every sentence is
+			     the core's, and the whole block renders for every viewer,
+			     bound to a Team or not — a dissolution is a fact about the
+			     Auction, not about who is looking at it. -->
+			{#if dissolved}
+				<p class="prose" id="auction-dissolved">{CONTENTION_DISSOLVED}</p>
+				<p class="prose" id="auction-former-contender-count">
+					{formerContenderSentence(auction.contenderCount)}
+				</p>
+				{#if auction.contenders.length > 0}
+					<ul class="contenders" id="auction-former-contenders">
+						{#each auction.contenders as contender, position (position)}
+							<li class="prose">{contender}</li>
+						{/each}
+					</ul>
+				{/if}
+				<!-- One sentence or the other, never both: a commitment that
+				     folded to null has nothing to check the reveal against,
+				     and two sentences making opposite claims about the same
+				     value is the one thing this page may not do. -->
+				<p class="prose" id="auction-seed-reveal">
+					{auction.seedHash === null ? SEED_COMMITMENT_UNVERIFIABLE : SEED_REVEALED}
+				</p>
+				<p class="prose seed-hash" id="auction-revealed-seed">{auction.seed}</p>
+				{#if auction.seedHash !== null}
+					<p class="prose seed-hash" id="auction-published-hash">{auction.seedHash}</p>
 				{/if}
 			{/if}
 		</div>

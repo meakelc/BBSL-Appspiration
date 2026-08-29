@@ -64,6 +64,32 @@ import { AUCTION_CLOSED_EVENT, readClosedPlayerId } from './nominations.ts';
 export const BID_PLACED_EVENT = 'BidPlaced';
 
 /**
+ * The event type a dissolution appends beside the converting `BidPlaced`
+ * (Story 3.3, FR-19, AD-14).
+ *
+ * Declared here for `BID_PLACED_EVENT`'s reason, and the declaration is the
+ * whole of the registration: there is no central event registry in this
+ * codebase and no database check constraint on `event_type` —
+ * `20260821020000_auction_events.sql` deliberately holds "no opinion on what
+ * `event_type` values are legal" — so a const beside the reducer that gives
+ * it meaning is where an event type comes into existence.
+ *
+ * **It carries the REVEALED seed, and that is why it exists at all.** A
+ * contention that dissolved with its seed still sealed is the one outcome
+ * AD-14 cannot survive: the commitment was published, the Contenders were
+ * released, and nothing would ever open the envelope, because the draw that
+ * would have opened it will never run. `decide()` verifies the seed against
+ * the published commitment before it builds this payload, so a reveal that
+ * does not match the commitment a Manager already recorded is foreclosed
+ * rather than merely tested for.
+ *
+ * Appended SECOND, after the `BidPlaced` that caused it, in one transaction.
+ * Cause then consequence: a log read in `seq` order states the Bid that
+ * dissolved the contention before it states the dissolution.
+ */
+export const CONTENTION_DISSOLVED_EVENT = 'ContentionDissolved';
+
+/**
  * Which contention an Auction is in.
  *
  * `awaiting_opening_bid` is a nominated Player nobody has bid on. `standard`
@@ -80,9 +106,11 @@ export const BID_PLACED_EVENT = 'BidPlaced';
  * state is now reached the ordinary way.
  *
  * A conversion OUT of it — a Bid of `MINIMUM_BID + MINIMUM_INCREMENT` or more
- * into a live contention — is still refused by name, because dissolution
- * releases every Contender's commitment and reveals the seed, and both are
- * Story 3.3's.
+ * into a live contention — is ACCEPTED since Story 3.3, and the return to
+ * `standard` is this fold's own arithmetic rather than a written transition:
+ * the converting Bid is strictly higher, so it becomes `leadingBid`, and
+ * `contentionForAmount` reads `standard` off its amount. The reveal rides the
+ * `ContentionDissolved` event appended beside it.
  */
 export type ContentionState = 'awaiting_opening_bid' | 'standard' | 'minimum_bid';
 
@@ -188,6 +216,21 @@ export type Auction = {
 	 * the same log twice cannot swap one commitment for another.
 	 */
 	readonly seedHash: string | null;
+	/**
+	 * The REVEALED seed, off a `ContentionDissolved` event — `null` for every
+	 * Auction whose contention has not dissolved, which is almost all of them.
+	 *
+	 * Non-`null` beside a `standard` contention is what a dissolution looks
+	 * like in the fold, and `wasDissolved` is the one derivation that says so.
+	 * It is deliberately NOT cleared by anything: an insert-only log states
+	 * what happened, and a reveal that could be un-revealed would make the
+	 * published commitment uncheckable after the fact.
+	 *
+	 * The FIRST one seen wins, mirroring `seedHash` exactly and for the
+	 * identical reason: replay must converge, and a second reveal must not be
+	 * able to replace the value a Manager already hashed.
+	 */
+	readonly seed: string | null;
 };
 
 /** Every Auction that has seen a Bid, keyed on the Player. */
@@ -307,6 +350,111 @@ export const SEED_COMMITMENT =
 	'can read it. Only its SHA-256 is published, and it is published now rather than at the ' +
 	'draw — so when the seed is revealed you can hash it yourself and check it against this ' +
 	'value.';
+
+/**
+ * What a dissolution IS, in words — the sentence the Auction page prints at
+ * the head of the dissolution block (Story 3.3, FR-19).
+ *
+ * Worded here, beside the fold that produces the state, for
+ * `contentionSentence`'s reason: a Manager returning to a page that used to
+ * carry a lottery badge and a Contender list must be told what became of
+ * them, and a second spelling of that in a `.svelte` file is exactly where a
+ * synonym would appear.
+ *
+ * **It quotes no figure at all.** The amount that converted, the count that
+ * was released and the new close instant all render beside it from the fold's
+ * own values, and a figure restated in this string would be a second copy of
+ * a number that must agree with the arithmetic beside it.
+ */
+export const CONTENTION_DISSOLVED =
+	'This Minimum-Bid Contention dissolved. A converting Bid returned the Auction to Standard ' +
+	'Contention, every former Contender was released, and the Auction Clock restarted from that ' +
+	'Bid. Ordinary ascending rules apply from here: the next Bid must beat the current high by at ' +
+	'least the Minimum Increment.';
+
+/**
+ * What the revealed seed IS, in words — the sentence printed above the seed
+ * itself, beside the commitment published when the contention opened.
+ *
+ * `SEED_COMMITMENT`'s counterpart, one story on: that one says the value is
+ * sealed and will be revealed, this one says it has been. It states what a
+ * Manager can now DO with the pair, because a 64-character hex string and a
+ * second one beside it explain nothing on their own.
+ *
+ * **No draw ran, and this says so.** A revealed seed on a page that also
+ * shows a Contender list would otherwise read as a draw result; the seed is
+ * revealed here precisely because this contention will never draw.
+ */
+export const SEED_REVEALED =
+	'The seed sealed when this contention opened is revealed below, beside the commitment that ' +
+	'was published at the time. Hash the seed yourself and the two must match. No draw was run ' +
+	'and no winner was selected — the contention dissolved instead, so the sealed value is opened ' +
+	'here rather than left behind.';
+
+/**
+ * The statement that a revealed seed has nothing to check it against.
+ *
+ * Reachable only from a log whose opening Bid carried no commitment or a
+ * malformed one — a state this codebase cannot write and `readPayload` folds
+ * to a `null` `seedHash` rather than crashing over. The dissolution still
+ * proceeds and still reveals, because refusing would strand the Auction in a
+ * contention forever; what it must not do is imply a verification that is not
+ * available.
+ *
+ * Printed INSTEAD of `SEED_REVEALED`, never beside it: two sentences making
+ * opposite claims about the same value is the one thing a page stating facts
+ * may never do.
+ */
+export const SEED_COMMITMENT_UNVERIFIABLE =
+	'No commitment was published when this contention opened, so there is nothing to check this ' +
+	'seed against. It is stated for the record rather than as something you can verify.';
+
+/**
+ * How many Teams were Contenders when the contention dissolved, as a finished
+ * sentence.
+ *
+ * `contenderCountSentence`'s counterpart in the past tense, and a second
+ * function rather than a tense parameter because "so far" is simply the wrong
+ * words for a list that is over: a dissolved contention takes no further
+ * join, so a sentence implying more may arrive would be false.
+ *
+ * **It says these Teams CONTENDED, and does not say each was released.** FR-19
+ * permits a Contender to be the converting bidder, and the count this sentence
+ * words is the whole list — so on the page it can sit directly above a Leading
+ * Bidder line naming one of the very Teams it is describing. "3 former
+ * Contenders, released" would then be false about one of the three, beside the
+ * evidence that it is false. What every Team on the list has in common is that
+ * it contended; what became of each is the Leading Bidder line's to say.
+ *
+ * Zero is a real state a total function must answer for — a lottery whose
+ * only Bids were malformed, in a log this codebase cannot write.
+ */
+export function formerContenderSentence(count: number): string {
+	if (count === 0) return 'No Teams had joined this contention when it dissolved.';
+	if (count === 1) return 'One Team contended before this contention dissolved.';
+	return `${String(count)} Teams contended before this contention dissolved.`;
+}
+
+/**
+ * Whether this Auction's Minimum-Bid Contention dissolved — the ONE
+ * derivation of it, so no surface assembles the two-fact test itself.
+ *
+ * A revealed seed and a `standard` contention, together. Neither alone is the
+ * answer: a live lottery has a sealed seed this fold has never seen, and an
+ * Auction that was never a lottery is `standard` with no seed at all. Only a
+ * contention that ran and then converted produces both.
+ *
+ * Structural in its parameter so the read path can ask it of a whole
+ * `Auction` and the surface can ask it of the two fields it was handed —
+ * neither has to reach for the other's shape, and there is still only one
+ * expression of the rule.
+ */
+export function wasDissolved(auction: {
+	readonly contention: ContentionState;
+	readonly seed: string | null;
+}): boolean {
+	return auction.seed !== null && auction.contention === 'standard';
+}
 
 /**
  * How many Teams have joined, as a finished sentence.
@@ -467,6 +615,38 @@ function readPayload(
 }
 
 /**
+ * The `ContentionDissolved` payload as this reducer needs it, read
+ * defensively — `readPayload`'s idiom, for `readPayload`'s reason: the column
+ * holds whatever JSON was written and an insert-only log cannot be corrected
+ * in place, so a malformed historical row must never crash the fold.
+ *
+ * An event naming no Player is SKIPPED outright: there is no Auction it could
+ * be about. A malformed or absent `seed` folds to `null` rather than to a
+ * skip, which is the honest reading of the two facts separately — the
+ * dissolution happened, and the reveal on it is unusable. Nothing here
+ * validates the seed against the commitment; `decide()` did that before the
+ * event was ever appended, and a fold has no seed of its own to compare.
+ *
+ * The three fields this reducer does NOT read — the ordered former
+ * Contenders, the converting Team and the amount — ride the payload for
+ * Epic 5's dispatcher, which must notify every former Contender from one
+ * event without re-folding. They are deliberately not narrowed here.
+ */
+function readDissolvedPayload(
+	payload: unknown
+): { readonly fantraxPlayerId: string; readonly seed: string | null } | null {
+	if (typeof payload !== 'object' || payload === null) return null;
+	const record = payload as Record<string, unknown>;
+	const fantraxPlayerId = record['fantraxPlayerId'];
+	if (typeof fantraxPlayerId !== 'string' || fantraxPlayerId === '') return null;
+	const rawSeed = record['seed'];
+	return {
+		fantraxPlayerId,
+		seed: typeof rawSeed === 'string' && rawSeed !== '' ? rawSeed : null
+	};
+}
+
+/**
  * Every entry of a record except the named key, built through
  * `Object.entries`/`Object.fromEntries` for `hasOwn`'s reason: the keys are
  * data, and `record[key] = value` on `__proto__` would set a prototype.
@@ -510,7 +690,11 @@ export const auctionsReducer: Reducer<OpenAuctions> = (state, event) => {
 					closesAt: bid.closesAt,
 					bids: [bid],
 					contenders: contendersFor([bid]),
-					seedHash: bid.seedHash
+					seedHash: bid.seedHash,
+					// No reveal can precede the first Bid: a `ContentionDissolved`
+					// for a Player with no Auction is skipped below, so the only
+					// way here is with nothing revealed yet.
+					seed: null
 				};
 				return { byPlayer: { ...state.byPlayer, [fantraxPlayerId]: auction } };
 			}
@@ -552,9 +736,56 @@ export const auctionsReducer: Reducer<OpenAuctions> = (state, event) => {
 				// same Auction cannot replace the published one — replay would
 				// otherwise be able to swap the commitment a Manager already
 				// checked.
-				seedHash: existing.seedHash
+				seedHash: existing.seedHash,
+				// A Bid never reveals anything. The reveal is `ContentionDissolved`'s
+				// alone, and it is carried across here unchanged so a Bid placed
+				// AFTER a dissolution — an ordinary ascending raise — cannot
+				// erase the seed the dissolution published.
+				seed: existing.seed
 			};
 			return { byPlayer: { ...state.byPlayer, [fantraxPlayerId]: auction } };
+		}
+		case CONTENTION_DISSOLVED_EVENT: {
+			// **This case records the reveal and NOTHING else.** The return to
+			// `standard`, the new Leading Bidder, the restarted clock and the
+			// released commitments are all consequences of the converting
+			// `BidPlaced` folded above — a strictly higher amount, read through
+			// `contentionForAmount` — and re-deriving any of them here would be
+			// a second judgement about one event pair. `contenders` in
+			// particular is NOT cleared: the list is what the reveal is about,
+			// and `teamMoneyStateFor` tests the contention STATE rather than
+			// the list being empty, which is the line that makes a dissolved
+			// contention commit nobody while keeping its history.
+			const read = readDissolvedPayload(event.payload);
+			if (read === null) return state;
+			const { fantraxPlayerId, seed } = read;
+			if (!hasOwn(state.byPlayer, fantraxPlayerId)) return state;
+			const existing = state.byPlayer[fantraxPlayerId] ?? null;
+			if (existing === null) return state;
+			// **An Auction that never ran a lottery has no reveal to record.**
+			// A hand-written or corrupt `ContentionDissolved` naming an
+			// ordinary Auction would otherwise set `seed`, which would make
+			// `wasDissolved` true and put a dissolution block — former
+			// Contenders, a revealed seed, a published hash — on a page whose
+			// Auction had none of those things.
+			//
+			// The test is the CONTENDER LIST and emphatically not the
+			// contention state: by the time this case runs, the converting
+			// `BidPlaced` has already folded and moved the Auction to
+			// `standard`, so `existing.contention !== 'minimum_bid'` would
+			// reject every genuine dissolution there is. A Contender is a Bid
+			// at exactly `MINIMUM_BID` that the log already holds, and
+			// `contenders` is never cleared — so a non-empty list is the one
+			// durable evidence that a lottery ran here, before and after the
+			// dissolution alike.
+			if (existing.contenders.length === 0) return state;
+			// The FIRST reveal seen, kept — `seedHash`'s rule, and what makes a
+			// second fold of the same log converge on the same seed.
+			if (existing.seed !== null) return state;
+			if (seed === null) return state;
+			return {
+				byPlayer: { ...state.byPlayer, [fantraxPlayerId]: { ...existing, seed } }
+			};
 		}
 		case AUCTION_CLOSED_EVENT: {
 			// The SAME reader `nominationsReducer` folds a close through, so a
