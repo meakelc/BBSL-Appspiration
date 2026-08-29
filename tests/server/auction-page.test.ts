@@ -1588,3 +1588,101 @@ describe('loadAuctionPage — a dissolved Minimum-Bid Contention (Story 3.3)', (
 		}
 	});
 });
+
+/**
+ * The Auction Contracts fold, on the READ path (Story 3.4).
+ *
+ * The page derives Cap Space, Roster Count and Minor League occupancy through
+ * the identical `loadTeamRoster` the locked transaction uses, so a Team that
+ * has just won a Player sees the figures its next Bid will actually be judged
+ * against — AD-9's "the render is never the check" holds only while the two
+ * are the SAME derivation.
+ */
+describe('loadAuctionPage — a won Player is in the viewer’s figures (AC4)', () => {
+	const won = (
+		seq: number,
+		fantraxPlayerId: string,
+		teamId: string,
+		winningAmount: number,
+		capHit: number,
+		placement: 'active_bench' | 'minor_league'
+	) =>
+		logEvent(
+			seq,
+			AUCTION_CLOSED_EVENT,
+			{
+				fantraxPlayerId,
+				playerName: fantraxPlayerId,
+				teamId,
+				teamName: teamId,
+				managerId: 'm-w',
+				winningAmount,
+				capHit,
+				placement,
+				contention: 'standard',
+				contractYears: null,
+				closedAt: '2026-08-26T09:00:00.000Z'
+			},
+			'2026-08-26T09:00:00.000Z',
+			{ managerId: 'm-w', teamId }
+		);
+
+	it('charges an Active/Bench win against Cap Space and Roster Count', async () => {
+		const harness = fakeGateway({
+			events: [
+				nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1'),
+				won(2, 'p-won', VIEWER_TEAM, 8_000_000, 8_000_000, 'active_bench')
+			],
+			freeAgents: [
+				{ fantraxPlayerId: 'p-1', playerName: 'Jalen Green', positions: 'SG', nbaTeam: 'HOU' }
+			],
+			managers: [{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' }]
+		});
+
+		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+
+		// The nine imported $1.0M contracts plus the $8.0M win.
+		expect(auction?.bidControl.team?.capSpace).toBe(156_000_000 - 8_000_000);
+		expect(auction?.bidControl.team?.rosterCount).toBe(10);
+		expect(auction?.bidControl.team?.minorLeagueOccupied).toBe(0);
+		// Still ONE roster statement: a contract is a fold, not a second read.
+		expect(harness.order.filter((step) => step === 'read-roster')).toHaveLength(1);
+	});
+
+	it('occupies a Minor League Slot at a $0 Cap Hit and leaves Roster Count alone (AD-23)', async () => {
+		const harness = fakeGateway({
+			events: [
+				nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1'),
+				won(2, 'p-stash', VIEWER_TEAM, 4_000_000, 0, 'minor_league')
+			],
+			freeAgents: [
+				{ fantraxPlayerId: 'p-1', playerName: 'Jalen Green', positions: 'SG', nbaTeam: 'HOU' }
+			],
+			managers: [{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' }]
+		});
+
+		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+
+		expect(auction?.bidControl.team?.capSpace).toBe(156_000_000);
+		expect(auction?.bidControl.team?.rosterCount).toBe(9);
+		expect(auction?.bidControl.team?.minorLeagueOccupied).toBe(1);
+	});
+
+	it('ignores another Team’s contracts', async () => {
+		const harness = fakeGateway({
+			events: [
+				nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1'),
+				won(2, 'p-won', 't-other', 30_000_000, 30_000_000, 'active_bench')
+			],
+			freeAgents: [
+				{ fantraxPlayerId: 'p-1', playerName: 'Jalen Green', positions: 'SG', nbaTeam: 'HOU' }
+			],
+			managers: [{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' }]
+		});
+
+		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+
+		expect(auction?.bidControl.team?.capSpace).toBe(156_000_000);
+		expect(auction?.bidControl.team?.rosterCount).toBe(9);
+	});
+});

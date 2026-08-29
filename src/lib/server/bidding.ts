@@ -91,6 +91,10 @@ import {
 	auctionsReducer
 } from '../core/projection/auctions.ts';
 import {
+	INITIAL_CONTRACTS,
+	contractsReducer
+} from '../core/projection/contracts.ts';
+import {
 	INITIAL_ELIGIBILITY,
 	eligibilityReducer,
 	isEligible
@@ -199,7 +203,14 @@ export type BidRejection = {
  * the transaction, after `pg_advisory_xact_lock`, so the figures cannot
  * move between the read and the decision.
  *
- * Three folds now share the ONE `loadEventsViaClient` read, and eligibility
+ * **Story 3.4 puts half of it back into the log.** `team_rosters` still
+ * answers what a Team STARTED with, but what it has WON since is folded from
+ * `AuctionClosed` and handed to `loadTeamRoster` alongside the table read, so
+ * the three figures include this Team's Auction Contracts through the one
+ * derivation the read path shares. Nothing else moved: `teamMoneyStateFor`'s
+ * inputs are already those three figures.
+ *
+ * Four folds now share the ONE `loadEventsViaClient` read, and eligibility
  * is one of them rather than a `select minor_league_eligible` on
  * `free_agent_players`. That is deliberate: the flag is the fold of
  * `MinorLeagueEligibilitySet` events, and asking the table instead would
@@ -215,8 +226,15 @@ export async function loadBidState(
 	const nominations = fold(INITIAL_NOMINATIONS, events, nominationsReducer);
 	const auctions = fold(INITIAL_AUCTIONS, events, auctionsReducer);
 	const eligibility = fold(INITIAL_ELIGIBILITY, events, eligibilityReducer);
+	// The FOURTH fold over the same events array (Story 3.4): what this Team
+	// has already won. It reaches the gates only through `loadTeamRoster`,
+	// which counts a contract row exactly as it counts an imported one — so
+	// Cap Space, Roster Count and Minor League occupancy all move on a close
+	// with no new term anywhere and no change to `teamMoneyStateFor`, whose
+	// inputs are already those three figures.
+	const contracts = fold(INITIAL_CONTRACTS, events, contractsReducer);
 
-	const roster = await loadTeamRoster(client, teamId);
+	const roster = await loadTeamRoster(client, teamId, contracts);
 
 	const auction = auctionForPlayer(auctions, fantraxPlayerId);
 

@@ -12,8 +12,58 @@
 import { describe, expect, it } from 'vitest';
 
 import { SALARY_CAP } from '../../src/lib/core/constants.ts';
+import { AUCTION_CLOSED_EVENT } from '../../src/lib/core/projection/nominations.ts';
+import { INITIAL_CONTRACTS, contractsReducer } from '../../src/lib/core/projection/contracts.ts';
+import { fold } from '../../src/lib/core/projection/fold.ts';
 import { loadTeamRoster } from '../../src/lib/server/team-roster.ts';
+import type { AppendedEvent } from '../../src/lib/core/types.ts';
 import type { QueryResultRow, TransactionalClient } from '../../src/lib/shell/write.ts';
+
+/**
+ * The Auction Contracts a log holds, folded (Story 3.4).
+ *
+ * Built by folding real `AuctionClosed` events rather than by hand-assembling
+ * an `AuctionContracts` literal: the reducer is what a caller will actually
+ * have, and a hand-built state could carry a shape the fold cannot produce.
+ */
+function contractsFrom(...closes: readonly AppendedEvent[]) {
+	return fold(INITIAL_CONTRACTS, closes, contractsReducer);
+}
+
+function close(
+	seq: number,
+	fantraxPlayerId: string,
+	teamId: string,
+	winningAmount: number,
+	capHit: number,
+	placement: 'active_bench' | 'minor_league'
+): AppendedEvent {
+	return {
+		seq: String(seq),
+		occurredAt: '2026-08-27T09:00:00.000Z',
+		schemaVersion: 1,
+		coreVersion: 1,
+		type: AUCTION_CLOSED_EVENT,
+		payload: {
+			fantraxPlayerId,
+			playerName: fantraxPlayerId,
+			teamId,
+			teamName: teamId,
+			managerId: 'm-1',
+			winningAmount,
+			capHit,
+			placement,
+			contention: 'standard',
+			contractYears: null,
+			closedAt: '2026-08-27T09:00:00.000Z'
+		},
+		managerId: 'm-1',
+		teamId,
+		deviceClass: null,
+		dispatchOutcome: null,
+		deliveryOutcome: null
+	};
+}
 
 /**
  * A client that answers the one statement and records what it was asked.
@@ -46,7 +96,7 @@ describe('loadTeamRoster — Cap Space, Roster Count and minors occupancy from o
 	it('reads one statement, keyed on the Team', async () => {
 		const harness = fakeClient([]);
 
-		await loadTeamRoster(harness.client, 't-7');
+		await loadTeamRoster(harness.client, 't-7', INITIAL_CONTRACTS);
 
 		expect(harness.statements).toHaveLength(1);
 		expect(harness.statements[0]?.params).toEqual(['t-7']);
@@ -57,7 +107,7 @@ describe('loadTeamRoster — Cap Space, Roster Count and minors occupancy from o
 		// error — and not a refusal for a reason no rule states.
 		const harness = fakeClient([]);
 
-		expect(await loadTeamRoster(harness.client, 't-7')).toEqual({
+		expect(await loadTeamRoster(harness.client, 't-7', INITIAL_CONTRACTS)).toEqual({
 			capSpace: SALARY_CAP,
 			rosterCount: 0,
 			minorLeagueOccupied: 0
@@ -70,7 +120,7 @@ describe('loadTeamRoster — Cap Space, Roster Count and minors occupancy from o
 			row('3000000', 'injury_reserve')
 		]);
 
-		expect(await loadTeamRoster(harness.client, 't-7')).toEqual({
+		expect(await loadTeamRoster(harness.client, 't-7', INITIAL_CONTRACTS)).toEqual({
 			capSpace: SALARY_CAP - 7_000_000,
 			rosterCount: 1,
 			// An IR row occupies no Minor League Slot either.
@@ -84,7 +134,7 @@ describe('loadTeamRoster — Cap Space, Roster Count and minors occupancy from o
 			row('30000000', 'minor_league')
 		]);
 
-		expect(await loadTeamRoster(harness.client, 't-7')).toEqual({
+		expect(await loadTeamRoster(harness.client, 't-7', INITIAL_CONTRACTS)).toEqual({
 			capSpace: SALARY_CAP - 4_000_000,
 			rosterCount: 1,
 			// ...and it is the one kind that DOES occupy a Minor League Slot,
@@ -100,8 +150,8 @@ describe('loadTeamRoster — Cap Space, Roster Count and minors occupancy from o
 		const asString = fakeClient([row('4000000', 'active_bench')]);
 		const asNumber = fakeClient([row(4_000_000, 'active_bench')]);
 
-		expect(await loadTeamRoster(asString.client, 't-7')).toEqual(
-			await loadTeamRoster(asNumber.client, 't-7')
+		expect(await loadTeamRoster(asString.client, 't-7', INITIAL_CONTRACTS)).toEqual(
+			await loadTeamRoster(asNumber.client, 't-7', INITIAL_CONTRACTS)
 		);
 	});
 
@@ -111,11 +161,118 @@ describe('loadTeamRoster — Cap Space, Roster Count and minors occupancy from o
 		// Roster Count is the conservative reading.
 		const harness = fakeClient([row('4000000', 'something_else')]);
 
-		expect(await loadTeamRoster(harness.client, 't-7')).toEqual({
+		expect(await loadTeamRoster(harness.client, 't-7', INITIAL_CONTRACTS)).toEqual({
 			capSpace: SALARY_CAP - 4_000_000,
 			rosterCount: 0,
 			// Nor does it silently consume one of the three.
 			minorLeagueOccupied: 0
+		});
+	});
+});
+
+/**
+ * The Auction Contracts half of the same three figures (Story 3.4).
+ *
+ * What a Team WON is not in `team_rosters` — nothing writes that table but the
+ * import — so it is folded from `AuctionClosed` and concatenated onto the rows
+ * read, before the ONE loop. What this suite pins is that a contract is
+ * counted by exactly the same rules an imported row is, with no second counter
+ * anywhere: Roster Count moves only on an Active/Bench placement, occupancy
+ * moves only on a Minor League one, and a Minor League Cap Hit is $0.
+ */
+describe('loadTeamRoster — the Auction Contracts fold, counted by the same loop', () => {
+	it('issues no extra statement for the contracts — they are not a table', async () => {
+		const harness = fakeClient([]);
+
+		await loadTeamRoster(
+			harness.client,
+			't-7',
+			contractsFrom(close(1, 'p-1', 't-7', 8_000_000, 8_000_000, 'active_bench'))
+		);
+
+		// One read, still keyed on the Team. A contract is a fold, not a row
+		// somebody has to go and fetch.
+		expect(harness.statements).toHaveLength(1);
+	});
+
+	it('charges an Active/Bench win against the Cap and against the twelve', async () => {
+		const harness = fakeClient([row('4000000', 'active_bench')]);
+
+		expect(
+			await loadTeamRoster(
+				harness.client,
+				't-7',
+				contractsFrom(close(1, 'p-1', 't-7', 8_000_000, 8_000_000, 'active_bench'))
+			)
+		).toEqual({
+			capSpace: SALARY_CAP - 12_000_000,
+			rosterCount: 2,
+			minorLeagueOccupied: 0
+		});
+	});
+
+	it('charges a Minor League win against NEITHER, and occupies a Slot (AD-23)', async () => {
+		// §10 example 16's shape: won at $4,000,000, Cap Hit $0, Roster Count
+		// unchanged, occupancy up by one. The winning amount stands on the
+		// contract; it simply is not what the Cap is charged.
+		const harness = fakeClient([row('4000000', 'active_bench')]);
+
+		expect(
+			await loadTeamRoster(
+				harness.client,
+				't-7',
+				contractsFrom(close(1, 'p-1', 't-7', 4_000_000, 0, 'minor_league'))
+			)
+		).toEqual({
+			capSpace: SALARY_CAP - 4_000_000,
+			rosterCount: 1,
+			minorLeagueOccupied: 1
+		});
+	});
+
+	it('counts only THIS Team’s contracts', async () => {
+		const harness = fakeClient([]);
+
+		expect(
+			await loadTeamRoster(
+				harness.client,
+				't-7',
+				contractsFrom(
+					close(1, 'p-1', 't-7', 8_000_000, 8_000_000, 'active_bench'),
+					close(2, 'p-2', 't-8', 30_000_000, 30_000_000, 'active_bench')
+				)
+			)
+		).toEqual({
+			capSpace: SALARY_CAP - 8_000_000,
+			rosterCount: 1,
+			minorLeagueOccupied: 0
+		});
+	});
+
+	it('adds imported rows and won contracts into ONE set of figures', async () => {
+		const harness = fakeClient([
+			row('4000000', 'active_bench'),
+			row('3000000', 'injury_reserve'),
+			row('30000000', 'minor_league')
+		]);
+
+		expect(
+			await loadTeamRoster(
+				harness.client,
+				't-7',
+				contractsFrom(
+					close(1, 'p-1', 't-7', 8_000_000, 8_000_000, 'active_bench'),
+					close(2, 'p-2', 't-7', 4_000_000, 0, 'minor_league')
+				)
+			)
+		).toEqual({
+			// $4.0M imported + $3.0M IR + $0 minors + $8.0M won + $0 won-minors.
+			capSpace: SALARY_CAP - 15_000_000,
+			// One imported Active/Bench row plus one Active/Bench win. The IR
+			// row and both Minor League rows count for nothing here.
+			rosterCount: 2,
+			// One imported Minor League row plus one Minor League win.
+			minorLeagueOccupied: 2
 		});
 	});
 });

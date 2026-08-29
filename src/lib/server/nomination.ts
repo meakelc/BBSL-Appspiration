@@ -15,14 +15,14 @@
  * acceptance criteria require Slot status to be a FOLD rather than a stored
  * flag that is read, and it still is.
  *
- * **The claim row is written once and deleted once.** Story 2.3 adds
+ * **The claim row is written once and deleted once.** Story 2.3 added
  * `releaseNomination`, the delete that clears a claim when a Player's
- * Auction closes. It ships tested and DELIBERATELY UNREGISTERED: no
- * `AuctionClosed` producer exists, Epic 3 owns closing, and the delete
- * belongs inside the transaction that appends the close (Story 3.4's), not
- * inside `placeNomination`'s. The Slot's release itself is not this
- * function's doing either — `nominationsReducer` frees it by folding the
- * same close event.
+ * Auction closes, and shipped it unregistered because no `AuctionClosed`
+ * producer existed. Story 3.4 is that producer: `server/close.ts` registers
+ * this exact updater, unchanged, in the transaction that appends the close.
+ * It is still not on `placeNomination`'s `projections`, because that path
+ * appends no close. The Slot's release itself is not this module's doing
+ * either — `nominationsReducer` frees it by folding the same close event.
  *
  * **The gate re-derives every check under the lock, whatever the page
  * rendered.** `loadNominationState` runs inside `runTransactionalWrite`'s
@@ -38,6 +38,16 @@
  * event-sourced (`20260824020000_live_reference_tables.sql`), and both are
  * read on the locked transaction's own client rather than trusted from the
  * render.
+ *
+ * **Under contract now has TWO sources, and one refusal** (Story 3.4).
+ * `team_rosters` answers what a Team started the offseason with; the
+ * `AuctionContracts` fold answers what it has won since. A Player is under
+ * contract if EITHER says so, and `under_contract` — which has always been
+ * this gate's answer to a rostered Player — is what a won Player is refused
+ * as, naming the winning Team. No refusal was added: `refuseNomination` reads
+ * one `contractHolderTeamName`, and this module is what resolves it from
+ * whichever source holds one. The table wins a tie, because a Player who has
+ * been promoted onto a roster is on it for real.
  *
  * **Device class rides the envelope, never the payload.** It is a
  * measurement column (`shell/write.ts:226`), not domain data — no reducer
@@ -59,6 +69,11 @@ import {
 	nominationsReducer,
 	readClosedPlayerId
 } from '../core/projection/nominations.ts';
+import {
+	INITIAL_CONTRACTS,
+	contractForPlayer,
+	contractsReducer
+} from '../core/projection/contracts.ts';
 import { INITIAL_PHASE, phaseReducer } from '../core/projection/phase.ts';
 import {
 	nominationConsequenceSentence,
@@ -110,14 +125,14 @@ export type NominationPlacedPayload = {
 };
 
 /**
- * Read the phase, the open nominations, the named pool Player and any
- * contract holder — all from ONE read of the log plus two point lookups, on
- * the given client.
+ * Read the phase, the open nominations, the Auction Contracts, the named pool
+ * Player and any contract holder — all from ONE read of the log plus two point
+ * lookups, on the given client.
  *
- * Two folds over a single `loadEventsViaClient` read: the two projections
- * cannot disagree about which events they saw, because they saw the same
- * array. The two table reads are both keyed on `fantrax_player_id`, which is
- * `unique` on both tables, so each returns at most one row.
+ * Three folds over a single `loadEventsViaClient` read: the projections cannot
+ * disagree about which events they saw, because they saw the same array. The
+ * two table reads are both keyed on `fantrax_player_id`, which is `unique` on
+ * both tables, so each returns at most one row.
  */
 export async function loadNominationState(
 	client: TransactionalClient,
@@ -126,6 +141,9 @@ export async function loadNominationState(
 	const events = await loadEventsViaClient(client);
 	const phase = fold(INITIAL_PHASE, events, phaseReducer);
 	const nominations = fold(INITIAL_NOMINATIONS, events, nominationsReducer);
+	// What has been WON in this auction (Story 3.4) — the second source of
+	// "under contract", folded from the same events the board came from.
+	const contracts = fold(INITIAL_CONTRACTS, events, contractsReducer);
 
 	const poolResult = await client.query(
 		`select fantrax_player_id, player_name
@@ -154,7 +172,16 @@ export async function loadNominationState(
 		[fantraxPlayerId]
 	);
 	const contractRow = contractResult.rows[0];
-	const contractHolderTeamName = contractRow === undefined ? null : String(contractRow['name']);
+	// Either source names the holder, and the ROSTER wins a tie: a Player the
+	// import promoted onto a Team is on that Team for real, whereas a folded
+	// Auction Contract is this auction's own output waiting to be exported. In
+	// practice the two cannot both answer — a rostered Player is not in the
+	// Free Agent pool and so was never nominatable — so the order states which
+	// is authoritative rather than resolving a collision that arises.
+	const contractHolderTeamName =
+		contractRow !== undefined
+			? String(contractRow['name'])
+			: (contractForPlayer(contracts, fantraxPlayerId)?.teamName ?? null);
 
 	return { phase, nominations, poolPlayer, contractHolderTeamName };
 }
@@ -225,6 +252,11 @@ export async function loadNominatablePool(
 		const events = await loadEventsViaClient(client);
 		const phase = fold(INITIAL_PHASE, events, phaseReducer);
 		const nominations = fold(INITIAL_NOMINATIONS, events, nominationsReducer);
+		// The won Players (Story 3.4). The pool query's left join answers who
+		// is on a ROSTER; this answers who has been won in this auction, and
+		// the two are resolved per row below exactly as `loadNominationState`
+		// resolves them for the one Player it is asked about.
+		const contracts = fold(INITIAL_CONTRACTS, events, contractsReducer);
 
 		// One statement, left joined, rather than one query per Player: the
 		// contract holder is part of what makes a row unavailable, and asking
@@ -253,9 +285,15 @@ export async function loadNominatablePool(
 					phase,
 					nominations,
 					poolPlayer: { fantraxPlayerId, playerName },
+					// The roster join's answer, or the Auction Contract's own
+					// `teamName` — the identical resolution, in the identical
+					// order, that `loadNominationState` makes under the lock.
+					// A Player won in this auction is greyed out on the page
+					// with the same `under_contract` sentence the submit would
+					// refuse them with.
 					contractHolderTeamName:
 						row.contract_team_name === null || row.contract_team_name === undefined
-							? null
+							? (contractForPlayer(contracts, fantraxPlayerId)?.teamName ?? null)
 							: String(row.contract_team_name)
 				},
 				// The empty string is not a Team id, so a signed-in Manager
@@ -391,12 +429,13 @@ export const claimNomination: ProjectionUpdater = async (client, appended) => {
  * collision IS the rule, a delete that finds nothing has already achieved
  * what it was asked to achieve.
  *
- * **Deliberately not registered.** No `AuctionClosed` producer exists — Epic
- * 3 owns closing — and the delete must run inside the transaction that
- * appends the close, which is Story 3.4's transaction, not `placeNomination`'s.
- * Adding it to `placeNomination`'s `projections` would issue a delete that
- * can never match, on a path that never appends a close. Shipping it tested
- * and unregistered makes 3.4 a one-line registration.
+ * **Registered by Story 3.4, and by nothing else.** Story 2.3 shipped it
+ * tested and deliberately unregistered, because no `AuctionClosed` producer
+ * existed and the delete must run inside the transaction that appends the
+ * close. `server/close.ts` is that transaction, and registering it there cost
+ * the one line 2.3 predicted. It is still NOT on `placeNomination`'s
+ * `projections`: that path never appends a close, so the delete could only
+ * ever issue against nothing.
  */
 export const releaseNomination: ProjectionUpdater = async (client, appended) => {
 	for (const event of appended) {

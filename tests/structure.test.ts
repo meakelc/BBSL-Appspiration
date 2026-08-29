@@ -48,9 +48,15 @@ const AR2_DIRECTORIES: Array<[path: string, purpose: string]> = [
  *
  * **Story 3.3 added ONE — 9** — the dissolution: the conversion at
  * $1,500,000 that releases every Contender, resets the clock, reveals the
- * sealed seed and returns the Auction to ordinary ascending rules. What
- * remains of Epic 3's examples — 8, 11, 13, 16, 17 and 27 — belongs to
- * Stories 3.4 through 3.7: the draw, the sweep and the League Clock.
+ * sealed seed and returns the Auction to ordinary ascending rules.
+ *
+ * **Story 3.4 added TWO — 16 and 17** — the Slot Placement pair: the stash
+ * into the third Minor League Slot at a $0 Cap Hit, and the second win that
+ * overflows into Active/Bench because the FIRST close was committed before it
+ * was evaluated. 17 imports 16's produced state rather than restating its
+ * numbers, which is AD-11's sequential ordering as an executable claim. What
+ * remains of Epic 3's examples — 8, 11, 13 and 27 — belongs to Stories 3.5
+ * through 3.7: the draw, the sweep and the League Clock.
  */
 const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 	['example-01-ordinary-raise.test.ts', '1 — Ordinary raise'],
@@ -66,6 +72,8 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 	['example-09-the-lottery-dissolves.test.ts', '9 — Lottery dissolves'],
 	['example-10-the-dead-zone.test.ts', '10 — The dead zone'],
 	['example-15-co-manager-race.test.ts', '15 — Co-manager race'],
+	['example-16-minors-placement.test.ts', '16 — Minors placement'],
+	['example-17-minors-overflow.test.ts', '17 — Minors overflow'],
 	['example-18-stashing-beats-the-cap.test.ts', '18 — Stashing beats the cap, on purpose'],
 	[
 		'example-19-overflow-refuses-the-cheap-bid.test.ts',

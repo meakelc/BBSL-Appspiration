@@ -56,7 +56,10 @@ export type NominatablePlayer = {
  *
  * `poolPlayer` is `null` when the named `fantraxPlayerId` matches no pool
  * row at all; `contractHolderTeamName` is `null` when the Player sits on no
- * Team's roster, which is the ordinary case for a Free Agent.
+ * Team's roster AND has been won by nobody in this auction, which is the
+ * ordinary case for a Free Agent. The caller resolves it from the two sources
+ * — `team_rosters` and the `AuctionContracts` fold — so this gate reads one
+ * answer and has no notion of which produced it (Story 3.4).
  */
 export type NominationState = {
 	readonly phase: LeaguePhase;
@@ -78,10 +81,17 @@ export type NominationState = {
  * rejection that arrived stating no reason. All eight are worded here
  * anyway, so no route ever words a refusal itself.
  *
- * **There is deliberately no "already won in this auction" refusal.** No
- * close event exists yet — `AuctionClosed` is Story 2.3's — so that state is
- * unreachable, and a refusal for an unreachable state is a sentence nobody
- * can ever be shown and no test can ever honestly produce.
+ * **There is deliberately no separate "already won in this auction" refusal,
+ * and since Story 3.4 that is because `under_contract` IS it.** A close
+ * appends an `AuctionClosed` and `contractsReducer` folds it into an Auction
+ * Contract, so a won Player is under contract to the winning Team — the same
+ * fact `team_rosters` states about an imported Player, arriving from the
+ * other of the two sources `server/nomination.ts` resolves. The sentence
+ * already names the Player and the Team, which is what the refusal has to do,
+ * and a second refusal saying the same thing in different words would be a
+ * synonym rather than a distinction. (Until 3.4 the reason was that no close
+ * event existed at all; `AUCTION_CLOSED_EVENT` arrived in Story 2.3 and its
+ * producer in 3.4, so that reason is retired here rather than left standing.)
  */
 export type NominationRefusal =
 	| { readonly kind: 'phase'; readonly phase: LeaguePhase }
@@ -178,7 +188,11 @@ export function nominationRefusalDetail(refusal: NominationRefusal): string {
  * `under_contract` precedes `already_nominated` because a Player on a roster
  * should never have been nominatable in the first place: if both somehow
  * hold, "they are under contract to the Lakers" is the fact that explains
- * the other one, not the other way round.
+ * the other one, not the other way round. Since Story 3.4 a Player WON in
+ * this auction reaches the same refusal, and the ordering matters there for
+ * the same reason: a close drops the board seat and awards the contract in
+ * one event, so the contract is the fact that explains any stale board state
+ * beside it.
  *
  * `slot_in_use` goes LAST of the five, which is a deliberate choice about
  * whose problem is named first. A Manager whose Slot is held and who has

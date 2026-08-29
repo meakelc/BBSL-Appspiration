@@ -64,7 +64,7 @@ development_status:
   3-1-expiry-is-authoritative-for-validation: done
   3-2-enter-and-join-a-minimum-bid-contention: done
   3-3-dissolve-a-minimum-bid-contention: done
-  3-4-close-an-auction-and-place-the-player: backlog
+  3-4-close-an-auction-and-place-the-player: review
   3-5-the-tick-one-cron-one-function-sweep-then-drain: backlog
   3-6-draw-a-minimum-bid-contention-winner: backlog
   3-7-the-league-clock-and-the-end-of-the-auction-phase: backlog

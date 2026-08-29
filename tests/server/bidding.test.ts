@@ -1394,3 +1394,137 @@ describe('placeBid — the lottery seed (AC5, AD-14)', () => {
 		expect(code).not.toContain('supabase.ts');
 	});
 });
+
+/**
+ * A Team's next Bid, judged against what it has already WON (Story 3.4, AC4).
+ *
+ * `team_rosters` is unchanged by a close — nothing writes it but the import —
+ * so every figure below moves because `loadBidState` folds `AuctionClosed`
+ * into `AuctionContracts` and hands them to `loadTeamRoster`, which counts a
+ * contract row exactly as it counts an imported one. There is no second Cap
+ * term and no `+ wonCount` anywhere; a won Player is one more `CapHitRow`.
+ */
+describe('loadBidState — a won contract is in the three figures (AC4)', () => {
+	const won = (
+		seq: number,
+		fantraxPlayerId: string,
+		teamId: string,
+		winningAmount: number,
+		capHit: number,
+		placement: 'active_bench' | 'minor_league'
+	) =>
+		logEvent(
+			seq,
+			AUCTION_CLOSED_EVENT,
+			{
+				fantraxPlayerId,
+				playerName: fantraxPlayerId,
+				teamId,
+				teamName: teamId,
+				managerId: 'm-w',
+				winningAmount,
+				capHit,
+				placement,
+				contention: 'standard',
+				contractYears: null,
+				closedAt: '2026-08-26T09:00:00.000Z'
+			},
+			'2026-08-26T09:00:00.000Z',
+			{ managerId: 'm-w', teamId }
+		);
+
+	async function bidStateWith(events: QueryResultRow[]) {
+		const harness = fakeGateway({ events });
+		let loaded: Awaited<ReturnType<typeof loadBidState>> | null = null;
+		const client = await harness.gateway.connect();
+		try {
+			await client.query('begin');
+			loaded = await loadBidState(client, 'p-1', ACTOR.teamId);
+			await client.query('rollback');
+		} finally {
+			client.release();
+		}
+		return { harness, loaded };
+	}
+
+	it('charges an Active/Bench win against Cap Space and Roster Count', async () => {
+		const { loaded } = await bidStateWith([
+			nominated(),
+			bidLogged(2, 8_000_000),
+			won(3, 'p-won', ACTOR.teamId, 8_000_000, 8_000_000, 'active_bench')
+		]);
+
+		// Nine imported $1.0M contracts is $156.0M of room; the win takes $8.0M.
+		expect(loaded?.bid.team?.capSpace).toBe(SALARY_CAP - 9_000_000 - 8_000_000);
+		expect(loaded?.bid.team?.rosterCount).toBe(10);
+		expect(loaded?.bid.team?.minorLeagueOccupied).toBe(0);
+	});
+
+	it('leaves Cap Space and Roster Count alone on a Minor League win, and occupies a Slot', async () => {
+		const { loaded } = await bidStateWith([
+			nominated(),
+			bidLogged(2, 8_000_000),
+			won(3, 'p-stash', ACTOR.teamId, 4_000_000, 0, 'minor_league')
+		]);
+
+		// AD-23: the contract says $4,000,000 and charges $0.
+		expect(loaded?.bid.team?.capSpace).toBe(SALARY_CAP - 9_000_000);
+		expect(loaded?.bid.team?.rosterCount).toBe(9);
+		expect(loaded?.bid.team?.minorLeagueOccupied).toBe(1);
+	});
+
+	it('counts no other Team’s contract', async () => {
+		const { loaded } = await bidStateWith([
+			nominated(),
+			bidLogged(2, 8_000_000),
+			won(3, 'p-won', 't-someone-else', 30_000_000, 30_000_000, 'active_bench')
+		]);
+
+		expect(loaded?.bid.team?.capSpace).toBe(SALARY_CAP - 9_000_000);
+		expect(loaded?.bid.team?.rosterCount).toBe(9);
+	});
+
+	it('drops the won Auction out of the eligible leads it was exposure for (§10 ex 20)', async () => {
+		// Nothing sweeps: the close removes the Auction from
+		// `auctionsReducer`'s fold, so the amount simply stops appearing.
+		const stashEvents: QueryResultRow[] = [
+			nominated(),
+			bidLogged(2, 8_000_000),
+			nominated(3, 'p-stash', 'Ausar Bright', 't-8'),
+			logEvent(4, MINOR_LEAGUE_ELIGIBILITY_SET, {
+				fantraxPlayerId: 'p-stash',
+				playerName: 'Ausar Bright',
+				before: false,
+				after: true
+			}),
+			logEvent(
+				5,
+				BID_PLACED_EVENT,
+				{
+					fantraxPlayerId: 'p-stash',
+					teamId: ACTOR.teamId,
+					teamName: ACTOR.teamName,
+					managerId: ACTOR.managerId,
+					amount: 30_000_000,
+					closesAt: '2026-08-27T09:00:00.000Z'
+				},
+				'2026-08-26T09:00:00.000Z',
+				{ managerId: ACTOR.managerId, teamId: ACTOR.teamId }
+			)
+		];
+
+		const open = await bidStateWith(stashEvents);
+		expect(open.loaded?.bid.team?.eligibleLeading).toEqual([
+			{ fantraxPlayerId: 'p-stash', playerName: 'Ausar Bright', amount: 30_000_000 }
+		]);
+
+		const closed = await bidStateWith([
+			...stashEvents,
+			won(6, 'p-stash', ACTOR.teamId, 30_000_000, 0, 'minor_league')
+		]);
+		expect(closed.loaded?.bid.team?.eligibleLeading).toEqual([]);
+		// ...and the Slot it took is now occupied, which is the other half of
+		// example 20: the exposure went away because the Player is placed.
+		expect(closed.loaded?.bid.team?.minorLeagueOccupied).toBe(1);
+	});
+});

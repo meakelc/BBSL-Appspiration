@@ -1,0 +1,427 @@
+/**
+ * The close transaction. Server-only (Story 3.4, FR-21).
+ *
+ * The stateful fake `ConnectionGateway` is `tests/server/bidding.test.ts`'s:
+ * it records every statement in order and keeps the appended events in memory,
+ * so "exactly one event was appended", "the claim row was deleted in the same
+ * transaction" and "everything rolled back on a throw" are observable rather
+ * than assumed. It throws on any statement it does not recognise, which is
+ * what makes "no `team_rosters` write, no `free_agent_players` write, no
+ * contracts table" provable rather than merely unasserted.
+ */
+
+import { describe, expect, it } from 'vitest';
+
+import { MINIMUM_BID, SALARY_CAP } from '../../src/lib/core/constants.ts';
+import { BID_PLACED_EVENT } from '../../src/lib/core/projection/auctions.ts';
+import { MINOR_LEAGUE_ELIGIBILITY_SET } from '../../src/lib/core/projection/eligibility.ts';
+import {
+	AUCTION_CLOSED_EVENT,
+	NOMINATION_PLACED_EVENT
+} from '../../src/lib/core/projection/nominations.ts';
+import type { AuctionClosedPayload } from '../../src/lib/core/rules/close.ts';
+import { closeAuction } from '../../src/lib/server/close.ts';
+import type {
+	ConnectionGateway,
+	QueryResultRow,
+	TransactionalClient
+} from '../../src/lib/shell/write.ts';
+
+const NOW = new Date('2026-08-27T09:00:00.000Z');
+const CLOSES_AT = '2026-08-27T09:00:00.000Z';
+
+/**
+ * The winning Team's imported roster: nine $1.0M Active/Bench contracts and
+ * two occupied Minor League Slots. Deliberately roomy — every assertion here is
+ * about the close, not about the money.
+ */
+const ROSTER: QueryResultRow[] = [
+	...Array.from({ length: 9 }, () => ({ cap_hit: '1000000', roster_slot_kind: 'active_bench' })),
+	{ cap_hit: '30000000', roster_slot_kind: 'minor_league' },
+	{ cap_hit: '20000000', roster_slot_kind: 'minor_league' }
+];
+
+function fakeGateway(options: { events?: QueryResultRow[]; roster?: QueryResultRow[] } = {}) {
+	const order: string[] = [];
+	const params: unknown[][] = [];
+	const appendedEvents: QueryResultRow[] = [];
+	let releasedClaims: unknown[][] = [];
+	let seq = 40;
+	let released = 0;
+	let committed = false;
+	let rolledBack = false;
+
+	const client: TransactionalClient & { release(): void } = {
+		async query(text: string, queryParams: readonly unknown[] = []) {
+			const sql = text.trim();
+			if (/^begin/i.test(sql)) {
+				order.push('begin');
+				return { rows: [] };
+			}
+			if (/pg_advisory_xact_lock/i.test(sql)) {
+				order.push('lock');
+				return { rows: [{ locked: true, now: NOW }] };
+			}
+			if (/^select \* from auction_events/i.test(sql)) {
+				order.push('read-log');
+				return { rows: [...(options.events ?? []), ...appendedEvents] };
+			}
+			if (/^select cap_hit, roster_slot_kind\s+from team_rosters/i.test(sql)) {
+				order.push('read-roster');
+				params.push([...queryParams]);
+				return { rows: options.roster ?? ROSTER };
+			}
+			if (/^insert into auction_events/i.test(sql)) {
+				order.push('append-event');
+				params.push([...queryParams]);
+				seq += 1;
+				const row: QueryResultRow = {
+					seq,
+					occurred_at: queryParams[0],
+					schema_version: queryParams[1],
+					core_version: queryParams[2],
+					manager_id: queryParams[3],
+					team_id: queryParams[4],
+					event_type: queryParams[5],
+					payload: JSON.parse(String(queryParams[6])),
+					device_class: queryParams[7],
+					dispatch_outcome: queryParams[8],
+					delivery_outcome: queryParams[9]
+				};
+				appendedEvents.push(row);
+				return { rows: [row] };
+			}
+			if (/^delete from open_nominations/i.test(sql)) {
+				order.push('release-claim');
+				releasedClaims.push([...queryParams]);
+				return { rows: [] };
+			}
+			if (/^commit/i.test(sql)) {
+				order.push('commit');
+				committed = true;
+				return { rows: [] };
+			}
+			if (/^rollback/i.test(sql)) {
+				order.push('rollback');
+				rolledBack = true;
+				// A real ROLLBACK discards every uncommitted write; the fake
+				// must too, or "nothing was written" would be trivially true.
+				appendedEvents.length = 0;
+				releasedClaims = [];
+				return { rows: [] };
+			}
+			throw new Error(`unexpected statement: ${sql}`);
+		},
+		release() {
+			released += 1;
+		}
+	};
+
+	const gateway: ConnectionGateway = { connect: async () => client };
+
+	return {
+		gateway,
+		order,
+		params,
+		appendedEvents,
+		get releasedClaims() {
+			return releasedClaims;
+		},
+		state: {
+			get released() {
+				return released;
+			},
+			get committed() {
+				return committed;
+			},
+			get rolledBack() {
+				return rolledBack;
+			}
+		}
+	};
+}
+
+function logEvent(
+	seq: number,
+	type: string,
+	payload: unknown,
+	occurredAt = '2026-08-26T09:00:00.000Z',
+	envelope: { managerId?: string; teamId?: string } = {}
+): QueryResultRow {
+	return {
+		seq,
+		occurred_at: new Date(occurredAt),
+		schema_version: 1,
+		core_version: 1,
+		manager_id: envelope.managerId ?? 'm-0',
+		team_id: envelope.teamId ?? 't-0',
+		event_type: type,
+		payload
+	};
+}
+
+const nominated = (fantraxPlayerId = 'p-1', playerName = 'Ausar Bright') =>
+	logEvent(1, NOMINATION_PLACED_EVENT, {
+		fantraxPlayerId,
+		playerName,
+		teamId: 't-n',
+		teamName: 'Team N',
+		managerId: 'm-n'
+	});
+
+const bidLogged = (
+	seq: number,
+	amount: number,
+	fantraxPlayerId = 'p-1',
+	teamId = 't-m',
+	managerId = 'm-m',
+	seedHash?: string
+) =>
+	logEvent(
+		seq,
+		BID_PLACED_EVENT,
+		{
+			fantraxPlayerId,
+			teamId,
+			teamName: 'Team M',
+			managerId,
+			amount,
+			closesAt: CLOSES_AT,
+			...(seedHash === undefined ? {} : { seedHash })
+		},
+		'2026-08-26T09:00:00.000Z',
+		{ managerId, teamId }
+	);
+
+const eligible = (seq: number, fantraxPlayerId = 'p-1') =>
+	logEvent(seq, MINOR_LEAGUE_ELIGIBILITY_SET, {
+		fantraxPlayerId,
+		playerName: 'Ausar Bright',
+		before: false,
+		after: true
+	});
+
+function acceptedPayload(harness: ReturnType<typeof fakeGateway>): AuctionClosedPayload {
+	expect(harness.appendedEvents).toHaveLength(1);
+	const row = harness.appendedEvents[0];
+	if (row === undefined) throw new Error('no event appended');
+	expect(row['event_type']).toBe(AUCTION_CLOSED_EVENT);
+	return row['payload'] as AuctionClosedPayload;
+}
+
+describe('closeAuction — one event, one transaction (AC3)', () => {
+	it('appends exactly one AuctionClosed, acted by the WINNER', async () => {
+		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 8_500_000)] });
+
+		const outcome = await closeAuction(harness.gateway, 'p-1');
+
+		expect(outcome.kind).toBe('accepted');
+		const payload = acceptedPayload(harness);
+		expect(payload.teamId).toBe('t-m');
+		expect(payload.winningAmount).toBe(8_500_000);
+		// The envelope's columns, not just the payload's copy of them.
+		expect(harness.appendedEvents[0]?.['manager_id']).toBe('m-m');
+		expect(harness.appendedEvents[0]?.['team_id']).toBe('t-m');
+		// A close is not a user action, so the measurement column stays null.
+		expect(harness.appendedEvents[0]?.['device_class']).toBeNull();
+		expect(harness.state.committed).toBe(true);
+		expect(harness.state.released).toBe(1);
+	});
+
+	it('locks before it reads, reads the roster after the fold, and releases the claim before commit', async () => {
+		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 8_500_000)] });
+
+		await closeAuction(harness.gateway, 'p-1');
+
+		// The roster read follows the log read because the WINNING Team is not
+		// known until the winner is derived from the fold.
+		expect(harness.order).toEqual([
+			'begin',
+			'lock',
+			'read-log',
+			'read-roster',
+			'append-event',
+			'release-claim',
+			'commit'
+		]);
+	});
+
+	it('reads the roster of the WINNER, not of the nominator', async () => {
+		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 8_500_000)] });
+
+		await closeAuction(harness.gateway, 'p-1');
+
+		const rosterParams = harness.params.find((entry) => entry[0] === 't-m');
+		expect(rosterParams).toEqual(['t-m']);
+		expect(harness.params.some((entry) => entry[0] === 't-n')).toBe(false);
+	});
+
+	it('deletes the claim row for the closed Player, in the same transaction', async () => {
+		// The one-line registration Story 2.3 wrote `releaseNomination` for.
+		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 8_500_000)] });
+
+		await closeAuction(harness.gateway, 'p-1');
+
+		expect(harness.releasedClaims).toEqual([['p-1']]);
+	});
+
+	it('states the Auction’s NOMINAL expiry as closedAt while the row records when it landed', async () => {
+		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 8_500_000)] });
+
+		await closeAuction(harness.gateway, 'p-1');
+
+		// `occurredAt` is the transaction clock; `closedAt` is what the Auction
+		// was due at. Here they coincide, and the payload's value comes from
+		// the persisted `closesAt` either way.
+		expect(acceptedPayload(harness).closedAt).toBe(CLOSES_AT);
+		expect(harness.appendedEvents[0]?.['occurred_at']).toBe(NOW);
+	});
+});
+
+describe('closeAuction — Slot Placement against the roster at this close (AC2)', () => {
+	it('stashes an eligible Player in the third Minor League Slot at a $0 Cap Hit', async () => {
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, 4_000_000), eligible(3)]
+		});
+
+		await closeAuction(harness.gateway, 'p-1');
+
+		const payload = acceptedPayload(harness);
+		expect(payload.placement).toBe('minor_league');
+		expect(payload.winningAmount).toBe(4_000_000);
+		expect(payload.capHit).toBe(0);
+	});
+
+	it('overflows an eligible Player into Active/Bench once all three are occupied', async () => {
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, 3_000_000), eligible(3)],
+			roster: [
+				{ cap_hit: '30000000', roster_slot_kind: 'minor_league' },
+				{ cap_hit: '20000000', roster_slot_kind: 'minor_league' },
+				{ cap_hit: '10000000', roster_slot_kind: 'minor_league' }
+			]
+		});
+
+		await closeAuction(harness.gateway, 'p-1');
+
+		const payload = acceptedPayload(harness);
+		expect(payload.placement).toBe('active_bench');
+		expect(payload.capHit).toBe(3_000_000);
+	});
+
+	it('sees a contract this same Team won EARLIER in the log, with no roster row for it', async () => {
+		// AD-11's arithmetic through the shell: the first close occupies the
+		// third Slot, and `team_rosters` says nothing about it — the fold does.
+		const harness = fakeGateway({
+			events: [
+				nominated('p-2', 'Someone Else'),
+				logEvent(2, NOMINATION_PLACED_EVENT, {
+					fantraxPlayerId: 'p-1',
+					playerName: 'Ausar Bright',
+					teamId: 't-x',
+					teamName: 'Team X',
+					managerId: 'm-x'
+				}),
+				bidLogged(3, 3_000_000, 'p-1'),
+				eligible(4, 'p-1'),
+				logEvent(5, AUCTION_CLOSED_EVENT, {
+					fantraxPlayerId: 'p-2',
+					playerName: 'Someone Else',
+					teamId: 't-m',
+					teamName: 'Team M',
+					managerId: 'm-m',
+					winningAmount: 4_000_000,
+					capHit: 0,
+					placement: 'minor_league',
+					contention: 'standard',
+					contractYears: null,
+					closedAt: CLOSES_AT
+				})
+			]
+		});
+
+		await closeAuction(harness.gateway, 'p-1');
+
+		// Two imported Minor League rows plus one won one is three occupied,
+		// so this eligible win overflows into Active/Bench at full price.
+		const payload = acceptedPayload(harness);
+		expect(payload.placement).toBe('active_bench');
+		expect(payload.capHit).toBe(3_000_000);
+	});
+
+	it('places a Player who is not eligible in Active/Bench however empty the minors are', async () => {
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, 8_500_000)],
+			roster: []
+		});
+
+		await closeAuction(harness.gateway, 'p-1');
+
+		expect(acceptedPayload(harness).placement).toBe('active_bench');
+		// The roster read still happened and still found the full Cap.
+		expect(harness.order).toContain('read-roster');
+		expect(SALARY_CAP).toBeGreaterThan(0);
+	});
+});
+
+describe('closeAuction — the bugs it refuses to paper over (AD-1, AD-14)', () => {
+	it('throws on a live Minimum-Bid Contention, naming Story 3.6, and appends nothing', async () => {
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, MINIMUM_BID, 'p-1', 't-e', 'm-e', 'a-commitment')]
+		});
+
+		await expect(closeAuction(harness.gateway, 'p-1')).rejects.toThrow(/Story 3\.6/);
+
+		expect(harness.appendedEvents).toEqual([]);
+		expect(harness.releasedClaims).toEqual([]);
+		expect(harness.state.rolledBack).toBe(true);
+		expect(harness.state.committed).toBe(false);
+		expect(harness.state.released).toBe(1);
+	});
+
+	it('throws before it reads a roster, so a lottery close touches no table', async () => {
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, MINIMUM_BID, 'p-1', 't-e', 'm-e', 'a-commitment')]
+		});
+
+		await expect(closeAuction(harness.gateway, 'p-1')).rejects.toThrow(TypeError);
+
+		expect(harness.order).toEqual(['begin', 'lock', 'read-log', 'rollback']);
+	});
+
+	it('throws when nobody ever bid, and appends nothing', async () => {
+		const harness = fakeGateway({ events: [nominated()] });
+
+		await expect(closeAuction(harness.gateway, 'p-1')).rejects.toThrow(/no Auction to close/);
+		expect(harness.appendedEvents).toEqual([]);
+		expect(harness.state.rolledBack).toBe(true);
+	});
+
+	it('throws when the Auction Clock has not run out, and appends nothing', async () => {
+		const harness = fakeGateway({
+			events: [
+				nominated(),
+				logEvent(
+					2,
+					BID_PLACED_EVENT,
+					{
+						fantraxPlayerId: 'p-1',
+						teamId: 't-m',
+						teamName: 'Team M',
+						managerId: 'm-m',
+						amount: 8_500_000,
+						// An hour past the transaction clock: still live.
+						closesAt: '2026-08-27T10:00:00.000Z'
+					},
+					'2026-08-26T10:00:00.000Z',
+					{ managerId: 'm-m', teamId: 't-m' }
+				)
+			]
+		});
+
+		await expect(closeAuction(harness.gateway, 'p-1')).rejects.toThrow(/has not reached it/);
+		expect(harness.appendedEvents).toEqual([]);
+		expect(harness.releasedClaims).toEqual([]);
+		expect(harness.state.rolledBack).toBe(true);
+	});
+});
