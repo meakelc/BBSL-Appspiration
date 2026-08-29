@@ -536,6 +536,128 @@ describe('the Auction page — the clock it counts down on (Story 3.1)', () => {
 	});
 });
 
+// --- Story 3.2: the Minimum-Bid Contention on the Auction page (AC7) ------
+
+describe('the Auction page — the lottery it renders', () => {
+	it('carries the 3px `lottery` left accent bar, through tokens and nothing else', () => {
+		const style = PAGE.slice(PAGE.indexOf('<style>'));
+		// DESIGN.md:162 grants the 3px left bar to Minimum-Bid Contention and
+		// to nothing else on any surface. Both halves are tokens: the width is
+		// `--accent-bar-width` and the colour is `--color-lottery`, which
+		// existed unused until this story.
+		expect(style).toMatch(
+			/\.lottery\s*\{[^}]*border-left:\s*var\(--accent-bar-width\)\s+solid\s+var\(--color-lottery\)/
+		);
+		// No raw hex, no raw pixel width.
+		expect(style).not.toMatch(/border-left:\s*3px/);
+		expect(style).not.toMatch(/#8B98E0/i);
+	});
+
+	it('applies the bar with Svelte’s class: directive, never a conditional class string', () => {
+		expect(PAGE).toContain('class:lottery={isContention}');
+		// The standing guard, restated where the temptation is: a conditional
+		// `class="{...}"` anywhere on this page is a finding.
+		expect(PAGE).not.toMatch(/class=["'][^"']*\{/);
+	});
+
+	it('shows an icon AND a word beside the colour — a greyscale screenshot still reads', () => {
+		// DESIGN.md:120 — no state is ever conveyed by colour alone. The icon
+		// is decorative and hidden from assistive technology; the WORD is the
+		// core's own glossary label, so a greyscale reader and a screen-reader
+		// user both get the state in text.
+		expect(PAGE).toContain('aria-hidden="true"');
+		expect(PAGE).toContain('{MINIMUM_BID_CONTENTION_LABEL}');
+		// ...and the page does not spell the term itself.
+		expect(PAGE_CODE).not.toMatch(/Standard Contention|Minimum-Bid Contention/);
+	});
+
+	it('renders the live Contender list in the server’s order, never re-sorted', () => {
+		expect(PAGE).toMatch(/\{#each auction\.contenders as contender/);
+		expect(PAGE).toContain('id="auction-contenders"');
+		// AD-14 makes the order an input to the winner, so a surface that
+		// reordered it would show a list the draw will not run over.
+		expect(PAGE).not.toMatch(/auction\.contenders\.(sort|reverse|toSorted)/);
+	});
+
+	it('renders the Contender count as the core’s sentence, not a bare number', () => {
+		expect(PAGE).toContain('{contenderCountSentence(auction.contenderCount)}');
+		expect(PAGE).toContain('id="auction-contender-count"');
+		// Not worded here: no singular/plural logic and no interpolated count
+		// of its own.
+		expect(PAGE_CODE).not.toMatch(/Contenders? so far/);
+		expect(PAGE_CODE).not.toMatch(/\{auction\.contenderCount\}/);
+	});
+
+	it('states in WORDS that the clock will not reset on a join, from the core', () => {
+		// `EXPERIENCE.md`:155 asks for it by name. It is imported, never
+		// spelled, so the page and the fold cannot word it differently.
+		expect(PAGE).toContain('{CONTENTION_CLOCK_UNMOVED}');
+		expect(PAGE).toContain("CONTENTION_CLOCK_UNMOVED");
+		expect(PAGE_CODE).not.toMatch(/will not reset/);
+	});
+
+	it('publishes the commitment with the core’s sentence and the fold’s digest', () => {
+		expect(PAGE).toContain('{SEED_COMMITMENT}');
+		expect(PAGE).toContain('{auction.seedHash}');
+		// The page never hashes anything, and the only seed-shaped value it
+		// can reach is the published DIGEST off the fold — the raw seed lives
+		// in a table this process holds no privilege on and never queries, so
+		// there is nothing here for it to name.
+		expect(PAGE_CODE).not.toMatch(/\bhash\(/);
+		expect(PAGE_CODE).not.toMatch(/\bseed\s*[:=]/i);
+		// Not worded here either: the sentence is imported, never spelled.
+		expect(PAGE_CODE).not.toMatch(/sealed where no role/);
+	});
+
+	it('decides the lottery from the fold’s own state literal, not from a shipped flag', () => {
+		expect(PAGE).toContain("gateState.contention === 'minimum_bid'");
+		// No transported boolean: `isLottery` and `youAreContending` are each
+		// one comparison away from facts already on the wire, and a
+		// transported derivation is one the browser trusts instead of making
+		// (AD-7, AD-9).
+		expect(PAGE_CODE).not.toMatch(/isLottery/);
+		expect(PAGE_CODE).not.toMatch(/youAreContending/);
+	});
+
+	it('rebuilds the gate state with the two contention facts, for the same evaluate()', () => {
+		expect(PAGE).toMatch(/contention: control\.contention/);
+		expect(PAGE).toMatch(/contenders: control\.contenderTeamIds/);
+	});
+
+	it('still has exactly ONE button — joining is placing a $1,000,000 Bid', () => {
+		// A second control would be a second way to commit capital, and the
+		// form that already exists is the way. Restated here because "join"
+		// is exactly the word that invites a button.
+		const controls = [...PAGE_CODE.matchAll(/<button\b[\s\S]*?<\/button>/g)];
+		expect(controls).toHaveLength(1);
+		expect(PAGE_CODE).not.toMatch(/\bJoin\b/);
+	});
+
+	it('adds no new CSS sizing literal — every value it introduced is a token', () => {
+		// The exact-list guard below already enforces this; asserted here too
+		// so the lottery block is the thing under test rather than a
+		// coincidence of where the literals happen to live.
+		const style = PAGE.slice(PAGE.indexOf('<style>'));
+		const lottery = style.slice(style.indexOf('.contention {'));
+		for (const declaration of lottery.matchAll(
+			/^\s*(?:width|height|min-height|max-width|gap|padding|padding-left|padding-top|margin|margin-top):\s*([^;]+);/gm
+		)) {
+			expect(declaration[1]?.trim(), declaration[0]).toMatch(/^var\(--[a-z0-9-]+\)$/);
+		}
+	});
+
+	it('renders the whole block for every viewer — it hangs off no Team fact', () => {
+		// A lottery is a fact about the Auction, not about who is looking at
+		// it. The block is conditional on `isContention` alone, which is the
+		// fold's state, and on nothing about `control.viewerTeamId`.
+		const block = PAGE.slice(PAGE.indexOf('class:lottery={isContention}'));
+		const end = block.indexOf('</section>');
+		const lottery = block.slice(0, end);
+		expect(lottery).not.toMatch(/viewerTeamId/);
+		expect(lottery).not.toMatch(/control\.available/);
+	});
+});
+
 describe('the Auction page — what it never renders', () => {
 	it('offers no control to cancel, edit or lower a Bid — absent, not disabled', () => {
 		// Every control on the page, checked by markup rather than by prose:
@@ -1109,10 +1231,10 @@ describe('the refusal panel — the only surface with a dedicated anatomy', () =
 		);
 
 		expect(rows).toHaveLength(PLACE_BID_GATES.length);
-		// Seven since Story 3.1. The literal is kept beside the derived length
+		// Eight since Story 3.2. The literal is kept beside the derived length
 		// deliberately: it is what notices a gate arriving without anybody
 		// deciding to add one.
-		expect(rows).toHaveLength(7);
+		expect(rows).toHaveLength(8);
 		expect(rows.map((row) => row.gate)).toEqual([...PLACE_BID_GATES]);
 		// The refusing row is filled — `class:refused={!row.passed}` — and
 		// every other row is outlined and carries its own figure.
@@ -1192,6 +1314,17 @@ describe('the bid action — a refusal carries the figures it was judged against
 			opening: 'not_an_opening',
 			offered: 10_500_000,
 			minimumOpening: 1_000_000
+		},
+		// Story 3.2's eighth gate. This Auction is in Standard Contention, so
+		// it has nothing to decide and reports zero Contenders — a count it
+		// knows rather than a figure it lacks.
+		contention: {
+			passed: true,
+			entry: 'not_a_contention',
+			offered: 10_500_000,
+			joinAmount: 1_000_000,
+			conversionAmount: 1_500_000,
+			contenderCount: 0
 		},
 		selfBid: { passed: true, actingTeamId: 't-2', leadingTeamId: 't-9' },
 		increment: {

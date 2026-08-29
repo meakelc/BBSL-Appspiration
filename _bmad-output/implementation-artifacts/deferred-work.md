@@ -325,3 +325,15 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-3-1-expiry-is-authoritative.md`
   summary: A malformed `closesAt` in the insert-only log makes that Auction refuse every future Bid permanently, and no story yet names the recovery path.
   evidence: `hasExpired` reads an unreadable close instant as expired — the deliberate fail-closed direction, matching `readPayload`'s own fallback — and AD-4 forbids correcting a `BidPlaced` payload in place. Story 7.2 (Void a Bid and restore the Auction) is the only mechanism that could recover such an Auction; it should cover this case explicitly rather than by accident.
+
+## Deferred from: code review of spec-3-2-minimum-bid-contention (2026-08-28)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-minimum-bid-contention.md`
+  summary: `auction_contention_seeds` keys on `fantrax_player_id` alone, so a second contention opened on the same Player would abort the whole transaction rather than write a second seed.
+  evidence: bmad-code-review (2026-08-28), blind-hunter layer. The migration's primary key is `fantrax_player_id text primary key` and carries no Auction or contention instance component, and `recordContentionSeed` in `src/lib/server/bidding.ts` inserts with no `on conflict` clause — so a duplicate key raises and rolls back the accepted Bid alongside it. This is unreachable today: a lottery cannot convert (3.2 refuses `$1,500,000` on `contention` by name) and a `$1,000,000` Bid onto a standard Auction is never accepted, so no Player can reach a second opening. It becomes reachable the moment a story lets an Auction re-open on the same Player — dissolution and re-nomination (3.3), or void and restore (Epic 7.2). The fix is a decision that belongs with whichever story creates the second opening: widen the key, or make the insert idempotent.
+  status: open
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-2-minimum-bid-contention.md`
+  summary: A live Minimum-Bid Contention whose `seedHash` folds to `null` renders no commitment block and no statement that the commitment is missing.
+  evidence: bmad-code-review (2026-08-28), edge-case-hunter layer. `src/routes/auction/[fantraxPlayerId]/+page.svelte:669` guards the commitment on `{#if auction.seedHash !== null}` with no `{:else}`, so a lottery with no readable commitment is visually identical to one whose commitment simply did not render. `decide()` throws when an opening at `MINIMUM_BID` arrives with a `null` seed, and `readPayload` nulls a malformed `seedHash` rather than throwing, so the state is reachable only from a corrupt or hand-written log — which AD-4 forbids correcting in place. AD-14's trust guarantee rests on a Manager being able to see the commitment, so the absence of one is exactly the case worth naming out loud. Story 3.6 builds the reveal and the verification surface and should decide what an uncommitted lottery says for itself.
+  status: open

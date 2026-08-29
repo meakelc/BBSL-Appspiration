@@ -38,10 +38,15 @@ const AR2_DIRECTORIES: Array<[path: string, purpose: string]> = [
  * executable specification.
  *
  * **Story 3.1 added NONE, and that is recorded rather than left to look like
- * a miss.** Epic 3's examples — 6, 7, 8, 9, 10, 11, 13, 16, 17, 21, 22 and 27
- * — all belong to Stories 3.2 through 3.7: Minimum-Bid Contention, the fixed
- * clock, the draw, the sweep and the League Clock. Expiry-as-authority owns
- * no §10 example of its own, so this list is unchanged by it.
+ * a miss.** Expiry-as-authority owns no §10 example of its own.
+ *
+ * **Story 3.2 added FIVE — 6, 7, 10, 21 and 22** — the Minimum-Bid Contention
+ * set: the lottery opening, three joins that do not move the clock, the dead
+ * zone between the two thresholds, and the two capital examples that are the
+ * whole of what widening `teamMoneyStateFor` from the leader to every
+ * Contender changed. What remains of Epic 3's examples — 8, 9, 11, 13, 16, 17
+ * and 27 — belongs to Stories 3.3 through 3.7: dissolution, the draw, the
+ * sweep and the League Clock.
  */
 const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 	['example-01-ordinary-raise.test.ts', '1 — Ordinary raise'],
@@ -49,6 +54,12 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 	['example-03-roster-reserve-bites.test.ts', '3 — Roster reserve bites'],
 	['example-04-reserve-clears.test.ts', '4 — Reserve clears as commitments accumulate'],
 	['example-05-outbid-frees-capital.test.ts', '5 — Outbid frees capital immediately'],
+	['example-06-lottery-opens.test.ts', '6 — Lottery opens'],
+	[
+		'example-07-lottery-grows-clock-unmoved.test.ts',
+		'7 — Lottery grows, clock unmoved'
+	],
+	['example-10-the-dead-zone.test.ts', '10 — The dead zone'],
 	['example-15-co-manager-race.test.ts', '15 — Co-manager race'],
 	['example-18-stashing-beats-the-cap.test.ts', '18 — Stashing beats the cap, on purpose'],
 	[
@@ -58,6 +69,14 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 	[
 		'example-20-a-resolved-win-stops-being-exposure.test.ts',
 		'20 — A resolved win stops being exposure'
+	],
+	[
+		'example-21-a-lottery-on-an-eligible-player-commits-nothing.test.ts',
+		'21 — A lottery on an eligible player commits nothing'
+	],
+	[
+		'example-22-a-lottery-that-overflows-does-commit.test.ts',
+		'22 — A lottery that overflows does commit'
 	],
 	['example-23-ir-does-not-fill-the-twelve.test.ts', '23 — IR does not fill the twelve'],
 	[

@@ -239,15 +239,76 @@ export type GateResults = Readonly<Record<string, GateOutcome>>;
  *  - `not_an_opening` — a Bid already leads, so this gate has nothing to
  *    decide and passes. The increment gate owns the raise.
  *  - `above_the_minimum` — passes, and the Auction enters Standard Contention.
- *  - `at_the_minimum` — refused. Exactly `MINIMUM_BID` would open a
- *    Minimum-Bid Contention, whose Contender list, seed table, fixed clock
- *    and draw are Stories 3.2/3.3. Nothing here may create one.
+ *  - `at_the_minimum` — PASSES since Story 3.2, and the Auction enters a
+ *    Minimum-Bid Contention. It was refused by name until then, because no
+ *    Contender list, seed table or fixed clock existed to run one; all three
+ *    exist now, and `contention` below owns every amount question inside the
+ *    lottery this opening starts.
  *  - `below_the_minimum` — refused: an Opening Bid is at least `MINIMUM_BID`.
  */
 export type OpeningGateOutcome = GateOutcome & {
 	readonly opening: 'not_an_opening' | 'above_the_minimum' | 'at_the_minimum' | 'below_the_minimum';
 	readonly offered: Money;
 	readonly minimumOpening: Money;
+};
+
+/**
+ * The Minimum-Bid Contention gate: every amount question INSIDE a lottery
+ * (Story 3.2).
+ *
+ * **One gate, four questions, and they are one gate because they are one
+ * rule.** Once an Auction sits at exactly `$1,000,000` the ordinary
+ * arithmetic stops applying — there is no ascending raise to be short of, so
+ * `increment` reports no rule applies — and what replaces it is a
+ * classification of the offered amount against two fixed thresholds. Joining,
+ * joining twice, the dead zone between the thresholds and the conversion this
+ * story deliberately does not build are all the same question asked of the
+ * same amount, and splitting them across four gates would let a caller be
+ * handed three passes and one refusal about a single comparison.
+ *
+ * `entry` states which case this is, so the wording and the tests read one
+ * field rather than re-deriving the comparisons:
+ *
+ *  - `not_a_contention` — no lottery is running, so this gate has nothing to
+ *    decide and passes. `contenderCount` is `0` because there are none, not
+ *    because the figure is unknown.
+ *  - `joins` — exactly `joinAmount`, from a Team not already on the list.
+ *    Passes: this Bid joins the contention.
+ *  - `already_contending` — exactly `joinAmount` from a Team that is already
+ *    a Contender. Refused: a Team joins once, and every Contender holds the
+ *    identical `$1,000,000`, so a second join would commit nothing new and
+ *    buy a second chance at the draw.
+ *  - `converts` — at or above `conversionAmount`. Refused, and named as
+ *    deferred: dissolving a contention releases every Contender's commitment
+ *    and reveals the seed (Story 3.3), and accepting this as an ordinary
+ *    raise would do most of the first while leaving the seed sealed forever
+ *    — which is exactly what AD-14's "no unopened commitment is left behind"
+ *    forbids.
+ *  - `neither` — strictly between the two thresholds. Refused: too high to
+ *    join, too low to convert. §10 example 10's dead zone, which under the
+ *    $500,000 grid contains no on-grid amount at all, so `granularity`
+ *    refuses every member of it too.
+ *
+ * **No money figure beyond the two thresholds, and no close instant.** That
+ * is `SlotsGateOutcome`'s and `ExpiryGateOutcome`'s structural discipline:
+ * this gate decides what an amount MEANS inside a lottery, never whether a
+ * Team can afford it (`cap`) and never whether the clock has run out
+ * (`expiry`). `offered`, `joinAmount` and `conversionAmount` are the three
+ * terms of its own comparison and nothing else is reachable from here.
+ *
+ * `contenderCount` is a COUNT, in the register `SlotsGateOutcome` already
+ * uses: the refusal panel states how many Teams are in, which is the fact a
+ * Manager reading "you are already a Contender" needs beside it.
+ */
+export type ContentionGateOutcome = GateOutcome & {
+	readonly entry: 'not_a_contention' | 'joins' | 'already_contending' | 'converts' | 'neither';
+	readonly offered: Money;
+	/** Exactly this amount joins a contention — `MINIMUM_BID`. */
+	readonly joinAmount: Money;
+	/** At or above this converts one — `MINIMUM_BID + MINIMUM_INCREMENT` (3.3). */
+	readonly conversionAmount: Money;
+	/** How many Teams are Contenders already. `0` when no lottery is running. */
+	readonly contenderCount: number;
 };
 
 /**
@@ -490,13 +551,20 @@ export type ExpiryGateOutcome = GateOutcome & {
  * arithmetic and left this list exactly as it was. Story 3.1 added `expiry`,
  * and it cost the same ONE edit — the list below, plus the key on
  * `PlaceBidGateResults`; every consumer, the refusal panel's seventh chip
- * included, followed from it.
+ * included, followed from it. Story 3.2 added `contention` and spent the
+ * edit a fourth time: the eighth chip reached the panel because this list
+ * grew, and no component or route was touched to make it appear.
  *
  * **The ORDER is the reading order.** `allGatesPassed`, `failedGates`,
  * `bidRefusalDelta` and `bidGateReport` all iterate this list, so it is the
  * order a Manager reads the refusal panel in. `expiry` is FIRST because a
  * clock that has run out is the frame every other question sits inside:
- * offering, raising and affording are all moot once it has.
+ * offering, raising and affording are all moot once it has. `contention`
+ * sits IMMEDIATELY AFTER `opening`, because the two are one reading:
+ * `opening` says what an amount means when nothing leads yet, and
+ * `contention` says what it means once a lottery is running — so a Bid
+ * refused on both `contention` and `selfBid` states the lottery's ground
+ * before the ordinary auction's.
  *
  * Frozen at runtime as well as `as const`, because this list is what
  * `evaluate()`'s totality is asserted against — a caller that could splice
@@ -505,6 +573,7 @@ export type ExpiryGateOutcome = GateOutcome & {
 export const PLACE_BID_GATES = Object.freeze([
 	'expiry',
 	'opening',
+	'contention',
 	'selfBid',
 	'increment',
 	'granularity',
@@ -512,7 +581,7 @@ export const PLACE_BID_GATES = Object.freeze([
 	'slots'
 ] as const);
 
-/** One of the seven gate names above. */
+/** One of the eight gate names above. */
 export type PlaceBidGate = (typeof PLACE_BID_GATES)[number];
 
 /**
@@ -526,6 +595,7 @@ export type PlaceBidGate = (typeof PLACE_BID_GATES)[number];
 export type PlaceBidGateResults = {
 	readonly expiry: ExpiryGateOutcome;
 	readonly opening: OpeningGateOutcome;
+	readonly contention: ContentionGateOutcome;
 	readonly selfBid: SelfBidGateOutcome;
 	readonly increment: IncrementGateOutcome;
 	readonly granularity: GranularityGateOutcome;

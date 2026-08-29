@@ -200,8 +200,9 @@ describe('§10 example 25 — the full roster can still stash', () => {
 		// — a real figure the money gate still clears at $40.0M of room.
 		expect(gates.cap.minorsExposure).toBe(STASH_AMOUNT);
 		expect(gates.cap.maximumBid).toBe(31_000_000);
-		// Seven since Story 3.1 added `expiry` to `PLACE_BID_GATES`.
-		expect(rows).toHaveLength(7);
+		// Eight since Story 3.2 added `contention` to `PLACE_BID_GATES`,
+		// and it reached this panel by the list growing and nothing else.
+		expect(rows).toHaveLength(8);
 	});
 
 	it('breaks the tie on Player id, so the figure and the naming are deterministic', () => {

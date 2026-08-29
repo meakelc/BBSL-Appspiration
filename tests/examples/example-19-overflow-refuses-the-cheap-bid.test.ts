@@ -151,9 +151,13 @@ describe('§10 example 19 — overflow refuses the cheap bid', () => {
 		expect(gates.cap.minorsExposure).toBe(30_000_000);
 		expect(gates.cap.maximumBid).toBe(-28_000_000);
 
-		// ...and at the literal $1,000,000 the exposure refusal is still there,
-		// beside the one Epic 3 owns.
-		expect(failedGates(evaluate(STATE, bidOf(1_000_000), NOW))).toEqual(['opening', 'cap']);
+		// ...and at the literal $1,000,000 the exposure refusal is now the SOLE
+		// ground. Story 3.2 made the opening gate pass that amount — it opens
+		// a Minimum-Bid Contention rather than being refused for want of one —
+		// so what used to be a second refusal beside `cap` is gone, and the
+		// example's own claim reads more cleanly than before: the cheap bid is
+		// refused on money, and on nothing else.
+		expect(failedGates(evaluate(STATE, bidOf(1_000_000), NOW))).toEqual(['cap']);
 	});
 
 	it('appends nothing, and the earlier Bid is untouched', () => {
@@ -205,9 +209,9 @@ describe('§10 example 19 — overflow refuses the cheap bid', () => {
 		// naming a dollar, because the outcome it renders carries none.
 		expect(rowFor('slots')?.figure).toBe('Roster Count would be 12 of 12, Overflow Count 1');
 		expect(rowFor('slots')?.figure).not.toMatch(/\$/);
-		// Seven since Story 3.1 added `expiry`, and it reached this panel by
+		// Eight since Story 3.2 added `contention`, and it reached this panel by
 		// `PLACE_BID_GATES` growing — no markup change and no edit to the
 		// example itself beyond the count.
-		expect(rows).toHaveLength(7);
+		expect(rows).toHaveLength(8);
 	});
 });

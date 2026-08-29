@@ -70,10 +70,16 @@ const OPENING_AUCTION: Auction = {
 		managerId: 'm-a',
 		amount: parseMoney(8_000_000),
 		occurredAt: '2026-08-26T08:00:00.000Z',
-		closesAt: '2026-08-27T08:00:00.000Z'
+		closesAt: '2026-08-27T08:00:00.000Z',
+		// Story 3.2: `hash(seed)`, present only on the Bid that opened a
+		// Minimum-Bid Contention. This one opened nothing of the sort.
+		seedHash: null
 	},
 	closesAt: '2026-08-27T08:00:00.000Z',
-	bids: []
+	bids: [],
+	// Standard Contention has no Contenders and no published commitment.
+	contenders: [],
+	seedHash: null
 };
 
 /** The two Managers of Team L, bidding the same amount in the same second. */

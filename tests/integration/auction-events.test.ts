@@ -571,6 +571,100 @@ describe.skipIf(!reachable)(SUITE_TITLE, () => {
 			}
 		});
 
+		// --- Story 3.2: the sealed seed table (AD-14) -----------------------
+
+		it('grants NO role anything on auction_contention_seeds — anon, authenticated AND service_role', async () => {
+			// **The one table in this schema that grants service_role
+			// nothing.** Every other table revokes the client-facing roles and
+			// then grants service_role what it needs — auction_events gets
+			// SELECT and INSERT, open_nominations gets SELECT, INSERT and
+			// DELETE. This one grants nobody anything, so with RLS forced and
+			// no policy the sole reachable identity is the direct
+			// SUPABASE_DB_URL connection.
+			//
+			// AD-14 requires the seed to be unreadable by every manager-facing
+			// role, "the Commissioner's included". The Commissioner is an
+			// application flag on `managers.is_commissioner` rather than a
+			// database role, so there is no separate role to deny — which is
+			// why denying EVERY role is the only assertion that means what the
+			// AD says.
+			const client = new Client({ connectionString: LOCAL_DB_URL });
+			await client.connect();
+			try {
+				const grants = await client.query<{ grantee: string; privilege_type: string }>(
+					`select grantee, privilege_type from information_schema.role_table_grants
+					 where table_schema = 'public' and table_name = 'auction_contention_seeds'
+					   and grantee in ('anon', 'authenticated', 'service_role')`
+				);
+				expect(grants.rows).toEqual([]);
+			} finally {
+				await client.end();
+			}
+		});
+
+		it('forces row level security on auction_contention_seeds and declares no policy', async () => {
+			// Belt as well as braces, from the other direction: even the
+			// table's OWNER is subject to RLS here (`force`), and with no
+			// policy declared there is no row anybody reaches through
+			// PostgREST at all.
+			const client = new Client({ connectionString: LOCAL_DB_URL });
+			await client.connect();
+			try {
+				const flags = await client.query<{ relrowsecurity: boolean; relforcerowsecurity: boolean }>(
+					`select relrowsecurity, relforcerowsecurity from pg_class
+					 where oid = 'public.auction_contention_seeds'::regclass`
+				);
+				expect(flags.rows[0]?.relrowsecurity).toBe(true);
+				expect(flags.rows[0]?.relforcerowsecurity).toBe(true);
+
+				const policies = await client.query(
+					`select policyname from pg_policies
+					 where schemaname = 'public' and tablename = 'auction_contention_seeds'`
+				);
+				expect(policies.rows).toEqual([]);
+			} finally {
+				await client.end();
+			}
+		});
+
+		it('holds the seed as text, keyed one per Player, with a NOT NULL created_at', async () => {
+			// The shape Story 3.6's draw will read: one seed per contention,
+			// stored byte-for-byte as the string `hash()` was computed over, and
+			// stamped with the instant the contention opened.
+			const client = new Client({ connectionString: LOCAL_DB_URL });
+			await client.connect();
+			try {
+				const columns = await client.query<{
+					column_name: string;
+					data_type: string;
+					is_nullable: string;
+				}>(
+					`select column_name, data_type, is_nullable
+					 from information_schema.columns
+					 where table_schema = 'public' and table_name = 'auction_contention_seeds'
+					 order by column_name`
+				);
+				expect(
+					columns.rows.map((row) => [row.column_name, row.data_type, row.is_nullable])
+				).toEqual([
+					['created_at', 'timestamp with time zone', 'NO'],
+					['fantrax_player_id', 'text', 'NO'],
+					['seed', 'text', 'NO']
+				]);
+
+				const key = await client.query<{ constraint_type: string }>(
+					`select tc.constraint_type
+					 from information_schema.table_constraints tc
+					 where tc.table_schema = 'public'
+					   and tc.table_name = 'auction_contention_seeds'
+					   and tc.constraint_type = 'PRIMARY KEY'`
+				);
+				expect(key.rows).toHaveLength(1);
+			} finally {
+				await client.end();
+			}
+		});
+
 		it('leaves anon and authenticated with ZERO privileges on open_nominations', async () => {
 			// The migration's "belt as well as braces" revoke was asserted only
 			// in a comment. The security property is that the client-facing

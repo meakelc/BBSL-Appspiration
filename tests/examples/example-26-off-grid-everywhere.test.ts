@@ -71,10 +71,18 @@ function auctionAt(amount: number, contention: 'standard' | 'minimum_bid'): Auct
 			managerId: 'm-a',
 			amount: parseMoney(amount),
 			occurredAt: '2026-08-26T08:00:00.000Z',
-			closesAt: '2026-08-27T08:00:00.000Z'
+			closesAt: '2026-08-27T08:00:00.000Z',
+			seedHash: null
 		},
 		closesAt: '2026-08-27T08:00:00.000Z',
-		bids: []
+		bids: [],
+		// Story 3.2. Example 26's lottery half is built as a state literal
+		// with its opener as the only Contender, exactly as the fold would.
+		contenders:
+			contention === 'minimum_bid'
+				? [{ seq: '2', teamId: 't-a', teamName: 'Team A' }]
+				: [],
+		seedHash: null
 	};
 }
 
@@ -141,14 +149,15 @@ const LOTTERY_AUCTION: Auction = auctionAt(MINIMUM_BID, 'minimum_bid');
 const LOTTERY: BidState = bidStateFor(LOTTERY_AUCTION, RICH, false);
 
 describe('§10 example 26b — $1,000,001 in a Minimum-Bid Contention', () => {
-	it('is a Minimum-Bid Contention state literal, not one this story created', () => {
+	it('is the state an Opening Bid of exactly $1,000,000 now produces', () => {
 		expect(LOTTERY_AUCTION.contention).toBe('minimum_bid');
 		expect(LOTTERY.leadingBid?.amount).toBe(MINIMUM_BID);
-		// And the gate refuses to CREATE one: an Opening Bid of exactly
-		// $1,000,000 is named and refused, so nothing here can produce this
-		// state through the rules.
+		// Until Story 3.2 this fixture was a state literal the rules could not
+		// reach: the opening gate refused exactly $1,000,000 by name. It PASSES
+		// now, so the same state is reachable the ordinary way, and example 26b
+		// is testing a lottery the codebase can actually produce.
 		const opening = evaluate(bidStateFor(null, RICH, false), bidOf(MINIMUM_BID), NOW);
-		expect(opening.opening.passed).toBe(false);
+		expect(opening.opening.passed).toBe(true);
 		expect(opening.opening.opening).toBe('at_the_minimum');
 	});
 

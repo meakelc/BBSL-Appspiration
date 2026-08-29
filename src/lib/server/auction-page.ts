@@ -123,7 +123,7 @@ import {
 	contentionOf,
 	contentionSentence
 } from '../core/projection/auctions.ts';
-import type { Auction, Bid } from '../core/projection/auctions.ts';
+import type { Auction, Bid, ContentionState } from '../core/projection/auctions.ts';
 import {
 	INITIAL_NOMINATIONS,
 	NOMINATION_PLACED_EVENT,
@@ -219,6 +219,30 @@ export type AuctionPageBidControl = {
 	readonly leadingAmount: number | null;
 	/** The leading Bid's Team, or `null` when nothing leads. */
 	readonly leadingTeamId: string | null;
+	/**
+	 * Which contention this Auction is in, as the fold decided it — a state
+	 * literal, not a derived flag.
+	 *
+	 * `AuctionPageState.contention` above is the SENTENCE, for printing. This
+	 * is the fact `BidState` carries, serialised so the surface rebuilds
+	 * exactly the state the locked transaction will and calls the same
+	 * `evaluate()` on every keystroke. There is deliberately no `isLottery`
+	 * and no `youAreContending` on this wire: both are one comparison away
+	 * from the facts beside them, and a transported boolean is a derivation
+	 * the browser would then be trusting instead of making (AD-7, AD-9).
+	 */
+	readonly contention: ContentionState;
+	/**
+	 * The Teams already on the Contender list, in join order — IDS, because
+	 * that is what the `contention` gate matches the viewer's Team against.
+	 *
+	 * The NAMES are on `AuctionPageState.contenders`, for printing. Two
+	 * fields rather than one shape carrying both, for `leadingTeamId` and
+	 * `leadingBidder`'s reason: what a gate decides from and what a page
+	 * prints are different things, and merging them invites a gate that
+	 * matches on a display string.
+	 */
+	readonly contenderTeamIds: readonly string[];
 	/** The viewer's own Team, from the session and nothing else (AD-4). */
 	readonly viewerTeamId: string | null;
 	/**
@@ -285,6 +309,32 @@ export type AuctionPageState = {
 	readonly nominatedAt: string;
 	/** Which contention this Auction is in, worded by the fold that decides it. */
 	readonly contention: string;
+	/**
+	 * The Contenders in a Minimum-Bid Contention — Team NAMES, in ascending
+	 * join `seq` (AD-14). Empty for every Auction that is not a lottery.
+	 *
+	 * Names rather than ids because this is what the page PRINTS: there is no
+	 * anonymity at any point on this page, and a list of uuids names nobody.
+	 * The ids the `contention` gate matches on ride `bidControl` instead,
+	 * where every other gate fact lives.
+	 *
+	 * The ORDER is the fold's and is never re-sorted here: AD-14 makes it an
+	 * input to the winner, so a surface that reordered it would be showing a
+	 * different list from the one the draw will run over.
+	 */
+	readonly contenders: readonly string[];
+	/** How many Contenders, as a count. `0` when no lottery is running. */
+	readonly contenderCount: number;
+	/**
+	 * The published `hash(seed)` for this contention, or `null`.
+	 *
+	 * The COMMIT half of AD-14, shown on the page from the moment the lottery
+	 * opens so a Manager can record it and check the reveal against it at the
+	 * draw (Story 3.6). It is the fold's own value, off the opening Bid's
+	 * payload — nothing is hashed here, and the seed it commits to is not
+	 * reachable from this process's queries at all.
+	 */
+	readonly seedHash: string | null;
 	/** The current price, rendered, or `null` when there are no Bids. */
 	readonly price: string | null;
 	/** The Leading Bidder, Team spelled out with acting Manager, or `null`. */
@@ -536,6 +586,13 @@ export async function loadAuctionPage(
 			nominatingTeam: nameBidder(nomination.teamName, managerDisplayName),
 			nominatedAt: nomination.occurredAt,
 			contention: contentionSentence(contentionOf(auction)),
+			// The fold's own ordered list, names only, never re-sorted (AD-14).
+			contenders: (auction?.contenders ?? []).map((contender) => contender.teamName),
+			contenderCount: auction?.contenders.length ?? 0,
+			// The published commitment, straight off the fold. The seed it
+			// commits to is in `auction_contention_seeds`, which this
+			// connection's role holds no privilege on.
+			seedHash: auction?.seedHash ?? null,
 			price: auction === null ? null : describeAmount(auction.leadingBid.amount),
 			leadingBidder:
 				auction === null
@@ -622,6 +679,11 @@ function readBidControl(
 		minimumLegalSentence: minimumLegalSentence(minimumLegal),
 		leadingAmount: state.leadingBid?.amount ?? null,
 		leadingTeamId: state.leadingBid?.teamId ?? null,
+		// The two contention facts, off the SAME `BidState` the gates were
+		// just evaluated against — so what the browser rebuilds is what this
+		// module decided from, not a second narrowing of the fold.
+		contention: state.contention,
+		contenderTeamIds: state.contenders,
 		viewerTeamId,
 		playerIsMinorLeagueEligible,
 		team,

@@ -1,0 +1,82 @@
+/**
+ * `core/hash.ts` against the published SHA-256 vectors (Story 3.2, AD-14).
+ *
+ * This file runs BEFORE anything in the codebase consumes `hash()`, and that
+ * ordering is the point: the commitment AD-14 rests on is worth nothing if
+ * the digest is not the one `sha256sum` prints. Every expected value below is
+ * a published vector — FIPS 180-4's own two examples, the empty-string digest
+ * every implementation agrees on, and a long input that forces a second
+ * compression block.
+ *
+ * Pure: a string in, a string out. No database, no clock, no randomness.
+ */
+
+import { describe, expect, it } from 'vitest';
+
+import { hash } from '../../src/lib/core/hash.ts';
+
+describe('hash — the published SHA-256 vectors', () => {
+	it('hashes the empty string', () => {
+		expect(hash('')).toBe('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
+	});
+
+	it('hashes "abc" — FIPS 180-4 §B.1, the one-block example', () => {
+		expect(hash('abc')).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+	});
+
+	it('hashes the 56-character example — FIPS 180-4 §B.2, two blocks', () => {
+		// 56 characters is exactly the length at which the padding no longer
+		// fits in the first block, so this vector is what proves the second
+		// compression round runs at all.
+		expect(hash('abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq')).toBe(
+			'248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1'
+		);
+	});
+
+	it('hashes a million "a"s the long way — the multi-block vector', () => {
+		expect(hash('a'.repeat(1_000_000))).toBe(
+			'cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0'
+		);
+	});
+
+	it('hashes a 64-character hex seed — the shape this codebase actually hashes', () => {
+		// `randomBytes(32).toString('hex')`, which is what `server/bidding.ts`
+		// generates. Checked against a value produced independently, so the
+		// digest a Manager computes with `sha256sum` matches this one.
+		expect(
+			hash('0000000000000000000000000000000000000000000000000000000000000000')
+		).toBe('60e05bd1b195af2f94112fa7197a5c88289058840ce7c6df9693756bc6250f55');
+	});
+});
+
+describe('hash — the properties a commitment needs', () => {
+	it('is 64 lowercase hex characters for every input', () => {
+		for (const text of ['', 'a', 'abc', 'x'.repeat(1000), 'Ω≈ç√', '🏀🏀🏀']) {
+			expect(hash(text), text.slice(0, 20)).toMatch(/^[0-9a-f]{64}$/);
+		}
+	});
+
+	it('is deterministic — the same input always commits to the same digest', () => {
+		const seed = 'a3f19c0d5b7e2481a3f19c0d5b7e2481a3f19c0d5b7e2481a3f19c0d5b7e2481';
+		expect(hash(seed)).toBe(hash(seed));
+	});
+
+	it('changes completely when one character of the seed changes', () => {
+		const left = hash('a3f19c0d5b7e2481a3f19c0d5b7e2481a3f19c0d5b7e2481a3f19c0d5b7e2481');
+		const right = hash('a3f19c0d5b7e2481a3f19c0d5b7e2481a3f19c0d5b7e2481a3f19c0d5b7e2482');
+		expect(left).not.toBe(right);
+	});
+
+	it('never throws — a hash is total, including over lone surrogates', () => {
+		// A lone surrogate cannot arise from a hex seed, but a total function
+		// is what keeps `decide()` from turning a payload into an exception.
+		for (const text of ['', '\0', '\ud800', '\udfff', '🏀']) {
+			expect(() => hash(text)).not.toThrow();
+		}
+	});
+
+	it('distinguishes inputs that differ only in length', () => {
+		expect(hash('a')).not.toBe(hash('aa'));
+		expect(hash('abc')).not.toBe(hash('abc '));
+	});
+});

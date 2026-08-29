@@ -285,6 +285,12 @@ describe('loadAuctionPage — an open Auction', () => {
 			// Story 2.5's half: nominated, nobody has bid. "No bids yet" is a
 			// state of the Auction, never "there is no Auction".
 			contention: 'Awaiting an Opening Bid.',
+			// Story 3.2: no lottery is running, so there are no Contenders and
+			// no published commitment. Empty and null rather than absent —
+			// every key is always on the wire, whatever the state.
+			contenders: [],
+			contenderCount: 0,
+			seedHash: null,
 			price: null,
 			leadingBidder: null,
 			closesAt: null,
@@ -292,14 +298,22 @@ describe('loadAuctionPage — an open Auction', () => {
 			bidControl: {
 				available: true,
 				detail: BID_READY,
-				// $1,000,000 is refused outright (it would open a lottery) and
-				// the grid is $500,000, so the smallest legal opening is $1.5M.
-				minimumLegal: 1_500_000,
-				minimumLegalSentence: 'Whole dollars. The least this Auction will take is $1.5M.',
-				// The two facts every gate decides from, serialised so the
-				// surface can ask the same question about a TYPED amount.
+				// $1,000,000 opens a Minimum-Bid Contention since Story 3.2,
+				// and the opening gate passes it — so the smallest legal
+				// opening is the minimum itself rather than one grid step
+				// above it.
+				minimumLegal: 1_000_000,
+				minimumLegalSentence: 'Whole dollars. The least this Auction will take is $1.0M.',
+				// The facts every gate decides from, serialised so the surface
+				// can ask the same question about a TYPED amount.
 				leadingAmount: null,
 				leadingTeamId: null,
+				// Story 3.2's two contention facts. A state literal and a list
+				// of ids — never `isLottery` and never `youAreContending`,
+				// which would be derivations the browser trusted instead of
+				// making.
+				contention: 'awaiting_opening_bid',
+				contenderTeamIds: [],
 				viewerTeamId: VIEWER_TEAM,
 				// The viewer Team's money FACTS, and deliberately not its
 				// Maximum Bid: AD-7 forbids a derived money figure being cached
@@ -717,6 +731,18 @@ describe('loadAuctionPage — the bid control is evaluate() on the read path (AC
 						offered: 9_000_000 as never,
 						minimumOpening: 1_000_000 as never
 					},
+					// Story 3.2's eighth gate, immediately after `opening`. No
+					// lottery is running on this Auction, so it has nothing to
+					// decide and says so with a `contenderCount` of zero
+					// rather than a figure it does not have.
+					contention: {
+						passed: true,
+						entry: 'not_a_contention',
+						offered: 9_000_000 as never,
+						joinAmount: 1_000_000 as never,
+						conversionAmount: 1_500_000 as never,
+						contenderCount: 0
+					},
 					selfBid: { passed: false, actingTeamId: 't-2', leadingTeamId: 't-2' },
 					increment: {
 						passed: true,
@@ -1032,10 +1058,13 @@ describe('loadAuctionPage — the clock the expiry gate is decided against (Stor
 						managerId: 'm-2',
 						amount: parseMoney(8_500_000),
 						occurredAt: '2026-08-26T12:00:00.000Z',
-						closesAt: '2026-08-27T12:00:00.000Z'
+						closesAt: '2026-08-27T12:00:00.000Z',
+						seedHash: null
 					},
 					closesAt: '2026-08-27T12:00:00.000Z',
-					bids: []
+					bids: [],
+					contenders: [],
+					seedHash: null
 				},
 				null,
 				false
@@ -1236,5 +1265,164 @@ describe('loadAuctionPage — an unusable database clock (Story 3.1)', () => {
 		expect(source).toContain('requireDatabaseClock(');
 		// The message is not restated here — it is imported with the check.
 		expect(source).not.toContain(CLOCK_ERROR);
+	});
+});
+
+// --- Story 3.2: the Minimum-Bid Contention on the wire ---------------------
+
+/**
+ * A live lottery: opened by the Lakers at exactly $1,000,000 at 09:00 Monday,
+ * joined by the Rockets at 14:00 and by the Bulls at 20:00.
+ *
+ * Every join carries the OPENING's close instant on its own payload, which is
+ * what `decide()` stamps — so this fixture is the log a real contention
+ * produces rather than a shape assembled to make an assertion pass.
+ */
+function lotteryAuction() {
+	// The fake's database clock reads 13:00 on the 26th, so the contention
+	// opened that morning and closes the following one — live, not expired.
+	const opened = '2026-08-26T09:00:00.000Z';
+	const closes = '2026-08-27T09:00:00.000Z';
+	return fakeGateway({
+		events: [
+			nominated(1, 'p-1', 'Jalen Green', 't-9', 'Celtics', 'm-9', NOMINATED_AT),
+			{
+				...bidPlaced(2, 'p-1', 't-1', 'Lakers', 'm-1', 1_000_000, opened, closes),
+				// The published commitment rides the OPENING Bid and nothing
+				// else. The seed behind it is in `auction_contention_seeds`,
+				// which this read path holds no privilege on and never asks.
+				payload: {
+					fantraxPlayerId: 'p-1',
+					teamId: 't-1',
+					teamName: 'Lakers',
+					managerId: 'm-1',
+					amount: 1_000_000,
+					closesAt: closes,
+					seedHash: 'a'.repeat(64)
+				}
+			},
+			bidPlaced(3, 'p-1', 't-2', 'Rockets', 'm-2', 1_000_000, '2026-08-26T10:00:00.000Z', closes),
+			bidPlaced(4, 'p-1', 't-3', 'Bulls', 'm-3', 1_000_000, '2026-08-26T12:00:00.000Z', closes)
+		],
+		freeAgents: [
+			{ fantraxPlayerId: 'p-1', playerName: 'Jalen Green', positions: 'SG', nbaTeam: 'HOU' }
+		],
+		managers: [
+			{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' },
+			{ id: 'm-2', teamId: 't-2', displayName: 'Sam' },
+			{ id: 'm-3', teamId: 't-3', displayName: 'Alex' }
+		]
+	});
+}
+
+describe('loadAuctionPage — a Minimum-Bid Contention (Story 3.2, AC7)', () => {
+	it('serialises the Contender list by NAME, in join order, with its count', async () => {
+		const harness = lotteryAuction();
+
+		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+
+		expect(auction?.contention).toBe('Minimum-Bid Contention.');
+		// Ascending join `seq` (AD-14) — the fold's order, never re-sorted.
+		expect(auction?.contenders).toEqual(['Lakers', 'Rockets', 'Bulls']);
+		expect(auction?.contenderCount).toBe(3);
+	});
+
+	it('serialises the published commitment and nothing else about the seed', async () => {
+		const harness = lotteryAuction();
+
+		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+
+		expect(auction?.seedHash).toBe('a'.repeat(64));
+		// The read path issues no statement against the seed table at all —
+		// it holds no privilege on it, and the value it needs is on the log.
+		expect(harness.order).not.toContain('read-seeds');
+	});
+
+	it('serialises the contention FACTS the gates decide from, and no derived flag', async () => {
+		const harness = lotteryAuction();
+
+		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+
+		// The fold's own state literal, and the Contender Teams by id.
+		expect(auction?.bidControl.contention).toBe('minimum_bid');
+		expect(auction?.bidControl.contenderTeamIds).toEqual(['t-1', 't-2', 't-3']);
+		// **No derived flag crosses this wire.** `isLottery` and
+		// `youAreContending` are each one comparison away from the facts
+		// beside them, and a transported boolean is a derivation the browser
+		// would trust instead of making (AD-7, AD-9).
+		const wire = JSON.stringify(auction);
+		expect(wire).not.toContain('isLottery');
+		expect(wire).not.toContain('youAreContending');
+		expect(wire).not.toContain('contending');
+	});
+
+	it('pre-fills the join amount, not a raise over it', async () => {
+		const harness = lotteryAuction();
+
+		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+
+		expect(auction?.bidControl.minimumLegal).toBe(1_000_000);
+		expect(auction?.bidControl.minimumLegalSentence).toBe(
+			'Whole dollars. The least this Auction will take is $1.0M.'
+		);
+		// A Team that has not joined can join, so the control is available.
+		expect(auction?.bidControl.available).toBe(true);
+	});
+
+	it('disables the control for a Team that is ALREADY a Contender, with the reason', async () => {
+		const harness = lotteryAuction();
+
+		// `t-2` joined at 10:00 and does not lead — so `contention` is the
+		// sole ground, and it is read on the BOARD rather than discovered at
+		// submission.
+		const auction = await loadAuctionPage(harness.gateway, 'p-1', 't-2');
+
+		expect(auction?.bidControl.available).toBe(false);
+		expect(auction?.bidControl.detail).toContain('already a Contender');
+		// The Contender list still renders for them: the lottery is a fact
+		// about the Auction, not about who is looking at it.
+		expect(auction?.contenders).toEqual(['Lakers', 'Rockets', 'Bulls']);
+	});
+
+	it('renders the whole lottery for a viewer bound to NO Team', async () => {
+		const harness = lotteryAuction();
+
+		const auction = await loadAuctionPage(harness.gateway, 'p-1', null);
+
+		// Accent bar, icon, word, count and list are all facts about the
+		// Auction, so they are here for every viewer.
+		expect(auction?.contention).toBe('Minimum-Bid Contention.');
+		expect(auction?.contenders).toEqual(['Lakers', 'Rockets', 'Bulls']);
+		expect(auction?.contenderCount).toBe(3);
+		expect(auction?.seedHash).toBe('a'.repeat(64));
+		expect(auction?.bidControl.contention).toBe('minimum_bid');
+		// ...and the CONTROL is refused, on the standing condition it always
+		// was: no Team means no event to append (AD-4).
+		expect(auction?.bidControl.available).toBe(false);
+		expect(auction?.bidControl.detail).toContain('not bound to a Team');
+	});
+
+	it('reports the close as the OPENING’s, unmoved by three joins', async () => {
+		const harness = lotteryAuction();
+
+		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+
+		expect(auction?.closesAt).toBe('2026-08-27T09:00:00.000Z');
+		// The lead never moved either: a join is never strictly higher.
+		expect(auction?.leadingBidder).toBe('Lakers — Meakel');
+		expect(auction?.price).toBe('$1.0M');
+	});
+
+	it('carries an empty Contender list and a null commitment outside a lottery', async () => {
+		const harness = contestedAuction();
+
+		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+
+		expect(auction?.contention).toBe('Standard Contention.');
+		expect(auction?.contenders).toEqual([]);
+		expect(auction?.contenderCount).toBe(0);
+		expect(auction?.seedHash).toBeNull();
+		expect(auction?.bidControl.contention).toBe('standard');
+		expect(auction?.bidControl.contenderTeamIds).toEqual([]);
 	});
 });
