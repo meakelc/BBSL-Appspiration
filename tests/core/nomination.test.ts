@@ -5,6 +5,8 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { closedPayload } from '../fixtures/closed-event.ts';
+
 import { DEVICE_CLASSES, classifyDeviceClass } from '../../src/lib/core/device-class.ts';
 import { fold } from '../../src/lib/core/projection/fold.ts';
 import {
@@ -16,6 +18,11 @@ import {
 	nominationsReducer,
 	openNominations
 } from '../../src/lib/core/projection/nominations.ts';
+import {
+	INITIAL_CONTRACTS,
+	contractForPlayer,
+	contractsReducer
+} from '../../src/lib/core/projection/contracts.ts';
 import { AUCTION_OPENED_EVENT } from '../../src/lib/core/projection/phase.ts';
 import {
 	NOMINATION_CONSEQUENCE,
@@ -77,7 +84,7 @@ function closed(
 	extra: Record<string, unknown> = {},
 	occurredAt = '2026-08-25T18:00:00.000Z'
 ): AppendedEvent {
-	return event(seq, AUCTION_CLOSED_EVENT, { fantraxPlayerId, ...extra }, occurredAt);
+	return event(seq, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId, ...extra }), occurredAt);
 }
 
 // --- The fold ---------------------------------------------------------------
@@ -731,5 +738,88 @@ describe('classifyDeviceClass', () => {
 	it('is deterministic — no clock, no randomness', () => {
 		const agent = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Mobile/15E148';
 		expect(classifyDeviceClass(agent)).toBe(classifyDeviceClass(agent));
+	});
+});
+
+/**
+ * A Player won in this auction reaches the SAME refusal (Story 3.4, AC5).
+ *
+ * The gate reads one `contractHolderTeamName` and has no notion of where it
+ * came from — which is why `NominationRefusal` needed no new case and this
+ * file needed no new wording. What is new is the second source: an Auction
+ * Contract, folded from `AuctionClosed`, naming the winning Team. The
+ * composition is asserted here rather than only in `server/nomination.test.ts`
+ * so the claim "under_contract IS the already-won refusal" is executable
+ * without a database.
+ */
+describe('refuseNomination — a won Player is under contract (Story 3.4)', () => {
+	const close = (fantraxPlayerId: string, teamName: string) =>
+		event(9, AUCTION_CLOSED_EVENT, {
+			fantraxPlayerId,
+			playerName: 'Jalen Green',
+			teamId: 't-w',
+			teamName,
+			managerId: 'm-w',
+			winningAmount: 8_000_000,
+			capHit: 8_000_000,
+			placement: 'active_bench',
+			contention: 'standard',
+			contractYears: null,
+			closedAt: '2026-08-26T09:00:00.000Z'
+		});
+
+	it('refuses under_contract, naming the winning Team, from the fold alone', () => {
+		const contracts = fold(INITIAL_CONTRACTS, [close('p-1', 'Rockets')], contractsReducer);
+
+		const refusal = refuseNomination(
+			readyState({
+				// Exactly what `server/nomination.ts` resolves when the roster
+				// join finds nothing: the contract's own `teamName`.
+				contractHolderTeamName: contractForPlayer(contracts, 'p-1')?.teamName ?? null
+			}),
+			't-1'
+		);
+
+		expect(refusal?.kind).toBe('under_contract');
+		if (refusal?.kind !== 'under_contract') return;
+		expect(refusal.teamName).toBe('Rockets');
+		expect(nominationRefusalDetail(refusal)).toContain('Rockets');
+	});
+
+	it('leaves a Player nobody won nominatable', () => {
+		const contracts = fold(INITIAL_CONTRACTS, [close('p-9', 'Rockets')], contractsReducer);
+
+		expect(
+			refuseNomination(
+				readyState({
+					contractHolderTeamName: contractForPlayer(contracts, 'p-1')?.teamName ?? null
+				}),
+				't-1'
+			)
+		).toBeNull();
+	});
+
+	it('names the Player before it names the Slot, when both would refuse', () => {
+		// `under_contract` precedes `slot_in_use`: the Slot is a standing
+		// condition a Manager can already see, and the Player's unavailability
+		// is the news.
+		const contracts = fold(INITIAL_CONTRACTS, [close('p-1', 'Rockets')], contractsReducer);
+
+		const refusal = refuseNomination(
+			readyState({
+				contractHolderTeamName: contractForPlayer(contracts, 'p-1')?.teamName ?? null,
+				nominations: boardOf(
+					event(1, NOMINATION_PLACED_EVENT, {
+						fantraxPlayerId: 'p-7',
+						playerName: 'Someone Else',
+						teamId: 't-1',
+						teamName: 'Lakers'
+					})
+				)
+			}),
+			't-1'
+		);
+
+		expect(refusal?.kind).toBe('under_contract');
 	});
 });

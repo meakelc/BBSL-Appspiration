@@ -130,6 +130,35 @@ export type AppendedEvent = {
 export type RosterSlotKind = 'active_bench' | 'injury_reserve' | 'minor_league';
 
 /**
+ * Where a close puts the won Player (Story 3.4) — a NARROWING of
+ * `RosterSlotKind`, and the narrowing is the point.
+ *
+ * A close can produce exactly two of the three roster slot kinds. Injury
+ * Reserve is a state a Team's own roster moves a Player into afterwards, in
+ * Fantrax; no rule in this product can place a Player there at a close, so
+ * the type the contracts fold holds and the type `slotPlacementFor` returns
+ * cannot express it. `CapHitRow` accepts a `RosterSlotKind`, and this union
+ * is assignable to it, so the Cap arithmetic needs no widening in either
+ * direction.
+ *
+ * **It lives here beside `RosterSlotKind` rather than in
+ * `projection/contracts.ts`**, which is where Story 3.4 first declared it.
+ * `projection/nominations.ts` validates an `AuctionClosed`'s placement for
+ * all three of the reducers that fold that event, and `contracts.ts` imports
+ * from `nominations.ts` — so the union has to sit upstream of both or the
+ * import graph closes a cycle. The story's Code Map named this move as the
+ * one permitted edit to this file if the type "proves to want a home beside
+ * `RosterSlotKind`". It did.
+ */
+export type SlotPlacement = 'active_bench' | 'minor_league';
+
+/** The two placements a close can produce, for a total check over a payload. */
+export const SLOT_PLACEMENTS: readonly SlotPlacement[] = Object.freeze([
+	'active_bench',
+	'minor_league'
+] as const);
+
+/**
  * One roster row exactly as the Fantrax adapter emits it (AD-24) — the only
  * shape `core/rules/roster-import.ts` and `server/roster-import.ts` see.
  *

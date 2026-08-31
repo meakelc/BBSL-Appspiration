@@ -1,17 +1,24 @@
 /**
- * The roster figures the money and capacity gates cannot fold from the log:
- * a Team's Cap Space, its Roster Count and how many Minor League Slots it
- * occupies. Server-only (Stories 2.6, 2.8).
+ * The roster figures the money and capacity gates cannot fold from the log
+ * ALONE: a Team's Cap Space, its Roster Count and how many Minor League Slots
+ * it occupies. Server-only (Stories 2.6, 2.8, 3.4).
  *
- * **Why this is a table read and not a projection.** `team_rosters` is
- * mutable reference data promoted by the import, explicitly NOT an
- * event-sourced projection — its own migration says so and says nothing
- * rebuilds it from `auction_events`. Cap Space and Roster Count are
- * therefore facts about the world, and only the auction's own commitments on
- * top of them are folded. Story 2.5's `loadBidState` header claimed "no
- * table read at all"; that claim ends with the money gate, because AD-7
- * requires Maximum Bid derived from committed state at validation time and
- * the Cap half of that state lives here.
+ * **Two sources, one derivation of each figure.** `team_rosters` is mutable
+ * reference data promoted by the import, explicitly NOT an event-sourced
+ * projection — its own migration says so and says nothing rebuilds it from
+ * `auction_events`. That table is the WORLD a Team started the offseason with.
+ * What it has WON since is the auction's own output, which is event-sourced
+ * (AD-4): Story 3.4 folds `AuctionClosed` into `AuctionContracts` and this
+ * module concatenates `contractRowsFor(...)` onto the rows it read, before the
+ * one existing loop. So Cap Space, Roster Count and Minor League occupancy
+ * each pick contracts up with no second counter, no second definition and no
+ * migration — and a Team that has just won a Player is judged against the
+ * roster it now has.
+ *
+ * Story 2.5's `loadBidState` header claimed "no table read at all"; that claim
+ * ends with the money gate, because AD-7 requires Maximum Bid derived from
+ * committed state at validation time and the imported half of that state lives
+ * here.
  *
  * **One reader, two callers**, exactly as `bidStateFor` is one narrowing:
  * the locked transaction (`server/bidding.ts`) and the read path
@@ -20,13 +27,16 @@
  * against cannot be computed two different ways.
  *
  * Nothing derived is stored. This module returns three numbers computed from
- * rows read a moment ago; Committed Bids, Roster Reserve, Maximum Bid, Free
- * Minor League Slots and Minors Exposure are the core's, on every evaluation
- * (AD-7). Note which side of that line `minorLeagueOccupied` sits on: the
- * OCCUPANCY is a fact about `team_rosters`, and `M = max(0, 3 - occupied)`
- * is a derivation the core runs — this module never computes `M`.
+ * rows read a moment ago plus contracts folded a moment ago; Committed Bids,
+ * Roster Reserve, Maximum Bid, Free Minor League Slots and Minors Exposure are
+ * the core's, on every evaluation (AD-7). Note which side of that line
+ * `minorLeagueOccupied` sits on: the OCCUPANCY is a fact about the rows, and
+ * `M = max(0, 3 - occupied)` is a derivation the core runs — this module never
+ * computes `M`.
  */
 
+import { contractRowsFor } from '../core/projection/contracts.ts';
+import type { AuctionContracts } from '../core/projection/contracts.ts';
 import { computeCapSpace } from '../core/rules/roster-import.ts';
 import type { CapHitRow } from '../core/rules/roster-import.ts';
 import { parseMoney } from '../core/money.ts';
@@ -70,7 +80,18 @@ export type TeamRosterFigures = {
 };
 
 /**
- * Read one Team's roster rows and reduce them to the two figures.
+ * Read one Team's roster rows, append the Auction Contracts it has won, and
+ * reduce the lot to the three figures.
+ *
+ * **`contracts` is a required third parameter and not an optional one**,
+ * deliberately: adding it made every caller a compile error, which is how a
+ * fact that changes what a gate decides is supposed to arrive. A default of
+ * "no contracts" would have let a caller silently keep the pre-3.4 behaviour
+ * and judge a Bid against a roster the Team no longer has.
+ *
+ * The contract rows are concatenated onto the imported ones BEFORE the one
+ * loop below, which is the whole integration: there is no `+ wonCount` and no
+ * second Cap term anywhere, because a won Player is simply another row.
  *
  * **No rows is a real state, not an error.** A Team exists before the import
  * promotes anything, and `computeCapSpace` over zero rows already returns
@@ -91,7 +112,8 @@ export type TeamRosterFigures = {
  */
 export async function loadTeamRoster(
 	client: TransactionalClient,
-	teamId: string
+	teamId: string,
+	contracts: AuctionContracts
 ): Promise<TeamRosterFigures> {
 	const result = await client.query(
 		`select cap_hit, roster_slot_kind
@@ -100,10 +122,18 @@ export async function loadTeamRoster(
 		[teamId]
 	);
 
-	const rows: CapHitRow[] = result.rows.map((row) => ({
-		capHit: parseMoney(row['cap_hit']),
-		rosterSlotKind: String(row['roster_slot_kind']) as RosterSlotKind
-	}));
+	const rows: CapHitRow[] = [
+		...result.rows.map((row) => ({
+			capHit: parseMoney(row['cap_hit']),
+			rosterSlotKind: String(row['roster_slot_kind']) as RosterSlotKind
+		})),
+		// What this Team has WON, folded from the log — the auction's own
+		// output, on the same footing as an imported row and counted by the
+		// same loop (Story 3.4). A `minor_league` placement carries a `$0` Cap
+		// Hit and occupies a Minor League Slot; an `active_bench` one carries
+		// the winning amount and takes one of the twelve.
+		...contractRowsFor(contracts, teamId)
+	];
 
 	let rosterCount = 0;
 	let minorLeagueOccupied = 0;

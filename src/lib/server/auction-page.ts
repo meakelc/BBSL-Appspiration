@@ -131,6 +131,7 @@ import {
 	nominationsReducer
 } from '../core/projection/nominations.ts';
 import type { OpenNomination } from '../core/projection/nominations.ts';
+import { INITIAL_CONTRACTS, contractsReducer } from '../core/projection/contracts.ts';
 import {
 	INITIAL_ELIGIBILITY,
 	eligibilityReducer,
@@ -472,6 +473,13 @@ export async function loadAuctionPage(
 		const auctions = fold(INITIAL_AUCTIONS, events, auctionsReducer);
 		const auction = auctionForPlayer(auctions, fantraxPlayerId);
 		const eligibility = fold(INITIAL_ELIGIBILITY, events, eligibilityReducer);
+		// The fourth fold, over the same events array (Story 3.4): the Auction
+		// Contracts this log has produced. It reaches the page only through
+		// `loadTeamRoster` below, which counts a won Player exactly as it
+		// counts an imported roster row — so the figures a control is disabled
+		// against move on a close through the identical derivation the locked
+		// transaction uses, and no serialised field was added for it.
+		const contracts = fold(INITIAL_CONTRACTS, events, contractsReducer);
 
 		// The DATABASE clock, read exactly once and with no lock — this module
 		// deliberately takes none, and `now()` needs none: it is Postgres'
@@ -504,7 +512,7 @@ export async function loadAuctionPage(
 						// The spread carries Story 2.8's `minorLeagueOccupied`
 						// through with the two figures 2.6 added, so the new fact
 						// reached the core with no third call site.
-						...(await loadTeamRoster(client, viewerTeamId)),
+						...(await loadTeamRoster(client, viewerTeamId, contracts)),
 						auctions,
 						isMinorLeagueEligible: (playerId) => isEligible(eligibility, playerId),
 						// The name an exposing Auction is refused by, from the fold

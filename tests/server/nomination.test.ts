@@ -13,6 +13,8 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { closedPayload } from '../fixtures/closed-event.ts';
+
 import {
 	AUCTION_CLOSED_EVENT,
 	NOMINATION_PLACED_EVENT
@@ -865,7 +867,7 @@ describe('releaseNomination — the claim row is deleted when the Auction closes
 		const harness = fakeGateway({});
 
 		await releaseNomination(harness.client, [
-			appended(50, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'p-1' })
+			appended(50, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1' }))
 		]);
 
 		expect(harness.order).toEqual(['release-nomination']);
@@ -878,11 +880,11 @@ describe('releaseNomination — the claim row is deleted when the Auction closes
 		const harness = fakeGateway({});
 
 		await releaseNomination(harness.client, [
-			appended(50, AUCTION_CLOSED_EVENT, {
-				fantraxPlayerId: 'p-1',
-				winningTeamId: 't-9',
-				price: 42
-			})
+			appended(
+				50,
+				AUCTION_CLOSED_EVENT,
+				closedPayload({ fantraxPlayerId: 'p-1', teamId: 't-9', winningAmount: 42, capHit: 42 })
+			)
 		]);
 
 		// The Slot frees whoever won, so the delete carries one parameter and
@@ -927,9 +929,9 @@ describe('releaseNomination — the claim row is deleted when the Auction closes
 		const harness = fakeGateway({});
 
 		await releaseNomination(harness.client, [
-			appended(50, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'p-1' }),
+			appended(50, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1' })),
 			appended(51, NOMINATION_PLACED_EVENT, { fantraxPlayerId: 'p-3', teamId: 't-3' }),
-			appended(52, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'p-2' })
+			appended(52, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-2' }))
 		]);
 
 		expect(harness.order).toEqual(['release-nomination', 'release-nomination']);
@@ -966,7 +968,7 @@ describe('releaseNomination — the claim row is deleted when the Auction closes
 
 		await releaseNomination(harness.client, [
 			appended(50, AUCTION_CLOSED_EVENT, null),
-			appended(51, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'p-2' })
+			appended(51, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-2' }))
 		]);
 
 		expect(harness.order).toEqual(['release-nomination']);
@@ -982,13 +984,13 @@ describe('releaseNomination — the claim row is deleted when the Auction closes
 
 		await expect(
 			releaseNomination(harness.client, [
-				appended(50, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'never-nominated' })
+				appended(50, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'never-nominated' }))
 			])
 		).resolves.toBeUndefined();
 
 		await expect(
 			releaseNomination(harness.client, [
-				appended(51, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'never-nominated' })
+				appended(51, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'never-nominated' }))
 			])
 		).resolves.toBeUndefined();
 
@@ -998,7 +1000,7 @@ describe('releaseNomination — the claim row is deleted when the Auction closes
 	it('never SELECTS from the claim table — the Slot stays a fold of the log', async () => {
 		const harness = fakeGateway({});
 		await releaseNomination(harness.client, [
-			appended(50, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'p-1' })
+			appended(50, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1' }))
 		]);
 		// The fake has no read branch for `open_nominations` at all and throws
 		// on any statement it does not recognise, so a select would have failed
@@ -1041,5 +1043,125 @@ describe('the nomination event type has exactly one definition', () => {
 		expect(outcome.kind).toBe('accepted');
 		if (outcome.kind !== 'accepted') return;
 		expect(outcome.events[0]?.type).toBe(NOMINATION_PLACED_EVENT);
+	});
+});
+
+/**
+ * A Player WON in this auction is under contract (Story 3.4, AC5).
+ *
+ * `under_contract` has two sources now and one refusal. `team_rosters` answers
+ * what a Team started the offseason with; the `AuctionContracts` fold answers
+ * what it has won since — and a won Player has NO roster row, because nothing
+ * writes `team_rosters` but the import. So a stale pool row for a won Player
+ * would be nominatable again if the close were not folded, which is exactly
+ * the state this suite pins shut.
+ */
+describe('under contract, from the contracts fold (Story 3.4)', () => {
+	const won = (seq: number, fantraxPlayerId: string, teamName: string) =>
+		logEvent(seq, AUCTION_CLOSED_EVENT, {
+			fantraxPlayerId,
+			playerName: 'Jalen Green',
+			teamId: 't-w',
+			teamName,
+			managerId: 'm-w',
+			winningAmount: 8_000_000,
+			capHit: 8_000_000,
+			placement: 'active_bench',
+			contention: 'standard',
+			contractYears: null,
+			closedAt: '2026-08-26T09:00:00.000Z'
+		});
+
+	it('names the WINNING Team as the contract holder, with no roster row at all', async () => {
+		const harness = fakeGateway({
+			pool: [JALEN],
+			events: [opened(), nominated(2, 'p-1', 'Jalen Green', 't-9', 'Celtics'), won(3, 'p-1', 'Rockets')]
+		});
+
+		const client = await harness.gateway.connect();
+		try {
+			await client.query('begin');
+			const state = await loadNominationState(client, 'p-1');
+			await client.query('rollback');
+			// The roster join found nothing — `read-contract` still ran and
+			// still came back empty — and the fold answered instead.
+			expect(harness.order).toContain('read-contract');
+			expect(state.contractHolderTeamName).toBe('Rockets');
+		} finally {
+			client.release();
+		}
+	});
+
+	it('refuses the nomination as under_contract, naming that Team', async () => {
+		const harness = fakeGateway({
+			pool: [JALEN],
+			events: [opened(), nominated(2, 'p-1', 'Jalen Green', 't-9', 'Celtics'), won(3, 'p-1', 'Rockets')]
+		});
+
+		const outcome = await placeNomination(harness.gateway, ACTOR, 'p-1', DEVICE_CLASS);
+		const rejection = rejectionOf(outcome);
+
+		expect(rejection.refusal.kind).toBe('under_contract');
+		if (rejection.refusal.kind !== 'under_contract') return;
+		expect(rejection.refusal.playerName).toBe('Jalen Green');
+		expect(rejection.refusal.teamName).toBe('Rockets');
+		// Nothing was written: no event, no claim row.
+		expect(harness.appendedEvents).toEqual([]);
+		expect(harness.order).not.toContain('claim-nomination');
+	});
+
+	it('greys the won Player out on the pool page with the same sentence', async () => {
+		const harness = fakeGateway({
+			pool: [JALEN, SENGUN],
+			events: [opened(), nominated(2, 'p-1', 'Jalen Green', 't-9', 'Celtics'), won(3, 'p-1', 'Rockets')]
+		});
+
+		const pool = await loadNominatablePool(harness.gateway, ACTOR.teamId);
+		const jalen = pool.players.find((row) => row.fantraxPlayerId === 'p-1');
+		const sengun = pool.players.find((row) => row.fantraxPlayerId === 'p-2');
+
+		expect(jalen?.available).toBe(false);
+		expect(jalen?.unavailableDetail).toContain('under contract to Rockets');
+		// The render and the submit word one refusal, from one core function.
+		expect(jalen?.unavailableDetail).toBe(
+			nominationRefusalDetail({
+				kind: 'under_contract',
+				playerName: 'Jalen Green',
+				teamName: 'Rockets'
+			})
+		);
+		// The Player nobody won is untouched.
+		expect(sengun?.available).toBe(true);
+	});
+
+	it('lets the ROSTER win a tie, because a promoted Player is on a Team for real', async () => {
+		const harness = fakeGateway({
+			pool: [{ ...JALEN, contractTeamName: 'Lakers' }],
+			events: [opened(), nominated(2, 'p-1', 'Jalen Green', 't-9', 'Celtics'), won(3, 'p-1', 'Rockets')]
+		});
+
+		const client = await harness.gateway.connect();
+		try {
+			await client.query('begin');
+			const state = await loadNominationState(client, 'p-1');
+			await client.query('rollback');
+			expect(state.contractHolderTeamName).toBe('Lakers');
+		} finally {
+			client.release();
+		}
+	});
+
+	it('leaves an unwon Player nominatable, with neither source naming a holder', async () => {
+		const harness = fakeGateway({ pool: [JALEN], events: [opened()] });
+
+		const client = await harness.gateway.connect();
+		try {
+			await client.query('begin');
+			const state = await loadNominationState(client, 'p-1');
+			await client.query('rollback');
+			expect(state.contractHolderTeamName).toBeNull();
+		} finally {
+			client.release();
+		}
 	});
 });

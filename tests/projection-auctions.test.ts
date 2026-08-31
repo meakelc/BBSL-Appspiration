@@ -7,6 +7,8 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { closedPayload } from './fixtures/closed-event.ts';
+
 import { AUCTION_CLOCK, MINIMUM_BID } from '../src/lib/core/constants.ts';
 import {
 	AUCTION_EXPIRED,
@@ -249,7 +251,7 @@ describe('auctionsReducer — AuctionClosed removes the Auction', () => {
 	it('drops the Auction on a close naming its Player', () => {
 		const auction = at([
 			bid(2, 8_000_000),
-			event(3, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'p-1' })
+			event(3, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1' }))
 		]);
 		expect(auction).toBeNull();
 	});
@@ -258,7 +260,7 @@ describe('auctionsReducer — AuctionClosed removes the Auction', () => {
 		const log = [
 			bid(2, 8_000_000, { fantraxPlayerId: 'p-1' }),
 			bid(3, 2_000_000, { fantraxPlayerId: 'p-2' }),
-			event(4, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'p-1' })
+			event(4, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1' }))
 		];
 		expect(at(log, 'p-1')).toBeNull();
 		expect(at(log, 'p-2')).not.toBeNull();
@@ -269,13 +271,13 @@ describe('auctionsReducer — AuctionClosed removes the Auction', () => {
 			8_000_000
 		);
 		expect(
-			at([bid(2, 8_000_000), event(3, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'p-9' })])
+			at([bid(2, 8_000_000), event(3, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-9' }))])
 				?.leadingBid?.amount
 		).toBe(8_000_000);
 	});
 
 	it('converges on a double replay of the close', () => {
-		const log = [bid(2, 8_000_000), event(3, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'p-1' })];
+		const log = [bid(2, 8_000_000), event(3, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1' }))];
 		const once = fold(INITIAL_AUCTIONS, log, auctionsReducer);
 		expect(fold(once, log, auctionsReducer)).toEqual(once);
 	});

@@ -18,7 +18,10 @@ import {
 	BID_PLACED_EVENT,
 	CONTENTION_DISSOLVED_EVENT
 } from '../../src/lib/core/projection/auctions.ts';
-import { NOMINATION_PLACED_EVENT } from '../../src/lib/core/projection/nominations.ts';
+import {
+	AUCTION_CLOSED_EVENT,
+	NOMINATION_PLACED_EVENT
+} from '../../src/lib/core/projection/nominations.ts';
 import { LEAGUE_CLOCK } from '../../src/lib/core/constants.ts';
 import { POOL_SOURCE_LABEL } from '../../src/lib/core/rules/pool-import.ts';
 import {
@@ -432,6 +435,87 @@ describe('leagueClockReducer — ContentionDissolved does NOT reset it (Story 3.
 function nominationAt(seq: number, occurredAt: string) {
 	return event(seq, NOMINATION_PLACED_EVENT, { fantraxPlayerId: 'p-1', teamId: 't-1' }, occurredAt);
 }
+
+/**
+ * §10 example 13's first half (Story 3.4, AD-22, FR-21).
+ *
+ * > An auction closes 12:00 Saturday — this does *not* reset the League Clock.
+ *
+ * **AD-22 fixes the reset set at exactly two event types**, and a close does
+ * not join it: "Auction closes, randomizer draws, contention dissolutions, bid
+ * voids, overrides, and pause/resume do **not** reset it. New event types
+ * default to *not* resetting it." `league-clock.ts`'s `default: return state`
+ * is what makes that true, so Story 3.4 wrote no line for it — which is
+ * exactly why it is asserted, beside the fold, rather than left as a claim
+ * nobody keeps. It sits here for `ContentionDissolved`'s reason: there is no
+ * `league-clock.test.ts`.
+ *
+ * The rest of example 13 — the Auction Phase ending 48 hours after the last
+ * reset — is Story 3.7's.
+ */
+describe('leagueClockReducer — AuctionClosed does NOT reset it (Story 3.4, §10 ex 13)', () => {
+	const closedAt = (seq: number, occurredAt: string) =>
+		event(
+			seq,
+			AUCTION_CLOSED_EVENT,
+			{
+				fantraxPlayerId: 'p-1',
+				playerName: 'Ausar Bright',
+				teamId: 't-m',
+				teamName: 'Team M',
+				managerId: 'm-m',
+				winningAmount: 8_000_000,
+				capHit: 8_000_000,
+				placement: 'active_bench',
+				contention: 'standard',
+				contractYears: null,
+				closedAt: occurredAt
+			},
+			occurredAt
+		);
+
+	it('leaves the last reset on the BID, not on the close that followed it', () => {
+		const state = fold(
+			INITIAL_LEAGUE_CLOCK,
+			[
+				event(1, AUCTION_OPENED_EVENT, {}, '2026-08-25T19:00:00.000Z'),
+				// "Last bid league-wide lands 12:00 Friday"
+				bidAt(2, '2026-08-26T12:00:00.000Z'),
+				// "An auction closes 12:00 Saturday"
+				closedAt(3, '2026-08-27T12:00:00.000Z')
+			],
+			leagueClockReducer
+		);
+
+		expect(state.lastReset).toBe('2026-08-26T12:00:00.000Z');
+		// So the Phase still ends 48 hours after the BID — 12:00 Sunday.
+		expect(leagueClockExpiry(state)).toBe('2026-08-28T12:00:00.000Z');
+	});
+
+	it('cannot manufacture a reset on its own', () => {
+		const state = fold(
+			INITIAL_LEAGUE_CLOCK,
+			[
+				event(1, AUCTION_OPENED_EVENT, {}, '2026-08-25T19:00:00.000Z'),
+				closedAt(2, '2026-08-27T12:00:00.000Z')
+			],
+			leagueClockReducer
+		);
+
+		expect(state.lastReset).toBeNull();
+		expect(leagueClockExpiry(state)).toBe('2026-08-27T19:00:00.000Z');
+	});
+
+	it('converges on a double replay', () => {
+		const log = [
+			event(1, AUCTION_OPENED_EVENT, {}, '2026-08-25T19:00:00.000Z'),
+			bidAt(2, '2026-08-26T12:00:00.000Z'),
+			closedAt(3, '2026-08-27T12:00:00.000Z')
+		];
+		const once = fold(INITIAL_LEAGUE_CLOCK, log, leagueClockReducer);
+		expect(fold(once, log, leagueClockReducer)).toEqual(once);
+	});
+});
 
 describe('leagueClockReducer — the NominationPlaced reset', () => {
 	it('records a nomination’s own instant as the last reset', () => {
