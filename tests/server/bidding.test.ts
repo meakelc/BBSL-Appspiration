@@ -14,6 +14,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
+
+import { closedPayload } from '../fixtures/closed-event.ts';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -538,7 +540,7 @@ describe('placeBid — the gate refuses (AC1, AC2, AC3)', () => {
 			// Never nominated.
 			[],
 			// Nominated, then closed (Story 2.3's release fold).
-			[nominated(), logEvent(2, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'p-1' })]
+			[nominated(), logEvent(2, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1' }))]
 		]) {
 			const harness = fakeGateway({ events });
 			const outcome = await placeBid(

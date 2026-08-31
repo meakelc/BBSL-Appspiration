@@ -23,17 +23,26 @@
  * nominator, which it has no reason to know, and would free the wrong Slot
  * if it carried the winner instead.
  *
- * **The payload contract, fixed here.** This fold reads exactly
- * `fantraxPlayerId` off an `AuctionClosed` payload and ignores everything
- * else — winner, price, Slot Placement, bid history. Deliberate in both
- * directions: Story 3.4, which owns appending the real close, may shape the
- * rest of that payload freely without touching this reducer, and this
- * reducer cannot come to depend on a field 3.4 has not designed yet.
+ * **The payload contract, fixed here — and it is now the WHOLE close.** This
+ * fold uses only `fantraxPlayerId`, but it decides whether a payload is a
+ * close at all through `readClosedFacts` below, which every reducer that
+ * folds an `AuctionClosed` shares. Story 2.3 wrote the narrower rule — read
+ * this one field, ignore winner, price and placement — because Story 3.4 had
+ * not yet designed the rest of the payload and this reducer must not depend
+ * on a field that did not exist.
  *
- * **Nothing here APPENDS an `AuctionClosed`.** Epic 3 owns closing; no
- * command, rule, sweep or route in this story produces one, so the case
- * ships proven against a synthetic event and needs no change when the real
- * one arrives.
+ * 3.4 designed it, and 3.4's code review found what the narrow rule cost:
+ * `contractsReducer` validated the winner and both money fields while this
+ * fold and `auctionsReducer` did not, so a close naming a real Player with a
+ * corrupt `teamId` freed the Slot and dropped the Auction while recording no
+ * contract — the won Player silently back in the pool, the winning Team's Cap
+ * Space unmoved. One shared reader is the fix: what makes a close well formed
+ * is one question with one answer, and a payload any of the three skips is
+ * skipped by all three.
+ *
+ * **Nothing here APPENDS an `AuctionClosed`.** Epic 3 owns closing;
+ * `server/close.ts` is the producer, and this reducer is a consumer of the
+ * same event.
  *
  * **First nomination wins.** The gate refuses a Player already on the board
  * and a Team that already holds an open nomination, so in practice neither
@@ -47,6 +56,10 @@
  * stdlib only, relative .ts imports only so Deno can load it (AD-2).
  */
 
+import type { Money } from '../money.ts';
+import { parseMoney } from '../money.ts';
+import type { SlotPlacement } from '../types.ts';
+import { SLOT_PLACEMENTS } from '../types.ts';
 import type { Reducer } from './fold.ts';
 
 /**
@@ -186,33 +199,103 @@ function readPayload(payload: unknown, event: { readonly occurredAt: string }): 
 }
 
 /**
- * The Player an `AuctionClosed` payload names, or `null` when it names none.
+ * The facts an `AuctionClosed` must carry to mean anything at all — the ONE
+ * definition of a well-formed close, shared by every reducer that folds one.
  *
- * `readPayload`'s discipline, narrowed to the one field the release case
- * reads. A close that names no Player cannot identify a board seat or a
- * Slot, so it is skipped rather than folded — the reducer stays total over
- * any log it is handed, and an insert-only log's malformed historical row
- * can never crash the fold.
+ * **Why one reader rather than three.** An `AuctionClosed` is folded in three
+ * places that must agree: `nominationsReducer` frees the board seat and the
+ * nominating Team's Slot, `auctionsReducer` drops the Auction, and
+ * `projection/contracts.ts`'s `contractsReducer` records who now owns the
+ * Player and at what price. Those three are two halves of one fact plus the
+ * fact itself — the Player left the pool AND landed on a Team — so a payload
+ * that any of them skips must be skipped by all of them.
  *
- * Everything else an `AuctionClosed` may carry — the winner, the price, the
- * Slot Placement, the bid history — is deliberately not read. Story 3.4
- * shapes that payload; this fold only needs to know WHICH Player's auction
- * ended.
+ * The alternative was measured and rejected: when the first two gated only on
+ * `fantraxPlayerId` while the third also required a Team, a placement and two
+ * parseable amounts, a payload naming a valid Player with a corrupt `teamId`
+ * released the seat and removed the Auction while recording NO contract. The
+ * won Player was then in no auction, no nomination, no contract and no
+ * `team_rosters` row — silently back in the nominatable pool, with the
+ * winning Team's Cap Space and Roster Count never moving. Skipping such a
+ * payload in all three leaves the Auction standing and visible instead, which
+ * is the loud failure rather than the silent one (NFR1, AD-5).
+ *
+ * The fields split the way every `readPayload` in this core splits its own:
+ *
+ *   - **Here, because they cannot be guessed.** The Player, the winning Team,
+ *     the placement and both money figures are what a close IS. A close
+ *     naming no Player identifies no board seat; one naming no Team records
+ *     an ownership nobody holds; an unparseable amount is not a price; and a
+ *     placement that is neither kind decides both Roster Count and the Cap
+ *     treatment.
+ *   - **Not here, because they are audit detail no fold decides on.** The two
+ *     names and `closedAt` are repaired by `contracts.ts` against their ids
+ *     and the event's own instant. Dropping a real contract over a cosmetic
+ *     field would be the very failure this reader exists to prevent.
+ *
+ * A negative amount is rejected on `auctions.ts`'s grounds: `parseMoney`
+ * accepts an optionally-signed digit run legitimately, because Available Cap
+ * Space is legitimately negative, so a PRICE has to refuse the sign here.
+ */
+export type ClosedFacts = {
+	readonly fantraxPlayerId: string;
+	readonly teamId: string;
+	readonly placement: SlotPlacement;
+	readonly winningAmount: Money;
+	readonly capHit: Money;
+};
+
+export function readClosedFacts(payload: unknown): ClosedFacts | null {
+	if (typeof payload !== 'object' || payload === null) return null;
+	const record = payload as Record<string, unknown>;
+
+	const fantraxPlayerId = record['fantraxPlayerId'];
+	if (typeof fantraxPlayerId !== 'string' || fantraxPlayerId === '') return null;
+
+	const teamId = record['teamId'];
+	if (typeof teamId !== 'string' || teamId === '') return null;
+
+	const placement = record['placement'];
+	if (typeof placement !== 'string') return null;
+	if (!SLOT_PLACEMENTS.includes(placement as SlotPlacement)) return null;
+
+	// Both amounts are parsed rather than trusted, and parsed SEPARATELY —
+	// neither is read out of the other (AD-23). `parseMoney` accepts the two
+	// shapes an `int8` arrives as and throws on everything else (AD-8); that
+	// throw is caught and turned into a skip, because a corrupt payload in an
+	// insert-only log is not a fold's to crash over.
+	let winningAmount: Money;
+	let capHit: Money;
+	try {
+		winningAmount = parseMoney(record['winningAmount']);
+		capHit = parseMoney(record['capHit']);
+	} catch {
+		return null;
+	}
+	if (winningAmount < 0 || capHit < 0) return null;
+
+	return { fantraxPlayerId, teamId, placement: placement as SlotPlacement, winningAmount, capHit };
+}
+
+/**
+ * The Player a well-formed `AuctionClosed` names, or `null` when the payload
+ * is not one.
+ *
+ * A thin reading of `readClosedFacts` above, kept as its own name because two
+ * of the three folds need only this field. It inherits that reader's full
+ * strictness deliberately: what makes a close well formed is one question
+ * with one answer, not a per-caller one.
  *
  * **Exported because the release has two halves that must agree.** The fold
  * frees the Slot; `server/nomination.ts`'s `releaseNomination` deletes the
- * claim row. Both read the same field off the same event, so they read it
- * through this one function rather than through two literals that could
- * come to disagree about what a malformed close means — a close the fold
- * skipped but the delete acted on (or the reverse) would leave the log and
- * the claim table saying different things about the same Slot.
+ * claim row. Both read the same event through this one function rather than
+ * through two literals that could come to disagree about what a malformed
+ * close means — a close the fold skipped but the delete acted on (or the
+ * reverse) would leave the log and the claim table saying different things
+ * about the same Slot.
  */
 export function readClosedPlayerId(payload: unknown): string | null {
-	if (typeof payload !== 'object' || payload === null) return null;
-	const record = payload as Record<string, unknown>;
-	const fantraxPlayerId = record['fantraxPlayerId'];
-	if (typeof fantraxPlayerId !== 'string' || fantraxPlayerId === '') return null;
-	return fantraxPlayerId;
+	return readClosedFacts(payload)?.fantraxPlayerId ?? null;
 }
 
 /**

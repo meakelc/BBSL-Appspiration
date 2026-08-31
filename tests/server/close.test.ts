@@ -12,7 +12,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { MINIMUM_BID, SALARY_CAP } from '../../src/lib/core/constants.ts';
+import { MINIMUM_BID } from '../../src/lib/core/constants.ts';
 import { BID_PLACED_EVENT } from '../../src/lib/core/projection/auctions.ts';
 import { MINOR_LEAGUE_ELIGIBILITY_SET } from '../../src/lib/core/projection/eligibility.ts';
 import {
@@ -358,9 +358,13 @@ describe('closeAuction — Slot Placement against the roster at this close (AC2)
 		await closeAuction(harness.gateway, 'p-1');
 
 		expect(acceptedPayload(harness).placement).toBe('active_bench');
-		// The roster read still happened and still found the full Cap.
+		// The roster read still happened — against an EMPTY roster, so all
+		// three Minor League Slots were free and the placement was decided on
+		// eligibility alone rather than on occupancy.
 		expect(harness.order).toContain('read-roster');
-		expect(SALARY_CAP).toBeGreaterThan(0);
+		// An Active/Bench placement charges the full winning amount (AD-23).
+		expect(acceptedPayload(harness).winningAmount).toBe(8_500_000);
+		expect(acceptedPayload(harness).capHit).toBe(8_500_000);
 	});
 });
 

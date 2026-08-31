@@ -346,3 +346,13 @@
   summary: The corrupt-log path where a live contention's `seedHash` folded to `null` is proven at the core level only; no server-transaction test drives `placeBid` end to end through a dissolution against a null commitment.
   evidence: bmad-code-review (2026-08-29), blind-hunter layer. `decide()`'s "reveal against a commitment that folded to null rather than stranding the Auction" branch is asserted in `tests/core/bidding.test.ts`, and `readContentionSeed`'s null answer is asserted in `tests/server/bidding.test.ts`, but nothing joins the two: no test opens a contention whose `seedHash` is absent, dissolves it through `placeBid`, and confirms the transaction commits and `loadAuctionPage` then serialises what the page renders as the unverifiable-commitment sentence. The state is reachable only from a corrupt or hand-written log, which AD-4 forbids correcting in place, so the gap is narrow — but Story 3.6 builds the reveal-verification surface and is where an end-to-end assertion about an unverifiable commitment belongs.
   status: open
+
+## Deferred from: code review of spec-3-4-close-an-auction-and-place-the-player (2026-08-31)
+
+- **`closedWinnerFor` does not validate the `ClosedWinner` it is handed.** `src/lib/core/rules/close.ts` reads `winner.teamId`, `winner.teamName` and `winner.managerId` straight onto the `AuctionClosed` payload with no check that they are non-empty. `auction_events.manager_id`/`team_id` are `not null` and reference real rows, so a malformed drawn winner would fail at the FK rather than at the rule that could name the problem. Unreachable today: no drawer exists and `closeAuction` passes `null`.
+  owner: Story 3.6 (draw a Minimum-Bid Contention winner) — validate where the winner is constructed, or add the guard to `closedWinnerFor`.
+  status: open
+
+- **The spec verification command `git diff --stat <read-only paths>` under-covers the authorised file set.** As written in Story 3.4's Verification section it guards only `src/routes/`, `src/lib/components/`, `src/lib/shell/` and `src/lib/core/rules/bidding.ts`. An inadvertent edit to `src/lib/core/types.ts` or `src/lib/core/rules/roster-import.ts` — both declared read-only by the Code Map — would pass the check silently. Verified by hand at review time that neither was touched, so nothing was breached in 3.4.
+  owner: future story specs — prefer an allow-list check over a deny-list of four paths.
+  status: open

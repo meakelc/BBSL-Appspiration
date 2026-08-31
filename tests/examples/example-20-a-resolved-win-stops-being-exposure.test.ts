@@ -44,6 +44,8 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { closedPayload } from '../fixtures/closed-event.ts';
+
 import {
 	INITIAL_AUCTIONS,
 	auctionsReducer,
@@ -97,7 +99,7 @@ const THE_STASH_BID = event(1, BID_PLACED_EVENT, {
  * id through `nominations.ts`'s own `readClosedPlayerId`, so this is the
  * exact shape a real close will carry when Epic 3 starts appending them.
  */
-const THE_CLOSE = event(2, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'p-stash' });
+const THE_CLOSE = event(2, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-stash' }));
 
 /**
  * Team P, from the fold, at a given point in the log — plus the roster facts

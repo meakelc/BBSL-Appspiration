@@ -5,6 +5,8 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { closedPayload } from '../fixtures/closed-event.ts';
+
 import { DEVICE_CLASSES, classifyDeviceClass } from '../../src/lib/core/device-class.ts';
 import { fold } from '../../src/lib/core/projection/fold.ts';
 import {
@@ -82,7 +84,7 @@ function closed(
 	extra: Record<string, unknown> = {},
 	occurredAt = '2026-08-25T18:00:00.000Z'
 ): AppendedEvent {
-	return event(seq, AUCTION_CLOSED_EVENT, { fantraxPlayerId, ...extra }, occurredAt);
+	return event(seq, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId, ...extra }), occurredAt);
 }
 
 // --- The fold ---------------------------------------------------------------

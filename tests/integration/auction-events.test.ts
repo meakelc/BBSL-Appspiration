@@ -10,6 +10,7 @@ import type { AppendedEvent } from '../../src/lib/core/types.ts';
 import { classifyNominationConflict, releaseNomination } from '../../src/lib/server/nomination.ts';
 import { writeGateway, writePool } from '../../src/lib/shell/db.ts';
 import { runTransactionalWrite } from '../../src/lib/shell/write.ts';
+import { closedPayload } from '../fixtures/closed-event.ts';
 import type { Decision } from '../../src/lib/shell/write.ts';
 
 /**
@@ -717,7 +718,7 @@ describe.skipIf(!reachable)(SUITE_TITLE, () => {
 				schemaVersion: 1,
 				coreVersion: 1,
 				type: AUCTION_CLOSED_EVENT,
-				payload: { fantraxPlayerId },
+				payload: closedPayload({ fantraxPlayerId, teamId, managerId }),
 				managerId,
 				teamId,
 				deviceClass: null,

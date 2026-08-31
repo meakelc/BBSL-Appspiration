@@ -45,39 +45,29 @@
  */
 
 import type { Money } from '../money.ts';
-import { parseMoney } from '../money.ts';
 import type { CapHitRow } from '../rules/roster-import.ts';
+import type { SlotPlacement } from '../types.ts';
 import type { Reducer } from './fold.ts';
-import { AUCTION_CLOSED_EVENT } from './nominations.ts';
+import { AUCTION_CLOSED_EVENT, readClosedFacts } from './nominations.ts';
 
-/**
- * Where a close puts the won Player — a NARROWING of `RosterSlotKind`
- * (`types.ts`), and the narrowing is the point.
- *
- * A close can produce exactly two of the three roster slot kinds. Injury
- * Reserve is a state a Team's own roster moves a Player into afterwards, in
- * Fantrax; no rule in this product can place a Player there at a close, so
- * the type this module folds and the type `slotPlacementFor` returns cannot
- * express it. `CapHitRow` accepts a `RosterSlotKind`, and this union is
- * assignable to it, so the Cap arithmetic needs no widening in either
- * direction.
- */
-export type SlotPlacement = 'active_bench' | 'minor_league';
-
-/** The two placements a close can produce, for a total check over a payload. */
-const SLOT_PLACEMENTS: readonly SlotPlacement[] = Object.freeze([
-	'active_bench',
-	'minor_league'
-] as const);
+export type { SlotPlacement };
 
 /**
  * One Auction Contract, as the close recorded it.
  *
- * Everything a downstream reading needs without re-folding the Auction it
- * came from: the Team that owns it (id AND name, because the `under_contract`
- * refusal NAMES the holder and an id is not a name a Manager recognises), the
- * two AD-23 money fields, where the Player landed, and when the Auction was
- * due to close.
+ * What the Cap arithmetic and the `under_contract` refusal need without
+ * re-folding the Auction it came from: the Team that owns it (id AND name,
+ * because the refusal NAMES the holder and an id is not a name a Manager
+ * recognises), the two AD-23 money fields, where the Player landed, and when
+ * the Auction was due to close.
+ *
+ * **`contention` is deliberately not held here**, though `AuctionClosedPayload`
+ * carries it. Nothing this story derives asks which contention an Auction
+ * closed out of — the winner and the price are already settled by the time a
+ * contract exists — and the log keeps the answer for whoever eventually wants
+ * it. A consumer that needs to tell a lottery win from a standard one (Epic
+ * 4's Your Positions, an audit view) should widen this type then, against a
+ * real caller, rather than carrying a field no reader has.
  *
  * `contractYears` is `null` and typed as `null` rather than
  * `number | null`. FR-21 says contract length is recorded UNSET at a close and
@@ -141,11 +131,6 @@ export function contractForPlayer(
 	return contracts.byPlayer[fantraxPlayerId] ?? null;
 }
 
-/** Every Auction Contract, in no stated order. For a caller that wants the set. */
-export function auctionContracts(contracts: AuctionContracts): readonly AuctionContract[] {
-	return Object.values(contracts.byPlayer);
-}
-
 /**
  * One Team's Auction Contracts as `CapHitRow`s — the ONE bridge between this
  * fold and the Cap arithmetic.
@@ -186,73 +171,46 @@ export function contractRowsFor(
  * `AppendedEvent.payload` is `unknown` — whatever JSON the column holds — and
  * an insert-only log cannot be corrected in place, so a malformed historical
  * row must never crash the fold. Returning `null` rather than throwing is
- * `nominations.ts`'s and `auctions.ts`'s discipline for the same reason, and
- * the other two reducers already skip the same event.
+ * `nominations.ts`'s and `auctions.ts`'s discipline for the same reason.
  *
- * The fields split the way `eligibility.ts` splits its own, and for its
- * reason:
+ * **The rejections are not this module's, and that is the point.** Everything
+ * a close must carry to mean anything — the Player, the winning Team, the
+ * placement and both money figures — is validated by
+ * `nominations.ts`'s `readClosedFacts`, the ONE definition of a well-formed
+ * close that all three reducers folding this event share. So a payload this
+ * fold skips is a payload `nominationsReducer` and `auctionsReducer` skip
+ * too: the board seat, the Auction and the contract move together or not at
+ * all. When they did not, a corrupt `teamId` released the seat and dropped
+ * the Auction while recording no contract, and the won Player fell silently
+ * back into the nominatable pool with the winning Team's Cap Space unmoved.
  *
- *   - **Rejected, because they cannot be guessed.** The Player, the winning
- *     Team, both money fields and the placement are what this fold IS. A
- *     close naming no Player identifies no contract; one naming no Team
- *     records an ownership nobody holds; an unparseable amount is not a
- *     price; and a placement that is neither of the two kinds decides both
- *     Roster Count and the Cap treatment, so guessing at it would move a
- *     Team's spending power on the strength of a corrupt row.
- *   - **Repaired, because they are audit detail this fold never decides on.**
- *     The two names fall back to their ids, which still identify the thing,
- *     and `closedAt` falls back to the event's own instant — dropping a real
- *     contract over a cosmetic field would silently return a won Player to
- *     the pool, which is far the worse failure.
- *
- * A negative amount is rejected on `readPayload`'s grounds in `auctions.ts`:
- * `parseMoney` accepts an optionally-signed digit run legitimately, because
- * Available Cap Space is legitimately negative, so a price has to refuse the
- * sign here.
+ * What is left here is only what this fold REPAIRS, because it is audit
+ * detail no fold decides on: the two names fall back to their ids, which
+ * still identify the thing, and `closedAt` falls back to the event's own
+ * instant. Dropping a real contract over a cosmetic field would be the very
+ * failure the shared reader exists to prevent.
  */
 function readPayload(
 	payload: unknown,
 	event: { readonly occurredAt: string }
 ): AuctionContract | null {
-	if (typeof payload !== 'object' || payload === null) return null;
+	const facts = readClosedFacts(payload);
+	if (facts === null) return null;
+
 	const record = payload as Record<string, unknown>;
-
-	const fantraxPlayerId = record['fantraxPlayerId'];
-	const teamId = record['teamId'];
-	if (typeof fantraxPlayerId !== 'string' || fantraxPlayerId === '') return null;
-	if (typeof teamId !== 'string' || teamId === '') return null;
-
-	const placement = record['placement'];
-	if (typeof placement !== 'string') return null;
-	if (!SLOT_PLACEMENTS.includes(placement as SlotPlacement)) return null;
-
-	// Both amounts are parsed rather than trusted, and parsed SEPARATELY —
-	// neither is read out of the other (AD-23). `parseMoney` accepts the two
-	// shapes an `int8` arrives as and throws on everything else (AD-8); that
-	// throw is caught and turned into a skip, because a corrupt payload in an
-	// insert-only log is not this fold's to crash over.
-	let winningAmount: Money;
-	let capHit: Money;
-	try {
-		winningAmount = parseMoney(record['winningAmount']);
-		capHit = parseMoney(record['capHit']);
-	} catch {
-		return null;
-	}
-	if (winningAmount < 0 || capHit < 0) return null;
-
 	const playerName = record['playerName'];
 	const teamName = record['teamName'];
 	const closedAt = record['closedAt'];
 
 	return {
-		fantraxPlayerId,
-		playerName: typeof playerName === 'string' && playerName !== '' ? playerName : fantraxPlayerId,
-		teamId,
-		teamName: typeof teamName === 'string' && teamName !== '' ? teamName : teamId,
-		winningAmount,
-		capHit,
-		placement: placement as SlotPlacement,
+		fantraxPlayerId: facts.fantraxPlayerId,
+		playerName:
+			typeof playerName === 'string' && playerName !== '' ? playerName : facts.fantraxPlayerId,
+		teamId: facts.teamId,
+		teamName: typeof teamName === 'string' && teamName !== '' ? teamName : facts.teamId,
+		winningAmount: facts.winningAmount,
+		capHit: facts.capHit,
+		placement: facts.placement,
 		// Stated as the absence it is, never as a zero-length contract.
 		contractYears: null,
 		closedAt: typeof closedAt === 'string' && closedAt !== '' ? closedAt : event.occurredAt

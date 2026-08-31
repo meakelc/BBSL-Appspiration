@@ -17,13 +17,24 @@ import { describe, expect, it } from 'vitest';
 
 import {
 	INITIAL_CONTRACTS,
-	auctionContracts,
 	contractForPlayer,
 	contractRowsFor,
 	contractsReducer
 } from '../src/lib/core/projection/contracts.ts';
 import { fold } from '../src/lib/core/projection/fold.ts';
-import { AUCTION_CLOSED_EVENT } from '../src/lib/core/projection/nominations.ts';
+import {
+	AUCTION_CLOSED_EVENT,
+	INITIAL_NOMINATIONS,
+	NOMINATION_PLACED_EVENT,
+	nominationForPlayer,
+	nominationsReducer
+} from '../src/lib/core/projection/nominations.ts';
+import {
+	BID_PLACED_EVENT,
+	INITIAL_AUCTIONS,
+	auctionForPlayer,
+	auctionsReducer
+} from '../src/lib/core/projection/auctions.ts';
 import { computeCapSpace } from '../src/lib/core/rules/roster-import.ts';
 import type { AppendedEvent } from '../src/lib/core/types.ts';
 
@@ -77,7 +88,7 @@ describe('contractsReducer — what a close records', () => {
 	it('records nothing at all before a close', () => {
 		expect(INITIAL_CONTRACTS.byPlayer).toEqual({});
 		expect(contractForPlayer(INITIAL_CONTRACTS, 'p-1')).toBeNull();
-		expect(auctionContracts(INITIAL_CONTRACTS)).toEqual([]);
+		expect(Object.keys(INITIAL_CONTRACTS.byPlayer)).toEqual([]);
 	});
 
 	it('records the placement and BOTH money fields (AD-23)', () => {
@@ -132,7 +143,7 @@ describe('contractsReducer — first close wins, and replay converges (AD-5)', (
 
 		expect(contractForPlayer(contracts, 'p-1')?.teamId).toBe('t-1');
 		expect(contractForPlayer(contracts, 'p-1')?.winningAmount).toBe(8_000_000);
-		expect(auctionContracts(contracts)).toHaveLength(1);
+		expect(Object.keys(contracts.byPlayer)).toHaveLength(1);
 	});
 
 	it('converges on a double fold of the same log', () => {
@@ -185,7 +196,7 @@ describe('contractsReducer — a malformed close is SKIPPED, never thrown over',
 			close(1, { fantraxPlayerId: undefined }),
 			close(2, { fantraxPlayerId: 'p-2', teamId: 't-2', teamName: 'Team N' })
 		);
-		expect(auctionContracts(contracts)).toHaveLength(1);
+		expect(Object.keys(contracts.byPlayer)).toHaveLength(1);
 		expect(contractForPlayer(contracts, 'p-2')?.teamName).toBe('Team N');
 	});
 
@@ -248,5 +259,92 @@ describe('contractRowsFor — the ONE bridge to the Cap arithmetic', () => {
 			{ capHit: 2_000_000, rosterSlotKind: 'active_bench' },
 			{ capHit: 3_000_000, rosterSlotKind: 'active_bench' }
 		]);
+	});
+});
+
+// --- The three folds agree about what a close IS ---------------------------
+
+describe('one close, three folds — a payload any of them skips, all of them skip', () => {
+	/**
+	 * The invariant this block exists for, found by Story 3.4's code review.
+	 *
+	 * `nominationsReducer` frees the board seat and the nominating Team's
+	 * Nomination Slot, `auctionsReducer` drops the Auction, and
+	 * `contractsReducer` records who now owns the Player. Those are two halves
+	 * of one fact plus the fact itself — the Player left the pool AND landed on
+	 * a Team — so they must agree, event for event, about which payloads count.
+	 *
+	 * They did not. The first two gated only on `fantraxPlayerId` while the
+	 * third also required a Team, a placement and two parseable amounts. A
+	 * payload naming a valid Player with a corrupt `teamId` therefore released
+	 * the seat and removed the Auction while recording NO contract: the won
+	 * Player was in no auction, no nomination, no contract and no
+	 * `team_rosters` row — silently back in the nominatable pool, with the
+	 * winning Team's Cap Space and Roster Count never moving.
+	 *
+	 * `readClosedFacts` is now the one definition all three share, so the
+	 * failure is loud instead: the Auction stays standing and visible.
+	 */
+	const NOMINATED = event(1, NOMINATION_PLACED_EVENT, {
+		fantraxPlayerId: 'p-1',
+		playerName: 'Ausar Bright',
+		teamId: 't-n',
+		teamName: 'Team N'
+	});
+
+	const BID = event(2, BID_PLACED_EVENT, {
+		fantraxPlayerId: 'p-1',
+		teamId: 't-1',
+		teamName: 'Team M',
+		managerId: 'm-1',
+		amount: 8_000_000,
+		closesAt: '2026-08-27T09:00:00.000Z'
+	});
+
+	/** Every way a close can name a real Player and still not be a close. */
+	const CORRUPT: readonly [string, Record<string, unknown>][] = [
+		['no teamId', { teamId: undefined }],
+		['a blank teamId', { teamId: '' }],
+		['an unknown placement', { placement: 'injury_reserve' }],
+		['no placement', { placement: undefined }],
+		['an unparseable winningAmount', { winningAmount: 'lots' }],
+		['an unparseable capHit', { capHit: {} }],
+		['a negative winningAmount', { winningAmount: -1 }],
+		['a negative capHit', { capHit: -1 }]
+	];
+
+	it.each(CORRUPT)('all three folds skip a close with %s', (_label, overrides) => {
+		const log = [NOMINATED, BID, close(3, overrides)];
+
+		// The contract is not recorded...
+		expect(contractForPlayer(foldClosures(...log), 'p-1')).toBeNull();
+		// ...and neither of the other two moved either, so the Player is still
+		// on the board and their Auction is still standing to be closed again.
+		expect(
+			nominationForPlayer(fold(INITIAL_NOMINATIONS, log, nominationsReducer), 'p-1')
+		).not.toBeNull();
+		expect(auctionForPlayer(fold(INITIAL_AUCTIONS, log, auctionsReducer), 'p-1')).not.toBeNull();
+	});
+
+	it('all three folds ACCEPT the well-formed close the same log ends with', () => {
+		const log = [NOMINATED, BID, close(3)];
+
+		// The mirror of the case above: when the payload is a real close, all
+		// three move together — seat freed, Auction dropped, contract recorded.
+		expect(contractForPlayer(foldClosures(...log), 'p-1')?.teamId).toBe('t-1');
+		expect(nominationForPlayer(fold(INITIAL_NOMINATIONS, log, nominationsReducer), 'p-1')).toBeNull();
+		expect(auctionForPlayer(fold(INITIAL_AUCTIONS, log, auctionsReducer), 'p-1')).toBeNull();
+	});
+
+	it('still skips a close naming no Player at all, in all three', () => {
+		// The original shared case, which was never the broken one — kept so a
+		// future narrowing of `readClosedFacts` cannot quietly drop it.
+		const log = [NOMINATED, BID, close(3, { fantraxPlayerId: undefined })];
+
+		expect(contractForPlayer(foldClosures(...log), 'p-1')).toBeNull();
+		expect(
+			nominationForPlayer(fold(INITIAL_NOMINATIONS, log, nominationsReducer), 'p-1')
+		).not.toBeNull();
+		expect(auctionForPlayer(fold(INITIAL_AUCTIONS, log, auctionsReducer), 'p-1')).not.toBeNull();
 	});
 });

@@ -13,6 +13,8 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { closedPayload } from '../fixtures/closed-event.ts';
+
 import {
 	AUCTION_CLOSED_EVENT,
 	NOMINATION_PLACED_EVENT
@@ -865,7 +867,7 @@ describe('releaseNomination — the claim row is deleted when the Auction closes
 		const harness = fakeGateway({});
 
 		await releaseNomination(harness.client, [
-			appended(50, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'p-1' })
+			appended(50, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1' }))
 		]);
 
 		expect(harness.order).toEqual(['release-nomination']);
@@ -878,11 +880,11 @@ describe('releaseNomination — the claim row is deleted when the Auction closes
 		const harness = fakeGateway({});
 
 		await releaseNomination(harness.client, [
-			appended(50, AUCTION_CLOSED_EVENT, {
-				fantraxPlayerId: 'p-1',
-				winningTeamId: 't-9',
-				price: 42
-			})
+			appended(
+				50,
+				AUCTION_CLOSED_EVENT,
+				closedPayload({ fantraxPlayerId: 'p-1', teamId: 't-9', winningAmount: 42, capHit: 42 })
+			)
 		]);
 
 		// The Slot frees whoever won, so the delete carries one parameter and
@@ -927,9 +929,9 @@ describe('releaseNomination — the claim row is deleted when the Auction closes
 		const harness = fakeGateway({});
 
 		await releaseNomination(harness.client, [
-			appended(50, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'p-1' }),
+			appended(50, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1' })),
 			appended(51, NOMINATION_PLACED_EVENT, { fantraxPlayerId: 'p-3', teamId: 't-3' }),
-			appended(52, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'p-2' })
+			appended(52, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-2' }))
 		]);
 
 		expect(harness.order).toEqual(['release-nomination', 'release-nomination']);
@@ -966,7 +968,7 @@ describe('releaseNomination — the claim row is deleted when the Auction closes
 
 		await releaseNomination(harness.client, [
 			appended(50, AUCTION_CLOSED_EVENT, null),
-			appended(51, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'p-2' })
+			appended(51, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-2' }))
 		]);
 
 		expect(harness.order).toEqual(['release-nomination']);
@@ -982,13 +984,13 @@ describe('releaseNomination — the claim row is deleted when the Auction closes
 
 		await expect(
 			releaseNomination(harness.client, [
-				appended(50, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'never-nominated' })
+				appended(50, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'never-nominated' }))
 			])
 		).resolves.toBeUndefined();
 
 		await expect(
 			releaseNomination(harness.client, [
-				appended(51, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'never-nominated' })
+				appended(51, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'never-nominated' }))
 			])
 		).resolves.toBeUndefined();
 
@@ -998,7 +1000,7 @@ describe('releaseNomination — the claim row is deleted when the Auction closes
 	it('never SELECTS from the claim table — the Slot stays a fold of the log', async () => {
 		const harness = fakeGateway({});
 		await releaseNomination(harness.client, [
-			appended(50, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'p-1' })
+			appended(50, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1' }))
 		]);
 		// The fake has no read branch for `open_nominations` at all and throws
 		// on any statement it does not recognise, so a select would have failed

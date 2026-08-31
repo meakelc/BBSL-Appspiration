@@ -35,7 +35,12 @@ import {
 import type { AuctionClosedPayload, CloseState, ClosedWinner } from '../../src/lib/core/rules/close.ts';
 
 const CLOSES_AT = '2026-08-27T09:00:00.000Z';
-/** One millisecond after the close — the earliest instant a close is legal. */
+/**
+ * The close instant itself — the EARLIEST instant a close is legal, because
+ * `hasExpired` is `now >= closesAt`. Not one millisecond later: Story 3.5
+ * hands each Auction its own nominal expiry as `now`, so a close at exactly
+ * `closesAt` has to succeed or the sweep would never close anything.
+ */
 const AT_EXPIRY = CLOSES_AT;
 const LATE = '2026-08-27T15:00:00.000Z';
 const EARLY = '2026-08-27T08:59:59.999Z';
@@ -192,11 +197,37 @@ describe('closedWinnerFor — who won, and for how much', () => {
 	});
 
 	it('is the SAME derivation the shell and the core both ask', () => {
-		// `server/close.ts` asks it inside `load` because it needs the winning
-		// Team before it can read a roster; `decideClose` asks it again. Pure,
-		// so the two calls cannot disagree.
+		// `server/close.ts` asks `closedWinnerFor` inside `load`, because it
+		// needs the winning Team before it can read that Team's roster;
+		// `decideClose` asks it again inside `decide`. The property worth
+		// pinning is that the shell's answer is the one that reaches the LOG —
+		// so assert the shell's derivation against the payload the core emits,
+		// rather than the function against itself.
 		const auction = auctionOf();
-		expect(closedWinnerFor(auction, null)).toEqual(closedWinnerFor(auction, null));
+		const shellAnswer = closedWinnerFor(auction, null);
+		const { payload } = payloadOf(stateOf({ auction }));
+
+		expect(payload.teamId).toBe(shellAnswer.teamId);
+		expect(payload.teamName).toBe(shellAnswer.teamName);
+		expect(payload.managerId).toBe(shellAnswer.managerId);
+		expect(payload.winningAmount).toBe(shellAnswer.winningAmount);
+		expect(payload.contention).toBe(shellAnswer.contention);
+	});
+
+	it('agrees with the core on a LOTTERY close too, where the amounts differ', () => {
+		// The case the tautology could never have caught: the leading Bid is
+		// $4,000,000 but a drawn Contender wins at the flat MINIMUM_BID, so a
+		// shell reading the winner off `leadingBid` would disagree with the
+		// payload here and nowhere else.
+		const auction = auctionOf({ contention: 'minimum_bid' });
+		const shellAnswer = closedWinnerFor(auction, DRAWN);
+		const { payload } = payloadOf(stateOf({ auction }), AT_EXPIRY, DRAWN);
+
+		expect(payload.teamId).toBe(shellAnswer.teamId);
+		expect(payload.managerId).toBe(shellAnswer.managerId);
+		expect(payload.winningAmount).toBe(shellAnswer.winningAmount);
+		expect(payload.winningAmount).toBe(MINIMUM_BID);
+		expect(auction.leadingBid.amount).not.toBe(shellAnswer.winningAmount);
 	});
 });
 

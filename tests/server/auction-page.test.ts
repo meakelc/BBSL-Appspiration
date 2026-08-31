@@ -10,6 +10,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
+
+import { closedPayload } from '../fixtures/closed-event.ts';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -499,7 +501,7 @@ describe('loadAuctionPage — no open nomination', () => {
 		const harness = fakeGateway({
 			events: [
 				nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1'),
-				logEvent(2, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'p-1' })
+				logEvent(2, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1' }))
 			]
 		});
 		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
@@ -511,7 +513,7 @@ describe('loadAuctionPage — no open nomination', () => {
 			events: [
 				nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1'),
 				nominated(2, 'p-2', 'Alperen Sengun', 't-2', 'Rockets', 'm-2'),
-				logEvent(3, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'p-1' })
+				logEvent(3, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1' }))
 			]
 		});
 		expect(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM)).toBeNull();
@@ -686,7 +688,7 @@ describe('loadAuctionPage — the Auction with Bids on it (AC6)', () => {
 					'2026-08-26T09:00:00.000Z',
 					'2026-08-27T09:00:00.000Z'
 				),
-				logEvent(3, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 'p-1' })
+				logEvent(3, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1' }))
 			]
 		});
 

@@ -6,8 +6,11 @@
  * > Active/Bench Slot at a $3,000,000 Cap Hit and Roster Count increases by
  * > one.
  *
- * **"Same Team M" is the whole example, and it is why this file imports from
- * example 16 rather than restating its numbers.** The state this close is
+ * **"Same Team M" is the whole example, and it is why this file imports
+ * example 16's produced state rather than restating its numbers.** That state
+ * lives in `tests/fixtures/example-16-minors-placement.ts` — a plain module
+ * with no `describe` of its own, because importing example 16's TEST file
+ * here made vitest register its whole suite a second time inside this one. The state this close is
  * evaluated against is the state example 16's close PRODUCED — its
  * `AuctionClosed`, folded through `contractsReducer` into a Minor League row
  * that `contractRowsFor` hands the Cap arithmetic. That is AD-11 in one file:
@@ -50,7 +53,7 @@ import {
 	minorLeagueOccupiedIn,
 	nominationOf,
 	rosterCountOf
-} from './example-16-minors-placement.test.ts';
+} from '../fixtures/example-16-minors-placement.ts';
 
 const CLOSES_AT = '2026-08-27T09:00:00.000Z';
 
