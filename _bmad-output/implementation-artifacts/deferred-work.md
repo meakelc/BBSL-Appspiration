@@ -356,3 +356,37 @@
 - **The spec verification command `git diff --stat <read-only paths>` under-covers the authorised file set.** As written in Story 3.4's Verification section it guards only `src/routes/`, `src/lib/components/`, `src/lib/shell/` and `src/lib/core/rules/bidding.ts`. An inadvertent edit to `src/lib/core/types.ts` or `src/lib/core/rules/roster-import.ts` — both declared read-only by the Code Map — would pass the check silently. Verified by hand at review time that neither was touched, so nothing was breached in 3.4.
   owner: future story specs — prefer an allow-list check over a deny-list of four paths.
   status: open
+
+## Deferred from: spec-3-5-the-tick-sweep-then-drain (2026-08-31)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-5-the-tick-sweep-then-drain.md`
+  summary: The tick sweeps and closes with **no pause check** — a paused auction's Auctions would still be closed by `runTick` — because AD-13's pause does not exist to read yet.
+  evidence: spec-3-5's **Never** list states it directly ("No pause check — Epic 7 owns pause, and no pause event or flag exists to read, so a check written now would be unverifiable"), and the codebase agrees: `grep -rn "pause" src/` finds no pause event type, no `paused` column on any table in `supabase/migrations/`, and no phase or flag `src/lib/core/projection/` folds that could answer "is the auction paused". AD-13 requires a pause to recompute close instants FORWARD rather than shift them in place, which means the gate the sweep would consult is not merely a boolean — it is whatever Epic 7 decides the resumed clock is, and inventing one now would be a second, unverifiable definition of it. `src/lib/server/sweep.ts` is deliberately the one place it will go: the check belongs between the version gate and the overdue derivation, before any close.
+  deferred_reason: Epic 7 owns pause (AD-13). A check written against a flag that does not exist could not be tested and would have to be rewritten by the story that creates the real one.
+  owner: Epic 7's pause story — add the check to `runTick` and a heartbeat outcome for a paused pass.
+  status: open
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-5-the-tick-sweep-then-drain.md`
+  summary: `tick_heartbeats` records every pass, but **nothing reads it** — a tick that stops running entirely writes no row and there is no external detector to notice the silence.
+  evidence: spec-3-5's **Never** list ("No external heartbeat detector (8.2)"). AD-19's whole reason for the heartbeat is that "a pass that recorded nothing is indistinguishable from a dead tick", and Story 3.5 supplies the recording half only: `supabase/migrations/20260831000000_tick.sql` creates the table and the index on `ran_at desc`, and `src/lib/server/sweep.ts` writes exactly one row per pass on every path including a refusal and a failed pass. What is missing is the reader — something outside this database that alerts when the newest `ran_at` is older than a threshold. It cannot live in the tick itself: a tick that is not running cannot notice that it is not running, and a pg_cron job that checked would be the same single point of failure wearing a second hat.
+  deferred_reason: Story 8.2 owns operational alerting. The detector must be external to the mechanism it watches, which is infrastructure this repository does not yet configure.
+  owner: Story 8.2 — read `tick_heartbeats` from outside and alert on staleness.
+  status: open
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-5-the-tick-sweep-then-drain.md`
+  summary: Two tick passes can overlap, and the second reports benign contention as close FAILURES on the heartbeat — correctness holds, but AD-19's record becomes noisy.
+  evidence: bmad-build review (2026-08-31), Blind Hunter and Acceptance Auditor layers, independently. The cron job POSTs via `net.http_post`, which is fire-and-forget: `timeout_milliseconds` abandons the response and cannot stop an Edge Function still sweeping, so the 10-second schedule fires again regardless. `src/lib/server/sweep.ts` states by design that it takes no lock across the pass. Two passes therefore re-derive the same overdue set; the per-close `GLOBAL_WRITE_LOCK_KEY` serialises them so nothing is closed twice — correctness is preserved — but the loser's `loadCloseState` finds the Auction already gone from `auctions.byPlayer`, `closedWinnerFor` throws on the null Auction, and the sweep records it in `failures` with `outcome: 'completed_with_failures'`. A monitoring surface built on that column would treat routine overlap as a fault. Not fixed here because both clean fixes are out of bounds: a second, pass-level advisory lock contradicts the spec's frozen "the lock is taken by `runTransactionalWrite` per close and by no second mechanism", and discriminating the benign case by matching a thrown `TypeError`'s message text would be brittle.
+  owner: whichever story first reads `tick_heartbeats` for alerting (8.2), or Epic 7's pause story if it introduces a pass-level gate anyway.
+  status: open
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-5-the-tick-sweep-then-drain.md`
+  summary: `tick_heartbeats` grows by roughly 259,000 rows a month forever, with no retention, partitioning or cleanup — and `cron.job_run_details` grows alongside it on the same schedule.
+  evidence: bmad-build review (2026-08-31), Blind Hunter layer. The migration `supabase/migrations/20260831000000_tick.sql` does the invocation arithmetic itself (~259,200/month at a 10-second interval, AD-10's own figure) and creates the table with an index on `ran_at desc` but no TTL, no partitioning and no pruning job. pg_cron's own `cron.job_run_details` has the identical unbounded-growth characteristic and is likewise unaddressed. On Supabase's free tier the database size ceiling is a silent-outage source of exactly the kind AD-19 says must be alerted on well before the ceiling.
+  owner: Story 8.2, alongside the external detector that reads this table.
+  status: open
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-3-5-the-tick-sweep-then-drain.md`
+  summary: The heartbeat stores counts plus one prose sentence, so nothing can answer "which Auctions failed" without parsing English.
+  evidence: bmad-build review (2026-08-31), Blind Hunter layer. `tick_heartbeats` carries `closed`, `skipped` and `failed` as integers; the Player ids exist only inside the free-text `detail` column, assembled by `detailFor` in `src/lib/server/sweep.ts` as `closed 2 (p-1, p-2); skipped 1 (p-9) — ...`. The deferred external detector (AD-19, Story 8.2) is meant to read this table and alert; it will have no structured way to report which Auction failed, or to distinguish a persistent per-Auction failure from a transient one, without regex over a sentence whose wording is not a contract.
+  owner: Story 8.2 — decide the shape it needs (a jsonb column, or a child row per failure) when the reader exists to justify it.
+  status: open
