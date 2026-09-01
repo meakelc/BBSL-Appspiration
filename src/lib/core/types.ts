@@ -61,6 +61,7 @@
  */
 
 import type { Money } from './money.ts';
+import type { LeaguePhase } from './projection/phase.ts';
 
 /**
  * What a caller's `decide()` hands the transactional shell to append.
@@ -71,9 +72,18 @@ import type { Money } from './money.ts';
  * as-is, and whatever reads it back is the one place that knows what to
  * expect for a given `type`.
  *
- * `managerId`/`teamId` are required from the first event onward (AD-4): no
- * system-originated event exists yet that would need to resolve who "acts"
- * for it. `deviceClass`/`dispatchOutcome`/`deliveryOutcome` are the
+ * `managerId`/`teamId` are `string | null` **as a pair** (Story 3.7). They
+ * were required from the first event onward (AD-4) on the stated grounds that
+ * no system-originated event existed yet; `ContractAssignmentOpened` is the
+ * first, and `20260901000000_system_actor.sql` relaxes both columns together
+ * behind a check constraint that makes a half-null actor unwritable. Null
+ * means nobody acted — the tick read a clock and the log says the phase
+ * ended — and it is never a stand-in for an actor that could not be
+ * resolved. Every existing construction site still compiles: `string` is
+ * assignable to `string | null`, so widening this type made no caller a
+ * compile error and no caller needed to change.
+ *
+ * `deviceClass`/`dispatchOutcome`/`deliveryOutcome` are the
  * measurement fields NFR §5 requires and are optional here because most
  * events populate none of them; the column they land in is nullable for the
  * same reason.
@@ -81,8 +91,10 @@ import type { Money } from './money.ts';
 export type EventEnvelope = {
 	readonly type: string;
 	readonly payload: unknown;
-	readonly managerId: string;
-	readonly teamId: string;
+	/** The acting Manager, or `null` for a system event. Null with `teamId`. */
+	readonly managerId: string | null;
+	/** The acting Team, or `null` for a system event. Null with `managerId`. */
+	readonly teamId: string | null;
 	readonly deviceClass?: string | null;
 	readonly dispatchOutcome?: string | null;
 	readonly deliveryOutcome?: string | null;
@@ -111,8 +123,10 @@ export type AppendedEvent = {
 	readonly coreVersion: number;
 	readonly type: string;
 	readonly payload: unknown;
-	readonly managerId: string;
-	readonly teamId: string;
+	/** The acting Manager, or `null` for a system event. Null with `teamId`. */
+	readonly managerId: string | null;
+	/** The acting Team, or `null` for a system event. Null with `managerId`. */
+	readonly teamId: string | null;
 	readonly deviceClass: string | null;
 	readonly dispatchOutcome: string | null;
 	readonly deliveryOutcome: string | null;
@@ -573,6 +587,28 @@ export type ExpiryGateOutcome = GateOutcome & {
 };
 
 /**
+ * The phase gate: no Bid is accepted outside the Auction Phase (Story 3.7,
+ * FR-22, AD-22).
+ *
+ * **One field, and it is the only thing the gate looked at.** `phase` is the
+ * folded `LeaguePhase` — `phaseReducer` over the whole log — and the verdict
+ * is `phase === 'Auction'` and nothing else. There is no expiry instant on
+ * this shape, no clock and no count, which is `ExpiryGateOutcome`'s discipline
+ * applied to a refusal that is about neither: a gate that cannot see a figure
+ * cannot quote one (AD-7).
+ *
+ * **It carries no League Clock expiry deliberately.** The Auction Phase ends
+ * when the League Clock runs out, but `Setup` and `Archived` fail this gate
+ * too and in neither case did any clock expire. A shape carrying an expiry
+ * would invite a refusal sentence asserting a cause this gate cannot see, and
+ * that sentence would be false in two of the three states that fail it.
+ */
+export type PhaseGateOutcome = GateOutcome & {
+	/** The folded League phase this gate was decided from. Never re-derived. */
+	readonly phase: LeaguePhase;
+};
+
+/**
  * The gate set for `PlaceBid`, **fixed per command type** (AD-1).
  *
  * Declared here, in one place, so a later story adds a gate with a single
@@ -599,11 +635,24 @@ export type ExpiryGateOutcome = GateOutcome & {
  * refused on both `contention` and `selfBid` states the lottery's ground
  * before the ordinary auction's.
  *
+ * **Story 3.7 added `phase`, and it goes FIRST — ahead of `expiry`.** Outside
+ * the Auction Phase there is no auction for a clock to belong to, so which
+ * amount was offered and how long an Auction Clock had left are both beside
+ * the point; "the league is in Contract Assignment" is the honest answer and
+ * every other row sits inside it. That is exactly the ordering
+ * `rules/nomination.ts:182` argues for its own phase refusal, applied to the
+ * ninth gate. It is the fifth time this one-edit mechanism has been spent:
+ * adding the name below and the key on `PlaceBidGateResults` made every
+ * consumer a compile error until it handled the new gate, and the ninth chip
+ * reached the refusal panel because this list grew rather than because a
+ * component was edited.
+ *
  * Frozen at runtime as well as `as const`, because this list is what
  * `evaluate()`'s totality is asserted against — a caller that could splice
  * an entry out of it could make a partial result look complete.
  */
 export const PLACE_BID_GATES = Object.freeze([
+	'phase',
 	'expiry',
 	'opening',
 	'contention',
@@ -614,7 +663,7 @@ export const PLACE_BID_GATES = Object.freeze([
 	'slots'
 ] as const);
 
-/** One of the eight gate names above. */
+/** One of the nine gate names above. */
 export type PlaceBidGate = (typeof PLACE_BID_GATES)[number];
 
 /**
@@ -626,6 +675,7 @@ export type PlaceBidGate = (typeof PLACE_BID_GATES)[number];
  * record it has to guess at.
  */
 export type PlaceBidGateResults = {
+	readonly phase: PhaseGateOutcome;
 	readonly expiry: ExpiryGateOutcome;
 	readonly opening: OpeningGateOutcome;
 	readonly contention: ContentionGateOutcome;

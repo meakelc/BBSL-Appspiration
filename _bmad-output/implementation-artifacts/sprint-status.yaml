@@ -67,7 +67,7 @@ development_status:
   3-4-close-an-auction-and-place-the-player: done
   3-5-the-tick-one-cron-one-function-sweep-then-drain: done
   3-6-draw-a-minimum-bid-contention-winner: done
-  3-7-the-league-clock-and-the-end-of-the-auction-phase: backlog
+  3-7-the-league-clock-and-the-end-of-the-auction-phase: review
   epic-3-retrospective: optional
 
   epic-4: backlog

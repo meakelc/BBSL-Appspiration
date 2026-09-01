@@ -66,7 +66,7 @@ const TEAM_P: TeamMoneyState = {
 };
 
 /** The Player is Minor League Eligible — the fact this whole example turns on. */
-const STATE: BidState = bidStateFor(null, TEAM_P, true);
+const STATE: BidState = bidStateFor(null, TEAM_P, true, 'Auction');
 
 function bidOf(amount: number): PlaceBid {
 	return {
@@ -191,7 +191,7 @@ describe('§10 example 18 — stashing beats the cap, on purpose', () => {
 			eligibleLeading: [],
 			minorLeagueOccupied: 0
 		};
-		const gates = evaluate(bidStateFor(null, short, true), bidOf(30_000_000), NOW);
+		const gates = evaluate(bidStateFor(null, short, true, 'Auction'), bidOf(30_000_000), NOW);
 
 		expect(gates.cap.unbounded).toBe(true);
 		expect(gates.cap.rosterReserve).toBe(7_000_000);

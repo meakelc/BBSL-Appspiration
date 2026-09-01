@@ -130,8 +130,8 @@ const UNBOUND_MANAGER: RegisteredManager = {
 	isCommissioner: false
 };
 
-const SETUP_PHASE: ResolvedPhase = { name: 'Setup', sentence: 'Setup.' };
-const AUCTION_PHASE: ResolvedPhase = { name: 'Auction', sentence: 'Auction.' };
+const SETUP_PHASE: ResolvedPhase = { name: 'Setup', sentence: 'Setup.' , announcement: null };
+const AUCTION_PHASE: ResolvedPhase = { name: 'Auction', sentence: 'Auction.' , announcement: null };
 
 const OPEN_AUCTION = {
 	fantraxPlayerId: 'p-1',
@@ -1358,7 +1358,7 @@ describe('the refusal panel — the only surface with a dedicated anatomy', () =
 					// Slots, so `N` is the bid alone and `M` is the full three.
 					eligibleLeading: [],
 					minorLeagueOccupied: 0
-				}, false),
+				}, false, 'Auction'),
 				{
 					kind: 'PlaceBid',
 					fantraxPlayerId: 'p-1',
@@ -1375,7 +1375,7 @@ describe('the refusal panel — the only surface with a dedicated anatomy', () =
 		// Eight since Story 3.2. The literal is kept beside the derived length
 		// deliberately: it is what notices a gate arriving without anybody
 		// deciding to add one.
-		expect(rows).toHaveLength(8);
+		expect(rows).toHaveLength(9);
 		expect(rows.map((row) => row.gate)).toEqual([...PLACE_BID_GATES]);
 		// The refusing row is filled — `class:refused={!row.passed}` — and
 		// every other row is outlined and carries its own figure.
@@ -1446,6 +1446,11 @@ describe('the Maximum Bid breakdown on the page', () => {
 describe('the bid action — a refusal carries the figures it was judged against', () => {
 	/** A gate set shaped as the locked transaction would return it. */
 	const REFUSED_GATES = {
+		// Story 3.7's ninth gate, and the first in the list, passing: the league
+		// is in the Auction Phase, so bidding is open and the money is the only
+		// obstacle. The route passes the whole set through untouched whatever is
+		// in it.
+		phase: { passed: true, phase: 'Auction' },
 		// Story 3.1's seventh gate, passing: this Auction's clock has not run
 		// out, and the money is the only obstacle. The route passes the whole
 		// set through untouched whatever is in it.

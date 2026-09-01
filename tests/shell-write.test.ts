@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { EnqueueError, runTransactionalWrite } from '../src/lib/shell/write.ts';
+import { EnqueueError, runTransactionalWrite, toAppendedEvent } from '../src/lib/shell/write.ts';
 import type {
 	ConnectionGateway,
 	Decision,
@@ -408,5 +408,81 @@ describe('runTransactionalWrite — a throwing enqueue, after a successful commi
 		expect(enqueueError.outcome.kind).toBe('accepted');
 		expect(enqueueError.outcome.events).toHaveLength(1);
 		expect(enqueueError.outcome.events[0]?.type).toBe('Test.Event');
+	});
+});
+
+// --- the actor pair, which may be null TOGETHER (Story 3.7) ----------------
+
+/**
+ * `toAppendedEvent`'s row mapping for the two actor columns.
+ *
+ * **Tested directly because nothing else can catch a regression here yet.** No
+ * consumer reads `AppendedEvent.managerId` today — the Audit Log that will
+ * (Story 7.5) does not exist — so a return to `String(row['manager_id'])`
+ * would map a null column to the four-character string `"null"`, which is
+ * truthy, passes every `!== null` check, and would surface as an actor
+ * literally named "null" on the first surface that ever renders one. Nothing
+ * in the suite would go red in between.
+ *
+ * `20260901000000_system_actor.sql` made the pair nullable together, and
+ * `ContractAssignmentOpened` is the first event that writes it that way.
+ */
+describe('toAppendedEvent — the actor pair', () => {
+	/** One `auction_events` row, as `pg` or a fake hands it back. */
+	function row(overrides: Partial<QueryResultRow> = {}): QueryResultRow {
+		return {
+			seq: 7,
+			occurred_at: NOW,
+			schema_version: EVENT_SCHEMA_VERSION,
+			core_version: CORE_VERSION,
+			manager_id: 'm-1',
+			team_id: 't-1',
+			event_type: 'Test.Event',
+			payload: { fantraxPlayerId: 'p-1' },
+			device_class: null,
+			dispatch_outcome: null,
+			delivery_outcome: null,
+			...overrides
+		};
+	}
+
+	it('carries a Manager’s act through unchanged', () => {
+		const event = toAppendedEvent(row());
+		expect(event.managerId).toBe('m-1');
+		expect(event.teamId).toBe('t-1');
+	});
+
+	it('maps a null actor pair to null, and NEVER to the string "null"', () => {
+		const event = toAppendedEvent(row({ manager_id: null, team_id: null }));
+
+		expect(event.managerId).toBeNull();
+		expect(event.teamId).toBeNull();
+		// Stated separately, because this is the specific regression: `String`
+		// on a null column produces text that every null check passes.
+		expect(event.managerId).not.toBe('null');
+		expect(event.teamId).not.toBe('null');
+	});
+
+	it('maps an ABSENT actor column to null too, as it does for the measurement columns', () => {
+		// A driver that omits a column is saying the same thing as one that
+		// returns it null, and the two must not read back differently.
+		const { manager_id: _m, team_id: _t, ...withoutActor } = row();
+		const event = toAppendedEvent(withoutActor);
+
+		expect(event.managerId).toBeNull();
+		expect(event.teamId).toBeNull();
+	});
+
+	it('leaves every other field of the mapping alone', () => {
+		// `seq` is still stringified — `pg` returns `int8` as a string and the
+		// fold orders by `BigInt(seq)` — and the payload is passed through as
+		// the driver handed it over.
+		const event = toAppendedEvent(row({ manager_id: null, team_id: null }));
+
+		expect(event.seq).toBe('7');
+		expect(event.occurredAt).toBe(NOW.toISOString());
+		expect(event.type).toBe('Test.Event');
+		expect(event.payload).toEqual({ fantraxPlayerId: 'p-1' });
+		expect(event.deviceClass).toBeNull();
 	});
 });

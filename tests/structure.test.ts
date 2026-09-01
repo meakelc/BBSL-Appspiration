@@ -66,8 +66,15 @@ const AR2_DIRECTORIES: Array<[path: string, purpose: string]> = [
  * lottery whose seed selects Team G and releases the other three alongside
  * Team D's Nomination Slot, and the single-Contender lottery that resolves to
  * its one Contender with no special case and records a one-team list. 8 picks
- * up the log examples 6 and 7 built rather than restating it. The two Epic 3
- * examples still outstanding are 13 and 27, Story 3.7's League Clock.
+ * up the log examples 6 and 7 built rather than restating it.
+ *
+ * **Story 3.7 added the last TWO of Epic 3's — 13 and 27** — the League Clock
+ * pair, which 3.6's note above named as 3.7's before either existed: the close
+ * that does not reset the clock, and the voided Bid that shortens it. 27 is
+ * driven against a STATE LITERAL carrying both the `BidPlaced` and the
+ * `BidVoided`, because nothing in this codebase appends a void — Story 7.2
+ * owns that, and this test is what lets it append one against a fold already
+ * proven to survive it.
  */
 const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 	['example-01-ordinary-raise.test.ts', '1 — Ordinary raise'],
@@ -87,6 +94,7 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 		'example-11-single-contender-lottery.test.ts',
 		'11 — Single-contender lottery'
 	],
+	['example-13-league-clock.test.ts', '13 — A close is not a League Clock reset'],
 	['example-15-co-manager-race.test.ts', '15 — Co-manager race'],
 	['example-16-minors-placement.test.ts', '16 — Minors placement'],
 	['example-17-minors-overflow.test.ts', '17 — Minors overflow'],
@@ -116,7 +124,11 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 		'example-25-the-full-roster-can-still-stash.test.ts',
 		'25 — The same full roster can still stash, until it overflows'
 	],
-	['example-26-off-grid-everywhere.test.ts', '26 — Off-grid amounts are refused everywhere']
+	['example-26-off-grid-everywhere.test.ts', '26 — Off-grid amounts are refused everywhere'],
+	[
+		'example-27-a-voided-bid-shortens-the-clock.test.ts',
+		'27 — A voided Bid shortens the League Clock'
+	]
 ];
 
 const AR2_FILES: Array<[path: string, purpose: string]> = [
@@ -405,11 +417,19 @@ describe('AC2 — the Nomination Slot is released by the fold, never by a stored
 		expect(statements.sort()).toEqual(['delete from', 'insert into']);
 	});
 
-	it('folds exactly two events — a close releases, and nothing else does', () => {
+	it('folds exactly three events — two of them release, and nothing else does', () => {
+		// Story 3.7 added the third: an `AuctionTerminated` frees the same board
+		// seat and the same Nomination Slot a close frees, because the League
+		// Clock ran out with that Player still Awaiting an Opening Bid. There is
+		// still no fourth, and in particular no timer of any kind.
 		const nominations = code('src/lib/core/projection/nominations.ts');
 		const cases = [...nominations.matchAll(/case\s+([A-Z_]+):/g)].map((match) => match[1]);
 
-		expect(cases).toEqual(['NOMINATION_PLACED_EVENT', 'AUCTION_CLOSED_EVENT']);
+		expect(cases).toEqual([
+			'NOMINATION_PLACED_EVENT',
+			'AUCTION_TERMINATED_EVENT',
+			'AUCTION_CLOSED_EVENT'
+		]);
 		// No timer, no elapsed time, no wall clock: the trigger is the event.
 		expect(nominations).not.toMatch(/Date\.now|new Date\(|setTimeout|setInterval/);
 	});

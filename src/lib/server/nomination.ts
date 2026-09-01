@@ -62,12 +62,14 @@
 import { fold } from '../core/projection/fold.ts';
 import {
 	AUCTION_CLOSED_EVENT,
+	AUCTION_TERMINATED_EVENT,
 	INITIAL_NOMINATIONS,
 	NOMINATION_PLACED_EVENT,
 	nominationForPlayer,
 	nominationForTeam,
 	nominationsReducer,
-	readClosedPlayerId
+	readClosedPlayerId,
+	readTerminatedPlayerId
 } from '../core/projection/nominations.ts';
 import {
 	INITIAL_CONTRACTS,
@@ -394,8 +396,9 @@ export const claimNomination: ProjectionUpdater = async (client, appended) => {
 };
 
 /**
- * Delete the claim row for every `AuctionClosed` in the batch just appended,
- * on the appending transaction's own client (Story 2.3).
+ * Delete the claim row for every `AuctionClosed` — and, since Story 3.7,
+ * every `AuctionTerminated` — in the batch just appended, on the appending
+ * transaction's own client (Story 2.3).
  *
  * The mirror image of `claimNomination`, and for the same reasons: it is a
  * WRITE-SIDE statement, never a read, and it goes through the `projections`
@@ -408,6 +411,17 @@ export const claimNomination: ProjectionUpdater = async (client, appended) => {
  * Keyed on the Player alone, exactly as the fold is: the Slot frees whether
  * the nominator won, lost or never bid, and `open_nominations`' primary key
  * IS `fantrax_player_id`, so one statement clears one claim.
+ *
+ * **Story 3.7 widens the condition to a second event type, and it MUST.** An
+ * `AuctionTerminated` frees the same kind of Slot a close frees — the League
+ * Clock ran out with the Player still Awaiting an Opening Bid — and
+ * `nominationsReducer` releases on it. A claim row left behind would make the
+ * table and the log disagree about that Slot PERMANENTLY: an insert-only log
+ * can never be replayed to clear a row, and the nominating Team's next
+ * nomination would draw a wrong `slot_in_use` refusal off
+ * `open_nominations_team_id_key` for a Player who is back in the pool. That is
+ * precisely the divergence AD-5 makes the fold the authority to prevent, and
+ * the delete is the write-side half of it.
  *
  * **The payload is read through the core's own reader, not cast.** A close
  * arrives from Story 3.4, not from this module — unlike `claimNomination`,
@@ -429,21 +443,33 @@ export const claimNomination: ProjectionUpdater = async (client, appended) => {
  * collision IS the rule, a delete that finds nothing has already achieved
  * what it was asked to achieve.
  *
- * **Registered by Story 3.4, and by nothing else.** Story 2.3 shipped it
- * tested and deliberately unregistered, because no `AuctionClosed` producer
- * existed and the delete must run inside the transaction that appends the
- * close. `server/close.ts` is that transaction, and registering it there cost
- * the one line 2.3 predicted. It is still NOT on `placeNomination`'s
- * `projections`: that path never appends a close, so the delete could only
- * ever issue against nothing.
+ * **Registered by Story 3.4 and by Story 3.7, and by nothing else.** Story 2.3
+ * shipped it tested and deliberately unregistered, because no `AuctionClosed`
+ * producer existed and the delete must run inside the transaction that appends
+ * the close. `server/close.ts` is that transaction, and registering it there
+ * cost the one line 2.3 predicted; `server/phase-end.ts` is the second, and
+ * cost the same. It is still NOT on `placeNomination`'s `projections`: that
+ * path appends neither event type, so the delete could only ever issue against
+ * nothing.
  */
 export const releaseNomination: ProjectionUpdater = async (client, appended) => {
 	for (const event of appended) {
-		if (event.type !== AUCTION_CLOSED_EVENT) continue;
-		const fantraxPlayerId = readClosedPlayerId(event.payload);
-		// A close naming no Player identifies no claim row, so there is
-		// nothing to delete and no statement to issue. The fold skips the same
-		// event for the same reason.
+		// **Two event types, two readers, one delete.** Each payload is read
+		// through the CORE's own reader for its own event — the same functions
+		// `nominationsReducer` folds through — so what makes each event well
+		// formed is decided in one place and this delete can never act on an
+		// event the fold skipped, or skip one the fold acted on.
+		let fantraxPlayerId: string | null;
+		if (event.type === AUCTION_CLOSED_EVENT) {
+			fantraxPlayerId = readClosedPlayerId(event.payload);
+		} else if (event.type === AUCTION_TERMINATED_EVENT) {
+			fantraxPlayerId = readTerminatedPlayerId(event.payload);
+		} else {
+			continue;
+		}
+		// A close or termination naming no Player identifies no claim row, so
+		// there is nothing to delete and no statement to issue. The fold skips
+		// the same event for the same reason.
 		if (fantraxPlayerId === null) continue;
 		await client.query(
 			`delete from ${OPEN_NOMINATIONS_TABLE}

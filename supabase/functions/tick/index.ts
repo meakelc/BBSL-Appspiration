@@ -44,11 +44,22 @@
  * passed over. Nothing about that is decided here; this file still only checks
  * the secret, builds the gateway and reports what the pass did.
  *
+ * **The League Clock is evaluated behind this entry point since Story 3.7.**
+ * `endPhase` below is `evaluateLeagueClock`, which folds the clock, the
+ * nominations, the Auctions and the phase off one read inside its own locked
+ * transaction and — when the clock has run out — appends one
+ * `AuctionTerminated` per still-unbid nomination and then the
+ * `ContractAssignmentOpened` that ends the phase. Nothing about that is
+ * decided here; the ORDER (sweep, then the League Clock, then the drain) is
+ * stated at the one place all three are wired together, exactly as `drain`
+ * already was.
+ *
  * Not this story: no pause check (Epic 7), no outbox and no Discord (5.1), no
- * League Clock evaluation (3.7), no external heartbeat detector (8.2).
+ * external heartbeat detector (8.2).
  */
 
 import { closeAuction } from '../../../src/lib/server/close.ts';
+import { evaluateLeagueClock } from '../../../src/lib/server/phase-end.ts';
 import { runTick } from '../../../src/lib/server/sweep.ts';
 import type { TickSummary } from '../../../src/lib/server/sweep.ts';
 import { isAuthorisedRequest } from './auth.ts';
@@ -102,6 +113,11 @@ Deno.serve(async (request: Request): Promise<Response> => {
 			// One whole locked transaction per Auction, committed before the
 			// next is evaluated (AD-11). The sweep never batches.
 			closeOne: (fantraxPlayerId) => closeAuction(gateway, fantraxPlayerId),
+			// The League Clock, after every close and before the drain (Story
+			// 3.7). Its own whole locked transaction, so it folds a log that
+			// already carries this pass's closes and a throw inside it rolls back
+			// nothing that has already committed.
+			endPhase: () => evaluateLeagueClock(gateway),
 			// Epic 5.1's outbox drain (AD-17): ordered after the sweep, always,
 			// and a documented no-op until that story gives it an
 			// implementation. It is passed explicitly rather than omitted so

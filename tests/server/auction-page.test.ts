@@ -21,6 +21,7 @@ import {
 	CONTENTION_DISSOLVED_EVENT
 } from '../../src/lib/core/projection/auctions.ts';
 import { AUCTION_CLOSED_EVENT, NOMINATION_PLACED_EVENT } from '../../src/lib/core/projection/nominations.ts';
+import { AUCTION_OPENED_EVENT } from '../../src/lib/core/projection/phase.ts';
 import { parseMoney } from '../../src/lib/core/money.ts';
 import {
 	BID_READY,
@@ -118,6 +119,29 @@ type ManagerRow = {
  *  unless a test says so, so `selfBid` does not fire by accident. */
 const VIEWER_TEAM = 't-viewer';
 
+/**
+ * The `AuctionOpened` every one of these logs carries (Story 3.7).
+ *
+ * The ninth `PLACE_BID_GATES` gate reads the folded phase, and a log with no
+ * open folds to Setup — where no Bid is accepted at all, so the control this
+ * page renders would be disabled league-wide. Every scenario in this file is a
+ * live auction, so every fixture log opens the auction first. It sits at `seq`
+ * 0, before the nomination and the Bids, which is the only order the gates
+ * could ever have produced.
+ */
+function auctionOpened(occurredAt = '2026-08-25T09:00:00.000Z'): QueryResultRow {
+	return {
+		seq: 0,
+		occurred_at: new Date(occurredAt),
+		schema_version: 1,
+		core_version: 1,
+		manager_id: 'm-commissioner',
+		team_id: 't-commissioner',
+		event_type: AUCTION_OPENED_EVENT,
+		payload: {}
+	};
+}
+
 function fakeGateway(options: {
 	events?: QueryResultRow[];
 	freeAgents?: FreeAgentRow[];
@@ -175,7 +199,10 @@ function fakeGateway(options: {
 			}
 			if (/^select \* from auction_events/i.test(sql)) {
 				order.push('read-log');
-				return { rows: events };
+				// The auction is OPEN in every scenario here (Story 3.7): the ninth
+				// gate reads the folded phase, and a log with no `AuctionOpened`
+				// folds to Setup, where the control is disabled league-wide.
+				return { rows: [auctionOpened(), ...events] };
 			}
 			// The ONE database clock read (Story 3.1). A label, not a loosened
 			// fake: an unrecognised statement still throws below, so a second
@@ -314,6 +341,10 @@ describe('loadAuctionPage — an open Auction', () => {
 				// above it.
 				minimumLegal: 1_000_000,
 				minimumLegalSentence: 'Whole dollars. The least this Auction will take is $1.0M.',
+				// Story 3.7's ninth gate reads this and nothing else. A FACT, not a
+				// verdict: no `biddingIsOpen` boolean crosses this wire, so the
+				// browser asks the core exactly as the locked transaction does.
+				phase: 'Auction',
 				// The facts every gate decides from, serialised so the surface
 				// can ask the same question about a TYPED amount.
 				leadingAmount: null,
@@ -725,7 +756,11 @@ describe('loadAuctionPage — the bid control is evaluate() on the read path (AC
 			bidRefusalDetail({
 				kind: 'gates',
 				gates: {
-					// Story 3.1's seventh gate, and the first in the list. It
+					// Story 3.7's ninth gate, and the first in the list. It passes:
+					// the log this fake serves carries an `AuctionOpened`, so the
+					// phase folds to Auction and bidding is open league-wide.
+					phase: { passed: true, phase: 'Auction' },
+					// Story 3.1's seventh gate, and the second in the list. It
 					// passes: the leading Bid closes at noon on the 27th and the
 					// fake's database clock reads 13:00 on the 26th. The two
 					// instants are stated because they are the whole of what the
@@ -1078,7 +1113,8 @@ describe('loadAuctionPage — the clock the expiry gate is decided against (Stor
 					seed: null
 				},
 				null,
-				false
+				false,
+				'Auction'
 			),
 			{
 				kind: 'PlaceBid',
@@ -1409,6 +1445,10 @@ describe('loadAuctionPage — a Minimum-Bid Contention (Story 3.2, AC7)', () => 
 
 		const typed = bidControlState({
 			state: {
+				// The ninth gate's one input (Story 3.7). The log this fake serves
+				// opened the auction, so the phase folded to Auction — rebuilt here
+				// exactly as the surface rebuilds every other field of this state.
+				phase: 'Auction',
 				leadingBid:
 					control.leadingAmount === null || control.leadingTeamId === null
 						? null

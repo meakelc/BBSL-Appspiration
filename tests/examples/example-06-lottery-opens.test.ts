@@ -76,7 +76,7 @@ const TEAM_E: TeamMoneyState = {
 };
 
 /** The Player is nominated by Team D and nobody has bid — no clock yet. */
-const AWAITING: BidState = bidStateFor(null, TEAM_E, false);
+const AWAITING: BidState = bidStateFor(null, TEAM_E, false, 'Auction');
 
 const OPENING: PlaceBid = {
 	kind: 'PlaceBid',

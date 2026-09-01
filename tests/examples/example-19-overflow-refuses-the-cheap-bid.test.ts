@@ -67,7 +67,7 @@ const TEAM_P: TeamMoneyState = {
 };
 
 /** The second eligible Player, with no Bid on him yet. */
-const STATE: BidState = bidStateFor(null, TEAM_P, true);
+const STATE: BidState = bidStateFor(null, TEAM_P, true, 'Auction');
 
 function bidOf(amount: number): PlaceBid {
 	return {
@@ -212,6 +212,6 @@ describe('§10 example 19 — overflow refuses the cheap bid', () => {
 		// Eight since Story 3.2 added `contention`, and it reached this panel by
 		// `PLACE_BID_GATES` growing — no markup change and no edit to the
 		// example itself beyond the count.
-		expect(rows).toHaveLength(8);
+		expect(rows).toHaveLength(9);
 	});
 });

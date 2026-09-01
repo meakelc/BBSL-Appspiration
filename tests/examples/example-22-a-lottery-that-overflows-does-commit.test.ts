@@ -93,7 +93,7 @@ const LOTTERY: Auction = {
 	seed: null
 };
 
-const STATE: BidState = bidStateFor(LOTTERY, TEAM_Q, true);
+const STATE: BidState = bidStateFor(LOTTERY, TEAM_Q, true, 'Auction');
 
 const JOIN: PlaceBid = {
 	kind: 'PlaceBid',

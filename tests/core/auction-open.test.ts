@@ -14,6 +14,7 @@ import {
 	leagueClockExpiry,
 	leagueClockReducer
 } from '../../src/lib/core/projection/league-clock.ts';
+import type { LeagueClock } from '../../src/lib/core/projection/league-clock.ts';
 import {
 	BID_PLACED_EVENT,
 	CONTENTION_DISSOLVED_EVENT
@@ -220,10 +221,40 @@ describe('promotedSourcesReducer', () => {
 
 // --- leagueClockReducer -----------------------------------------------------
 
+/**
+ * The instant of the LATEST reset this fold recorded, or `null` for none.
+ *
+ * Story 3.7 replaced `LeagueClock.lastReset` with the list of resets
+ * `leagueClockExpiry` walks backwards over. The assertions below were written
+ * against the single field and still mean exactly what they meant — "the
+ * clock's latest reset is this instant" — so they read the last entry rather
+ * than being rewritten. It deliberately does NOT re-implement the derivation's
+ * skip rules: voided and unreadable resets are `leagueClockExpiry`'s to walk
+ * past, and `tests/core/league-clock.test.ts` is where that is proven.
+ */
+function latestResetAt(clock: LeagueClock): string | null {
+	return clock.resets[clock.resets.length - 1]?.occurredAt ?? null;
+}
+
+/**
+ * A `LeagueClock` state literal in the pre-3.7 shape: an origin and at most
+ * one reset, nothing voided.
+ *
+ * The `seq` is arbitrary here — nothing in these cases voids anything, and
+ * `leagueClockExpiry` reads position rather than `seq` when nothing is voided.
+ */
+function clockOf(origin: string | null, lastReset: string | null): LeagueClock {
+	return {
+		origin,
+		resets: lastReset === null ? [] : [{ seq: '2', occurredAt: lastReset }],
+		voidedSeqs: []
+	};
+}
+
 describe('leagueClockReducer', () => {
 	it('has no origin while the auction has not opened — a state, not a failure', () => {
 		expect(INITIAL_LEAGUE_CLOCK.origin).toBeNull();
-		expect(INITIAL_LEAGUE_CLOCK.lastReset).toBeNull();
+		expect(latestResetAt(INITIAL_LEAGUE_CLOCK)).toBeNull();
 		expect(fold(INITIAL_LEAGUE_CLOCK, [event(1, IMPORT_PROMOTED_EVENT)], leagueClockReducer)).toEqual(
 			INITIAL_LEAGUE_CLOCK
 		);
@@ -284,13 +315,19 @@ describe('leagueClockReducer', () => {
 			leagueClockReducer
 		);
 		expect(later).toEqual(opened);
-		expect(later.lastReset).toBeNull();
+		expect(latestResetAt(later)).toBeNull();
 	});
 
-	it('folds exactly two reset cases and no more — AD-22, read off the source', () => {
+	it('folds exactly two RESET cases and no more — AD-22, read off the source', () => {
 		// The set is fixed at two by an AD, so "how many event types reset it"
-		// is asserted structurally as well as behaviourally: a third `case`
-		// added to the reducer would widen the set silently otherwise.
+		// is asserted structurally as well as behaviourally: a third RESET
+		// `case` added to the reducer would widen the set silently otherwise.
+		//
+		// Story 3.7 added a fourth `case` and did NOT widen the set:
+		// `BID_VOIDED_EVENT` is a NON-reset — it appends no reset, removes none,
+		// and only records that one has been withdrawn. It is listed here so the
+		// count stays exact, and the assertion below names which of the four
+		// actually reset the clock rather than counting them.
 		// Comments are stripped BOTH ways — block and line — for the reason
 		// `tests/structure.test.ts` and `tests/routes/auction-page.test.ts`
 		// both state: prose about a case is not a case. Stripping only block
@@ -305,8 +342,15 @@ describe('leagueClockReducer', () => {
 		expect(cases).toEqual([
 			'AUCTION_OPENED_EVENT',
 			'NOMINATION_PLACED_EVENT',
-			'BID_PLACED_EVENT'
+			'BID_PLACED_EVENT',
+			'BID_VOIDED_EVENT'
 		]);
+		// The origin is not a reset and the void is not a reset. Exactly two
+		// event types append to `resets`, which is AD-22's set, unwidened.
+		const appendsAReset = cases.filter(
+			(name) => name === 'NOMINATION_PLACED_EVENT' || name === 'BID_PLACED_EVENT'
+		);
+		expect(appendsAReset).toHaveLength(2);
 	});
 });
 
@@ -333,7 +377,7 @@ describe('leagueClockReducer — the BidPlaced reset', () => {
 			leagueClockReducer
 		);
 		expect(state.origin).toBe('2026-08-25T19:00:00.000Z');
-		expect(state.lastReset).toBe('2026-08-26T12:00:00.000Z');
+		expect(latestResetAt(state)).toBe('2026-08-26T12:00:00.000Z');
 	});
 
 	it('moves the expiry to 48 hours after the Bid, not after the nomination', () => {
@@ -399,7 +443,7 @@ describe('leagueClockReducer — ContentionDissolved does NOT reset it (Story 3.
 			],
 			leagueClockReducer
 		);
-		expect(state.lastReset).toBe('2026-08-26T12:00:00.000Z');
+		expect(latestResetAt(state)).toBe('2026-08-26T12:00:00.000Z');
 		expect(state.origin).toBe('2026-08-25T19:00:00.000Z');
 		expect(leagueClockExpiry(state)).toBe('2026-08-28T12:00:00.000Z');
 	});
@@ -413,7 +457,7 @@ describe('leagueClockReducer — ContentionDissolved does NOT reset it (Story 3.
 			],
 			leagueClockReducer
 		);
-		expect(state.lastReset).toBeNull();
+		expect(latestResetAt(state)).toBeNull();
 		// So the clock still expires 48 hours after the OPEN.
 		expect(leagueClockExpiry(state)).toBe('2026-08-27T19:00:00.000Z');
 	});
@@ -487,7 +531,7 @@ describe('leagueClockReducer — AuctionClosed does NOT reset it (Story 3.4, §1
 			leagueClockReducer
 		);
 
-		expect(state.lastReset).toBe('2026-08-26T12:00:00.000Z');
+		expect(latestResetAt(state)).toBe('2026-08-26T12:00:00.000Z');
 		// So the Phase still ends 48 hours after the BID — 12:00 Sunday.
 		expect(leagueClockExpiry(state)).toBe('2026-08-28T12:00:00.000Z');
 	});
@@ -502,7 +546,7 @@ describe('leagueClockReducer — AuctionClosed does NOT reset it (Story 3.4, §1
 			leagueClockReducer
 		);
 
-		expect(state.lastReset).toBeNull();
+		expect(latestResetAt(state)).toBeNull();
 		expect(leagueClockExpiry(state)).toBe('2026-08-27T19:00:00.000Z');
 	});
 
@@ -528,7 +572,7 @@ describe('leagueClockReducer — the NominationPlaced reset', () => {
 			leagueClockReducer
 		);
 		expect(state.origin).toBe('2026-08-25T19:00:00.000Z');
-		expect(state.lastReset).toBe('2026-08-26T09:00:00.000Z');
+		expect(latestResetAt(state)).toBe('2026-08-26T09:00:00.000Z');
 	});
 
 	it('leaves the origin exactly where it was — a reset is not an origin', () => {
@@ -557,7 +601,7 @@ describe('leagueClockReducer — the NominationPlaced reset', () => {
 			],
 			leagueClockReducer
 		);
-		expect(state.lastReset).toBe('2026-08-26T09:00:00.000Z');
+		expect(latestResetAt(state)).toBe('2026-08-26T09:00:00.000Z');
 	});
 
 	it('converges on a double replay', () => {
@@ -597,19 +641,16 @@ describe('leagueClockExpiry — 48 hours after the LATER of origin and reset (AD
 	});
 
 	it('never recomputes back past the open, even for a reset that predates it', () => {
-		// The whole reason the clock carries two fields rather than one: a
-		// void that left an earlier surviving reset must not shorten the
-		// clock below the open's own 48 hours.
+		// The whole reason the clock carries the origin separately from the
+		// resets: a void that left an earlier surviving reset must not shorten
+		// the clock below the open's own 48 hours.
 		expect(
-			leagueClockExpiry({
-				origin: '2026-08-25T19:00:00.000Z',
-				lastReset: '2026-08-25T08:00:00.000Z'
-			})
+			leagueClockExpiry(clockOf('2026-08-25T19:00:00.000Z', '2026-08-25T08:00:00.000Z'))
 		).toBe('2026-08-27T19:00:00.000Z');
 	});
 
 	it('is null for a reset with no origin — a stray reset starts no clock', () => {
-		expect(leagueClockExpiry({ origin: null, lastReset: '2026-08-26T09:00:00.000Z' })).toBeNull();
+		expect(leagueClockExpiry(clockOf(null, '2026-08-26T09:00:00.000Z'))).toBeNull();
 	});
 
 	it('agrees with Date arithmetic, which the core itself may not use', () => {
@@ -625,7 +666,7 @@ describe('leagueClockExpiry — 48 hours after the LATER of origin and reset (AD
 			'2000-02-27T00:00:00.000Z' // a century year that IS a leap year
 		];
 		for (const origin of cases) {
-			expect(leagueClockExpiry({ origin, lastReset: null })).toBe(
+			expect(leagueClockExpiry(clockOf(origin, null))).toBe(
 				new Date(Date.parse(origin) + LEAGUE_CLOCK).toISOString()
 			);
 		}
@@ -639,23 +680,23 @@ describe('leagueClockExpiry — 48 hours after the LATER of origin and reset (AD
 		['an hour that does not exist', '2026-08-25T24:00:00.000Z'],
 		['a non-UTC offset, which this log never holds', '2026-08-25T19:00:00.000+05:00']
 	])('returns null rather than throwing for an origin that is %s', (_label, origin: string) => {
-		expect(leagueClockExpiry({ origin, lastReset: null })).toBeNull();
+		expect(leagueClockExpiry(clockOf(origin, null))).toBeNull();
 	});
 
-	it('falls back to the origin for a lastReset that does not parse', () => {
+	it('falls back to the origin for a lone reset that does not parse', () => {
 		expect(
-			leagueClockExpiry({ origin: '2026-08-25T19:00:00.000Z', lastReset: 'nonsense' })
+			leagueClockExpiry(clockOf('2026-08-25T19:00:00.000Z', 'nonsense'))
 		).toBe('2026-08-27T19:00:00.000Z');
 	});
 
 	it('accepts the second-precision spelling the database can also produce', () => {
-		expect(leagueClockExpiry({ origin: '2026-08-25T19:00:00Z', lastReset: null })).toBe(
+		expect(leagueClockExpiry(clockOf('2026-08-25T19:00:00Z', null))).toBe(
 			'2026-08-27T19:00:00.000Z'
 		);
 	});
 
 	it('is a pure function of the state it is handed', () => {
-		const clock = { origin: '2026-08-25T19:00:00.000Z', lastReset: '2026-08-26T09:00:00.000Z' };
+		const clock = clockOf('2026-08-25T19:00:00.000Z', '2026-08-26T09:00:00.000Z');
 		expect(leagueClockExpiry(clock)).toBe(leagueClockExpiry(clock));
 	});
 });

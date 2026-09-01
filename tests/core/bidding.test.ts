@@ -57,6 +57,7 @@ import type {
 	TeamMoneyState
 } from '../../src/lib/core/rules/bidding.ts';
 import { PLACE_BID_GATES } from '../../src/lib/core/types.ts';
+import type { LeaguePhase } from '../../src/lib/core/projection/phase.ts';
 import type { PlaceBid } from '../../src/lib/core/types.ts';
 
 /**
@@ -196,7 +197,7 @@ function standardAt(amount: number, teamId = 't-1'): BidState {
 	};
 	// Narrowed through the core's own bridge, so these fixtures exercise the
 	// same path `server/bidding.ts` and `server/auction-page.ts` take.
-	return bidStateFor(auction, RICH, false);
+	return bidStateFor(auction, RICH, false, 'Auction');
 }
 
 /**
@@ -249,11 +250,11 @@ function contentionWith(joiners: readonly string[] = []): BidState {
 		// read it, so the fold has seen no reveal.
 		seed: null
 	};
-	return bidStateFor(auction, RICH, false);
+	return bidStateFor(auction, RICH, false, 'Auction');
 }
 
 /** A nominated Player nobody has bid on. */
-const NO_BIDS: BidState = bidStateFor(null, RICH, false);
+const NO_BIDS: BidState = bidStateFor(null, RICH, false, 'Auction');
 
 function command(amount: number, teamId = 't-2'): PlaceBid {
 	return {
@@ -269,21 +270,23 @@ function command(amount: number, teamId = 't-2'): PlaceBid {
 // --- AC1: the shape of the two entry points --------------------------------
 
 describe('evaluate — total, and the gate set is fixed per command type (AC1)', () => {
-	it('declares exactly eight gates for PlaceBid, in one place and in one order', () => {
+	it('declares exactly nine gates for PlaceBid, in one place and in one order', () => {
 		// Four in Story 2.5, five in 2.6, six in 2.7, seven in 3.1, eight in
-		// 3.2. The list is asserted literally rather than by length so ADDING
-		// a gate is a deliberate edit here as well as in `core/types.ts` —
-		// which is the whole point of it living in one place.
+		// 3.2, nine in 3.7. The list is asserted literally rather than by length
+		// so ADDING a gate is a deliberate edit here as well as in
+		// `core/types.ts` — which is the whole point of it living in one place.
 		//
 		// The ORDER is asserted too, and this is the one place it is
 		// recorded. `allGatesPassed`, `failedGates`, `bidRefusalDelta` and
 		// `bidGateReport` all iterate this list, so it is the order a Manager
-		// reads the refusal panel in — `expiry` is first because a clock that
-		// has run out is the frame every other question sits inside, and
-		// `contention` sits immediately after `opening` because the two are
-		// one reading: what an amount means when nothing leads, and what it
-		// means once a lottery is running.
+		// reads the refusal panel in — `phase` is first because outside the
+		// Auction Phase there is no auction for a clock to belong to, `expiry`
+		// second because a clock that has run out is the frame every remaining
+		// question sits inside, and `contention` sits immediately after
+		// `opening` because the two are one reading: what an amount means when
+		// nothing leads, and what it means once a lottery is running.
 		expect([...PLACE_BID_GATES]).toEqual([
+			'phase',
 			'expiry',
 			'opening',
 			'contention',
@@ -1417,7 +1420,8 @@ describe('bidRefusalDetail — one sentence per refusal, worded here and nowhere
 						],
 						minorLeagueOccupied: 2
 					},
-					true
+					true,
+					'Auction'
 				),
 				command(1_500_000),
 				NOW
@@ -1444,7 +1448,8 @@ describe('bidRefusalDetail — one sentence per refusal, worded here and nowhere
 						eligibleLeading: [],
 						minorLeagueOccupied: 0
 					},
-					true
+					true,
+					'Auction'
 				),
 				command(30_000_000),
 				NOW
@@ -1725,7 +1730,7 @@ describe('evaluateCap — Maximum Bid, derived on every evaluation (AD-7)', () =
 	const capOf = (state: BidState, amount: number) => evaluate(state, command(amount), NOW).cap;
 
 	it('reports every figure, and they sum exactly as the panel prints them', () => {
-		const state = bidStateFor(null, team({ capSpace: 12_000_000, rosterCount: 9 }), false);
+		const state = bidStateFor(null, team({ capSpace: 12_000_000, rosterCount: 9 }), false, 'Auction');
 		const cap = capOf(state, 1_500_000);
 
 		// The two subtractions the breakdown is a rendering of.
@@ -1884,7 +1889,7 @@ describe('evaluateCap — Maximum Bid, derived on every evaluation (AD-7)', () =
 	});
 
 	it('reports absence rather than zeroes when the actor is bound to no Team', () => {
-		const cap = capOf(bidStateFor(null, null, false), 1_500_000);
+		const cap = capOf(bidStateFor(null, null, false, 'Auction'), 1_500_000);
 
 		// Every nullable figure null together, and the gate PASSES — the
 		// refusal an unbound Manager sees is `unbound_actor`, raised before
@@ -1915,7 +1920,7 @@ describe('evaluateCap — Maximum Bid, derived on every evaluation (AD-7)', () =
 	});
 
 	it('nulls the capacity gate’s two counts on the same state, and passes it too', () => {
-		const slots = evaluate(bidStateFor(null, null, false), command(1_500_000), NOW).slots;
+		const slots = evaluate(bidStateFor(null, null, false, 'Auction'), command(1_500_000), NOW).slots;
 
 		// Both absent rather than invented zeroes, and absent TOGETHER — the
 		// real refusal is `unbound_actor`, raised before any transaction opens.
@@ -1943,7 +1948,7 @@ describe('evaluateCap — Maximum Bid, derived on every evaluation (AD-7)', () =
 		const state = bidStateFor(
 			null,
 			team({ capSpace: 2_000_000, rosterCount: 11, leading: [['p-2', 5_000_000]] })
-		, false);
+		, false, 'Auction');
 		const cap = capOf(state, 1_500_000);
 
 		expect(cap.committedBids).toBe(5_000_000);
@@ -1960,7 +1965,7 @@ describe('evaluateCap — Maximum Bid, derived on every evaluation (AD-7)', () =
 		// Active/Bench Slot, so the reserve is a real $1.0M rather than zero —
 		// the cap figure here has to be non-trivial or the assertion below
 		// would pass on an arithmetic that never ran.
-		const state = bidStateFor(null, team({ capSpace: 3_000_000, rosterCount: 10 }), false);
+		const state = bidStateFor(null, team({ capSpace: 3_000_000, rosterCount: 10 }), false, 'Auction');
 		const gates = evaluate(state, command(9_400_000), NOW);
 
 		expect(gates.granularity.passed).toBe(false);
@@ -1972,7 +1977,7 @@ describe('evaluateCap — Maximum Bid, derived on every evaluation (AD-7)', () =
 	});
 
 	it('is reported on an ACCEPTED result too, with the identical shape', () => {
-		const state = bidStateFor(null, team({ capSpace: 12_000_000, rosterCount: 9 }), false);
+		const state = bidStateFor(null, team({ capSpace: 12_000_000, rosterCount: 9 }), false, 'Auction');
 		const accepted = evaluate(state, command(1_500_000), NOW);
 		const refused = evaluate(state, command(10_500_000), NOW);
 
@@ -2039,7 +2044,7 @@ describe('evaluateSlots — Roster Capacity, the second independent ground (AC2,
 						(_unused, index) => [`p-lead-${String(index)}`, 1_000_000] as [string, number]
 					)
 				})
-			, false);
+			, false, 'Auction');
 			const slots = slotsOf(state, 1_500_000);
 
 			expect(slots.passed, `${String(rosterCount)} held, ${String(leads)} led`).toBe(passed);
@@ -2054,8 +2059,8 @@ describe('evaluateSlots — Roster Capacity, the second independent ground (AC2,
 		// FR-37's property, asserted as the structural fact it is: the gate has
 		// no `offered` field, so the only way to check it is that the verdict
 		// does not move when the money does.
-		const full = bidStateFor(null, team({ capSpace: 400_000_000, rosterCount: 12 }), false);
-		const broke = bidStateFor(null, team({ capSpace: 0, rosterCount: 9 }), false);
+		const full = bidStateFor(null, team({ capSpace: 400_000_000, rosterCount: 12 }), false, 'Auction');
+		const broke = bidStateFor(null, team({ capSpace: 0, rosterCount: 9 }), false, 'Auction');
 
 		for (const amount of [1_500_000, 5_000_000, 40_000_000]) {
 			expect(slotsOf(full, amount).passed, String(amount)).toBe(false);
@@ -2083,7 +2088,7 @@ describe('evaluateSlots — Roster Capacity, the second independent ground (AC2,
 		const state = bidStateFor(
 			null,
 			team({ capSpace: 12_000_000, rosterCount: 9, leading: [['p-2', 3_000_000]] })
-		, false);
+		, false, 'Auction');
 		const gates = evaluate(state, command(1_500_000), NOW);
 
 		expect(gates.slots.rosterCount).toBe(gates.cap.rosterCount);
@@ -2103,7 +2108,7 @@ describe('evaluateSlots — Roster Capacity, the second independent ground (AC2,
 					['p-3', 1_000_000]
 				]
 			})
-		, false);
+		, false, 'Auction');
 		const gates = evaluate(state, command(1_500_000), NOW);
 
 		expect(gates.slots.projectedAdditions).toBe(3);
@@ -2113,21 +2118,21 @@ describe('evaluateSlots — Roster Capacity, the second independent ground (AC2,
 
 	it('neither short-circuits the other, on either side of the pair', () => {
 		// Money fails, capacity does not: Roster Count 9, over Maximum Bid.
-		const moneyOnly = bidStateFor(null, team({ capSpace: 12_000_000, rosterCount: 9 }), false);
+		const moneyOnly = bidStateFor(null, team({ capSpace: 12_000_000, rosterCount: 9 }), false, 'Auction');
 		const overCap = evaluate(moneyOnly, command(10_500_000), NOW);
 		expect(failedGates(overCap)).toEqual(['cap']);
 		expect(overCap.slots.passed).toBe(true);
 		expect(overCap.slots.rosterCount).toBe(9);
 
 		// Capacity fails, money does not: Roster Count 12 with $40.0M spare.
-		const slotsOnly = bidStateFor(null, team({ capSpace: 40_000_000, rosterCount: 12 }), false);
+		const slotsOnly = bidStateFor(null, team({ capSpace: 40_000_000, rosterCount: 12 }), false, 'Auction');
 		const overSlots = evaluate(slotsOnly, command(5_000_000), NOW);
 		expect(failedGates(overSlots)).toEqual(['slots']);
 		expect(overSlots.cap.passed).toBe(true);
 		expect(overSlots.cap.maximumBid).toBe(40_000_000);
 
 		// Both fail, each with its own arithmetic, in PLACE_BID_GATES order.
-		const both = bidStateFor(null, team({ capSpace: 3_000_000, rosterCount: 12 }), false);
+		const both = bidStateFor(null, team({ capSpace: 3_000_000, rosterCount: 12 }), false, 'Auction');
 		const gates = evaluate(both, command(5_000_000), NOW);
 		expect(failedGates(gates)).toEqual(['cap', 'slots']);
 		expect(gates.cap.maximumBid).toBe(3_000_000);
@@ -2151,7 +2156,7 @@ describe('evaluateSlots — Roster Capacity, the second independent ground (AC2,
 		const capOnly = bidRefusalDetail({
 			kind: 'gates',
 			gates: evaluate(
-				bidStateFor(null, team({ capSpace: 12_000_000, rosterCount: 9 }), false),
+				bidStateFor(null, team({ capSpace: 12_000_000, rosterCount: 9 }), false, 'Auction'),
 				command(10_500_000),
 				NOW
 			)
@@ -2159,7 +2164,7 @@ describe('evaluateSlots — Roster Capacity, the second independent ground (AC2,
 		const slotsOnly = bidRefusalDetail({
 			kind: 'gates',
 			gates: evaluate(
-				bidStateFor(null, team({ capSpace: 40_000_000, rosterCount: 12 }), false),
+				bidStateFor(null, team({ capSpace: 40_000_000, rosterCount: 12 }), false, 'Auction'),
 				command(5_000_000),
 				NOW
 			)
@@ -2180,7 +2185,7 @@ describe('evaluateSlots — Roster Capacity, the second independent ground (AC2,
 		// The other half of the `unfilledSlots` clamp: the reserve stays at $0
 		// so no extra spending power is handed out, and the capacity gate is
 		// what actually refuses the Bid.
-		const state = bidStateFor(null, team({ capSpace: 40_000_000, rosterCount: 14 }), false);
+		const state = bidStateFor(null, team({ capSpace: 40_000_000, rosterCount: 14 }), false, 'Auction');
 		const gates = evaluate(state, command(5_000_000), NOW);
 
 		expect(gates.cap.rosterReserve).toBe(0);
@@ -2192,7 +2197,7 @@ describe('evaluateSlots — Roster Capacity, the second independent ground (AC2,
 
 	it('passes a Team with no roster rows at all — a real post-import state', () => {
 		const gates = evaluate(
-			bidStateFor(null, team({ capSpace: SALARY_CAP, rosterCount: 0 }), false),
+			bidStateFor(null, team({ capSpace: SALARY_CAP, rosterCount: 0 }), false, 'Auction'),
 			command(1_500_000),
 			NOW
 		);
@@ -2214,19 +2219,19 @@ describe('evaluateSlots — Roster Capacity, the second independent ground (AC2,
 			bidGateReport(evaluate(state, command(amount), NOW)).find((row) => row.gate === 'slots');
 
 		// The example's own numbers: Roster Count 9, one Bid being placed.
-		const spare = bidStateFor(null, team({ capSpace: SALARY_CAP, rosterCount: 9 }), false);
+		const spare = bidStateFor(null, team({ capSpace: SALARY_CAP, rosterCount: 9 }), false, 'Auction');
 		expect(rowFor(spare, 1_500_000)?.chip).toBe('Slots · Passed');
 		expect(rowFor(spare, 1_500_000)?.figure).toBe('Roster Count would be 10 of 12');
 
 		// And at the boundary, where the Bid itself fills the last hole.
-		const lastHole = bidStateFor(null, team({ capSpace: SALARY_CAP, rosterCount: 11 }), false);
+		const lastHole = bidStateFor(null, team({ capSpace: SALARY_CAP, rosterCount: 11 }), false, 'Auction');
 		expect(rowFor(lastHole, 1_500_000)?.chip).toBe('Slots · Passed');
 		expect(rowFor(lastHole, 1_500_000)?.figure).toBe('Roster Count would be 12 of 12');
 
 		// One branch serves both outcomes: the figure states the arithmetic
 		// and the chip beside it states the verdict, so the same sentence
 		// shape survives the turnover.
-		const full = bidStateFor(null, team({ capSpace: SALARY_CAP, rosterCount: 12 }), false);
+		const full = bidStateFor(null, team({ capSpace: SALARY_CAP, rosterCount: 12 }), false, 'Auction');
 		expect(rowFor(full, 1_500_000)?.chip).toBe('Slots · Refused');
 		expect(rowFor(full, 1_500_000)?.figure).toBe('Roster Count would be 13 of 12');
 	});
@@ -2291,7 +2296,8 @@ describe('the exposure arithmetic — M, N, Overflow Count and Minors Exposure',
 			const state = bidStateFor(
 				null,
 				team({ minorLeagueOccupied: occupied, eligibleLeading: eligibleLeads(leads) }),
-				eligible
+				eligible,
+				'Auction'
 			);
 			const gates = evaluate(state, command(9_000_000), NOW);
 
@@ -2319,7 +2325,8 @@ describe('the exposure arithmetic — M, N, Overflow Count and Minors Exposure',
 					['p-c', 2_000_000]
 				]
 			}),
-			true
+			true,
+			'Auction'
 		);
 		const cap = evaluate(state, command(6_000_000), NOW).cap;
 
@@ -2330,7 +2337,7 @@ describe('the exposure arithmetic — M, N, Overflow Count and Minors Exposure',
 		expect(cap.exposingBids.map((bid) => bid.fantraxPlayerId)).toEqual(['p-b', 'p-a']);
 
 		// And zero when `N <= M`, rather than a smaller sum.
-		const inside = bidStateFor(null, team({ eligibleLeading: [['p-a', 4_000_000]] }), true);
+		const inside = bidStateFor(null, team({ eligibleLeading: [['p-a', 4_000_000]] }), true, 'Auction');
 		expect(evaluate(inside, command(6_000_000), NOW).cap.minorsExposure).toBe(0);
 		expect(evaluate(inside, command(6_000_000), NOW).cap.exposingBids).toEqual([]);
 	});
@@ -2347,7 +2354,8 @@ describe('the exposure arithmetic — M, N, Overflow Count and Minors Exposure',
 					['p-alpha', 5_000_000]
 				]
 			}),
-			false
+			false,
+			'Auction'
 		);
 		expect(evaluate(roomy, command(9_000_000), NOW).cap.overflowCount).toBe(0);
 
@@ -2362,7 +2370,8 @@ describe('the exposure arithmetic — M, N, Overflow Count and Minors Exposure',
 					['p-alpha', 5_000_000]
 				]
 			}),
-			false
+			false,
+			'Auction'
 		);
 		const tie = evaluate(tighter, command(9_000_000), NOW).cap;
 
@@ -2384,7 +2393,8 @@ describe('the exposure arithmetic — M, N, Overflow Count and Minors Exposure',
 				bidStateFor(
 					null,
 					team({ minorLeagueOccupied: 2, eligibleLeading: [[leadId, 5_000_000]] }),
-					true
+					true,
+					'Auction'
 				),
 				command(5_000_000),
 				NOW
@@ -2425,7 +2435,8 @@ describe('the exposure arithmetic — M, N, Overflow Count and Minors Exposure',
 					['p-beta', 4_000_000]
 				]
 			}),
-			true
+			true,
+			'Auction'
 		);
 		const gates = evaluate(state, command(6_000_000), NOW);
 		const cap = gates.cap;
@@ -2460,7 +2471,8 @@ describe('the exposure arithmetic — M, N, Overflow Count and Minors Exposure',
 				minorLeagueOccupied: 3,
 				eligibleLeading: [['p-stash', 30_000_000]]
 			}),
-			false
+			false,
+			'Auction'
 		);
 		const cap = evaluate(state, command(1_500_000), NOW).cap;
 
@@ -2530,7 +2542,7 @@ describe('the exposure arithmetic — M, N, Overflow Count and Minors Exposure',
 		]);
 
 		// And it commits NOTHING while a Free Minor League Slot absorbs it.
-		const cap = evaluate(bidStateFor(null, money, false), command(1_500_000), NOW).cap;
+		const cap = evaluate(bidStateFor(null, money, false, 'Auction'), command(1_500_000), NOW).cap;
 		expect(cap.eligibleLeadingBids).toBe(1);
 		expect(cap.overflowCount).toBe(0);
 		expect(cap.minorsExposure).toBe(0);
@@ -2550,7 +2562,8 @@ describe('the exposure arithmetic — M, N, Overflow Count and Minors Exposure',
 				minorLeagueOccupied: 3,
 				eligibleLeading: [['p-stash', 30_000_000]]
 			}),
-			true
+			true,
+			'Auction'
 		);
 		const gates = evaluate(state, command(1_500_000), NOW);
 
@@ -2573,13 +2586,13 @@ describe('the exposure arithmetic — M, N, Overflow Count and Minors Exposure',
 		// answer and different facts always give a different one — there is no
 		// cache to stale, because there is no cache.
 		const facts = team({ minorLeagueOccupied: 2, eligibleLeading: [['p-a', 7_000_000]] });
-		const state = bidStateFor(null, facts, true);
+		const state = bidStateFor(null, facts, true, 'Auction');
 
 		expect(evaluate(state, command(9_000_000), NOW).cap).toEqual(
 			evaluate(state, command(9_000_000), NOW).cap
 		);
 		// One more Free Minor League Slot, and the exposure is simply gone.
-		const freer = bidStateFor(null, { ...facts, minorLeagueOccupied: 1 }, true);
+		const freer = bidStateFor(null, { ...facts, minorLeagueOccupied: 1 }, true, 'Auction');
 		expect(evaluate(freer, command(9_000_000), NOW).cap.minorsExposure).toBe(0);
 		expect(evaluate(state, command(9_000_000), NOW).cap.minorsExposure).toBe(9_000_000);
 	});
@@ -2588,7 +2601,7 @@ describe('the exposure arithmetic — M, N, Overflow Count and Minors Exposure',
 		// `M` is the constant minus occupancy, and both gates report the same
 		// `M` because both call the same function. A second derivation would
 		// be free to disagree with this one.
-		const state = bidStateFor(null, team({ minorLeagueOccupied: 0 }), true);
+		const state = bidStateFor(null, team({ minorLeagueOccupied: 0 }), true, 'Auction');
 		const gates = evaluate(state, command(9_000_000), NOW);
 
 		expect(gates.cap.freeMinorLeagueSlots).toBe(MINOR_LEAGUE_SLOTS);
@@ -2607,7 +2620,7 @@ describe('the refusal panel content, worded by the core and nowhere else', () =>
 		// Slots, so `N` is the bid alone and `M` is the full three.
 		eligibleLeading: [],
 		minorLeagueOccupied: 0
-	}, false);
+	}, false, 'Auction');
 
 	it('reports EVERY gate, refused and passed alike, in the declared order', () => {
 		const rows = bidGateReport(evaluate(PANEL_STATE, command(10_500_000), NOW));
@@ -2722,7 +2735,7 @@ describe('off-grid figures — rendered, never thrown on', () => {
 		// Slots, so `N` is the bid alone and `M` is the full three.
 		eligibleLeading: [],
 		minorLeagueOccupied: 0
-	}, false);
+	}, false, 'Auction');
 
 	it('renders a breakdown from an off-grid Cap Space instead of throwing', () => {
 		// `formatMoney` throws a RangeError on an off-grid amount BY DESIGN.
@@ -2755,7 +2768,7 @@ describe('off-grid figures — rendered, never thrown on', () => {
 			// Slots, so `N` is the bid alone and `M` is the full three.
 			eligibleLeading: [],
 			minorLeagueOccupied: 0
-		}, false);
+		}, false, 'Auction');
 		const gates = evaluate(state, command(9_400_000), NOW);
 
 		expect(failedGates(gates)).toEqual(['granularity', 'cap']);
@@ -2806,7 +2819,7 @@ function auctionClosingAt(closesAt: string, amount = 8_000_000, teamId = 't-1'):
 		seed: null,
 		seedHash: null
 	};
-	return bidStateFor(auction, RICH, false);
+	return bidStateFor(auction, RICH, false, 'Auction');
 }
 
 /** The close instant every boundary below is measured against. */
@@ -2915,7 +2928,8 @@ describe('expiry — the persisted close instant is the authority (AC2, AC3)', (
 				seed: null
 			},
 			poor,
-			false
+			false,
+			'Auction'
 		);
 		// A $30.0M offer is far over whatever this Team's Maximum Bid is, and
 		// the Auction is two hours past its close as well.
@@ -2958,10 +2972,14 @@ describe('expiry — the sentence, the figure and the chip (AC2)', () => {
 		expect(row?.chip).toBe('Auction Clock · Refused');
 	});
 
-	it('reports the row FIRST, above the cap and the slots rows', () => {
+	it('reports the row SECOND, below the phase row and above the cap and slots rows', () => {
+		// It was first until Story 3.7 put `phase` ahead of it: outside the
+		// Auction Phase there is no auction for a clock to belong to. It is
+		// still ahead of every gate that quotes an amount.
 		const rows = bidGateReport(expiredGates());
 		expect(rows.map((row) => row.gate)).toEqual([...PLACE_BID_GATES]);
-		expect(rows[0]?.gate).toBe('expiry');
+		expect(rows[0]?.gate).toBe('phase');
+		expect(rows[1]?.gate).toBe('expiry');
 	});
 
 	it('states one figure for passed and refused alike — the clock left, from closesInPhrase', () => {
@@ -3058,5 +3076,210 @@ describe('expiry — the control the surface disables (AC6)', () => {
 
 		expect(control.blocked).toBe(false);
 		expect(control.detail).toBe(BID_READY);
+	});
+});
+
+// --- the ninth gate: the Auction Phase (Story 3.7, FR-22, AD-22) -----------
+
+/**
+ * The $8.0M fixture, in a named phase.
+ *
+ * Narrowed through `bidStateFor` like every other fixture in this file, so
+ * these cases exercise the same path `server/bidding.ts` and
+ * `server/auction-page.ts` take. Nothing else about the Auction moves: the same
+ * leading Bid, the same clock, the same Team — so any change in the verdicts
+ * below is the phase and nothing else.
+ */
+function inPhase(phase: LeaguePhase, amount = 8_000_000): BidState {
+	const bid = leading(amount, 't-1');
+	const auction: Auction = {
+		fantraxPlayerId: 'p-1',
+		contention: contentionForAmount(bid.amount),
+		leadingBid: bid,
+		closesAt: bid.closesAt,
+		bids: [bid],
+		contenders: contendersOf([bid]),
+		seedHash: null,
+		seed: null
+	};
+	return bidStateFor(auction, RICH, false, phase);
+}
+
+/** The three phases that are not Auction. Bidding happens in none of them. */
+const NOT_AUCTION: readonly LeaguePhase[] = ['Setup', 'Contract Assignment', 'Archived'];
+
+describe('phase — bidding is disabled league-wide outside the Auction Phase (AC4)', () => {
+	it('passes in the Auction Phase, and the Bid is accepted', () => {
+		const gates = evaluate(inPhase('Auction'), command(8_500_000), NOW);
+
+		expect(gates.phase).toEqual({ passed: true, phase: 'Auction' });
+		expect(allGatesPassed(gates)).toBe(true);
+		expect(decide(inPhase('Auction'), command(8_500_000), NOW, null).kind).toBe('accepted');
+	});
+
+	it.each(NOT_AUCTION)('refuses the identical Bid in %s', (phase: LeaguePhase) => {
+		const gates = evaluate(inPhase(phase), command(8_500_000), NOW);
+
+		// The gate names the phase it was decided from and carries nothing
+		// else — no clock, no amount, no count.
+		expect(gates.phase, phase).toEqual({ passed: false, phase });
+		// Nothing else about this Bid changed, so `phase` is the ONLY gate
+		// that refuses it.
+		expect(failedGates(gates), phase).toEqual(['phase']);
+		expect(decide(inPhase(phase), command(8_500_000), NOW, null).kind, phase).toBe('rejected');
+	});
+
+	it('is FIRST in the reported order, ahead of the Auction Clock', () => {
+		const rows = bidGateReport(evaluate(inPhase('Contract Assignment'), command(8_500_000), NOW));
+
+		expect(rows.map((row) => row.gate)).toEqual([...PLACE_BID_GATES]);
+		expect(rows[0]?.gate).toBe('phase');
+		expect(rows[0]?.label).toBe('Auction Phase');
+		expect(rows[0]?.chip).toBe('Auction Phase · Refused');
+		// The row below it is the Auction Clock, and the two are never one
+		// reading: this Auction's own 24 hours is a different fact from
+		// whether the league is bidding at all.
+		expect(rows[1]?.gate).toBe('expiry');
+		expect(rows[1]?.chip).toBe('Auction Clock · Passed');
+	});
+
+	it('states one figure for passed and refused alike — the phase it read', () => {
+		const passed = bidGateReport(evaluate(inPhase('Auction'), command(8_500_000), NOW)).find(
+			(row) => row.gate === 'phase'
+		);
+		expect(passed?.chip).toBe('Auction Phase · Passed');
+		expect(passed?.figure).toBe('the league is in Auction');
+
+		const refused = bidGateReport(
+			evaluate(inPhase('Contract Assignment'), command(8_500_000), NOW)
+		).find((row) => row.gate === 'phase');
+		expect(refused?.chip).toBe('Auction Phase · Refused');
+		expect(refused?.figure).toBe('the league is in Contract Assignment');
+	});
+
+	it.each(NOT_AUCTION)(
+		'words the refusal from the phase ALONE in %s, never claiming a clock ran out',
+		(phase: LeaguePhase) => {
+			const delta = bidRefusalDelta({
+				kind: 'gates',
+				gates: evaluate(inPhase(phase), command(8_500_000), NOW)
+			});
+
+			// The gate compared `state.phase === 'Auction'` and knows nothing
+			// else. In `Setup` and in `Archived` no League Clock has ever
+			// expired, so a sentence saying one had would be false — AD-7's "a
+			// gate that cannot see a figure cannot quote one", broken in words
+			// instead of in numbers.
+			expect(delta, phase).toContain('Bidding is open only during the Auction Phase');
+			expect(delta, phase).toContain(phase);
+			// **And it claims nothing about a transaction.** This sentence is read
+			// on three paths — the locked write, `server/auction-page.ts`'s render
+			// (which deliberately takes no lock), and the browser re-evaluating it
+			// off the wire on every keystroke — so the clause
+			// `rules/nomination.ts` can say truthfully would be false on two of
+			// them. It says the phase is folded from the log, and stops there.
+			expect(delta, phase).toContain('The phase is folded from the event log');
+			expect(delta, phase).not.toContain('inside this transaction');
+			expect(delta.toLowerCase(), phase).not.toContain('league clock');
+			expect(delta.toLowerCase(), phase).not.toContain('ran out');
+			expect(delta.toLowerCase(), phase).not.toContain('expired');
+			// And it quotes no money figure and no count: this Bid was not too
+			// small, too large or too late.
+			expect(delta, phase).not.toMatch(/\$[\d,]/);
+		}
+	);
+
+	it('does not short-circuit any other gate — every one still reports its own arithmetic', () => {
+		// 2.7's invariant, checked at the one gate most tempting to let
+		// suppress the rest. A Bid that is off-grid, under the increment and
+		// unaffordable, submitted in Contract Assignment by the Team that
+		// already leads, reports ALL of it.
+		const leader = leading(8_000_000, 't-2');
+		const broke = bidStateFor(
+			{
+				fantraxPlayerId: 'p-1',
+				contention: 'standard',
+				leadingBid: leader,
+				closesAt: leader.closesAt,
+				bids: [leader],
+				contenders: [],
+				seedHash: null,
+				seed: null
+			},
+			// A full roster with almost no Cap Space, written out here rather
+			// than through a `team()` helper: those are scoped inside the money
+			// describes above, and this suite is not about the money.
+			{
+				capSpace: parseMoney(1_000_000),
+				rosterCount: 12,
+				leading: [],
+				eligibleLeading: [],
+				minorLeagueOccupied: 0
+			},
+			false,
+			'Contract Assignment'
+		);
+		const gates = evaluate(broke, command(8_250_001, 't-2'), NOW);
+
+		// Every key is present with its own outcome, refused and passed alike.
+		expect(Object.keys(gates).sort()).toEqual([...PLACE_BID_GATES].sort());
+		expect(failedGates(gates)).toEqual([
+			'phase',
+			'selfBid',
+			'increment',
+			'granularity',
+			'cap',
+			'slots'
+		]);
+		// The arithmetic each of them was decided from is still stated, in
+		// full, rather than replaced by the phase refusal.
+		expect(gates.increment.currentHigh).toBe(8_000_000);
+		expect(gates.increment.minimumLegal).toBe(8_500_000);
+		expect(gates.granularity.offered).toBe(8_250_001);
+		expect(gates.cap.capSpace).toBe(1_000_000);
+		expect(gates.slots.rosterCount).toBe(12);
+		// And every row carries a figure, the panel's own invariant.
+		for (const row of bidGateReport(gates)) {
+			expect(row.figure.length, row.gate).toBeGreaterThan(0);
+		}
+	});
+
+	it('changes no other gate’s answer when only the phase moves', () => {
+		// The same Auction, the same Team, the same amount, the same instant —
+		// two phases. Every gate but `phase` gives the identical outcome, which
+		// is what "no other gate's arithmetic changed" means as a test rather
+		// than as a claim.
+		const inAuction = evaluate(inPhase('Auction'), command(8_500_000), NOW);
+		const ended = evaluate(inPhase('Contract Assignment'), command(8_500_000), NOW);
+
+		for (const gate of PLACE_BID_GATES) {
+			if (gate === 'phase') continue;
+			expect(ended[gate], gate).toEqual(inAuction[gate]);
+		}
+	});
+
+	it('disables the control the surface renders, worded by the core', () => {
+		const control = bidControlState({
+			state: inPhase('Contract Assignment'),
+			fantraxPlayerId: 'p-1',
+			viewerTeamId: 't-2',
+			amountText: '8500000',
+			confirmed: true,
+			now: NOW
+		});
+
+		expect(control.blocked).toBe(true);
+		expect(control.refusingGates).toEqual(['phase']);
+		expect(control.detail).toContain('Bidding is open only during the Auction Phase');
+		expect(control.detail).toContain('Contract Assignment');
+	});
+
+	it('passes for a nominated Player nobody has bid on, while the phase is Auction', () => {
+		// The `null`-Auction branch of `bidStateFor` carries the phase through
+		// exactly as the Auction branch does — the phase is a fact about the
+		// LEAGUE, not about this Auction, so there is nowhere for it to be lost.
+		expect(bidStateFor(null, RICH, false, 'Auction').phase).toBe('Auction');
+		expect(bidStateFor(null, RICH, false, 'Archived').phase).toBe('Archived');
+		expect(evaluate(NO_BIDS, command(1_500_000), NOW).phase.passed).toBe(true);
 	});
 });

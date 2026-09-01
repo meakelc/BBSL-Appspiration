@@ -11,16 +11,28 @@
  * status to be "a fold over the log … never a stored flag toggled by a
  * handler", so storing it now would only have to be undone.
  *
- * **Release is one case, and it keys on the Player** (Story 2.3). A
- * nomination is released when that Player's Auction closes: an
+ * **Release is TWO cases, and both key on the Player.** Story 2.3 wrote the
+ * first: a nomination is released when that Player's Auction CLOSES, and an
  * `AuctionClosed` for a nominated Player frees that Player's board seat and
- * the nominating Team's Nomination Slot together. The two are one fact read
- * two ways — `byTeam` indexes the same object `byPlayer` holds — so dropping
- * the Player's key and the holding Team's key in a single step keeps both
- * indexes consistent by construction. The Player is the key and nothing
- * else: the Slot frees whether the nominator won the auction, lost it, or
- * never bid at all. Keying on a Team would require the close to carry the
- * nominator, which it has no reason to know, and would free the wrong Slot
+ * the nominating Team's Nomination Slot together. Story 3.7 added the second
+ * and, so far, last: an `AuctionTerminated` frees exactly the same pair when
+ * the Auction Phase ends with that Player still Awaiting an Opening Bid —
+ * nobody won them, no contract is recorded, and they return to the pool by
+ * this fold's own arithmetic rather than by a write to `free_agent_players`.
+ *
+ * The two cases are written separately rather than shared because what makes
+ * each event WELL FORMED differs: a close must name a winner, a price and a
+ * placement, and a termination names none of those and could not. Collapsing
+ * them would make one reader answer two questions.
+ *
+ * What they have in common is the release itself. The board seat and the
+ * Slot are one fact read two ways — `byTeam` indexes the same object
+ * `byPlayer` holds — so dropping the Player's key and the holding Team's key
+ * in a single step keeps both indexes consistent by construction. The Player
+ * is the key and nothing else: the Slot frees whether the nominator won the
+ * auction, lost it, or never bid at all. Keying on a Team would require the
+ * close to carry the nominator, which it has no reason to know, and would
+ * free the wrong Slot
  * if it carried the winner instead.
  *
  * **The payload contract, fixed here — and it is now the WHOLE close.** This
@@ -85,6 +97,28 @@ export const NOMINATION_PLACED_EVENT = 'NominationPlaced';
  */
 export const AUCTION_CLOSED_EVENT = 'AuctionClosed';
 
+/**
+ * The event type that ends a nominated Player's Auction with no Bid ever
+ * placed on it, releasing the nomination (Story 3.7, FR-22).
+ *
+ * Declared here, beside the reducer that gives it meaning, for
+ * `AUCTION_CLOSED_EVENT`'s reason. One is appended for every nomination still
+ * in Awaiting Opening Bid when the League Clock expires — by
+ * `core/rules/phase-end.ts`, inside the same transaction as the
+ * `ContractAssignmentOpened` that follows them all.
+ *
+ * **A termination is not a close and appends no contract.** Nobody bid, so
+ * nobody won: the Player simply stops being on the board and the nominating
+ * Team's Slot comes back. `contractsReducer` has no case for this event and
+ * needs none, which is what returns the Player to the Free Agent pool by
+ * arithmetic rather than by a table write.
+ *
+ * **It names the NOMINATING Team**, not a winner — there is no winner. That
+ * is the one substantive difference from a close, and it is why the payload
+ * this reducer reads is its own rather than `AuctionClosed`'s.
+ */
+export const AUCTION_TERMINATED_EVENT = 'AuctionTerminated';
+
 /** One open nomination, as every refusal sentence needs to name it. */
 export type OpenNomination = {
 	/** The Player nominated. */
@@ -95,6 +129,25 @@ export type OpenNomination = {
 	readonly teamId: string;
 	/** That Team's name — what a refusal says out loud. */
 	readonly teamName: string;
+	/**
+	 * The Manager who nominated, or `null` when the payload named none
+	 * (Story 3.7).
+	 *
+	 * No gate reads it and no refusal prints it. It is here because an
+	 * `AuctionTerminated` must carry the NOMINATING Manager and Team on its
+	 * envelope, exactly as an `AuctionClosed` carries the winner's, and this
+	 * fold is the only thing that still knows who nominated by the time the
+	 * League Clock expires.
+	 *
+	 * `null` rather than a fallback to the id: `auction_events.manager_id`
+	 * references `managers(id)`, so an invented value would be a foreign-key
+	 * violation rather than a cosmetic blemish, and the two names above fall
+	 * back precisely because they reference nothing. A nomination whose payload
+	 * named no Manager still holds its Slot and still frees it —
+	 * `rules/phase-end.ts` is what decides what to write on an envelope that
+	 * has no Manager to name.
+	 */
+	readonly managerId: string | null;
 	/** The nomination event's own instant, as the shell read the db clock. */
 	readonly occurredAt: string;
 };
@@ -184,6 +237,7 @@ function readPayload(payload: unknown, event: { readonly occurredAt: string }): 
 
 	const playerName = record['playerName'];
 	const teamName = record['teamName'];
+	const managerId = record['managerId'];
 
 	return {
 		fantraxPlayerId,
@@ -194,6 +248,11 @@ function readPayload(payload: unknown, event: { readonly occurredAt: string }): 
 		playerName: typeof playerName === 'string' && playerName !== '' ? playerName : fantraxPlayerId,
 		teamId,
 		teamName: typeof teamName === 'string' && teamName !== '' ? teamName : teamId,
+		// No fallback, unlike the two names above: this id becomes an
+		// `auction_events.manager_id`, which references `managers(id)`, so an
+		// invented value would fail a foreign key rather than merely read oddly.
+		// A nomination that named no Manager is still a nomination.
+		managerId: typeof managerId === 'string' && managerId !== '' ? managerId : null,
 		occurredAt: event.occurredAt
 	};
 }
@@ -299,6 +358,36 @@ export function readClosedPlayerId(payload: unknown): string | null {
 }
 
 /**
+ * The Player a well-formed `AuctionTerminated` names, or `null` when the
+ * payload is not one (Story 3.7).
+ *
+ * `readClosedPlayerId`'s shape and `readClosedPlayerId`'s reason, for its own
+ * event — including the reason it is EXPORTED. The release has two halves
+ * that must agree: this fold frees the Slot, and `server/nomination.ts`'s
+ * `releaseNomination` deletes the claim row. Both read the same event through
+ * this one function rather than through two literals that could come to
+ * disagree about what a malformed termination means. A termination the fold
+ * skipped but the delete acted on — or the reverse — would leave the log and
+ * the claim table saying different things about the same Slot, and an
+ * insert-only log can never be replayed to clear a stale claim row.
+ *
+ * **Strictly less demanding than `readClosedFacts`, and that is correct
+ * rather than lax.** A close is well formed only if it names a winner, a
+ * placement and two parseable amounts, because three folds act on it and one
+ * of them records ownership. A termination records no ownership at all: it
+ * names a Player and ends their Auction, and this fold is the only one that
+ * acts on it. Requiring fields the event has no reason to carry would refuse
+ * well-formed terminations and strand Slots forever.
+ */
+export function readTerminatedPlayerId(payload: unknown): string | null {
+	if (typeof payload !== 'object' || payload === null) return null;
+	const record = payload as Record<string, unknown>;
+	const fantraxPlayerId = record['fantraxPlayerId'];
+	if (typeof fantraxPlayerId !== 'string' || fantraxPlayerId === '') return null;
+	return fantraxPlayerId;
+}
+
+/**
  * Every entry of a record except the named key.
  *
  * Built through `Object.entries`/`Object.fromEntries` rather than by
@@ -338,6 +427,29 @@ export const nominationsReducer: Reducer<OpenNominations> = (state, event) => {
 			return {
 				byPlayer: { ...state.byPlayer, [nomination.fantraxPlayerId]: nomination },
 				byTeam: { ...state.byTeam, [nomination.teamId]: nomination }
+			};
+		}
+		case AUCTION_TERMINATED_EVENT: {
+			// **The `AuctionClosed` case below, for the other way an Auction
+			// ends** (Story 3.7). The League Clock expired with this Player still
+			// Awaiting an Opening Bid, so the board seat and the nominating Team's
+			// Slot are released exactly as a close releases them — and, exactly as
+			// with a close, this fold records no contract, so the Player is back in
+			// the nominatable pool by arithmetic rather than by a table write.
+			//
+			// A termination for a Player who holds no board seat is a no-op, which
+			// is what makes replay converge and what makes a second evaluation of
+			// an already-ended phase harmless.
+			const terminated = readTerminatedPlayerId(event.payload);
+			if (terminated === null) return state;
+			if (!hasOwn(state.byPlayer, terminated)) return state;
+			const freed = state.byPlayer[terminated];
+			if (freed === undefined) return state;
+			// Both indexes drop together, keyed off the ONE nomination object they
+			// share — the close case's discipline, for the close case's reason.
+			return {
+				byPlayer: omitKey(state.byPlayer, terminated),
+				byTeam: omitKey(state.byTeam, freed.teamId)
 			};
 		}
 		case AUCTION_CLOSED_EVENT: {

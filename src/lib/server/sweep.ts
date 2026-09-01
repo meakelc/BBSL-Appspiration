@@ -60,6 +60,23 @@
  * worth a migration. Nothing writes a non-zero value any more, and no code
  * path can.
  *
+ * **The League Clock is evaluated after the closes and before the drain**
+ * (Story 3.7). `server/phase-end.ts`'s `evaluateLeagueClock` is its own whole
+ * `runTransactionalWrite` — lock, load, decide, persist, commit — so it folds
+ * a log that already contains every close this pass committed, and a throw
+ * inside it rolls back nothing that was already committed. It is recorded on
+ * the heartbeat exactly as a failed close is, and retried on the next pass.
+ *
+ * The order is not arbitrary. A nomination whose Auction closed during THIS
+ * pass must not then be terminated as though nobody had bid on it — and it
+ * cannot be, because the close is committed before the evaluation folds the
+ * log. Running the evaluation first would leave that window open for one pass.
+ *
+ * **The evaluation is re-derived like everything else**, so running it on
+ * every pass forever is safe: once the phase has folded to Contract
+ * Assignment, `decidePhaseEnd` answers "nothing to do" from the very event
+ * that made it fold. There is no flag, no cursor and no memory.
+ *
  * **The drain is a named no-op seam**, ordered after the sweep exactly as
  * `enqueue` is ordered after commit in `shell/write.ts`. Epic 5.1 gives it an
  * implementation; its throwing is recorded and cannot undo a committed close.
@@ -70,8 +87,9 @@
  * apart.
  *
  * Not this story: no pause check (Epic 7 — no pause event or flag exists to
- * read), no League Clock evaluation and no terminated unbid Nominations (3.7),
- * no outbox and no Discord (5.1), no external heartbeat detector (8.2).
+ * read), no outbox and no Discord (5.1), no external heartbeat detector (8.2).
+ * The League Clock evaluation and the terminated unbid Nominations arrived
+ * with Story 3.7 and are described above.
  */
 
 import { CORE_VERSION } from '../core/constants.ts';
@@ -85,6 +103,7 @@ import type { AppendedEvent } from '../core/types.ts';
 import { requireDatabaseClock } from '../shell/write.ts';
 import type { ConnectionGateway, TransactionalClient } from '../shell/write.ts';
 import { loadEventsViaClient } from './event-log.ts';
+import type { PhaseEndOutcome } from './phase-end.ts';
 
 /**
  * What a pass did, as one word.
@@ -130,14 +149,71 @@ export type TickSummary = {
 	readonly tickCoreVersion: number;
 	/** The newest `auction_events.core_version`, or `null` for an empty log. */
 	readonly logCoreVersion: number | null;
+	/**
+	 * What the League Clock evaluation did on this pass (Story 3.7).
+	 *
+	 *  - `not_evaluated` — the pass refused on a version mismatch, or could not
+	 *    run at all. The clock was never looked at, which is a different fact
+	 *    from looking and finding it unexpired, and the heartbeat says which.
+	 *  - `not_due` — evaluated, and nothing was appended: the clock has not run
+	 *    out, it never started, or the phase had already ended. By far the
+	 *    common answer, and a successful pass.
+	 *  - `ended` — THIS pass appended the `ContractAssignmentOpened`. It reads
+	 *    once in the history of a league, which is what makes it worth a word.
+	 *  - `failed` — the evaluation threw. Every close above still stands; the
+	 *    message is in `phaseEndFailure` and the next pass retries.
+	 */
+	readonly phaseEnd: PhaseEndStatus;
+	/** The Players this pass returned to the pool, in appended order. */
+	readonly terminated: readonly string[];
+	/**
+	 * The League Clock's own expiry and the instant it was compared against —
+	 * both `null` unless THIS pass ended the phase (Story 3.7).
+	 *
+	 * The pair is the whole of AD-10's "late, not wrong" made visible: a pass
+	 * that ran six hours after the clock expired records the identical
+	 * `expiredAt` and a later `evaluatedAt`, and an operator reading only one of
+	 * them cannot tell that pass from an on-time one.
+	 */
+	readonly phaseEndExpiredAt: string | null;
+	readonly phaseEndEvaluatedAt: string | null;
+	/** The evaluation's failure, if it had one. Never undoes a close. */
+	readonly phaseEndFailure: string | null;
 	/** The drain seam's failure, if it had one. Never undoes a close. */
 	readonly drainFailure: string | null;
 	/** One human sentence naming what happened, for the heartbeat row. */
 	readonly detail: string;
 };
 
+/**
+ * What one pass's League Clock evaluation amounted to (Story 3.7).
+ *
+ * Four words rather than a boolean, because `not_evaluated` and `not_due` are
+ * genuinely different facts and collapsing them would make a refused pass
+ * indistinguishable from a pass that looked and found nothing due — the same
+ * distinction `TickOutcome` draws between `refused_version_mismatch` and `ok`.
+ */
+export type PhaseEndStatus = 'not_evaluated' | 'not_due' | 'ended' | 'failed';
+
 /** Close exactly one Auction, in its own locked transaction. */
 export type CloseOneFn = (fantraxPlayerId: string) => Promise<unknown>;
+
+/**
+ * Evaluate the League Clock and end the Auction Phase if it has run out
+ * (Story 3.7) — `server/phase-end.ts`'s `evaluateLeagueClock`, injected here
+ * for `CloseOneFn`'s reason.
+ *
+ * This module decides WHEN the evaluation runs (after the closes, before the
+ * drain) and what a failure of it means for the pass; `evaluateLeagueClock`
+ * decides what ending the phase IS. Injecting the seam is what lets these
+ * tests make the evaluation throw, count, or observe the log as it stood when
+ * it was called — none of which a real transaction would let them do. The two
+ * halves meet for real in `tests/server/phase-end.test.ts`.
+ *
+ * Optional, exactly as `drain` is: a caller that omits it gets a pass that
+ * records `not_evaluated`, which is honest rather than silent.
+ */
+export type EndPhaseFn = () => Promise<PhaseEndOutcome>;
 
 /**
  * Epic 5.1's outbox drain (AD-17). Ordered after the sweep, always, and a
@@ -181,11 +257,12 @@ const HEARTBEAT_SQL = `
 export async function runTick(input: {
 	readonly gateway: ConnectionGateway;
 	readonly closeOne: CloseOneFn;
+	readonly endPhase?: EndPhaseFn;
 	readonly drain?: DrainFn;
 }): Promise<TickSummary> {
 	const client = await input.gateway.connect();
 	try {
-		const summary = await sweepThenDrain(client, input.closeOne, input.drain);
+		const summary = await sweepThenDrain(client, input.closeOne, input.endPhase, input.drain);
 		await writeHeartbeat(client, summary);
 		return summary;
 	} finally {
@@ -209,6 +286,7 @@ export async function runTick(input: {
 async function sweepThenDrain(
 	client: TransactionalClient,
 	closeOne: CloseOneFn,
+	endPhase: EndPhaseFn | undefined,
 	drain: DrainFn | undefined
 ): Promise<TickSummary> {
 	let ranAt: string | null = null;
@@ -235,6 +313,16 @@ async function sweepThenDrain(
 				failures: [],
 				tickCoreVersion: CORE_VERSION,
 				logCoreVersion,
+				// **The League Clock is not evaluated either** (Story 3.7). The
+				// fail-stop is about the whole pass, not only about closing: ending
+				// the Auction Phase under different rules than the league bid under
+				// is exactly as undoable as closing an Auction under them, which is
+				// to say not at all (AD-4, AD-20).
+				phaseEnd: 'not_evaluated',
+				terminated: [],
+				phaseEndExpiredAt: null,
+				phaseEndEvaluatedAt: null,
+				phaseEndFailure: null,
 				drainFailure: null,
 				// `logCoreVersion` is interpolated rather than only bound, so an
 				// unreadable version — which `integerOrNull` writes to the column as
@@ -243,7 +331,8 @@ async function sweepThenDrain(
 					`refused: this tick carries CORE_VERSION ${CORE_VERSION} and the newest ` +
 					`auction_events.core_version reads as ${JSON.stringify(logCoreVersion)}. Nothing was ` +
 					'closed — an Auction closed under different rules than its Bids were placed under ' +
-					'cannot be undone, because AD-4 forbids deleting the event (AD-20)'
+					'cannot be undone, because AD-4 forbids deleting the event (AD-20)' +
+					PHASE_END_NOT_EVALUATED_CLAUSE
 			};
 		}
 
@@ -279,6 +368,33 @@ async function sweepThenDrain(
 			}
 		}
 
+		// **The League Clock, after every close and before the drain** (Story
+		// 3.7). It is its own whole `runTransactionalWrite`, so it folds a log
+		// that already contains this pass's closes — which is what stops a
+		// nomination whose Auction closed moments ago from being terminated as
+		// though nobody had bid on it — and a throw here rolls back nothing that
+		// is already committed.
+		let phaseEnd: PhaseEndStatus = 'not_evaluated';
+		let terminated: readonly string[] = [];
+		let phaseEndExpiredAt: string | null = null;
+		let phaseEndEvaluatedAt: string | null = null;
+		let phaseEndFailure: string | null = null;
+		if (endPhase !== undefined) {
+			try {
+				const outcome = await endPhase();
+				phaseEnd = outcome.ended ? 'ended' : 'not_due';
+				terminated = outcome.terminated;
+				phaseEndExpiredAt = outcome.expiredAt;
+				phaseEndEvaluatedAt = outcome.evaluatedAt;
+			} catch (error) {
+				// Recorded like a failed close and for the same reason: the closes
+				// above are committed and stand, the drain below still runs, and the
+				// next pass re-derives the whole question from the log.
+				phaseEnd = 'failed';
+				phaseEndFailure = messageOf(error);
+			}
+		}
+
 		// **After the sweep, always**, and its throwing cannot undo a close:
 		// every close above is already committed by its own transaction.
 		let drainFailure: string | null = null;
@@ -290,7 +406,9 @@ async function sweepThenDrain(
 			}
 		}
 
-		const clean = failures.length === 0 && drainFailure === null;
+		// A failed evaluation counts exactly as a failed close does: the pass
+		// ran to the end, something inside it threw, and what committed stands.
+		const clean = failures.length === 0 && phaseEndFailure === null && drainFailure === null;
 		return {
 			outcome: clean ? 'ok' : 'completed_with_failures',
 			ranAt,
@@ -299,8 +417,21 @@ async function sweepThenDrain(
 			failures,
 			tickCoreVersion: CORE_VERSION,
 			logCoreVersion,
+			phaseEnd,
+			terminated,
+			phaseEndExpiredAt,
+			phaseEndEvaluatedAt,
+			phaseEndFailure,
 			drainFailure,
-			detail: detailFor(closed, skipped, failures, drainFailure)
+			detail:
+				detailFor(closed, skipped, failures, drainFailure) +
+				phaseEndClause({
+					status: phaseEnd,
+					terminated,
+					expiredAt: phaseEndExpiredAt,
+					evaluatedAt: phaseEndEvaluatedAt,
+					failure: phaseEndFailure
+				})
 		};
 	} catch (error) {
 		// The pass could not run: the clock read or the log read threw. Nothing
@@ -315,8 +446,19 @@ async function sweepThenDrain(
 			failures: [],
 			tickCoreVersion: CORE_VERSION,
 			logCoreVersion,
+			// The clock read or the log read threw, so nothing downstream ran at
+			// all — including the evaluation. Saying so is not noise: a heartbeat
+			// silent about the League Clock would read as "evaluated, nothing due"
+			// on the one pass where that is least true.
+			phaseEnd: 'not_evaluated',
+			terminated: [],
+			phaseEndExpiredAt: null,
+			phaseEndEvaluatedAt: null,
+			phaseEndFailure: null,
 			drainFailure: null,
-			detail: `the pass could not run: ${messageOf(error)}`
+			detail:
+				`the pass could not run: ${messageOf(error)}` +
+				PHASE_END_NOT_EVALUATED_CLAUSE
 		};
 	}
 }
@@ -407,6 +549,80 @@ function detailFor(
 		parts.push(`the drain threw after the sweep, and every close above still stands: ${drainFailure}`);
 	}
 	return parts.join('; ');
+}
+
+/**
+ * The clause for a pass that never reached the evaluation.
+ *
+ * A constant rather than three call sites building the same string, because
+ * two of them are the branches that never call `phaseEndClause` at all — the
+ * version refusal and the pass that could not run — and a heartbeat silent
+ * about the League Clock there would read as "evaluated, nothing due", which
+ * is exactly the wrong thing to infer.
+ */
+const PHASE_END_NOT_EVALUATED_CLAUSE = '; the League Clock was not evaluated';
+
+/**
+ * What the League Clock evaluation contributes to the heartbeat's sentence
+ * (Story 3.7).
+ *
+ * **Appended to EVERY branch's detail, including the two that never ran it.**
+ * A heartbeat silent about the evaluation reads as "evaluated, nothing due" —
+ * which is exactly the wrong thing to infer about a pass that refused on a
+ * version mismatch or could not read the log at all. Naming
+ * `not_evaluated` out loud on those two branches costs six words and closes
+ * the one gap where absence and a negative look identical.
+ *
+ * Leads with a semicolon and a space so it composes onto `detailFor`'s
+ * `join('; ')` output and onto the two bespoke sentences alike, without any
+ * caller having to know which shape it is extending.
+ */
+function phaseEndClause(input: {
+	readonly status: PhaseEndStatus;
+	readonly terminated: readonly string[];
+	readonly expiredAt: string | null;
+	readonly evaluatedAt: string | null;
+	readonly failure: string | null;
+}): string {
+	switch (input.status) {
+		case 'not_evaluated':
+			return PHASE_END_NOT_EVALUATED_CLAUSE;
+		case 'not_due':
+			return '; the League Clock was evaluated and the Auction Phase continues';
+		case 'ended': {
+			// The terminated Players are NAMED rather than counted, `closed`'s
+			// discipline: this line is written once in the history of a league and
+			// it is the record of which nominations the phase end returned to the
+			// pool.
+			const players = `${input.terminated.length}${
+				input.terminated.length === 0 ? '' : ` (${input.terminated.join(', ')})`
+			}`;
+			// **BOTH instants, and the pair is the point.** The payloads carry
+			// `expiredAt` and `evaluatedAt` precisely so AD-10's "late, not wrong"
+			// is readable after the fact: a tick six hours behind appends the
+			// identical `expiredAt` and a later `evaluatedAt`, and the row's own
+			// `occurred_at` records when it landed. Stating only one of them would
+			// leave an operator unable to tell a punctual pass from a stalled one
+			// — which is the single most useful thing this line can say.
+			//
+			// Guarded rather than assumed: `readPhaseEndInstants` answers `null`
+			// for a payload it cannot read, and a heartbeat that printed
+			// "due at null" would be worse than one that says it could not tell.
+			const when =
+				input.expiredAt === null || input.evaluatedAt === null
+					? ' (the due and evaluated instants could not be read off the appended event)'
+					: ` — due at ${input.expiredAt}, evaluated at ${input.evaluatedAt}`;
+			return (
+				'; the League Clock expired and the Auction Phase ended, terminating ' +
+				`${players}${when}`
+			);
+		}
+		case 'failed':
+			return (
+				'; the League Clock evaluation threw, and every close above still stands: ' +
+				`${input.failure ?? 'no message'}`
+			);
+	}
 }
 
 /**
