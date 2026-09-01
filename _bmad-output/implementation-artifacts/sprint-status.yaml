@@ -60,14 +60,14 @@ development_status:
   2-8-minors-exposure-unbounded-eligible-bidding-bounded-by-overfl: done
   epic-2-retrospective: optional
 
-  epic-3: in-progress
+  epic-3: done
   3-1-expiry-is-authoritative-for-validation: done
   3-2-enter-and-join-a-minimum-bid-contention: done
   3-3-dissolve-a-minimum-bid-contention: done
   3-4-close-an-auction-and-place-the-player: done
   3-5-the-tick-one-cron-one-function-sweep-then-drain: done
   3-6-draw-a-minimum-bid-contention-winner: done
-  3-7-the-league-clock-and-the-end-of-the-auction-phase: review
+  3-7-the-league-clock-and-the-end-of-the-auction-phase: done
   epic-3-retrospective: optional
 
   epic-4: backlog
