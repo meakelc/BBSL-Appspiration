@@ -22,8 +22,10 @@
 import { describe, expect, it } from 'vitest';
 
 import { MINIMUM_BID, MINOR_LEAGUE_SLOTS } from '../../src/lib/core/constants.ts';
+import { hash } from '../../src/lib/core/hash.ts';
 import { parseMoney } from '../../src/lib/core/money.ts';
 import type { Auction, Bid } from '../../src/lib/core/projection/auctions.ts';
+import { CONTENTION_DRAWN_EVENT } from '../../src/lib/core/projection/draws.ts';
 import { AUCTION_CLOSED_EVENT } from '../../src/lib/core/projection/nominations.ts';
 import type { OpenNomination } from '../../src/lib/core/projection/nominations.ts';
 import {
@@ -32,7 +34,12 @@ import {
 	decideClose,
 	slotPlacementFor
 } from '../../src/lib/core/rules/close.ts';
-import type { AuctionClosedPayload, CloseState, ClosedWinner } from '../../src/lib/core/rules/close.ts';
+import type {
+	AuctionClosedPayload,
+	CloseState,
+	ClosedWinner,
+	ContentionDrawnPayload
+} from '../../src/lib/core/rules/close.ts';
 
 const CLOSES_AT = '2026-08-27T09:00:00.000Z';
 /**
@@ -88,27 +95,51 @@ function stateOf(overrides: Partial<CloseState> = {}): CloseState {
 		nomination: NOMINATION,
 		playerIsMinorLeagueEligible: false,
 		minorLeagueOccupied: 0,
+		// The shell derives this through `rules/draw.ts` and passes it as
+		// `decideClose`'s third argument; a Standard close has none.
+		drawnWinner: null,
 		...overrides
 	};
 }
+
+/**
+ * A real 64-hex-digit seed, so the commitment beside it can be `hash(SEED)`
+ * — DERIVED rather than written out, which is what makes the verification in
+ * `decideClose` succeed for the real reason rather than because two literals
+ * happened to be typed to match.
+ */
+const SEED = '4d81f0b6a72c395e4d81f0b6a72c395e4d81f0b6a72c395e4d81f0b6a72c395e';
 
 const DRAWN: ClosedWinner = {
 	kind: 'drawn',
 	teamId: 't-f',
 	teamName: 'Team F',
 	managerId: 'm-f',
-	seed: 'a-revealed-seed',
-	contenders: ['t-e', 't-f']
+	seed: SEED,
+	contenders: ['t-e', 't-f'],
+	// The position the drawer would have carried. `decideClose` publishes this
+	// number rather than looking `t-f` up, and cross-checks that the two agree
+	// — it does NOT re-run the reduction, which is `drawnWinnerFor`'s job and
+	// is proven against this same seed in `tests/core/draw.test.ts`.
+	selectedIndex: 1
 };
 
+/**
+ * Drive `decideClose` and hand back the `AuctionClosed` it emitted.
+ *
+ * A Standard close emits exactly one event. A lottery close emits TWO — the
+ * `ContentionDrawn` reveal and then the close, in that order (Story 3.6) — so
+ * the count is asserted against which kind of close this is, and the payload
+ * comes off the LAST event either way.
+ */
 function payloadOf(state: CloseState, now = AT_EXPIRY, winner: ClosedWinner | null = null) {
 	const decided = decideClose(state, now, winner);
 	expect(decided.kind).toBe('accepted');
-	expect(decided.events).toHaveLength(1);
-	const event = decided.events[0];
+	expect(decided.events).toHaveLength(winner === null ? 1 : 2);
+	const event = decided.events[decided.events.length - 1];
 	if (event === undefined) throw new Error('no event');
 	expect(event.type).toBe(AUCTION_CLOSED_EVENT);
-	return { event, payload: event.payload as AuctionClosedPayload };
+	return { decided, event, payload: event.payload as AuctionClosedPayload };
 }
 
 // --- Slot Placement ---------------------------------------------------------
@@ -182,8 +213,8 @@ describe('closedWinnerFor — who won, and for how much', () => {
 			contention: 'minimum_bid',
 			leadingBid: bid({ teamId: 't-e', teamName: 'Team E', managerId: 'm-e', amount: parseMoney(MINIMUM_BID) }),
 			contenders: [
-				{ seq: '2', teamId: 't-e', teamName: 'Team E' },
-				{ seq: '3', teamId: 't-f', teamName: 'Team F' }
+				{ seq: '2', teamId: 't-e', teamName: 'Team E', managerId: 'm-e' },
+				{ seq: '3', teamId: 't-f', teamName: 'Team F', managerId: 'm-f' }
 			]
 		});
 
@@ -244,7 +275,7 @@ describe('decideClose — every failure is a THROW, because a close has no gates
 		expect(() => closedWinnerFor(null, null)).toThrow(/no Auction to close/);
 	});
 
-	it('throws on a live Minimum-Bid Contention with no drawn winner, naming Story 3.6', () => {
+	it('throws on a live Minimum-Bid Contention with no drawn winner, naming the drawer', () => {
 		const state = stateOf({
 			auction: auctionOf({
 				contention: 'minimum_bid',
@@ -253,7 +284,11 @@ describe('decideClose — every failure is a THROW, because a close has no gates
 		});
 
 		expect(() => decideClose(state, AT_EXPIRY, null)).toThrow(TypeError);
-		expect(() => decideClose(state, AT_EXPIRY, null)).toThrow(/Story 3\.6/);
+		// It names what the caller must DO — derive a winner — rather than a
+		// story that has since shipped. A drawer exists; this guards a caller
+		// that failed to use it.
+		expect(() => decideClose(state, AT_EXPIRY, null)).toThrow(/drawnWinnerFor/);
+		expect(() => decideClose(state, AT_EXPIRY, null)).not.toThrow(/no drawer exists yet/);
 	});
 
 	it('throws on a Standard close handed a drawn winner anyway', () => {
@@ -355,10 +390,10 @@ describe('decideClose — exactly one AuctionClosed, carrying the whole outcome'
 				contention: 'minimum_bid',
 				leadingBid: bid({ teamId: 't-e', teamName: 'Team E', managerId: 'm-e', amount: parseMoney(MINIMUM_BID) }),
 				contenders: [
-					{ seq: '2', teamId: 't-e', teamName: 'Team E' },
-					{ seq: '3', teamId: 't-f', teamName: 'Team F' }
+					{ seq: '2', teamId: 't-e', teamName: 'Team E', managerId: 'm-e' },
+					{ seq: '3', teamId: 't-f', teamName: 'Team F', managerId: 'm-f' }
 				],
-				seedHash: 'a-published-commitment'
+				seedHash: hash(SEED)
 			})
 		});
 		const { payload } = payloadOf(state, AT_EXPIRY, DRAWN);
@@ -366,7 +401,9 @@ describe('decideClose — exactly one AuctionClosed, carrying the whole outcome'
 		expect(payload.teamId).toBe('t-f');
 		expect(payload.winningAmount).toBe(MINIMUM_BID);
 		expect(payload.contention).toBe('minimum_bid');
-		// The reveal is Story 3.6's whole event, not half a field on this one.
+		// The reveal is its own EVENT, not half a field on this one — which is
+		// why Story 3.4 declined to put a seed here and Story 3.6 did not
+		// change its mind.
 		expect(Object.keys(payload)).not.toContain('seed');
 		expect(Object.keys(payload)).not.toContain('contenders');
 	});
@@ -390,5 +427,174 @@ describe('decideClose — the outcome is invariant under `now` (AD-10)', () => {
 
 	it('reads no clock of its own — two calls with one `now` agree exactly', () => {
 		expect(decideClose(stateOf(), LATE, null)).toEqual(decideClose(stateOf(), LATE, null));
+	});
+});
+
+// --- The reveal (Story 3.6) -------------------------------------------------
+
+/** A live lottery whose commitment is `hash(SEED)` and whose Contenders are E and F. */
+function lotteryState(overrides: Partial<Auction> = {}): CloseState {
+	return stateOf({
+		auction: auctionOf({
+			contention: 'minimum_bid',
+			leadingBid: bid({
+				teamId: 't-e',
+				teamName: 'Team E',
+				managerId: 'm-e',
+				amount: parseMoney(MINIMUM_BID)
+			}),
+			contenders: [
+				{ seq: '2', teamId: 't-e', teamName: 'Team E', managerId: 'm-e' },
+				{ seq: '3', teamId: 't-f', teamName: 'Team F', managerId: 'm-f' }
+			],
+			seedHash: hash(SEED),
+			...overrides
+		})
+	});
+}
+
+describe('decideClose — ContentionDrawn, then AuctionClosed (Story 3.6, AD-14)', () => {
+	it('emits TWO events and the reveal comes FIRST', () => {
+		const decided = decideClose(lotteryState(), AT_EXPIRY, DRAWN);
+
+		expect(decided.events).toHaveLength(2);
+		// Cause then consequence: a log read in `seq` order states the draw
+		// that selected the winner before the close that awarded the Player.
+		expect(decided.events[0]?.type).toBe(CONTENTION_DRAWN_EVENT);
+		expect(decided.events[1]?.type).toBe(AUCTION_CLOSED_EVENT);
+	});
+
+	it('carries the seed, the commitment, the ordered list and the selection', () => {
+		const decided = decideClose(lotteryState(), AT_EXPIRY, DRAWN);
+		const drawn = decided.events[0]?.payload as ContentionDrawnPayload;
+
+		expect(drawn).toEqual({
+			fantraxPlayerId: 'p-stash',
+			seed: SEED,
+			seedHash: hash(SEED),
+			contenders: ['t-e', 't-f'],
+			selectedIndex: 1,
+			winningTeamId: 't-f',
+			winningTeamName: 'Team F',
+			winningManagerId: 'm-f',
+			drawnAt: CLOSES_AT
+		} satisfies ContentionDrawnPayload);
+		// The recorded position and the recorded winner agree by construction,
+		// which is what a Manager who ran the arithmetic checks against.
+		expect(drawn.contenders[drawn.selectedIndex]).toBe(drawn.winningTeamId);
+	});
+
+	it('acts both events as the WINNER, never as whoever opened the lottery', () => {
+		const decided = decideClose(lotteryState(), AT_EXPIRY, DRAWN);
+
+		for (const event of decided.events) {
+			expect(event.teamId).toBe('t-f');
+			expect(event.managerId).toBe('m-f');
+		}
+		// The opener led the Auction and did not win it.
+		expect(decided.events[0]?.teamId).not.toBe('t-e');
+	});
+
+	it('throws, appending nothing, when the seed does not answer the commitment', () => {
+		const state = lotteryState({ seedHash: hash('a-different-seed') });
+
+		expect(() => decideClose(state, AT_EXPIRY, DRAWN)).toThrow(TypeError);
+		expect(() => decideClose(state, AT_EXPIRY, DRAWN)).toThrow(/does not match the published/);
+	});
+
+	it('draws anyway when the commitment folded to null, and states the null', () => {
+		// Reachable only from a corrupt or hand-written log. Refusing would
+		// strand the Auction in a contention forever with every Contender's
+		// capital committed, so the draw runs and the reveal says outright
+		// that there was nothing to check it against.
+		const decided = decideClose(lotteryState({ seedHash: null }), AT_EXPIRY, DRAWN);
+		const drawn = decided.events[0]?.payload as ContentionDrawnPayload;
+
+		expect(decided.events).toHaveLength(2);
+		expect(drawn.seedHash).toBeNull();
+		expect(drawn.seed).toBe(SEED);
+	});
+
+	it('is invariant under `now` — the reveal is byte-identical late', () => {
+		expect(JSON.stringify(decideClose(lotteryState(), LATE, DRAWN))).toBe(
+			JSON.stringify(decideClose(lotteryState(), AT_EXPIRY, DRAWN))
+		);
+	});
+
+	it('publishes the position the DRAWER carried, never a lookup of the winner', () => {
+		// The list holds `t-f` twice. A `decideClose` that recovered the index
+		// with `indexOf` would publish 1 — the first occurrence — while the
+		// reduction that actually chose the winner produced 2. The number a
+		// Manager checks their spreadsheet against must be the arithmetic's.
+		const duplicated: ClosedWinner = {
+			...DRAWN,
+			contenders: ['t-e', 't-f', 't-f'],
+			selectedIndex: 2
+		};
+
+		const decided = decideClose(lotteryState(), AT_EXPIRY, duplicated);
+		const drawn = decided.events[0]?.payload as ContentionDrawnPayload;
+
+		expect(drawn.selectedIndex).toBe(2);
+		expect(drawn.contenders[drawn.selectedIndex]).toBe('t-f');
+	});
+
+	it('throws when the carried position is outside the list it was drawn from', () => {
+		const offList: ClosedWinner = { ...DRAWN, selectedIndex: 2 };
+
+		expect(() => decideClose(lotteryState(), AT_EXPIRY, offList)).toThrow(
+			/not a place in the Contender list/
+		);
+	});
+
+	it('throws when the carried position and the carried winner disagree', () => {
+		// `t-f` is real and position 0 is real; they are just not each other.
+		// Neither is silently preferred over the other.
+		const mismatched: ClosedWinner = { ...DRAWN, selectedIndex: 0 };
+
+		expect(() => decideClose(lotteryState(), AT_EXPIRY, mismatched)).toThrow(
+			/is not at position 0/
+		);
+	});
+
+	it('throws when the winner is not on the list it was drawn from at all', () => {
+		const stranger: ClosedWinner = { ...DRAWN, teamId: 't-z', teamName: 'Team Z' };
+
+		expect(() => decideClose(lotteryState(), AT_EXPIRY, stranger)).toThrow(/is not at position/);
+	});
+
+	it('throws on a revealed seed that is not 64 lowercase hex digits', () => {
+		// The commitment check cannot stand in for this one: with `seedHash`
+		// null it never runs, and an unshaped seed would reach the payload.
+		const unshaped: ClosedWinner = { ...DRAWN, seed: 'not-a-seed' };
+		const state = lotteryState({ seedHash: null });
+
+		expect(() => decideClose(state, AT_EXPIRY, unshaped)).toThrow(/64 lowercase hex digits/);
+	});
+});
+
+describe('closedWinnerFor — the winner it is handed is validated (Story 3.6)', () => {
+	const lottery = () =>
+		auctionOf({
+			contention: 'minimum_bid',
+			leadingBid: bid({ amount: parseMoney(MINIMUM_BID) })
+		});
+
+	it.each([['teamId'], ['teamName'], ['managerId']] as const)(
+		'throws on an empty %s, at the rule that can name it rather than at the FK',
+		(field: 'teamId' | 'teamName' | 'managerId') => {
+			// `auction_events.manager_id`/`team_id` are `not null` and
+			// reference real rows, so an empty identity would otherwise fail at
+			// the insert with a driver's message, after the whole close had
+			// been computed.
+			const winner: ClosedWinner = { ...DRAWN, [field]: '' };
+
+			expect(() => closedWinnerFor(lottery(), winner)).toThrow(TypeError);
+			expect(() => closedWinnerFor(lottery(), winner)).toThrow(new RegExp(`empty "${field}"`));
+		}
+	);
+
+	it('accepts a winner whose three identities are all present', () => {
+		expect(closedWinnerFor(lottery(), DRAWN).teamId).toBe('t-f');
 	});
 });

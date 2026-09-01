@@ -76,7 +76,7 @@ const LOTTERY: Auction = {
 	leadingBid: OPENING,
 	closesAt: OPENING.closesAt,
 	bids: [OPENING],
-	contenders: [{ seq: '1', teamId: 't-e', teamName: 'Team E' }],
+	contenders: [{ seq: '1', teamId: 't-e', teamName: 'Team E', managerId: 'm-t-e' }],
 	seedHash: OPENING.seedHash,
 	// The contention is LIVE: the seed is still sealed, so nothing is revealed.
 	seed: null

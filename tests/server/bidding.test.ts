@@ -23,7 +23,9 @@ import { AUCTION_CLOCK, SALARY_CAP } from '../../src/lib/core/constants.ts';
 import {
 	AUCTION_EXPIRED,
 	BID_PLACED_EVENT,
-	CONTENTION_DISSOLVED_EVENT
+	CONTENTION_DISSOLVED_EVENT,
+	SEED_COMMITMENT_UNVERIFIABLE,
+	SEED_REVEALED
 } from '../../src/lib/core/projection/auctions.ts';
 import {
 	AUCTION_CLOSED_EVENT,
@@ -38,6 +40,7 @@ import type {
 	ContentionDissolvedPayload
 } from '../../src/lib/core/rules/bidding.ts';
 import { PLACE_BID_GATES } from '../../src/lib/core/types.ts';
+import { loadAuctionPage } from '../../src/lib/server/auction-page.ts';
 import { loadBidState, placeBid } from '../../src/lib/server/bidding.ts';
 import type { BidRejection } from '../../src/lib/server/bidding.ts';
 import type {
@@ -209,6 +212,34 @@ function fakeGateway(
 			}
 		}
 	};
+}
+
+/**
+ * A READ-path gateway over a fixed log, for the one assertion in this file
+ * that has to cross from `placeBid` to `loadAuctionPage`.
+ *
+ * Deliberately permissive where `fakeGateway` above is strict: nothing here is
+ * asserting which statements the reader issues — `tests/server/auction-page.test.ts`
+ * owns that, with a fake that throws on anything it does not recognise. This
+ * one exists so a log this transaction actually WROTE can be handed to the
+ * reader that renders it, which is the join the deferred entry asked for.
+ */
+function pageGateway(events: QueryResultRow[]): ConnectionGateway {
+	const client: TransactionalClient & { release(): void } = {
+		async query(text: string) {
+			const sql = text.trim();
+			if (/^select \* from auction_events/i.test(sql)) return { rows: events };
+			if (/^select now\(\) as now/i.test(sql)) return { rows: [{ now: NOW }] };
+			// Everything else — the reference row, the two Manager joins, the
+			// roster — answers empty, which the reader already has a stated
+			// fallback for and which no assertion here depends on.
+			return { rows: [] };
+		},
+		release() {
+			// Nothing to return: this fake holds no pool.
+		}
+	};
+	return { connect: async () => client };
 }
 
 function logEvent(
@@ -1373,27 +1404,100 @@ describe('placeBid — the lottery seed (AC5, AD-14)', () => {
 		}
 	});
 
+	it('dissolves a contention with NO commitment, commits, and the page says so', async () => {
+		// **The end-to-end assertion Story 3.3's deferred entry asked for.**
+		// `decide()`'s "reveal against a commitment that folded to null rather
+		// than stranding the Auction" branch was proven at the core, and
+		// `readContentionSeed`'s null answer at the transaction, and nothing
+		// joined the two. This does: a lottery whose opening `BidPlaced` carries
+		// no `seedHash` at all — reachable only from a corrupt or hand-written
+		// log, which AD-4 forbids correcting in place — is dissolved through
+		// `placeBid`, the transaction COMMITS, and `loadAuctionPage` then
+		// serialises exactly what the Auction page renders as
+		// `SEED_COMMITMENT_UNVERIFIABLE`.
+		const harness = fakeGateway({
+			// No sixth argument: the opening publishes no commitment.
+			events: [nominated(), bidLogged(2, 1_000_000)],
+			sealedSeed: SEALED_SEED
+		});
+
+		const outcome = await placeBid(
+			harness.gateway,
+			ACTOR,
+			'p-1',
+			parseMoney(2_000_000),
+			DEVICE_CLASS
+		);
+		if (outcome.kind !== 'accepted') throw new Error('the dissolution was refused');
+
+		// It committed rather than stranding the Auction in a contention.
+		expect(harness.state.committed).toBe(true);
+		expect(harness.state.rolledBack).toBe(false);
+
+		const dissolved = harness.appendedEvents[1]?.['payload'] as ContentionDissolvedPayload;
+		expect(dissolved.seed).toBe(SEALED_SEED);
+		// Stated as the absence it is, never as a check that was made.
+		expect(dissolved.seedHash).toBeNull();
+
+		// ...and the READ path, over the log this transaction produced.
+		const view = await loadAuctionPage(
+			pageGateway([nominated(), bidLogged(2, 1_000_000), ...harness.appendedEvents]),
+			'p-1',
+			null
+		);
+
+		expect(view?.seed).toBe(SEALED_SEED);
+		expect(view?.seedHash).toBeNull();
+		// The page prints ONE sentence or the other off exactly this pair, and
+		// with a null commitment it is the unverifiable one — two sentences
+		// making opposite claims about one value is the thing it may never do.
+		expect(view?.seedHash === null ? SEED_COMMITMENT_UNVERIFIABLE : SEED_REVEALED).toBe(
+			SEED_COMMITMENT_UNVERIFIABLE
+		);
+	});
+
 	it('touches the seed table exactly twice: one insert and one select (Story 3.3)', () => {
 		// `recordContentionSeed` is a WRITE-SIDE statement, exactly as
 		// `claimNomination` is, and `readContentionSeed` is the table's one
 		// reader — added by dissolution, because a reveal has to open what
 		// the opening sealed. Both go through the transaction's own client,
 		// which is the only identity the migration grants anything at all.
-		const source = readFileSync(
-			fileURLToPath(new URL('../../src/lib/server/bidding.ts', import.meta.url)),
-			'utf8'
-		);
-		const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
-		expect(code).toContain('insert into ${CONTENTION_SEEDS_TABLE}');
-		expect(code).toContain('select seed from ${CONTENTION_SEEDS_TABLE}');
-		// Exactly three mentions: the const's own declaration, the insert and
-		// the select. A fourth is a statement nobody reviewed.
-		expect([...code.matchAll(/CONTENTION_SEEDS_TABLE/g)]).toHaveLength(3);
-		expect(code).not.toMatch(/update[\s\S]{0,80}CONTENTION_SEEDS_TABLE/i);
-		expect(code).not.toMatch(/delete[\s\S]{0,80}CONTENTION_SEEDS_TABLE/i);
+		//
+		// **Story 3.6 moved the READER out of this module**, to
+		// `server/contention-seed.ts`, because `supabase/functions/tick`
+		// makes Deno load `server/close.ts` and a close now needs to read a
+		// sealed seed at the draw. This file imports `node:crypto`, so a
+		// close reaching the reader through it would pull a Node built-in
+		// into the Deno graph and break AD-2. The two statements are counted
+		// across BOTH modules here, so "exactly one insert and one select"
+		// stays a property of the codebase rather than of one file.
+		const read = (path: string) =>
+			readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8')
+				.replace(/\/\*[\s\S]*?\*\//g, '')
+				.replace(/(^|[^:])\/\/.*$/gm, '$1');
+		const writer = read('../../src/lib/server/bidding.ts');
+		const reader = read('../../src/lib/server/contention-seed.ts');
+		const code = `${writer}
+${reader}`;
+
+		expect(writer).toContain('insert into ${CONTENTION_SEEDS_TABLE}');
+		expect(reader).toContain('select seed from ${CONTENTION_SEEDS_TABLE}');
+		// The writer names it twice — the import and the insert — and the
+		// reader twice: its own declaration and the select. A fifth is a
+		// statement nobody reviewed.
+		expect([...writer.matchAll(/CONTENTION_SEEDS_TABLE/g)]).toHaveLength(2);
+		expect([...reader.matchAll(/CONTENTION_SEEDS_TABLE/g)]).toHaveLength(2);
+		// The interpolated form, which is how every statement in these two
+		// modules names the table — so `ProjectionUpdater` sitting near the
+		// import is not mistaken for an UPDATE against it.
+		expect(code).not.toMatch(/update[\s\S]{0,80}\$\{CONTENTION_SEEDS_TABLE\}/i);
+		expect(code).not.toMatch(/delete[\s\S]{0,80}\$\{CONTENTION_SEEDS_TABLE\}/i);
 		// Both go through the transaction's own client — never through
 		// `server/supabase.ts`, whose roles hold nothing on this table.
 		expect(code).not.toContain('supabase.ts');
+		// ...and the module the tick's Deno graph reaches imports no Node
+		// built-in, which is the whole reason it exists.
+		expect(reader).not.toMatch(/from 'node:/);
 	});
 });
 

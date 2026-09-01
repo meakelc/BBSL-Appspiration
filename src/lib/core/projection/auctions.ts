@@ -133,12 +133,21 @@ export type ContentionState = 'awaiting_opening_bid' | 'standard' | 'minimum_bid
  * `teamName` rides along because the Auction page names the Contenders out
  * loud — there is no anonymity at any point — while `teamId` is what the
  * `contention` gate matches an acting Team against.
+ *
+ * `managerId` rides along for Story 3.6's draw. A `ClosedWinner` names the
+ * Manager whose join put the Team in — `auction_events.manager_id` is
+ * `not null` and references a real row — and the joining Bid this list is
+ * built from already holds it. Reaching back through `bids` by `seq` to
+ * recover it at the draw would be a second, failable derivation of a fact the
+ * one loop below already had in hand.
  */
 export type Contender = {
 	/** The joining Bid's own log position. The order AD-14 pins. */
 	readonly seq: string;
 	readonly teamId: string;
 	readonly teamName: string;
+	/** The Manager who placed the joining Bid. The draw's winner names them. */
+	readonly managerId: string;
 };
 
 /** One Bid, as the history line and the Leading Bidder both need it. */
@@ -523,7 +532,14 @@ function contendersFor(bids: readonly Bid[]): readonly Contender[] {
 		if (contentionForAmount(bid.amount) !== 'minimum_bid') continue;
 		if (joined.has(bid.teamId)) continue;
 		joined.add(bid.teamId);
-		contenders.push({ seq: bid.seq, teamId: bid.teamId, teamName: bid.teamName });
+		contenders.push({
+			seq: bid.seq,
+			teamId: bid.teamId,
+			teamName: bid.teamName,
+			// The JOINING Bid's Manager, kept because a drawn winner names
+			// them and this loop is the one place that already holds the pair.
+			managerId: bid.managerId
+		});
 	}
 	return contenders;
 }

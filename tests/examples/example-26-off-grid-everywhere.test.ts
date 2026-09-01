@@ -80,7 +80,7 @@ function auctionAt(amount: number, contention: 'standard' | 'minimum_bid'): Auct
 		// with its opener as the only Contender, exactly as the fold would.
 		contenders:
 			contention === 'minimum_bid'
-				? [{ seq: '2', teamId: 't-a', teamName: 'Team A' }]
+				? [{ seq: '2', teamId: 't-a', teamName: 'Team A', managerId: 'm-a' }]
 				: [],
 		seedHash: null,
 		// Nothing revealed: the lottery half is LIVE, the standard half never

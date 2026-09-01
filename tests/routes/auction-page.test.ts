@@ -620,6 +620,46 @@ describe('the Auction page — the lottery it renders', () => {
 		expect(PAGE_CODE).not.toMatch(/Hash the seed yourself/);
 	});
 
+	it('states the commitment’s ABSENCE out loud rather than rendering nothing', () => {
+		// Story 3.6, closing Story 3.2's deferred entry. The guard used to have
+		// no `{:else}`, so a lottery whose `seedHash` folded to null was
+		// visually identical to one whose commitment simply failed to render —
+		// and AD-14's trust rests on a Manager being able to SEE the
+		// commitment, which makes its absence the case worth naming.
+		const live = PAGE.slice(
+			PAGE.indexOf('{#if isContention}', PAGE.indexOf('class:lottery={isContention}'))
+		);
+		const block = live.slice(0, live.indexOf('{#if dissolved}'));
+
+		expect(block).toContain('{:else}');
+		expect(block).toContain('id="auction-seed-unverifiable"');
+		expect(block).toContain('{SEED_COMMITMENT_UNVERIFIABLE}');
+		// One sentence or the other, never both and never neither.
+		expect(block).toMatch(
+			/\{#if auction\.seedHash !== null\}[\s\S]*\{:else\}[\s\S]*\{\/if\}/
+		);
+		// ...and it is the CORE's sentence, the same one the dissolution
+		// prints for the same absence. Not worded here.
+		expect(PAGE_CODE).not.toMatch(/nothing to check this/);
+	});
+
+	it('links the verification procedure, as a link and never a control', () => {
+		// A 64-character hex string nobody has been told the procedure for is
+		// not a check. The procedure is prose run in a spreadsheet, off this
+		// page — so it is an anchor, and the page still has exactly one button.
+		const live = PAGE.slice(
+			PAGE.indexOf('{#if isContention}', PAGE.indexOf('class:lottery={isContention}'))
+		);
+		const block = live.slice(0, live.indexOf('{#if dissolved}'));
+
+		expect(block).toContain('href="/verify"');
+		expect(block).toContain('id="auction-verify-link"');
+		expect([...PAGE_CODE.matchAll(/<button\b[\s\S]*?<\/button>/g)]).toHaveLength(1);
+		// It is not a destination in the catalog: the question is asked here,
+		// looking at a commitment, and the nav is phase/role navigation.
+		expect(SERVER).not.toContain('verify');
+	});
+
 	it('decides the lottery from the fold’s own state literal, not from a shipped flag', () => {
 		expect(PAGE).toContain("gateState.contention === 'minimum_bid'");
 		// No transported boolean: `isLottery` and `youAreContending` are each

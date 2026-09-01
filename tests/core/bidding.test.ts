@@ -160,7 +160,12 @@ function contendersOf(bids: readonly Bid[]): readonly Contender[] {
 		if (Number(bid.amount) !== MINIMUM_BID) continue;
 		if (seen.has(bid.teamId)) continue;
 		seen.add(bid.teamId);
-		contenders.push({ seq: bid.seq, teamId: bid.teamId, teamName: bid.teamName });
+		contenders.push({
+			seq: bid.seq,
+			teamId: bid.teamId,
+			teamName: bid.teamName,
+			managerId: bid.managerId
+		});
 	}
 	return contenders;
 }
@@ -1819,7 +1824,7 @@ describe('evaluateCap — Maximum Bid, derived on every evaluation (AD-7)', () =
 		// amount, on an Auction it does not lead.
 		const stale = {
 			...auctionLiteral('p-was-a-lottery', 't-9', 8_000_000, 'standard'),
-			contenders: [{ seq: '2', teamId: 't-2', teamName: 'Rockets' }]
+			contenders: [{ seq: '2', teamId: 't-2', teamName: 'Rockets', managerId: 'm-2' }]
 		};
 		const money = teamMoneyStateFor({
 			teamId: 't-2',
@@ -2506,7 +2511,9 @@ describe('the exposure arithmetic — M, N, Overflow Count and Minors Exposure',
 						leadingBid: contender,
 						closesAt: contender.closesAt,
 						bids: [contender],
-						contenders: [{ seq: contender.seq, teamId: 't-2', teamName: 'Rockets' }],
+						contenders: [
+							{ seq: contender.seq, teamId: 't-2', teamName: 'Rockets', managerId: 'm-2' }
+						],
 						seedHash: null,
 						seed: null
 					}

@@ -164,7 +164,9 @@ describe('§10 example 6 — the lottery opens', () => {
 		expect(contentionOf(auction)).toBe('minimum_bid');
 		expect(contentionSentence(contentionOf(auction))).toBe('Minimum-Bid Contention.');
 		expect(auction?.closesAt).toBe(CLOSES_AT);
-		expect(auction?.contenders).toEqual([{ seq: '1', teamId: 't-e', teamName: 'Team E' }]);
+		expect(auction?.contenders).toEqual([
+			{ seq: '1', teamId: 't-e', teamName: 'Team E', managerId: 'm-e' }
+		]);
 		expect(auction?.seedHash).toBe(hash(SEED));
 	});
 

@@ -350,8 +350,12 @@ describe('runTick — restart safety comes from re-deriving, not remembering', (
 	});
 });
 
-describe('runTick — a live Minimum-Bid Contention is SKIPPED, not closed (Story 3.6)', () => {
-	it('passes over the lottery and closes every other overdue Auction', async () => {
+describe('runTick — a Minimum-Bid Contention is CLOSED like anything else (Story 3.6)', () => {
+	it('offers the lottery to closeOne beside every other overdue Auction', async () => {
+		// It used to be filtered out by name, because no drawer existed. There
+		// is one now: `closeAuction` reads the sealed seed under its own lock
+		// and appends the reveal before the close, so this loop has no branch
+		// for a lottery at all.
 		const harness = fakeGateway({
 			events: [
 				bid('p-lottery', '2026-08-27T07:00:00.000Z', MINIMUM_BID, { seedHash: 'a-commitment' }),
@@ -362,38 +366,108 @@ describe('runTick — a live Minimum-Bid Contention is SKIPPED, not closed (Stor
 
 		const summary = await runTick({ gateway: harness.gateway, closeOne: closer.closeOne });
 
-		// The lottery expires FIRST and is skipped anyway: one un-drawable
-		// Auction must not stall every other close.
-		expect(closer.asked).toEqual(['p-normal']);
-		expect(summary.skipped).toEqual(['p-lottery']);
-		expect(summary.closed).toEqual(['p-normal']);
+		// The lottery expires FIRST and is closed FIRST — AD-11's order, with
+		// no exception carved out for it.
+		expect(closer.asked).toEqual(['p-lottery', 'p-normal']);
+		expect(summary.closed).toEqual(['p-lottery', 'p-normal']);
+		expect(summary.skipped).toEqual([]);
 		expect(summary.outcome).toBe('ok');
 
 		const heartbeat = soleHeartbeat(harness);
-		expect(heartbeat.skipped).toBe(1);
-		expect(heartbeat.closed).toBe(1);
+		expect(heartbeat.closed).toBe(2);
+		// The column stays and stays zero: nothing writes to it any more.
+		expect(heartbeat.skipped).toBe(0);
 		expect(String(heartbeat.detail)).toContain('p-lottery');
-		expect(String(heartbeat.detail)).toContain('Story 3.6');
+		expect(String(heartbeat.detail)).not.toContain('Story 3.6');
 	});
 
-	it('never calls closeOne for it — the skip happens BEFORE the transaction', async () => {
-		// `closedWinnerFor` throws on a live lottery with no drawn winner. The
-		// sweep must not reach that throw and then catch it: a skip and a
+	it('closes a lottery and three ordinary Auctions in one pass — four, none skipped', async () => {
+		// AC4's own scenario, at its own arity: the lottery is not a special
+		// case that happens to work beside ONE ordinary close, it is simply one
+		// more entry in AD-11's ordering.
+		const harness = fakeGateway({
+			events: [
+				bid('p-lottery', '2026-08-27T07:00:00.000Z', MINIMUM_BID, { seedHash: 'a-commitment' }),
+				bid('p-a', '2026-08-27T08:00:00.000Z'),
+				bid('p-b', '2026-08-27T09:00:00.000Z'),
+				bid('p-c', '2026-08-27T10:00:00.000Z')
+			]
+		});
+		const closer = recordingCloser();
+
+		const summary = await runTick({ gateway: harness.gateway, closeOne: closer.closeOne });
+
+		expect(closer.asked).toEqual(['p-lottery', 'p-a', 'p-b', 'p-c']);
+		expect(summary.closed).toEqual(['p-lottery', 'p-a', 'p-b', 'p-c']);
+		expect(summary.skipped).toEqual([]);
+		expect(summary.failures).toEqual([]);
+		expect(summary.outcome).toBe('ok');
+
+		const heartbeat = soleHeartbeat(harness);
+		expect(heartbeat.closed).toBe(4);
+		expect(heartbeat.skipped).toBe(0);
+	});
+
+	it('records a lottery that throws as a FAILURE, and closes the rest anyway', async () => {
+		// The protection the skip used to give, without the sweep having to
+		// know what a lottery is: an un-drawable one throws inside its own
+		// transaction, is recorded, and the pass carries on. A skip and a
 		// failure are different facts and the heartbeat says which.
 		const harness = fakeGateway({
-			events: [bid('p-lottery', '2026-08-27T07:00:00.000Z', MINIMUM_BID, { seedHash: 'a-commitment' })]
+			events: [
+				bid('p-lottery', '2026-08-27T07:00:00.000Z', MINIMUM_BID, { seedHash: 'a-commitment' }),
+				bid('p-a', '2026-08-27T08:00:00.000Z'),
+				bid('p-b', '2026-08-27T09:00:00.000Z'),
+				bid('p-c', '2026-08-27T10:00:00.000Z')
+			]
+		});
+
+		const summary = await runTick({
+			gateway: harness.gateway,
+			closeOne: async (fantraxPlayerId: string) => {
+				if (fantraxPlayerId === 'p-lottery') {
+					throw new TypeError('drawnWinnerFor: no sealed seed exists for "p-lottery"');
+				}
+			}
+		});
+
+		expect(summary.closed).toEqual(['p-a', 'p-b', 'p-c']);
+		expect(summary.skipped).toEqual([]);
+		expect(summary.failures).toEqual([
+			{
+				fantraxPlayerId: 'p-lottery',
+				message: 'TypeError: drawnWinnerFor: no sealed seed exists for "p-lottery"'
+			}
+		]);
+		expect(summary.outcome).toBe('completed_with_failures');
+
+		const heartbeat = soleHeartbeat(harness);
+		expect(heartbeat.closed).toBe(3);
+		expect(heartbeat.failed).toBe(1);
+		expect(heartbeat.skipped).toBe(0);
+		expect(String(heartbeat.detail)).toContain('no sealed seed');
+	});
+
+	it('never writes a non-zero skipped count on any path', async () => {
+		// `skipped` and its column are kept for the historical rows that carry
+		// real counts, and nothing can add to them: there is no longer any
+		// reason for a pass to pass over an overdue Auction.
+		const harness = fakeGateway({
+			events: [
+				bid('p-lottery', '2026-08-27T07:00:00.000Z', MINIMUM_BID, { seedHash: 'a-commitment' }),
+				bid('p-normal', '2026-08-27T08:00:00.000Z')
+			]
 		});
 
 		const summary = await runTick({
 			gateway: harness.gateway,
 			closeOne: async () => {
-				throw new Error('closeOne must not be called for a live lottery');
+				throw new Error('everything fails');
 			}
 		});
 
-		expect(summary.skipped).toEqual(['p-lottery']);
-		expect(summary.failures).toEqual([]);
-		expect(summary.outcome).toBe('ok');
+		expect(summary.skipped).toEqual([]);
+		expect(soleHeartbeat(harness).skipped).toBe(0);
 	});
 });
 

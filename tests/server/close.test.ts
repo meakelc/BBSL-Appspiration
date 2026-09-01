@@ -13,13 +13,18 @@
 import { describe, expect, it } from 'vitest';
 
 import { MINIMUM_BID } from '../../src/lib/core/constants.ts';
+import { hash } from '../../src/lib/core/hash.ts';
 import { BID_PLACED_EVENT } from '../../src/lib/core/projection/auctions.ts';
+import { CONTENTION_DRAWN_EVENT } from '../../src/lib/core/projection/draws.ts';
 import { MINOR_LEAGUE_ELIGIBILITY_SET } from '../../src/lib/core/projection/eligibility.ts';
 import {
 	AUCTION_CLOSED_EVENT,
 	NOMINATION_PLACED_EVENT
 } from '../../src/lib/core/projection/nominations.ts';
-import type { AuctionClosedPayload } from '../../src/lib/core/rules/close.ts';
+import type {
+	AuctionClosedPayload,
+	ContentionDrawnPayload
+} from '../../src/lib/core/rules/close.ts';
 import { closeAuction } from '../../src/lib/server/close.ts';
 import type {
 	ConnectionGateway,
@@ -41,7 +46,20 @@ const ROSTER: QueryResultRow[] = [
 	{ cap_hit: '20000000', roster_slot_kind: 'minor_league' }
 ];
 
-function fakeGateway(options: { events?: QueryResultRow[]; roster?: QueryResultRow[] } = {}) {
+function fakeGateway(
+	options: {
+		events?: QueryResultRow[];
+		roster?: QueryResultRow[];
+		/**
+		 * The SEALED seed row for this Player's contention (Story 3.6).
+		 *
+		 * `undefined` is a table with no row — which is what every close that
+		 * is not a lottery wants, and what makes "a lottery with no sealed
+		 * seed throws" reachable.
+		 */
+		sealedSeed?: string;
+	} = {}
+) {
 	const order: string[] = [];
 	const params: unknown[][] = [];
 	const appendedEvents: QueryResultRow[] = [];
@@ -70,6 +88,15 @@ function fakeGateway(options: { events?: QueryResultRow[]; roster?: QueryResultR
 				order.push('read-roster');
 				params.push([...queryParams]);
 				return { rows: options.roster ?? ROSTER };
+			}
+			if (/^select seed from auction_contention_seeds/i.test(sql)) {
+				// The sealed table's one reader (Story 3.6), on THIS client —
+				// the connection that holds the lock and appends. Recorded in
+				// `order` so "under the lock, before the roster read" is
+				// observable rather than assumed.
+				order.push('read-seed');
+				params.push([...queryParams]);
+				return { rows: options.sealedSeed === undefined ? [] : [{ seed: options.sealedSeed }] };
 			}
 			if (/^insert into auction_events/i.test(sql)) {
 				order.push('append-event');
@@ -208,6 +235,13 @@ function acceptedPayload(harness: ReturnType<typeof fakeGateway>): AuctionClosed
 	expect(row['event_type']).toBe(AUCTION_CLOSED_EVENT);
 	return row['payload'] as AuctionClosedPayload;
 }
+
+/**
+ * A real 64-hex-digit seed for the lottery closes below, with the commitment
+ * DERIVED from it rather than written out beside it — so the verification
+ * inside the transaction succeeds for the real reason.
+ */
+const SEALED_SEED = '4d81f0b6a72c395e4d81f0b6a72c395e4d81f0b6a72c395e4d81f0b6a72c395e';
 
 describe('closeAuction — one event, one transaction (AC3)', () => {
 	it('appends exactly one AuctionClosed, acted by the WINNER', async () => {
@@ -369,12 +403,15 @@ describe('closeAuction — Slot Placement against the roster at this close (AC2)
 });
 
 describe('closeAuction — the bugs it refuses to paper over (AD-1, AD-14)', () => {
-	it('throws on a live Minimum-Bid Contention, naming Story 3.6, and appends nothing', async () => {
+	it('throws on a lottery with NO sealed seed, and appends nothing', async () => {
+		// The one outcome AD-14 cannot survive: a draw with no seed to open.
+		// The Auction stays open and visibly unclosed rather than being
+		// awarded to whichever Team happened to open the lottery.
 		const harness = fakeGateway({
-			events: [nominated(), bidLogged(2, MINIMUM_BID, 'p-1', 't-e', 'm-e', 'a-commitment')]
+			events: [nominated(), bidLogged(2, MINIMUM_BID, 'p-1', 't-e', 'm-e', hash(SEALED_SEED))]
 		});
 
-		await expect(closeAuction(harness.gateway, 'p-1')).rejects.toThrow(/Story 3\.6/);
+		await expect(closeAuction(harness.gateway, 'p-1')).rejects.toThrow(/no sealed seed exists/);
 
 		expect(harness.appendedEvents).toEqual([]);
 		expect(harness.releasedClaims).toEqual([]);
@@ -383,14 +420,43 @@ describe('closeAuction — the bugs it refuses to paper over (AD-1, AD-14)', () 
 		expect(harness.state.released).toBe(1);
 	});
 
-	it('throws before it reads a roster, so a lottery close touches no table', async () => {
+	it('throws before it reads a roster, so a failed draw touches no other table', async () => {
 		const harness = fakeGateway({
-			events: [nominated(), bidLogged(2, MINIMUM_BID, 'p-1', 't-e', 'm-e', 'a-commitment')]
+			events: [nominated(), bidLogged(2, MINIMUM_BID, 'p-1', 't-e', 'm-e', hash(SEALED_SEED))]
 		});
 
 		await expect(closeAuction(harness.gateway, 'p-1')).rejects.toThrow(TypeError);
 
-		expect(harness.order).toEqual(['begin', 'lock', 'read-log', 'rollback']);
+		expect(harness.order).toEqual(['begin', 'lock', 'read-log', 'read-seed', 'rollback']);
+	});
+
+	it('throws when the sealed seed does not answer the published commitment', async () => {
+		const harness = fakeGateway({
+			events: [
+				nominated(),
+				bidLogged(2, MINIMUM_BID, 'p-1', 't-e', 'm-e', hash('a-completely-different-seed'))
+			],
+			sealedSeed: SEALED_SEED
+		});
+
+		await expect(closeAuction(harness.gateway, 'p-1')).rejects.toThrow(
+			/does not match the published commitment/
+		);
+
+		expect(harness.appendedEvents).toEqual([]);
+		expect(harness.state.rolledBack).toBe(true);
+	});
+
+	it('throws on a malformed sealed seed, naming what was required', async () => {
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, MINIMUM_BID, 'p-1', 't-e', 'm-e', hash(SEALED_SEED))],
+			sealedSeed: 'NOT-HEX'
+		});
+
+		await expect(closeAuction(harness.gateway, 'p-1')).rejects.toThrow(
+			/64 lowercase hex digits/
+		);
+		expect(harness.appendedEvents).toEqual([]);
 	});
 
 	it('throws when nobody ever bid, and appends nothing', async () => {
@@ -427,5 +493,111 @@ describe('closeAuction — the bugs it refuses to paper over (AD-1, AD-14)', () 
 		expect(harness.appendedEvents).toEqual([]);
 		expect(harness.releasedClaims).toEqual([]);
 		expect(harness.state.rolledBack).toBe(true);
+	});
+});
+
+// --- Story 3.6: the lottery closes, through the whole transaction -----------
+
+describe('closeAuction — a Minimum-Bid Contention is drawn and closed (AC2, AC4)', () => {
+	/** §10 example 8's lottery: E opened it, F, G and H joined, seed sealed. */
+	const lottery = (overrides: { sealedSeed?: string } = {}) =>
+		fakeGateway({
+			events: [
+				nominated(),
+				bidLogged(2, MINIMUM_BID, 'p-1', 't-e', 'm-e', hash(SEALED_SEED)),
+				bidLogged(3, MINIMUM_BID, 'p-1', 't-f', 'm-f'),
+				bidLogged(4, MINIMUM_BID, 'p-1', 't-g', 'm-g'),
+				bidLogged(5, MINIMUM_BID, 'p-1', 't-h', 'm-h')
+			],
+			sealedSeed: SEALED_SEED,
+			...overrides
+		});
+
+	it('appends ContentionDrawn and then AuctionClosed, in one transaction', async () => {
+		const harness = lottery();
+
+		const outcome = await closeAuction(harness.gateway, 'p-1');
+
+		expect(outcome.kind).toBe('accepted');
+		expect(harness.appendedEvents).toHaveLength(2);
+		// Cause then consequence, in `seq` order.
+		expect(harness.appendedEvents[0]?.['event_type']).toBe(CONTENTION_DRAWN_EVENT);
+		expect(harness.appendedEvents[1]?.['event_type']).toBe(AUCTION_CLOSED_EVENT);
+		expect(harness.state.committed).toBe(true);
+		expect(harness.releasedClaims).toEqual([['p-1']]);
+	});
+
+	it('reads the sealed seed under the lock, BEFORE the winning Team’s roster', async () => {
+		// The roster read is keyed on the Team that won, and who won is not
+		// known until the seed has been read and the winner derived.
+		const harness = lottery();
+
+		await closeAuction(harness.gateway, 'p-1');
+
+		expect(harness.order).toEqual([
+			'begin',
+			'lock',
+			'read-log',
+			'read-seed',
+			'read-roster',
+			'append-event',
+			'append-event',
+			'release-claim',
+			'commit'
+		]);
+		expect(harness.params.some((entry) => entry[0] === 'p-1')).toBe(true);
+	});
+
+	it('awards the flat $1,000,000 to the Contender the seed selects', async () => {
+		const harness = lottery();
+
+		await closeAuction(harness.gateway, 'p-1');
+
+		const drawn = harness.appendedEvents[0]?.['payload'] as ContentionDrawnPayload;
+		const closed = harness.appendedEvents[1]?.['payload'] as AuctionClosedPayload;
+
+		// Four Contenders in join order, and the seed reduces to position 2.
+		expect(drawn.contenders).toEqual(['t-e', 't-f', 't-g', 't-h']);
+		expect(drawn.selectedIndex).toBe(2);
+		expect(drawn.winningTeamId).toBe('t-g');
+		expect(drawn.seed).toBe(SEALED_SEED);
+		expect(drawn.seedHash).toBe(hash(SEALED_SEED));
+
+		// The FLAT join amount, never the opener's leading Bid.
+		expect(closed.teamId).toBe('t-g');
+		expect(closed.winningAmount).toBe(MINIMUM_BID);
+		expect(closed.contention).toBe('minimum_bid');
+		// Both events are acted by the winner, not by the opener.
+		expect(harness.appendedEvents[0]?.['team_id']).toBe('t-g');
+		expect(harness.appendedEvents[1]?.['team_id']).toBe('t-g');
+	});
+
+	it('reads the roster of the DRAWN Team, not of the opener or the nominator', async () => {
+		const harness = lottery();
+
+		await closeAuction(harness.gateway, 'p-1');
+
+		expect(harness.params.some((entry) => entry[0] === 't-g')).toBe(true);
+		expect(harness.params.some((entry) => entry[0] === 't-e')).toBe(false);
+		expect(harness.params.some((entry) => entry[0] === 't-n')).toBe(false);
+	});
+
+	it('closes a ONE-Contender lottery on that Contender, with a one-team list', async () => {
+		// §10 example 11. `seed mod 1 = 0` needs no special case, and the list
+		// is recorded rather than omitted.
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, MINIMUM_BID, 'p-1', 't-e', 'm-e', hash(SEALED_SEED))],
+			sealedSeed: SEALED_SEED
+		});
+
+		await closeAuction(harness.gateway, 'p-1');
+
+		const drawn = harness.appendedEvents[0]?.['payload'] as ContentionDrawnPayload;
+		expect(drawn.contenders).toEqual(['t-e']);
+		expect(drawn.selectedIndex).toBe(0);
+		expect(drawn.winningTeamId).toBe('t-e');
+		expect((harness.appendedEvents[1]?.['payload'] as AuctionClosedPayload).winningAmount).toBe(
+			MINIMUM_BID
+		);
 	});
 });

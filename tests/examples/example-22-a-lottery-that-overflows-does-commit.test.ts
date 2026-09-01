@@ -87,7 +87,7 @@ const LOTTERY: Auction = {
 	leadingBid: OPENING,
 	closesAt: OPENING.closesAt,
 	bids: [OPENING],
-	contenders: [{ seq: '1', teamId: 't-other', teamName: 'Team Other' }],
+	contenders: [{ seq: '1', teamId: 't-other', teamName: 'Team Other', managerId: 'm-other' }],
 	seedHash: OPENING.seedHash,
 	// The contention is LIVE: the seed is still sealed, so nothing is revealed.
 	seed: null
@@ -182,7 +182,10 @@ describe('§10 example 22 — a lottery that overflows does commit', () => {
 		// commitment is Team Q's all the same, because any Contender may win.
 		const joined: Auction = {
 			...LOTTERY,
-			contenders: [...LOTTERY.contenders, { seq: '2', teamId: 't-q', teamName: 'Team Q' }]
+			contenders: [
+				...LOTTERY.contenders,
+				{ seq: '2', teamId: 't-q', teamName: 'Team Q', managerId: 'm-q' }
+			]
 		};
 		const money = teamMoneyStateFor({
 			teamId: 't-q',

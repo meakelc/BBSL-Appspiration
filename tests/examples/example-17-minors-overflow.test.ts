@@ -75,7 +75,9 @@ const STATE: CloseState = {
 	// "a second Minor League Eligible player"
 	playerIsMinorLeagueEligible: true,
 	// DERIVED from example 16's committed effect, never written as a literal.
-	minorLeagueOccupied: minorLeagueOccupiedIn(ROWS_AFTER_16)
+	minorLeagueOccupied: minorLeagueOccupiedIn(ROWS_AFTER_16),
+	// A Standard Contention: no lottery, no draw, no winner to derive.
+	drawnWinner: null
 };
 
 const DECIDED = decideClose(STATE, CLOSES_AT, null);
