@@ -48,14 +48,17 @@
  */
 
 import { MINIMUM_BID, MINOR_LEAGUE_SLOTS } from '../constants.ts';
+import { hash } from '../hash.ts';
 import type { Money } from '../money.ts';
 import { parseMoney } from '../money.ts';
 import type { Auction, ContentionState } from '../projection/auctions.ts';
 import { hasExpired } from '../projection/auctions.ts';
 import type { SlotPlacement } from '../projection/contracts.ts';
+import { CONTENTION_DRAWN_EVENT } from '../projection/draws.ts';
 import type { OpenNomination } from '../projection/nominations.ts';
 import { AUCTION_CLOSED_EVENT } from '../projection/nominations.ts';
 import type { Accepted, EventEnvelope } from '../types.ts';
+import { isSeedShaped } from './draw.ts';
 
 /** The flat amount every Contender in a Minimum-Bid Contention holds. */
 const CONTENTION_AMOUNT: Money = parseMoney(MINIMUM_BID);
@@ -67,24 +70,26 @@ const NO_CAP_HIT: Money = parseMoney(0);
  * The Contender a draw selected — the winner argument a Minimum-Bid
  * Contention's close REQUIRES, and the only kind there is.
  *
- * **Declared now and produced by nothing**, deliberately. Story 3.6 owns the
- * draw: it derives a winner from the revealed seed and the ordered Contender
- * list (AD-14) and hands the result here. Declaring the shape in 3.4 means
- * 3.6 adds a drawer rather than a signature change, and means the lottery
- * branch below can be proven against state literals today instead of waiting
- * for a producer. `closeAuction` passes `null` and therefore throws on a live
- * contention, which is the unreachable-rather-than-unhandled posture the
- * story chose.
+ * **Declared by Story 3.4 and produced since Story 3.6.** `rules/draw.ts`
+ * derives a winner from the revealed seed and the ordered Contender list
+ * (AD-14) and hands the result here; declaring the shape a story early meant
+ * 3.6 added a drawer rather than a signature change, and meant the lottery
+ * branch below was proven against state literals before a producer existed.
+ * `server/close.ts` reads the sealed seed under the lock and passes the drawn
+ * winner, so a live contention now closes rather than throwing.
  *
- * Written as a discriminated union of one so 3.6 can add a case — a
- * single-Contender lottery that needs no draw (§10 example 11), say — without
- * every reader having to learn a new shape.
+ * Written as a discriminated union of one so 3.6 could add a case — a
+ * single-Contender lottery that needs no draw (§10 example 11), say. **It did
+ * not need one**, and the union stays a union of one: `seed mod 1 = 0` selects
+ * the only Contender there is, the one-team list is recorded exactly as the
+ * multi-team one, and a second case would be a branch stating something the
+ * arithmetic already states.
  *
- * `seed` and `contenders` are carried for 3.6's reveal and are deliberately
- * NOT read here: this story appends no reveal, and putting a seed on
- * `AuctionClosed` would publish half of a commit-reveal that 3.6 owns whole.
- * They are named rather than omitted so the drawer has somewhere to put them
- * and a reviewer sees the choice rather than the gap.
+ * `seed` and `contenders` were carried for 3.6's reveal and deliberately not
+ * read by 3.4. **Story 3.6 reads them**: `decideClose` builds the
+ * `ContentionDrawn` payload from this shape, which is why the drawer puts the
+ * derivation's inputs here beside its output. `rules/draw.ts` is the one
+ * producer; nothing else in the codebase constructs one.
  */
 export type ClosedWinner = {
 	readonly kind: 'drawn';
@@ -98,6 +103,19 @@ export type ClosedWinner = {
 	readonly seed: string;
 	/** The ordered Contender list it was applied to, ascending join `seq`. */
 	readonly contenders: readonly string[];
+	/**
+	 * The 0-based position the reduction produced — `drawIndex`'s own return
+	 * value, carried rather than recoverable.
+	 *
+	 * **It is carried because it cannot be re-derived honestly.** Looking the
+	 * winner up in `contenders` would answer with the FIRST occurrence of that
+	 * Team, which is the same number only while the list holds no duplicate —
+	 * a property `contendersFor` happens to guarantee and this shape does not
+	 * require of whoever builds it. This is the one number a Manager's
+	 * spreadsheet produces, so it is the arithmetic's own output or it is
+	 * nothing.
+	 */
+	readonly selectedIndex: number;
 };
 
 /**
@@ -139,6 +157,23 @@ export type CloseState = {
 	readonly playerIsMinorLeagueEligible: boolean;
 	/** The WINNING Team's occupied Minor League Slots at this close. Raw. */
 	readonly minorLeagueOccupied: number;
+	/**
+	 * The drawn Contender, for a Minimum-Bid Contention, and `null` for every
+	 * other close (Story 3.6).
+	 *
+	 * A FIFTH fact, and it is on the state for the same reason the other four
+	 * are: the shell gathers it on the one locked transaction, from the sealed
+	 * seed row read beside the log read, so the winner and the fold cannot
+	 * disagree about the moment they describe. `server/close.ts` derives it
+	 * through `rules/draw.ts` — pure, handed the folded `Auction` and the
+	 * sealed seed — and hands the identical value to `closedWinnerFor` inside
+	 * `load` and to `decideClose` inside `decide`.
+	 *
+	 * It is NOT a second `winner` parameter alongside `decideClose`'s own: the
+	 * signature is unchanged, and this field is what `closeAuction` passes as
+	 * that argument.
+	 */
+	readonly drawnWinner: ClosedWinner | null;
 };
 
 /**
@@ -197,10 +232,32 @@ export function closedWinnerFor(
 	if (auction.contention === 'minimum_bid') {
 		if (winner === null) {
 			throw new TypeError(
-				'closeAuction: a Minimum-Bid Contention closes on the DRAWN Contender and no drawer ' +
-					'exists yet (Story 3.6, AD-14); received null. Closing it on the Leading Bidder would ' +
-					'award the Auction to whichever Team happened to open the lottery'
+				'closeAuction: a Minimum-Bid Contention closes on the DRAWN Contender and no drawn ' +
+					'winner was supplied; received null. The caller must derive one with ' +
+					'drawnWinnerFor() from the sealed seed before closing. Closing it on the Leading ' +
+					'Bidder would award the Auction to whichever Team happened to open the lottery ' +
+					'(AD-14)'
 			);
+		}
+		// **The winner is validated HERE, at the rule that can name the field**
+		// (Story 3.6). `auction_events.manager_id` and `.team_id` are
+		// `not null` and reference real rows, so a `ClosedWinner` with an empty
+		// identity would otherwise fail at the foreign key — at the insert,
+		// with a driver's message, after the roster read and the whole close
+		// had been computed. `rules/draw.ts` checks the same three fields on
+		// the Contender it selects; this is the guard for a winner that
+		// arrived from anywhere else, which is the case a shell bug is.
+		for (const [field, value] of [
+			['teamId', winner.teamId],
+			['teamName', winner.teamName],
+			['managerId', winner.managerId]
+		] as const) {
+			if (value === '') {
+				throw new TypeError(
+					`closeAuction: the drawn winner carries an empty "${field}", and a close names all ` +
+						'three of teamId, teamName and managerId (AD-1)'
+				);
+			}
 		}
 		return {
 			teamId: winner.teamId,
@@ -330,11 +387,73 @@ export type AuctionClosedPayload = {
 };
 
 /**
- * Close one Auction: exactly one `AuctionClosed` envelope, or a throw.
+ * The `ContentionDrawn` payload: the reveal, the list and the selection
+ * (Story 3.6, FR-19, AD-14).
+ *
+ * **A second event rather than fields on `AuctionClosed`, and Story 3.4 said
+ * why before it existed**: putting a seed on the close would publish half of a
+ * commit-reveal 3.4 did not own. `ContentionDissolved` already carries the
+ * other exit from this same state with the same four facts, so a
+ * `ContentionDrawn` beside it means the two exits from a Minimum-Bid
+ * Contention are read the same way — and `AuctionClosed`'s three existing
+ * folds need no change at all.
+ *
+ * Appended FIRST, before the `AuctionClosed` it causes, in one transaction.
+ * Cause then consequence: a log read in `seq` order states the draw that
+ * selected the winner before it states the close that awarded them the Player.
+ *
+ * `seedHash` is restated here rather than left to be looked up on the opening
+ * `BidPlaced` — `ContentionDissolvedPayload`'s reason: the reveal and the
+ * commitment it answers belong in one event, so a Manager checking the pair
+ * reads one row rather than joining two, and `null` states honestly that there
+ * was nothing to check against.
+ *
+ * `contenders` is the fold's own list in the fold's own order, ascending join
+ * `seq` — ids, unfiltered, exactly as the draw ran over them. AD-14 makes that
+ * order an INPUT to the winner, so a list recorded in any other order would be
+ * a list nobody could check the draw against.
+ */
+export type ContentionDrawnPayload = {
+	readonly fantraxPlayerId: string;
+	/** The seed, revealed. The one place a drawn seed enters `auction_events`. */
+	readonly seed: string;
+	/** The commitment it was published against, or `null` if none ever was. */
+	readonly seedHash: string | null;
+	/** The Contender list the draw ran over, ascending join `seq` — ids. */
+	readonly contenders: readonly string[];
+	/**
+	 * The 0-based position the reduction produced.
+	 *
+	 * Redundant with `contenders[selectedIndex] === winningTeamId` by
+	 * construction, and recorded anyway: a Manager who has run the 64-row
+	 * spreadsheet holds a NUMBER, and checking a number against a number is
+	 * the whole procedure. Making them perform the lookup first would add a
+	 * step nobody needs to get wrong.
+	 */
+	readonly selectedIndex: number;
+	/** The Team at that position — the winner. */
+	readonly winningTeamId: string;
+	/** That Team's name, so one row names the winner out loud. */
+	readonly winningTeamName: string;
+	/** The Manager whose joining Bid put that Team in the draw. */
+	readonly winningManagerId: string;
+	/** The Auction's own persisted expiry — never the transaction clock. */
+	readonly drawnAt: string;
+};
+
+/**
+ * Close one Auction: one `AuctionClosed` envelope — or, for a Minimum-Bid
+ * Contention, the `ContentionDrawn` reveal and then the close — or a throw.
  *
  * There is no `Rejected` half and no gate set. A close cannot be refused by a
  * rule — nobody issued it, and every question it asks has an answer — so the
  * return type is `Accepted` and every failure is a `TypeError` (AD-1).
+ *
+ * **The signature is unchanged from Story 3.4.** The winner still arrives as
+ * the third argument; what changed is that `server/close.ts` now has one to
+ * pass, derived by `rules/draw.ts` from the sealed seed it read under the same
+ * lock. A Standard close still passes `null` and still emits exactly one
+ * event.
  *
  * **`now` is read in exactly one expression and nothing emitted varies with
  * it.** The guard is `hasExpired`, the same derivation the `expiry` gate
@@ -431,6 +550,116 @@ export function decideClose(
 		teamId: party.teamId
 	};
 
-	const accepted: Accepted<readonly EventEnvelope[]> = { kind: 'accepted', events: [closed] };
+	if (winner === null) {
+		const accepted: Accepted<readonly EventEnvelope[]> = { kind: 'accepted', events: [closed] };
+		return accepted;
+	}
+
+	// **`hash(seed)` is verified against the folded commitment BEFORE the
+	// reveal is built** (Story 3.6, AD-14). `rules/draw.ts` made the same
+	// check when it selected this Contender; it is made again here because
+	// this function must never publish a seed that does not answer the
+	// commitment a Manager already recorded, whatever route the `ClosedWinner`
+	// took to reach it. Both calls are pure over the same two values, so they
+	// cannot disagree — and a mismatch throws with NOTHING appended, which
+	// rolls the whole transaction back.
+	//
+	// A `seedHash` of `null` is the corrupt-log case `readPayload` produces:
+	// unverifiable rather than mismatched. The draw proceeds and the payload
+	// states the `null` for the record, because refusing would strand the
+	// Auction in a contention forever with every Contender's capital
+	// committed. Story 3.3 took the identical position on a dissolution.
+	// **The shape first, because the hash check cannot stand in for it.** When
+	// `auction.seedHash` is `null` — the corrupt-log case that draws anyway
+	// rather than stranding the Auction — the comparison below does not run at
+	// all, and an unshaped seed would reach the payload unexamined. A seed is
+	// what a Manager types into `sha256sum`; publishing something that is not
+	// one is publishing a reveal nobody can use. `isSeedShaped` is `draw.ts`'s
+	// own predicate, asked here rather than restated.
+	if (!isSeedShaped(winner.seed)) {
+		throw new TypeError(
+			'decideClose: the revealed seed is not 64 lowercase hex digits, as sha256sum prints ' +
+				`them; received ${JSON.stringify(winner.seed)} (AD-14)`
+		);
+	}
+
+	if (auction.seedHash !== null) {
+		const revealed = hash(winner.seed);
+		if (revealed !== auction.seedHash) {
+			throw new TypeError(
+				'decideClose: the revealed seed does not match the published commitment; hash(seed) ' +
+					`is ${revealed} and the log published ${auction.seedHash} (AD-14)`
+			);
+		}
+	}
+
+	// **The reduction's own output, carried — never recovered by lookup.**
+	// `winner.contenders.indexOf(winner.teamId)` would answer with the first
+	// occurrence of that Team, which agrees with the arithmetic only while the
+	// list holds no duplicate. The number published here is the one a Manager
+	// compares their 64-row spreadsheet against, so it is `drawIndex`'s return
+	// value or it is nothing.
+	const selectedIndex = winner.selectedIndex;
+	if (
+		!Number.isInteger(selectedIndex) ||
+		selectedIndex < 0 ||
+		selectedIndex >= winner.contenders.length
+	) {
+		throw new TypeError(
+			`decideClose: the drawn position ${JSON.stringify(selectedIndex)} is not a place in the ` +
+				`Contender list it was drawn from (${winner.contenders.length} Contenders) (AD-14)`
+		);
+	}
+	// **The carried index and the carried winner must agree**, and a
+	// disagreement is a throw rather than a silent reconciliation in favour of
+	// either. Unreachable through `drawnWinnerFor`, which reads the winner out
+	// of this very list at this very position — which is exactly why a caller
+	// that reached here some other way must not be trusted to have done so.
+	if (winner.contenders[selectedIndex] !== winner.teamId) {
+		throw new TypeError(
+			`decideClose: the drawn winner "${winner.teamId}" is not at position ` +
+				`${String(selectedIndex)} of the Contender list it was drawn from ` +
+				`(${winner.contenders.join(', ')}) (AD-14)`
+		);
+	}
+
+	const drawn: ContentionDrawnPayload = {
+		fantraxPlayerId: auction.fantraxPlayerId,
+		// The seed, revealed — the one place a drawn seed enters the log, and
+		// only after the comparison above.
+		seed: winner.seed,
+		seedHash: auction.seedHash,
+		// The fold's own order, never re-sorted and never filtered.
+		contenders: winner.contenders,
+		selectedIndex,
+		winningTeamId: winner.teamId,
+		winningTeamName: winner.teamName,
+		winningManagerId: winner.managerId,
+		// The Auction's OWN persisted expiry, `closedAt`'s rule for
+		// `closedAt`'s reason: a sweep six hours late appends a byte-identical
+		// payload and only `occurred_at` records when it landed (AD-10).
+		drawnAt: auction.closesAt
+	};
+
+	// **Cause, then consequence**, and the order is the rule rather than a
+	// preference: a log read in `seq` order states the draw that selected the
+	// winner before it states the close that awarded them the Player.
+	// `runTransactionalWrite` has always appended N events in order under one
+	// lock, so two is no new machinery — it is what a dissolution already does.
+	const accepted: Accepted<readonly EventEnvelope[]> = {
+		kind: 'accepted',
+		events: [
+			{
+				type: CONTENTION_DRAWN_EVENT,
+				payload: drawn,
+				// The WINNER's, exactly as the close below: the Team the draw
+				// selected is the honest answer to "who does this belong to",
+				// and a close needs no synthetic actor.
+				managerId: party.managerId,
+				teamId: party.teamId
+			},
+			closed
+		]
+	};
 	return accepted;
 }

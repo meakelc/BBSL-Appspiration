@@ -688,10 +688,29 @@
 				     and check the reveal against it at the draw. The seed
 				     itself is in a table no role can read, and nothing on this
 				     page has ever seen it. -->
+				<!-- One sentence or the other, never both, and never neither.
+				     A lottery whose commitment folded to null used to render
+				     nothing at all here, which was indistinguishable from a
+				     commitment that simply failed to appear — and AD-14's
+				     trust rests on a Manager being able to SEE the commitment,
+				     so its absence is exactly the case worth naming out loud.
+				     The sentence is the core's own, the same one the
+				     dissolution prints for the same absence. -->
 				{#if auction.seedHash !== null}
 					<p class="prose" id="auction-seed-commitment">{SEED_COMMITMENT}</p>
 					<p class="prose seed-hash" id="auction-seed-hash">{auction.seedHash}</p>
+				{:else}
+					<p class="prose" id="auction-seed-unverifiable">{SEED_COMMITMENT_UNVERIFIABLE}</p>
 				{/if}
+				<!-- What to DO with the value above. A 64-character hex string
+				     nobody has been told the procedure for is not a check, and
+				     the procedure is prose rather than a control: it is run in
+				     a spreadsheet, by hand, off this page. Not a destination
+				     in the catalog — the question is asked here, looking at a
+				     commitment, and nowhere else. -->
+				<p class="prose">
+					<a href="/verify" id="auction-verify-link">How the draw is checked</a>
+				</p>
 			{/if}
 			<!-- The dissolution, in the same block and never beside the live
 			     one: a contention is running or it is over, and the two

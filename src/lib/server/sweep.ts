@@ -44,11 +44,21 @@
  * under different rules than its Bids were placed under cannot be undone, and
  * AD-4 forbids deleting the event (AD-20).
  *
- * **A live Minimum-Bid Contention is SKIPPED, not closed and not thrown on.**
- * No drawer exists until Story 3.6, and `closedWinnerFor` throws on one. The
- * sweep filters them out before calling `closeOne` so that one un-drawable
- * lottery cannot stall every other overdue close, and counts them on the
- * heartbeat so the skip is visible rather than silent.
+ * **A live Minimum-Bid Contention is CLOSED like anything else** (Story 3.6).
+ * It used to be filtered out by name, because no drawer existed and
+ * `closedWinnerFor` threw on one. There is a drawer now: `closeAuction` reads
+ * the sealed seed under its own lock, derives the winner from it and appends
+ * the reveal before the close, so this loop needs no branch for a lottery and
+ * has none. A lottery that throws is recorded as a failure like any other
+ * failed close and retried next pass — which is the same protection the skip
+ * used to give, without the sweep having to know what a lottery is.
+ *
+ * **`skipped` therefore stays, and stays EMPTY.** The field and the
+ * `tick_heartbeats.skipped` column are kept rather than removed: the table is
+ * append-only and holds real historical rows whose skip counts are facts about
+ * passes that happened, and dropping a column off it for cosmetics is not
+ * worth a migration. Nothing writes a non-zero value any more, and no code
+ * path can.
  *
  * **The drain is a named no-op seam**, ordered after the sweep exactly as
  * `enqueue` is ordered after commit in `shell/write.ts`. Epic 5.1 gives it an
@@ -59,10 +69,9 @@
  * dead tick, which is the one thing an operator most needs to be able to tell
  * apart.
  *
- * Not this story: no draw (3.6), no pause check (Epic 7 — no pause event or
- * flag exists to read), no League Clock evaluation and no terminated unbid
- * Nominations (3.7), no outbox and no Discord (5.1), no external heartbeat
- * detector (8.2).
+ * Not this story: no pause check (Epic 7 — no pause event or flag exists to
+ * read), no League Clock evaluation and no terminated unbid Nominations (3.7),
+ * no outbox and no Discord (5.1), no external heartbeat detector (8.2).
  */
 
 import { CORE_VERSION } from '../core/constants.ts';
@@ -104,7 +113,16 @@ export type TickSummary = {
 	readonly ranAt: string | null;
 	/** The Players whose Auctions this pass closed, in the order it closed them. */
 	readonly closed: readonly string[];
-	/** Live Minimum-Bid Contentions passed over, awaiting Story 3.6's draw. */
+	/**
+	 * Auctions this pass passed over. **Always empty since Story 3.6.**
+	 *
+	 * It held live Minimum-Bid Contentions, which had no drawer and could not
+	 * be closed. They can be now, and no other reason to skip an overdue
+	 * Auction exists — so nothing writes to this and no path can. It is kept
+	 * because `tick_heartbeats.skipped` is kept: the table is append-only and
+	 * its historical rows record real skips, and dropping a column off it for
+	 * cosmetics is not worth a migration.
+	 */
 	readonly skipped: readonly string[];
 	/** Closes that threw. Each is recorded and the pass continues past it. */
 	readonly failures: readonly TickFailure[];
@@ -234,17 +252,19 @@ async function sweepThenDrain(
 		const overdue = overdueAuctions(auctions, ranAt);
 
 		const closed: string[] = [];
-		const skipped: string[] = [];
+		// Declared, never pushed to. See `TickSummary.skipped`: the column is
+		// kept for the historical rows that carry real counts, and there is no
+		// longer any reason for a pass to skip an overdue Auction.
+		const skipped: readonly string[] = [];
 		const failures: TickFailure[] = [];
 
 		for (const auction of overdue) {
-			// Story 3.6 owns the draw. Skipping is what keeps ONE un-drawable
-			// lottery from stalling every other overdue close, and counting it
-			// is what keeps the skip from being silent.
-			if (auction.contention === 'minimum_bid') {
-				skipped.push(auction.fantraxPlayerId);
-				continue;
-			}
+			// **No branch on contention state** (Story 3.6). Every overdue
+			// Auction is offered to `closeOne`, lottery or not: the draw lives
+			// inside that transaction, where the sealed seed can be read under
+			// the same lock that appends. A lottery that cannot be drawn throws
+			// there and is caught below like any other failure, so one broken
+			// lottery still cannot stall the rest of the pass.
 			try {
 				// One whole transaction, committed before the next is evaluated
 				// (AD-11).
@@ -372,9 +392,13 @@ function detailFor(
 	failures: readonly TickFailure[],
 	drainFailure: string | null
 ): string {
+	// `skipped` is always empty since Story 3.6 — nothing writes to it and no
+	// path can. The count is still stated, because a heartbeat that stopped
+	// naming a column the table still carries would read as a missing fact
+	// rather than as a zero.
 	const parts = [
 		`closed ${closed.length}${closed.length === 0 ? '' : ` (${closed.join(', ')})`}`,
-		`skipped ${skipped.length}${skipped.length === 0 ? '' : ` (${skipped.join(', ')}) — a live Minimum-Bid Contention has no drawer until Story 3.6`}`
+		`skipped ${skipped.length}${skipped.length === 0 ? '' : ` (${skipped.join(', ')})`}`
 	];
 	for (const failure of failures) {
 		parts.push(`failed to close ${failure.fantraxPlayerId}: ${failure.message}`);

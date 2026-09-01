@@ -121,6 +121,7 @@ import type {
 	TransactionalClient,
 	WriteOutcome
 } from '../shell/write.ts';
+import { CONTENTION_SEEDS_TABLE, readContentionSeed } from './contention-seed.ts';
 import { loadEventsViaClient } from './event-log.ts';
 import { loadTeamRoster } from './team-roster.ts';
 
@@ -294,47 +295,6 @@ export async function loadBidState(
 	};
 }
 
-/** The sealed seed table (`20260828000000_contention_seeds.sql`). */
-const CONTENTION_SEEDS_TABLE = 'auction_contention_seeds';
-
-/**
- * The sealed seed for one Player's Minimum-Bid Contention, or `null` when the
- * table holds none (Story 3.3, AD-14).
- *
- * **The first and only reader of `auction_contention_seeds` before the
- * draw**, and it exists because a dissolution has to reveal what the opening
- * sealed. Story 3.2 stated outright that nothing in this codebase selected
- * from this table; that changes here and nowhere else.
- *
- * It takes the transaction's own `client` rather than reaching for
- * `server/supabase.ts`, and that is not a style preference: the migration
- * grants `anon`, `authenticated` and `service_role` NOTHING, so the direct
- * `SUPABASE_DB_URL` connection is the only identity that can read a row at
- * all. The same connection appends the events, which is what makes the read
- * and the append one atomic act under the global lock (AD-6).
- *
- * `fantrax_player_id` is the primary key, so at most one row comes back. A
- * missing row is `null` rather than a throw: the caller decides what an
- * absent seed means, and only a DISSOLUTION treats it as the bug it is.
- *
- * The value never leaves the server except as the reveal `decide()`
- * publishes, and only after `decide()` has hashed it against the commitment
- * the log already carries.
- */
-async function readContentionSeed(
-	client: TransactionalClient,
-	fantraxPlayerId: string
-): Promise<string | null> {
-	const result = await client.query(
-		`select seed from ${CONTENTION_SEEDS_TABLE} where fantrax_player_id = $1`,
-		[fantraxPlayerId]
-	);
-	const row = result.rows[0];
-	if (row === undefined) return null;
-	const seed = row['seed'];
-	return typeof seed === 'string' && seed !== '' ? seed : null;
-}
-
 /**
  * How many random bytes a lottery seed is. 32 — a full 256 bits, matching the
  * digest that commits to it, so the commitment is never the narrower half of
@@ -369,9 +329,11 @@ function generateSeed(): string {
  * Contention, on the appending transaction's own client (Story 3.2, AD-14).
  *
  * `claimNomination`'s shape and `claimNomination`'s discipline: a WRITE-SIDE
- * statement and nothing else — `readContentionSeed` above is the table's one
- * reader, and it is a separate function on purpose so this hook cannot grow
- * one — registered through `runTransactionalWrite`'s `projections` hook
+ * statement and nothing else — `readContentionSeed` is the table's one reader
+ * and lives in `server/contention-seed.ts`, a separate module on purpose so
+ * this hook cannot grow one and so a Deno-loaded close can reach it without
+ * pulling `node:crypto` in with it (AD-2) — registered through
+ * `runTransactionalWrite`'s `projections` hook
  * because that is the one seam that persists INSIDE the appending transaction
  * (AD-5). The seed row and the opening event therefore commit together or
  * neither does, and a contention whose commitment was published without a

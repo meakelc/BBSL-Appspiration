@@ -61,8 +61,13 @@ const AR2_DIRECTORIES: Array<[path: string, purpose: string]> = [
  * AD-11 ordering claim is proven directly in
  * `tests/server/sweep-sequential.test.ts`, which asserts both that the
  * sequential shape produces example 17's answer AND that the batch shape fails.
- * The four Epic 3 examples still outstanding belong to the two stories after
- * it: 8 and 11 are Story 3.6's draw, 13 and 27 are Story 3.7's League Clock.
+ *
+ * **Story 3.6 added TWO — 8 and 11** — the draw pair: the four-Contender
+ * lottery whose seed selects Team G and releases the other three alongside
+ * Team D's Nomination Slot, and the single-Contender lottery that resolves to
+ * its one Contender with no special case and records a one-team list. 8 picks
+ * up the log examples 6 and 7 built rather than restating it. The two Epic 3
+ * examples still outstanding are 13 and 27, Story 3.7's League Clock.
  */
 const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 	['example-01-ordinary-raise.test.ts', '1 — Ordinary raise'],
@@ -75,8 +80,13 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 		'example-07-lottery-grows-clock-unmoved.test.ts',
 		'7 — Lottery grows, clock unmoved'
 	],
+	['example-08-lottery-draws.test.ts', '8 — Lottery draws'],
 	['example-09-the-lottery-dissolves.test.ts', '9 — Lottery dissolves'],
 	['example-10-the-dead-zone.test.ts', '10 — The dead zone'],
+	[
+		'example-11-single-contender-lottery.test.ts',
+		'11 — Single-contender lottery'
+	],
 	['example-15-co-manager-race.test.ts', '15 — Co-manager race'],
 	['example-16-minors-placement.test.ts', '16 — Minors placement'],
 	['example-17-minors-overflow.test.ts', '17 — Minors overflow'],

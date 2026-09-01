@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 08-18-2026 13:11
-last_updated: 2026-08-31
+last_updated: 2026-09-01
 project: BBSL-Appspiration
 project_key: NOKEY
 tracking_system: file-system
@@ -66,7 +66,7 @@ development_status:
   3-3-dissolve-a-minimum-bid-contention: done
   3-4-close-an-auction-and-place-the-player: done
   3-5-the-tick-one-cron-one-function-sweep-then-drain: done
-  3-6-draw-a-minimum-bid-contention-winner: backlog
+  3-6-draw-a-minimum-bid-contention-winner: review
   3-7-the-league-clock-and-the-end-of-the-auction-phase: backlog
   epic-3-retrospective: optional
 

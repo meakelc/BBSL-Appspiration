@@ -115,7 +115,9 @@ export const STATE_16: CloseState = {
 	// "a Minor League Eligible player"
 	playerIsMinorLeagueEligible: true,
 	// "Team M holds two players in Minor League Slots"
-	minorLeagueOccupied: minorLeagueOccupiedIn(TEAM_M_IMPORTED)
+	minorLeagueOccupied: minorLeagueOccupiedIn(TEAM_M_IMPORTED),
+	// A Standard Contention: no lottery, no draw, no winner to derive.
+	drawnWinner: null
 };
 
 const DECIDED_16 = decideClose(STATE_16, CLOSES_AT, null);

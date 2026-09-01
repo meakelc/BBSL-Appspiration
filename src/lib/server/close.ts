@@ -1,6 +1,8 @@
 /**
- * The close: one transaction appending exactly one `AuctionClosed`, and
- * releasing the nomination beside it. Server-only (Story 3.4, FR-21).
+ * The close: one transaction appending `AuctionClosed` — preceded by the
+ * `ContentionDrawn` reveal when a Minimum-Bid Contention is what closed — and
+ * releasing the nomination beside it. Server-only (Stories 3.4 and 3.6,
+ * FR-21, AD-14).
  *
  * **Nothing here is stored but the event.** The winner, the price, the Cap
  * Hit, the Slot Placement and the released Nomination Slot are all folds of
@@ -28,16 +30,21 @@
  * `nominationsReducer` frees it by folding the same event — and the delete
  * exists so the claim table and the log agree about a Slot that is now free.
  *
- * **A live Minimum-Bid Contention THROWS**, and that is deliberate rather
- * than unfinished. No drawer exists until Story 3.6, and the alternative —
- * closing the lottery as though whichever Team opened it had won — is exactly
- * the silently-wrong outcome AD-14 exists to prevent. Nothing calls this
- * function in production until 3.5 lands, so the throw is unreachable rather
- * than merely unhandled. It is the same AD-1 posture Story 3.3 took on a
- * missing sealed seed. Story 3.5's sweep is now the one caller, and it
- * **skips** a live Minimum-Bid Contention rather than calling this and
- * catching the throw — so the throw guards the function against a future
- * caller rather than being routinely triggered by the present one.
+ * **A Minimum-Bid Contention is DRAWN and then closed, in one transaction**
+ * (Story 3.6). `loadCloseState` reads the sealed seed on this transaction's
+ * own client — the only identity the seeds table grants anything — and hands
+ * it with the folded Auction to `rules/draw.ts`, which verifies the published
+ * commitment and derives the winner from the seed and the ordered Contender
+ * list. `decideClose` then appends `ContentionDrawn` before `AuctionClosed`.
+ * Story 3.5's sweep no longer skips a lottery: there is a drawer now, and a
+ * lottery that throws is recorded on the heartbeat like any other failed close
+ * rather than being passed over by name.
+ *
+ * Every failure in that chain still THROWS with nothing appended (AD-1) — a
+ * missing seed, a malformed one, a commitment that does not match, an empty
+ * Contender list. Closing a lottery on whichever Team happened to open it is
+ * exactly the silently-wrong outcome AD-14 exists to prevent, so none of them
+ * is papered over.
  *
  * **No `deviceClass`.** A close is not a user action: no browser submitted it
  * and no header describes it, so the NFR §5 measurement column stays null
@@ -68,9 +75,11 @@ import {
 	nominationsReducer
 } from '../core/projection/nominations.ts';
 import { closedWinnerFor, decideClose } from '../core/rules/close.ts';
-import type { CloseState } from '../core/rules/close.ts';
+import type { CloseState, ClosedWinner } from '../core/rules/close.ts';
+import { drawnWinnerFor } from '../core/rules/draw.ts';
 import { runTransactionalWrite } from '../shell/write.ts';
 import type { ConnectionGateway, TransactionalClient, WriteOutcome } from '../shell/write.ts';
+import { readContentionSeed } from './contention-seed.ts';
 import { loadEventsViaClient } from './event-log.ts';
 import { releaseNomination } from './nomination.ts';
 import { loadTeamRoster } from './team-roster.ts';
@@ -91,10 +100,18 @@ import { loadTeamRoster } from './team-roster.ts';
  * itself would be a second statement of the rule, and the two could disagree
  * about the one thing a close is.
  *
- * The winner argument is `null`: no drawer exists (Story 3.6), so a live
- * Minimum-Bid Contention throws out of `closedWinnerFor` right here, inside
- * the transaction, before any roster is read and long before any event is
- * built.
+ * **The sealed seed is read under the SAME lock that will append** (Story
+ * 3.6), and only when the folded Auction is a live Minimum-Bid Contention —
+ * a point read on the transaction's own client, exactly as `loadBidState`
+ * reads it for a dissolution, because `20260828000000_contention_seeds.sql`
+ * grants `anon`, `authenticated` and `service_role` nothing at all. Every
+ * ordinary close reads it not at all.
+ *
+ * `drawnWinnerFor` is pure and is handed the folded `Auction` and that seed,
+ * so the winner is a function of the log and the sealed value alone. A
+ * Standard close derives no winner and passes `null`, which is what makes
+ * `closedWinnerFor` throw if the shell and the fold ever disagree about which
+ * kind of close this is.
  *
  * `loadTeamRoster` is handed the contracts this same fold produced, so the
  * occupancy Slot Placement is decided against already includes every Auction
@@ -112,9 +129,19 @@ export async function loadCloseState(
 
 	const auction = auctionForPlayer(auctions, fantraxPlayerId);
 
-	// Throws on no Auction, and on a live Minimum-Bid Contention with no drawn
-	// winner — both bugs, both before anything is read or written (AD-1).
-	const winner = closedWinnerFor(auction, null);
+	// The draw, for a lottery and for nothing else. `readContentionSeed`
+	// answers `null` when the table holds no row, and `drawnWinnerFor` is what
+	// says a lottery with no sealed seed cannot be closed — in the core, at the
+	// rule that can name what was missing, rather than here.
+	const drawnWinner: ClosedWinner | null =
+		auction !== null && auction.contention === 'minimum_bid'
+			? drawnWinnerFor(auction, await readContentionSeed(client, fantraxPlayerId))
+			: null;
+
+	// Throws on no Auction, on a drawn winner handed to a Standard close, and
+	// on a live Minimum-Bid Contention with no drawn winner — all bugs, all
+	// before the roster is read and long before anything is written (AD-1).
+	const winner = closedWinnerFor(auction, drawnWinner);
 
 	const roster = await loadTeamRoster(client, winner.teamId, contracts);
 
@@ -128,7 +155,12 @@ export async function loadCloseState(
 		playerIsMinorLeagueEligible: isEligible(eligibility, fantraxPlayerId),
 		// The RAW occupancy at this close, contracts included. `M = max(0, 3 −
 		// occupied)` is the core's derivation and is never computed here.
-		minorLeagueOccupied: roster.minorLeagueOccupied
+		minorLeagueOccupied: roster.minorLeagueOccupied,
+		// Carried on the state so `decide` hands the CORE the very value the
+		// roster read above was keyed on. Deriving it a second time inside
+		// `decide` would be a second read of a table the transaction has
+		// already passed the right moment to ask.
+		drawnWinner
 	};
 }
 
@@ -202,7 +234,11 @@ export async function closeAuction(
 			// `occurred_at` recording when it actually landed — that is AD-10's
 			// "late, not wrong", and `decideClose`'s own comment names this
 			// story as the caller that supplies it.
-			return decideClose(state, auction.closesAt, null);
+			// The winner `load` derived, unchanged — never re-derived here.
+			// `decideClose` asks `closedWinnerFor` about it again, which is pure
+			// and takes only what it is handed, so the shell and the core cannot
+			// arrive at different winners (Story 3.6).
+			return decideClose(state, auction.closesAt, state.drawnWinner);
 		}
 	});
 }

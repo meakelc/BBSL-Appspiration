@@ -434,7 +434,12 @@ describe('contendersFor — ascending join seq, one per Team (AD-14)', () => {
 	it('makes the opener of a lottery its first Contender', () => {
 		const auction = at([bid(1, MINIMUM_BID, { teamId: 't-1', teamName: 'Lakers' })]);
 		expect(auction?.contention).toBe('minimum_bid');
-		expect(auction?.contenders).toEqual([{ seq: '1', teamId: 't-1', teamName: 'Lakers' }]);
+		// `managerId` rides along from the joining Bid (Story 3.6): a drawn
+		// winner names the Manager whose join put the Team in, and a lookup
+		// back through `bids` would be a second, failable derivation.
+		expect(auction?.contenders).toEqual([
+			{ seq: '1', teamId: 't-1', teamName: 'Lakers', managerId: 'm-1' }
+		]);
 	});
 
 	it('orders Contenders by ascending seq and by nothing else', () => {
@@ -465,8 +470,8 @@ describe('contendersFor — ascending join seq, one per Team (AD-14)', () => {
 			bid(3, MINIMUM_BID, { teamId: 't-1', teamName: 'Lakers' })
 		]);
 		expect(auction?.contenders).toEqual([
-			{ seq: '1', teamId: 't-1', teamName: 'Lakers' },
-			{ seq: '2', teamId: 't-2', teamName: 'Rockets' }
+			{ seq: '1', teamId: 't-1', teamName: 'Lakers', managerId: 'm-1' },
+			{ seq: '2', teamId: 't-2', teamName: 'Rockets', managerId: 'm-1' }
 		]);
 	});
 

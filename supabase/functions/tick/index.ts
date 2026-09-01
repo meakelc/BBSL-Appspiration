@@ -37,9 +37,15 @@
  * response body is for a human running `curl`. Only a pass that could not
  * write its heartbeat at all reaches the `500`.
  *
- * Not this story: no draw (3.6), no pause check (Epic 7), no outbox and no
- * Discord (5.1), no League Clock evaluation (3.7), no external heartbeat
- * detector (8.2).
+ * **The draw runs behind this entry point since Story 3.6.** `closeOne` below
+ * is `closeAuction`, which reads a Minimum-Bid Contention's sealed seed under
+ * the same lock it appends on and closes it on the drawn Contender — so an
+ * expired lottery is swept like any other overdue Auction rather than being
+ * passed over. Nothing about that is decided here; this file still only checks
+ * the secret, builds the gateway and reports what the pass did.
+ *
+ * Not this story: no pause check (Epic 7), no outbox and no Discord (5.1), no
+ * League Clock evaluation (3.7), no external heartbeat detector (8.2).
  */
 
 import { closeAuction } from '../../../src/lib/server/close.ts';
