@@ -928,3 +928,72 @@ export function closeInstantFor(occurredAt: string, auctionClockMs: number): str
 	if (start === null) return null;
 	return formatInstant(start + auctionClockMs);
 }
+
+/**
+ * Every Auction whose close instant has passed, in the ONE order a sweep may
+ * close them in: ascending `closesAt`, ties broken on `fantraxPlayerId`
+ * (Story 3.5, AD-11).
+ *
+ * **The order is an input to the outcome, not a presentation choice.** §10
+ * example 17 is the whole reason: a Team with one Free Minor League Slot that
+ * wins two eligible Players gets the first into minors at a `$0` Cap Hit and
+ * the second into Active/Bench at full price, and which Player is "first" is
+ * decided here. So it is derived once, purely, over an explicitly sorted
+ * sequence — never over `Object.keys` insertion order, which is a property of
+ * how the log happened to fold rather than of the Auctions themselves (AD-1).
+ *
+ * **Ties break on `fantraxPlayerId` ascending** because two Auctions CAN share
+ * a close instant — two Bids inside the same transaction clock, or a
+ * contention's fixed clock — and a comparator that returned 0 there would
+ * leave the outcome to the engine's sort stability and, through that, to map
+ * order again.
+ *
+ * **`hasExpired` is the only expiry rule**, called here exactly as the
+ * `expiry` gate and `decideClose` call it, so the set the sweep closes and the
+ * set validation refuses Bids against cannot drift apart (AD-12). An
+ * unreadable `closesAt` therefore counts as overdue, and sorts FIRST — it is
+ * already past due by that rule, and an ordering that buried it would be a
+ * second, quieter answer to a question `hasExpired` has already answered.
+ *
+ * **A closed Auction is simply absent**: `auctionsReducer` removes the entry
+ * on `AuctionClosed`, so the sweep re-deriving this set on every pass is
+ * restart-safe by construction rather than by remembering what it did.
+ *
+ * Pure: two arguments in, a new array out, and nothing here reads a clock.
+ */
+export function overdueAuctions(auctions: OpenAuctions, now: string): readonly Auction[] {
+	const due: Auction[] = [];
+	// Sorted keys first, so the array handed to `sort` is itself deterministic
+	// rather than merely sorted afterwards by a comparator that must then be
+	// trusted to be total.
+	for (const fantraxPlayerId of Object.keys(auctions.byPlayer).sort()) {
+		if (!hasOwn(auctions.byPlayer, fantraxPlayerId)) continue;
+		const auction = auctions.byPlayer[fantraxPlayerId];
+		if (auction === undefined) continue;
+		if (!hasExpired(auction.closesAt, now)) continue;
+		due.push(auction);
+	}
+	return due.sort(byCloseThenPlayer);
+}
+
+/**
+ * The sort key for an Auction's close: its instant, or negative infinity when
+ * the stored value cannot be read. `hasExpired` already treats an unreadable
+ * `closesAt` as expired, so the earliest position is the reading that agrees
+ * with it.
+ */
+function closeOrderOf(closesAt: string): number {
+	return parseInstant(closesAt) ?? Number.NEGATIVE_INFINITY;
+}
+
+/** AD-11's order, total: close instant ascending, then `fantraxPlayerId`. */
+function byCloseThenPlayer(left: Auction, right: Auction): number {
+	const leftClose = closeOrderOf(left.closesAt);
+	const rightClose = closeOrderOf(right.closesAt);
+	if (leftClose !== rightClose) return leftClose < rightClose ? -1 : 1;
+	if (left.fantraxPlayerId === right.fantraxPlayerId) return 0;
+	// Plain code-unit comparison, never `localeCompare`: `Intl` is forbidden in
+	// the core precisely because its collation differs across runtimes, and
+	// AD-2 needs Node and Deno to agree on this order exactly.
+	return left.fantraxPlayerId < right.fantraxPlayerId ? -1 : 1;
+}

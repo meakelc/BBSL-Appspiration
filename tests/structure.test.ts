@@ -54,9 +54,15 @@ const AR2_DIRECTORIES: Array<[path: string, purpose: string]> = [
  * into the third Minor League Slot at a $0 Cap Hit, and the second win that
  * overflows into Active/Bench because the FIRST close was committed before it
  * was evaluated. 17 imports 16's produced state rather than restating its
- * numbers, which is AD-11's sequential ordering as an executable claim. What
- * remains of Epic 3's examples — 8, 11, 13 and 27 — belongs to Stories 3.5
- * through 3.7: the draw, the sweep and the League Clock.
+ * numbers, which is AD-11's sequential ordering as an executable claim.
+ *
+ * **Story 3.5 added NONE, and that is recorded rather than left to look like a
+ * miss.** The tick is mechanism, not a rule a §10 example states: the sweep's
+ * AD-11 ordering claim is proven directly in
+ * `tests/server/sweep-sequential.test.ts`, which asserts both that the
+ * sequential shape produces example 17's answer AND that the batch shape fails.
+ * The four Epic 3 examples still outstanding belong to the two stories after
+ * it: 8 and 11 are Story 3.6's draw, 13 and 27 are Story 3.7's League Clock.
  */
 const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 	['example-01-ordinary-raise.test.ts', '1 — Ordinary raise'],
@@ -133,8 +139,7 @@ describe('the AR-2 source tree', () => {
 		const wouldBeEmpty = [
 			'src/lib/adapters/discord',
 			'src/lib/server',
-			'supabase/migrations',
-			'supabase/functions/tick'
+			'supabase/migrations'
 		];
 		for (const path of wouldBeEmpty) {
 			const marker = at(...path.split('/'), '.gitkeep');
@@ -166,7 +171,15 @@ describe('the AR-2 source tree', () => {
 			// named this exact trap: leaving the marker fails the assertion
 			// above, and deleting it without moving the entry here fails this
 			// one. Both halves move together or neither does.
-			'tests/examples'
+			'tests/examples',
+			// Story 3.5 writes the first real files into
+			// supabase/functions/tick — the Deno half of "one sweep module,
+			// two runtimes" (AD-2): index.ts, gateway.ts, adapt.ts, auth.ts,
+			// deno.json and deno.lock. The same trap, moved the same way.
+			// (adapt.ts and auth.ts are the pieces held structurally typed and
+			// import-free so `npm test` can execute them; gateway.ts and
+			// index.ts are what genuinely needs Deno.)
+			'supabase/functions/tick'
 		]) {
 			const marker = at(...path.split('/'), '.gitkeep');
 			expect(existsSync(marker), `${path}/.gitkeep should be gone now that it holds real files`).toBe(

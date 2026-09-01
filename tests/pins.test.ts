@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
 	PINNED_NODE_MAJOR,
 	PINNED_PACKAGES,
+	TICK_DENO_JSON,
 	checkPins,
 	majorOf,
 	readRepositoryInputs,
@@ -448,5 +449,113 @@ describe('.nvmrc and netlify.toml agree with package.json', () => {
 		expect(majorOf(toml.values.get('build.environment.NODE_VERSION') ?? '')).toBe(
 			PINNED_NODE_MAJOR
 		);
+	});
+});
+
+/**
+ * The tick Edge Function's Deno import map (Story 3.5).
+ *
+ * Deno resolves these specifiers at deploy time on a machine nobody is
+ * watching, and there is no lockfile beside them and no `npm install` step
+ * where a drift would surface. So the same gate that pins package.json pins
+ * them, and the two must agree about any package they both name.
+ */
+describe('the tick Edge Function pins its Deno dependencies exactly', () => {
+	/** Rewrite one import-map value in the real deno.json text. */
+	function remap(specifier: string, value: string): string {
+		const config = JSON.parse(actual.tickDenoJson) as { imports: Record<string, string> };
+		config.imports[specifier] = value;
+		return JSON.stringify(config, null, 2);
+	}
+
+	it('names the map the gate reads', () => {
+		expect(TICK_DENO_JSON).toBe('supabase/functions/tick/deno.json');
+		expect(existsSync(join(ROOT, ...TICK_DENO_JSON.split('/')))).toBe(true);
+	});
+
+	it.each([
+		['https://deno.land/x/postgres@v0.19/mod.ts', 'a truncated deno.land version'],
+		['https://deno.land/x/postgres/mod.ts', 'no version at all'],
+		['https://esm.sh/postgres@3.4.5', 'an unrecognised host']
+	])('refuses %s — %s', (value: string) => {
+		const result = checkPins(withDrift({ tickDenoJson: remap('postgres', value) }));
+		expect(result.ok).toBe(false);
+		expect(result.errors.join('\n')).toContain(TICK_DENO_JSON);
+	});
+
+	it.each(['npm:@supabase/supabase-js@^2.112.3', 'npm:@supabase/supabase-js@2.x'])(
+		'refuses the ranged npm specifier %s',
+		(value: string) => {
+			const result = checkPins(withDrift({ tickDenoJson: remap('@supabase/supabase-js', value) }));
+			expect(result.ok).toBe(false);
+			expect(result.errors.join('\n')).toContain('exact version is required');
+		}
+	);
+
+	it('refuses a Deno version that disagrees with package.json’s pin', () => {
+		// The two runtimes load the same core and shell sources (AD-2). They
+		// must not disagree about the client those sources type against.
+		const result = checkPins(
+			withDrift({ tickDenoJson: remap('@supabase/supabase-js', 'npm:@supabase/supabase-js@2.113.0') })
+		);
+		expect(result.ok).toBe(false);
+		expect(result.errors.join('\n')).toContain(PINNED_PACKAGES['@supabase/supabase-js']);
+	});
+
+	it('refuses a map that is missing, malformed, or has no imports block', () => {
+		expect(checkPins(withDrift({ tickDenoJson: '{ not json' })).ok).toBe(false);
+		expect(checkPins(withDrift({ tickDenoJson: '{}' })).ok).toBe(false);
+		expect(checkPins(withDrift({ tickDenoJson: '[]' })).ok).toBe(false);
+	});
+
+	it('pins @supabase/supabase-js to the same version in both runtimes', () => {
+		const config = JSON.parse(actual.tickDenoJson) as { imports: Record<string, string> };
+		expect(config.imports['@supabase/supabase-js']).toBe(
+			`npm:@supabase/supabase-js@${PINNED_PACKAGES['@supabase/supabase-js']}`
+		);
+	});
+});
+
+/**
+ * The tick's committed lockfile (Story 3.5).
+ *
+ * `deno.json` pins the direct versions; `deno.lock` is what Deno actually
+ * resolves, transitive dependencies included. A gate that read only the import
+ * map would vouch for a deployment loading something else entirely.
+ */
+describe('the tick Deno lockfile agrees with the import map', () => {
+	/** The real lock, with one specifier remapped to a different version. */
+	function relock(specifier: string, version: string): string {
+		const lock = JSON.parse(actual.tickDenoLock) as { specifiers: Record<string, string> };
+		lock.specifiers[specifier] = version;
+		return JSON.stringify(lock, null, 2);
+	}
+
+	it('passes against the committed tree', () => {
+		expect(checkPins(actual).ok).toBe(true);
+	});
+
+	it('refuses a lock that resolves a specifier to a different version than the map asks for', () => {
+		const drifted = relock(
+			`npm:@supabase/supabase-js@${PINNED_PACKAGES['@supabase/supabase-js']}`,
+			'2.113.0'
+		);
+		const result = checkPins(withDrift({ tickDenoLock: drifted }));
+		expect(result.ok).toBe(false);
+		expect(result.errors.join('\n')).toMatch(/deno\.lock/);
+	});
+
+	it('refuses a lock that names no specifier for a mapped npm package', () => {
+		const lock = JSON.parse(actual.tickDenoLock) as { specifiers: Record<string, string> };
+		lock.specifiers = {};
+		const result = checkPins(withDrift({ tickDenoLock: JSON.stringify(lock) }));
+		expect(result.ok).toBe(false);
+		expect(result.errors.join('\n')).toMatch(/names no specifier/);
+	});
+
+	it('refuses a missing, empty or malformed lock', () => {
+		expect(checkPins(withDrift({ tickDenoLock: '' })).ok).toBe(false);
+		expect(checkPins(withDrift({ tickDenoLock: '{ not json' })).ok).toBe(false);
+		expect(checkPins(withDrift({ tickDenoLock: '{}' })).ok).toBe(false);
 	});
 });

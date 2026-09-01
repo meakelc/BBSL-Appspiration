@@ -12,13 +12,18 @@
 #   - `db.major_version = 15` matches ARCHITECTURE-SPINE.md's stack pin
 #     ("Postgres | Supabase-managed, >=15.1.1.61 — required for sub-minute
 #     Supabase Cron"), not the CLI's newer default of 17.
-#   - Storage, Realtime, Analytics, the local SMTP test server and the Edge
-#     Runtime are switched off. None is exercised by any story yet — this
-#     product sends no email for any purpose, ever (PRD "no email field
-#     exists anywhere"), and the Edge Function that will need the runtime is
-#     Epic 3's tick, which does not exist yet (this story's "Never" list is
-#     explicit: no Deno-side shell). Every disabled service is one fewer
-#     container `supabase start` has to pull and hold up in CI.
+#   - Storage, Realtime, Analytics and the local SMTP test server are
+#     switched off. None is exercised by any story yet — this product sends no
+#     email for any purpose, ever (PRD "no email field exists anywhere"). Every
+#     disabled service is one fewer container `supabase start` has to pull and
+#     hold up in CI.
+#   - The Edge Runtime is ON as of Story 3.5. It was off while its comment
+#     read "the Edge Function that will need the runtime is Epic 3's tick,
+#     which does not exist yet"; the tick now exists at
+#     `supabase/functions/tick/`, and `supabase functions serve` is a real
+#     local workflow rather than a hypothetical one. The SCHEDULE that invokes
+#     it is a different question and is still off: the migration creates the
+#     `bbsl-tick` cron job inactive, deliberately.
 project_id = "bbsl-appspiration"
 
 [api]
@@ -74,7 +79,11 @@ enable_signup = false
 enable_confirmations = false
 
 [edge_runtime]
-enabled = false
+# The tick (Story 3.5). One function, `supabase/functions/tick`, invoked by one
+# pg_cron schedule that is created inactive — see
+# supabase/migrations/20260831000000_tick.sql. Serving it locally is
+# `npx supabase functions serve tick`.
+enabled = true
 
 [analytics]
 enabled = false

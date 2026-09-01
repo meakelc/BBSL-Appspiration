@@ -5,7 +5,8 @@
  * This runs as the first half of `npm run build`, before Vite compiles anything,
  * so a drifted dependency can never reach a deploy.
  *
- * Inputs: package.json, .nvmrc, netlify.toml.
+ * Inputs: package.json, .nvmrc, netlify.toml, and the tick Edge Function's
+ * Deno import map (supabase/functions/tick/deno.json).
  *
  * The checking logic is exported as a pure function so the test suite can drive
  * it with synthetic inputs; the CLI entry point at the bottom reads the real
@@ -36,6 +37,39 @@ export const PINNED_PACKAGES = Object.freeze({
 
 /** The required Node major version. Netlify Functions' documented default. */
 export const PINNED_NODE_MAJOR = '24';
+
+/**
+ * The tick Edge Function's import map (Story 3.5).
+ *
+ * Deno resolves these at deploy time, on a machine nobody is watching, so a
+ * ranged specifier here is exactly the drift this file exists to stop — and it
+ * is worse than a ranged npm dependency, because there is no lockfile beside
+ * it and no `npm install` step where anybody would notice.
+ */
+export const TICK_DENO_JSON = 'supabase/functions/tick/deno.json';
+
+/**
+ * The tick's committed Deno lockfile. The import map pins the DIRECT versions;
+ * this pins the transitive ones, and the two must agree.
+ */
+export const TICK_DENO_LOCK = 'supabase/functions/tick/deno.lock';
+
+/**
+ * Import-map values that must carry an exact version, and how to find it.
+ *
+ * Each entry is a specifier form this repository actually uses, with a regex
+ * whose one capture is the version. A value matching none of them is reported
+ * rather than skipped: an unrecognised specifier form is a finding, because
+ * this gate cannot vouch for a shape it does not understand.
+ */
+const DENO_SPECIFIER_FORMS = Object.freeze([
+	// https://deno.land/x/postgres@v0.19.5/mod.ts
+	{ what: 'a deno.land/x module', pattern: /^https:\/\/deno\.land\/x\/[^@/]+@v?([^/]+)\// },
+	// jsr:@std/encoding@1.0.10  (unused today; here so adding one is checked)
+	{ what: 'a JSR package', pattern: /^jsr:@?[^@]+@([^/]+)/ },
+	// npm:@supabase/supabase-js@2.112.3
+	{ what: 'an npm package', pattern: /^npm:@?[^@]+@([^/]+)/ }
+]);
 
 /** An exact semver literal: no prefix, no range, no wildcard. */
 const EXACT_SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
@@ -149,6 +183,8 @@ export function stripInlineComment(value) {
  * @property {string} packageJson   raw contents of package.json
  * @property {string} nvmrc         raw contents of .nvmrc
  * @property {string} netlifyToml   raw contents of netlify.toml
+ * @property {string} tickDenoJson  raw contents of supabase/functions/tick/deno.json
+ * @property {string} tickDenoLock  raw contents of supabase/functions/tick/deno.lock
  */
 
 /**
@@ -307,7 +343,173 @@ export function checkPins(inputs) {
 		}
 	}
 
+	// 6. The tick Edge Function's Deno import map pins exactly, like everything
+	//    else. Checked here rather than in a second script so one command
+	//    reports every drift in the stack, whichever runtime it belongs to.
+	checkTickImportMap(inputs.tickDenoJson, errors);
+	checkTickLockfile(inputs.tickDenoJson, inputs.tickDenoLock, errors);
+
 	return { ok: errors.length === 0, errors };
+}
+
+/**
+ * The tick's lockfile must agree with its import map.
+ *
+ * `checkTickImportMap` below vouches for `deno.json`, which pins DIRECT
+ * versions only. `deno.lock` is committed beside it and is what actually
+ * decides what Deno resolves — every transitive npm dependency and every
+ * remote integrity hash. A lockfile disagreeing with the import map would pass
+ * every other gate in this file while the deployed function loaded something
+ * nobody reviewed, which is precisely the drift this module exists to stop.
+ *
+ * This checks AGREEMENT, not the transitive tree: each `npm:` specifier the
+ * import map names must appear in the lock's `specifiers` and resolve to the
+ * same version. Remote `https://` modules carry no specifier entry and are
+ * vouched for by `deno.json` plus the lock's own integrity hashes.
+ *
+ * @param {string | undefined} jsonSource raw contents of deno.json
+ * @param {string | undefined} lockSource raw contents of deno.lock
+ * @param {string[]} errors               appended to in place
+ */
+function checkTickLockfile(jsonSource, lockSource, errors) {
+	if (typeof lockSource !== 'string' || lockSource.trim() === '') {
+		errors.push(
+			`${TICK_DENO_LOCK}: missing or empty. It is committed on purpose — without it the ` +
+				`transitive versions Deno resolves are whatever it happened to fetch last.`
+		);
+		return;
+	}
+
+	let lock;
+	let config;
+	try {
+		lock = JSON.parse(lockSource);
+		config = JSON.parse(/** @type {string} */ (jsonSource));
+	} catch (cause) {
+		errors.push(
+			`${TICK_DENO_LOCK}: not valid JSON (${cause instanceof Error ? cause.message : String(cause)})`
+		);
+		return;
+	}
+
+	const specifiers = lock['specifiers'];
+	if (typeof specifiers !== 'object' || specifiers === null || Array.isArray(specifiers)) {
+		errors.push(
+			`${TICK_DENO_LOCK}: "specifiers" is ${describe(specifiers)} — it must be an object.`
+		);
+		return;
+	}
+
+	const imports = config['imports'];
+	if (typeof imports !== 'object' || imports === null || Array.isArray(imports)) return;
+
+	for (const [specifier, value] of Object.entries(imports)) {
+		if (typeof value !== 'string' || !value.startsWith('npm:')) continue;
+
+		const entry = specifiers[value];
+		if (entry === undefined) {
+			errors.push(
+				`${TICK_DENO_LOCK}: imports["${specifier}"] is "${value}" in ${TICK_DENO_JSON}, but the ` +
+					`lockfile names no specifier for it. Refresh the lock and commit the result.`
+			);
+			continue;
+		}
+
+		const version = /^npm:@?[^@]+@([^/]+)/.exec(value)?.[1] ?? '';
+		if (entry !== version) {
+			errors.push(
+				`${TICK_DENO_LOCK}: "${value}" resolves to ${JSON.stringify(entry)}, but ${TICK_DENO_JSON} ` +
+					`asks for ${version}. The lockfile is what Deno loads, so a disagreement means the ` +
+					`deployed function does not run the reviewed version.`
+			);
+		}
+	}
+}
+
+/**
+ * Every version in the tick's Deno import map is an exact literal.
+ *
+ * Two assertions, and the second is the one that matters most:
+ *
+ *   1. Every mapped specifier carries a version, in a form this gate
+ *      recognises, and that version is an exact semver literal.
+ *   2. `@supabase/supabase-js` is mapped to the SAME version package.json pins.
+ *      The Node and Deno halves of this application share `src/lib/core` and
+ *      `src/lib/shell` verbatim (AD-2); letting them disagree about the client
+ *      those files' types come from would reintroduce the drift the shared
+ *      source exists to eliminate.
+ *
+ * @param {string | undefined} source  raw contents of the import map
+ * @param {string[]} errors            appended to in place
+ */
+function checkTickImportMap(source, errors) {
+	if (typeof source !== 'string') {
+		errors.push(`${TICK_DENO_JSON}: not supplied to the gate — it must be read and checked.`);
+		return;
+	}
+
+	/** @type {Record<string, unknown>} */
+	let config;
+	try {
+		const parsed = JSON.parse(source);
+		if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+			errors.push(`${TICK_DENO_JSON}: top level is ${describe(parsed)} — it must be a JSON object.`);
+			return;
+		}
+		config = /** @type {Record<string, unknown>} */ (parsed);
+	} catch (cause) {
+		errors.push(
+			`${TICK_DENO_JSON}: not valid JSON (${cause instanceof Error ? cause.message : String(cause)})`
+		);
+		return;
+	}
+
+	const imports = config['imports'];
+	if (typeof imports !== 'object' || imports === null || Array.isArray(imports)) {
+		errors.push(`${TICK_DENO_JSON}: "imports" is ${describe(imports)} — it must be an object.`);
+		return;
+	}
+
+	for (const [specifier, value] of Object.entries(
+		/** @type {Record<string, unknown>} */ (imports)
+	)) {
+		if (typeof value !== 'string') {
+			errors.push(
+				`${TICK_DENO_JSON}: imports["${specifier}"] is ${describe(value)} — it must be a string.`
+			);
+			continue;
+		}
+
+		const form = DENO_SPECIFIER_FORMS.find((candidate) => candidate.pattern.test(value));
+		if (form === undefined) {
+			errors.push(
+				`${TICK_DENO_JSON}: imports["${specifier}"] is "${value}" — this gate does not ` +
+					`recognise that specifier form, so it cannot vouch that it is pinned. Use a ` +
+					`deno.land/x, jsr: or npm: specifier carrying an exact version.`
+			);
+			continue;
+		}
+
+		const version = form.pattern.exec(value)?.[1] ?? '';
+		if (!EXACT_SEMVER.test(version)) {
+			errors.push(
+				`${TICK_DENO_JSON}: imports["${specifier}"] resolves ${form.what} at "${version}" — ` +
+					`an exact version is required, not a range. Write the literal version with no prefix.`
+			);
+			continue;
+		}
+
+		// The one cross-runtime agreement: a package pinned for Node is pinned
+		// to the same version for Deno.
+		const pinned = PINNED_PACKAGES[specifier];
+		if (pinned !== undefined && version !== pinned) {
+			errors.push(
+				`${TICK_DENO_JSON}: imports["${specifier}"] is at ${version}, but package.json pins ` +
+					`${specifier} at ${pinned}. The Node and Deno runtimes load the same core and shell ` +
+					`sources and must not disagree about the client those sources type against (AD-2).`
+			);
+		}
+	}
 }
 
 /**
@@ -392,12 +594,14 @@ export function majorOf(value) {
 	return String(Number(match[1]));
 }
 
-/** Read the three real files from the repository root. @returns {PinInputs} */
+/** Read the four real files from the repository root. @returns {PinInputs} */
 export function readRepositoryInputs() {
 	return {
 		packageJson: readFileSync(join(ROOT, 'package.json'), 'utf8'),
 		nvmrc: readFileSync(join(ROOT, '.nvmrc'), 'utf8'),
-		netlifyToml: readFileSync(join(ROOT, 'netlify.toml'), 'utf8')
+		netlifyToml: readFileSync(join(ROOT, 'netlify.toml'), 'utf8'),
+		tickDenoJson: readFileSync(join(ROOT, ...TICK_DENO_JSON.split('/')), 'utf8'),
+		tickDenoLock: readFileSync(join(ROOT, ...TICK_DENO_LOCK.split('/')), 'utf8')
 	};
 }
 

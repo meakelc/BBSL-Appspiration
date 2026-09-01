@@ -34,7 +34,10 @@
  * the silently-wrong outcome AD-14 exists to prevent. Nothing calls this
  * function in production until 3.5 lands, so the throw is unreachable rather
  * than merely unhandled. It is the same AD-1 posture Story 3.3 took on a
- * missing sealed seed.
+ * missing sealed seed. Story 3.5's sweep is now the one caller, and it
+ * **skips** a live Minimum-Bid Contention rather than calling this and
+ * catching the throw — so the throw guards the function against a future
+ * caller rather than being routinely triggered by the present one.
  *
  * **No `deviceClass`.** A close is not a user action: no browser submitted it
  * and no header describes it, so the NFR §5 measurement column stays null
@@ -50,7 +53,8 @@ import { fold } from '../core/projection/fold.ts';
 import {
 	INITIAL_AUCTIONS,
 	auctionForPlayer,
-	auctionsReducer
+	auctionsReducer,
+	hasExpired
 } from '../core/projection/auctions.ts';
 import { INITIAL_CONTRACTS, contractsReducer } from '../core/projection/contracts.ts';
 import {
@@ -132,12 +136,14 @@ export async function loadCloseState(
  * Close one Player's Auction: one transaction, one `AuctionClosed`, one
  * claim-row delete.
  *
- * `now` is the database's transaction-start clock, read once by
- * `runTransactionalWrite` (AD-3) and handed to the core as an ISO-8601 string.
- * The core reads it in exactly ONE expression — the expiry guard — and nothing
- * it emits varies with it, so a sweep running six hours late appends a
- * byte-identical payload with a later `occurredAt`. That is AD-10's "late, not
- * wrong" made structural rather than tested for.
+ * **Two clocks, and which is which is the whole of AD-10's "late, not
+ * wrong".** `runTransactionalWrite` reads the database's transaction-start
+ * clock once (AD-3); this function uses it for exactly one thing — the shell's
+ * overdue guard below — and hands the CORE the Auction's own persisted
+ * `closesAt` instead (Story 3.5). Nothing `decideClose` emits varies with the
+ * instant it is handed, so a sweep running six hours late appends a
+ * byte-identical payload and only the row's `occurred_at` records when it
+ * actually landed. That is structural rather than tested for.
  *
  * Returns the pipeline's own `WriteOutcome`, which is always `accepted` here
  * or a throw: `decideClose` has no `Rejected` half, so no rejection shape
@@ -158,6 +164,45 @@ export async function closeAuction(
 		// No `deviceClass` is stamped on the envelope: a close is not a user
 		// action, and an invented measurement value would be worse than a null
 		// column.
-		decide: ({ state, now }) => decideClose(state, now.toISOString(), null)
+		decide: ({ state, now }) => {
+			const auction = state.auction;
+			if (auction === null) {
+				// Unreachable: `loadCloseState` above asks `closedWinnerFor`,
+				// which throws on a null Auction before the roster is read. The
+				// guard exists to give TypeScript the narrowing it cannot prove
+				// through `load`'s boundary, not to handle a reachable state.
+				throw new TypeError('closeAuction: no Auction was loaded to close');
+			}
+
+			// **The shell's own overdue guard, against the DATABASE clock**
+			// (Story 3.5). One derivation, two call sites — the same
+			// `hasExpired` the `expiry` gate refuses Bids with and the same one
+			// `decideClose` asserts below — so the instant at which this
+			// Auction stops taking Bids and the instant at which it may be
+			// closed cannot drift apart (AD-12).
+			//
+			// It has to be here rather than left to the core, because the line
+			// below now hands the core the Auction's OWN `closesAt` as `now`:
+			// `hasExpired(closesAt, closesAt)` is `true` by definition, so the
+			// core's guard can no longer tell a live Auction from an expired
+			// one. This is the check that still can. Both throw, both roll the
+			// transaction back with nothing appended (AD-1).
+			if (!hasExpired(auction.closesAt, now.toISOString())) {
+				throw new TypeError(
+					`closeAuction: this Auction closes at ${JSON.stringify(auction.closesAt)} and the ` +
+						`transaction clock is ${JSON.stringify(now.toISOString())}, which has not reached ` +
+						'it. Closing a live Auction is the sweep’s bug — the same instant the expiry ' +
+						'gate refuses Bids against (AD-12)'
+				);
+			}
+
+			// **The Auction's own nominal expiry, never the transaction
+			// clock.** A sweep six hours late must append the payload an
+			// on-time close would have appended, byte for byte, with only
+			// `occurred_at` recording when it actually landed — that is AD-10's
+			// "late, not wrong", and `decideClose`'s own comment names this
+			// story as the caller that supplies it.
+			return decideClose(state, auction.closesAt, null);
+		}
 	});
 }
