@@ -100,10 +100,10 @@ const LOTTERY: Auction = {
 };
 
 /** Team Q's join, on a Minor League Eligible Player. */
-const ELIGIBLE: BidState = bidStateFor(LOTTERY, TEAM_Q, true);
+const ELIGIBLE: BidState = bidStateFor(LOTTERY, TEAM_Q, true, 'Auction');
 
 /** ...and the same lottery on a Player who is not. */
-const NOT_ELIGIBLE: BidState = bidStateFor(LOTTERY, TEAM_Q, false);
+const NOT_ELIGIBLE: BidState = bidStateFor(LOTTERY, TEAM_Q, false, 'Auction');
 
 const JOIN: PlaceBid = {
 	kind: 'PlaceBid',

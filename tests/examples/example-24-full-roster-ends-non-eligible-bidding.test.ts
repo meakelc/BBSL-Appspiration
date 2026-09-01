@@ -65,7 +65,7 @@ const TEAM_R: TeamMoneyState = {
 };
 
 /** A nominated Player nobody has bid on, so `opening` is the live gate. */
-const STATE: BidState = bidStateFor(null, TEAM_R, false);
+const STATE: BidState = bidStateFor(null, TEAM_R, false, 'Auction');
 
 function bidOf(amount: number): PlaceBid {
 	return {
@@ -144,7 +144,7 @@ describe('§10 example 24 — a full roster ends non-eligible bidding', () => {
 		// Every gate has a row, none behind a disclosure.
 		// Eight since Story 3.2 added `contention` to `PLACE_BID_GATES`,
 		// and it reached this panel by the list growing and nothing else.
-		expect(rows).toHaveLength(8);
+		expect(rows).toHaveLength(9);
 		for (const row of rows) {
 			expect(row.figure.length, row.gate).toBeGreaterThan(0);
 		}
@@ -174,7 +174,7 @@ describe('§10 example 24 — a full roster ends non-eligible bidding', () => {
 		// none". The example picks $40.0M; the verdict is the same at any
 		// figure, which is what makes capacity a genuinely separate ground.
 		for (const capSpace of [0, 40_000_000, 400_000_000]) {
-			const state = bidStateFor(null, { ...TEAM_R, capSpace: parseMoney(capSpace) }, false);
+			const state = bidStateFor(null, { ...TEAM_R, capSpace: parseMoney(capSpace) }, false, 'Auction');
 			const slots = evaluate(state, bidOf(5_000_000), NOW).slots;
 			expect(slots.passed, String(capSpace)).toBe(false);
 			expect(slots.rosterCount, String(capSpace)).toBe(12);

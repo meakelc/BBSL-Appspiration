@@ -117,6 +117,10 @@ describe('nominationsReducer', () => {
 			playerName: 'Jalen Green',
 			teamId: 't-1',
 			teamName: 'Lakers',
+			// Story 3.7: the nominating Manager, carried so an `AuctionTerminated`
+			// can name them on its envelope the way an `AuctionClosed` names the
+			// winner's. No gate reads it and no refusal prints it.
+			managerId: 'm-1',
 			occurredAt: '2026-08-25T19:00:00.000Z'
 		});
 		expect(nominationForTeam(state, 't-1')).toEqual(nominationForPlayer(state, 'p-1'));

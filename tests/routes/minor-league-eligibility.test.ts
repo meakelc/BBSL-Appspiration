@@ -68,8 +68,8 @@ const MANAGER: RegisteredManager = {
 	isCommissioner: false
 };
 
-const SETUP_PHASE: ResolvedPhase = { name: 'Setup', sentence: 'Setup.' };
-const AUCTION_PHASE: ResolvedPhase = { name: 'Auction', sentence: 'Auction.' };
+const SETUP_PHASE: ResolvedPhase = { name: 'Setup', sentence: 'Setup.' , announcement: null };
+const AUCTION_PHASE: ResolvedPhase = { name: 'Auction', sentence: 'Auction.' , announcement: null };
 
 function locals(session: SessionState, phase: ResolvedPhase = SETUP_PHASE) {
 	return { session, phase };

@@ -58,6 +58,7 @@
 		wasDissolved
 	} from '$lib/core/projection/auctions.ts';
 	import type { ContentionState } from '$lib/core/projection/auctions.ts';
+	import type { LeaguePhase } from '$lib/core/projection/phase.ts';
 	import { formatInstant, parseInstant, relativePhrase } from '$lib/core/instant.ts';
 	import { parseMoney } from '$lib/core/money.ts';
 	import {
@@ -123,6 +124,11 @@
 		readonly detail: string;
 		readonly minimumLegal: number;
 		readonly minimumLegalSentence: string | null;
+		// The folded League phase (Story 3.7) — the ninth gate's one input, off
+		// the same narrowing the locked transaction uses. A FACT, not a verdict:
+		// nothing on this wire says "bidding is open", because that is the one
+		// comparison the core makes on every keystroke.
+		readonly phase: LeaguePhase;
 		readonly leadingAmount: number | null;
 		readonly leadingTeamId: string | null;
 		// The two contention FACTS the gates decide from — the fold's own
@@ -314,6 +320,10 @@
 	});
 
 	const gateState: BidState = $derived({
+		// The folded phase, straight off the wire. The ninth gate reads this and
+		// nothing else, so the disabled control and the locked transaction refuse
+		// a Bid outside the Auction Phase for one reason worded in one place.
+		phase: control.phase,
 		leadingBid:
 			control.leadingAmount === null || control.leadingTeamId === null
 				? null

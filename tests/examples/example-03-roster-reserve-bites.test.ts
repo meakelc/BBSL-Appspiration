@@ -56,7 +56,7 @@ const TEAM_C: TeamMoneyState = {
  * with no leader, `increment` does not apply and every amount here is on the
  * grid. What is left is `cap`, which is the point.
  */
-const STATE: BidState = bidStateFor(null, TEAM_C, false);
+const STATE: BidState = bidStateFor(null, TEAM_C, false, 'Auction');
 
 function bidOf(amount: number): PlaceBid {
 	return {

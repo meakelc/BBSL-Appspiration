@@ -123,7 +123,7 @@ function theLottery(): readonly AppendedEvent[] {
 		)
 	];
 
-	const decided = decide(bidStateFor(null, RICH, false), OPENING, OPENED_AT, FRESH);
+	const decided = decide(bidStateFor(null, RICH, false, 'Auction'), OPENING, OPENED_AT, FRESH);
 	if (decided.kind !== 'accepted') throw new Error('example 11: Team E was refused');
 	log.push(
 		appended(2, OPENED_AT, BID_PLACED_EVENT, decided.events[0]?.payload, {

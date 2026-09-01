@@ -42,6 +42,7 @@ import type {
 import { PLACE_BID_GATES } from '../../src/lib/core/types.ts';
 import { loadAuctionPage } from '../../src/lib/server/auction-page.ts';
 import { loadBidState, placeBid } from '../../src/lib/server/bidding.ts';
+import { AUCTION_OPENED_EVENT } from '../../src/lib/core/projection/phase.ts';
 import type { BidRejection } from '../../src/lib/server/bidding.ts';
 import type {
 	ConnectionGateway,
@@ -80,6 +81,28 @@ const NINE_CHEAP_PLAYERS: QueryResultRow[] = Array.from({ length: 9 }, () => ({
 	cap_hit: '1000000',
 	roster_slot_kind: 'active_bench'
 }));
+
+/**
+ * The `AuctionOpened` every one of these logs carries (Story 3.7).
+ *
+ * The ninth `PLACE_BID_GATES` gate reads the folded phase, and a log with no
+ * open folds to Setup — where no Bid is accepted at all. Every scenario in
+ * this file is a Bid inside a running auction, so every fixture log opens the
+ * auction first. It sits at `seq` 0, before the nomination and the Bids, which
+ * is the only order the gates could ever have produced.
+ */
+function auctionOpened(occurredAt = '2026-08-25T09:00:00.000Z'): QueryResultRow {
+	return {
+		seq: 0,
+		occurred_at: new Date(occurredAt),
+		schema_version: 1,
+		core_version: 1,
+		manager_id: 'm-commissioner',
+		team_id: 't-commissioner',
+		event_type: AUCTION_OPENED_EVENT,
+		payload: {}
+	};
+}
 
 function fakeGateway(
 	options: {
@@ -124,7 +147,11 @@ function fakeGateway(
 			}
 			if (/^select \* from auction_events/i.test(sql)) {
 				order.push('read-log');
-				return { rows: [...(options.events ?? []), ...appendedEvents] };
+				// The auction is OPEN in every scenario here (Story 3.7): the ninth
+				// gate reads the folded phase, and a log with no `AuctionOpened`
+				// folds to Setup, where no Bid is accepted at all. Served by the
+				// fake rather than repeated in thirty `events:` arrays.
+				return { rows: [auctionOpened(), ...(options.events ?? []), ...appendedEvents] };
 			}
 			if (/^select cap_hit, roster_slot_kind\s+from team_rosters/i.test(sql)) {
 				order.push('read-roster');
@@ -228,7 +255,8 @@ function pageGateway(events: QueryResultRow[]): ConnectionGateway {
 	const client: TransactionalClient & { release(): void } = {
 		async query(text: string) {
 			const sql = text.trim();
-			if (/^select \* from auction_events/i.test(sql)) return { rows: events };
+			if (/^select \* from auction_events/i.test(sql))
+				return { rows: [auctionOpened(), ...events] };
 			if (/^select now\(\) as now/i.test(sql)) return { rows: [{ now: NOW }] };
 			// Everything else — the reference row, the two Manager joins, the
 			// roster — answers empty, which the reader already has a stated
@@ -502,9 +530,14 @@ describe('placeBid — the gate refuses (AC1, AC2, AC3)', () => {
 			'granularity',
 			'increment',
 			'opening',
+			// Story 3.7's ninth gate. It passes here — the log opens the auction
+			// — and it is reported anyway, which is the whole property: an
+			// accepted result and a refused one carry the identical gate set.
+			'phase',
 			'selfBid',
 			'slots'
 		]);
+		expect(rejection.refusal.gates.phase.passed).toBe(true);
 		expect(rejection.refusal.gates.increment.passed).toBe(false);
 		expect(rejection.refusal.gates.granularity.passed).toBe(false);
 		expect(rejection.refusal.gates.selfBid.passed).toBe(true);
@@ -689,6 +722,10 @@ describe('loadBidState — three folds over ONE read of the log, plus one roster
 		// amount for the first four, and the acting Team's money facts for the
 		// fifth. Nothing derived — no Committed Bids, no Maximum Bid (AD-7).
 		expect(loaded.bid).toEqual({
+			// Story 3.7: the folded League phase, off the SAME log read again —
+			// the fifth fold, and the ninth gate's one input. `Auction`, because
+			// this log opens the auction before it nominates anybody.
+			phase: 'Auction',
 			leadingBid: { teamId: 't-1', amount: 8_000_000 },
 			// Story 3.1: the persisted absolute close instant, folded from the
 			// SAME log read and narrowed by the same `bidStateFor` — which is

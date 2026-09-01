@@ -84,7 +84,7 @@ function teamR(led: number): TeamMoneyState {
 
 /** The next eligible Player, with no Bid on him yet. */
 function stateAfter(led: number): BidState {
-	return bidStateFor(null, teamR(led), true);
+	return bidStateFor(null, teamR(led), true, 'Auction');
 }
 
 function bidOf(amount: number, fantraxPlayerId: string): PlaceBid {
@@ -171,7 +171,7 @@ describe('§10 example 25 — the full roster can still stash', () => {
 		// the promise that a close will sort it out. Money makes no difference
 		// in either direction, which is FR-37's own property.
 		for (const capSpace of [0, 40_000_000, 400_000_000]) {
-			const state = bidStateFor(null, { ...teamR(3), capSpace: parseMoney(capSpace) }, true);
+			const state = bidStateFor(null, { ...teamR(3), capSpace: parseMoney(capSpace) }, true, 'Auction');
 			const gates = evaluate(state, bidOf(STASH_AMOUNT, 'p-4'), NOW);
 
 			expect(gates.slots.passed, String(capSpace)).toBe(false);
@@ -202,7 +202,7 @@ describe('§10 example 25 — the full roster can still stash', () => {
 		expect(gates.cap.maximumBid).toBe(31_000_000);
 		// Eight since Story 3.2 added `contention` to `PLACE_BID_GATES`,
 		// and it reached this panel by the list growing and nothing else.
-		expect(rows).toHaveLength(8);
+		expect(rows).toHaveLength(9);
 	});
 
 	it('breaks the tie on Player id, so the figure and the naming are deterministic', () => {

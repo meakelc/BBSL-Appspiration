@@ -170,6 +170,25 @@ const INSERT_EVENT_SQL = `
 `;
 
 /**
+ * One actor column, read WITHOUT inventing a value for an absent one.
+ *
+ * `String(null)` is `"null"` — a four-character string that is truthy, that
+ * every `!== null` check passes, and that would reach the Audit Log as an
+ * actor named "null" rather than as the system. Since Story 3.7
+ * `auction_events.manager_id`/`team_id` are nullable as a pair
+ * (`20260901000000_system_actor.sql`), so `null` is a real value this mapping
+ * has to carry through rather than a defensive branch.
+ *
+ * `undefined` maps to `null` as well, for `deviceClass`'s reason: a driver
+ * that omits a column is saying the same thing as one that returns it null,
+ * and the two must not read back differently.
+ */
+function actorId(value: unknown): string | null {
+	if (value === null || value === undefined) return null;
+	return String(value);
+}
+
+/**
  * Map one `auction_events` row, as `pg` (or a fake) shapes it, to
  * `AppendedEvent`.
  *
@@ -188,8 +207,10 @@ export function toAppendedEvent(row: QueryResultRow): AppendedEvent {
 		coreVersion: Number(row['core_version']),
 		type: String(row['event_type']),
 		payload: row['payload'],
-		managerId: String(row['manager_id']),
-		teamId: String(row['team_id']),
+		// Null-preserving, never `String(...)`: a system-originated event has no
+		// actor and `"null"` is not one (Story 3.7).
+		managerId: actorId(row['manager_id']),
+		teamId: actorId(row['team_id']),
 		deviceClass: (row['device_class'] as string | null | undefined) ?? null,
 		dispatchOutcome: (row['dispatch_outcome'] as string | null | undefined) ?? null,
 		deliveryOutcome: (row['delivery_outcome'] as string | null | undefined) ?? null

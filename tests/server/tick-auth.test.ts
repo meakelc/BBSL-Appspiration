@@ -183,3 +183,52 @@ describe('the entry point checks the secret BEFORE it opens anything', () => {
 		).toContain(SECRET_HEADER);
 	});
 });
+
+describe('the entry point wires the real evaluation, in the stated order (Story 3.7)', () => {
+	const source = readFileSync(
+		fileURLToPath(new URL('../../supabase/functions/tick/index.ts', import.meta.url)),
+		'utf8'
+	);
+
+	/** The file with every comment stripped, so prose about a seam is not a seam. */
+	const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+
+	it('passes `endPhase` and it is the real `evaluateLeagueClock`', () => {
+		// The seam is optional on `runTick`, and a caller that omits it gets a
+		// pass that records `not_evaluated` — honest, and completely inert. The
+		// production wiring is the one place that must actually pass it, and
+		// nothing else in the repository does.
+		expect(code).toContain(
+			"import { evaluateLeagueClock } from '../../../src/lib/server/phase-end.ts'"
+		);
+		expect(code).toContain('endPhase: () => evaluateLeagueClock(gateway)');
+	});
+
+	it('states the order — sweep, then the League Clock, then the drain', () => {
+		// The order is not decided here (it is `sweep.ts`'s), but it is STATED
+		// here, at the one place all three seams are wired together, exactly as
+		// `drain` already was.
+		const closeOne = code.indexOf('closeOne:');
+		const endPhase = code.indexOf('endPhase:');
+		const drain = code.indexOf('drain:');
+
+		expect(closeOne).toBeGreaterThan(-1);
+		expect(endPhase).toBeGreaterThan(closeOne);
+		expect(drain).toBeGreaterThan(endPhase);
+	});
+
+	it('hands the evaluation the SAME gateway the closes use', () => {
+		// One connection source for the whole pass. A second gateway would
+		// mean the evaluation folding a log through a connection that had not
+		// seen this pass's committed closes.
+		expect(code).toContain('closeOne: (fantraxPlayerId) => closeAuction(gateway, fantraxPlayerId)');
+		expect(code).toContain('evaluateLeagueClock(gateway)');
+	});
+
+	it('no longer claims the League Clock is unevaluated', () => {
+		// The header said "no League Clock evaluation (3.7)" until this story
+		// made it false. A stale "not this story" line is worse than none: it
+		// is the first thing a reader trusts.
+		expect(source).not.toContain('no League Clock evaluation (3.7)');
+	});
+});

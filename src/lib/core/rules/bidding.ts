@@ -195,6 +195,7 @@ import {
 	parseMoney,
 	subtractMoney
 } from '../money.ts';
+import type { LeaguePhase } from '../projection/phase.ts';
 import { PLACE_BID_GATES } from '../types.ts';
 import type {
 	Accepted,
@@ -207,6 +208,7 @@ import type {
 	GranularityGateOutcome,
 	IncrementGateOutcome,
 	OpeningGateOutcome,
+	PhaseGateOutcome,
 	PlaceBid,
 	PlaceBidGate,
 	PlaceBidGateResults,
@@ -292,6 +294,21 @@ export type LeadingBid = {
  * on `TeamMoneyState`, where every other Team fact lives.
  */
 export type BidState = {
+	/**
+	 * The folded League phase (Story 3.7) — `phaseReducer` over the whole log,
+	 * never a route, never a destination list and never a flag.
+	 *
+	 * It is the ONE input to the ninth gate, and it is first on this shape as
+	 * it is first in `PLACE_BID_GATES`: outside the Auction Phase there is no
+	 * auction for any of the fields below to be about.
+	 *
+	 * "Bidding is disabled league-wide" is stated HERE, in the core, rather
+	 * than left to fall out of `server/destinations.ts` refusing the route. The
+	 * catalog would 403 a browser and the core would still accept a Bid handed
+	 * to it directly; AD-1 fixes the gate set per command type precisely so a
+	 * rule like this is one edit that makes every consumer a compile error.
+	 */
+	readonly phase: LeaguePhase;
 	readonly leadingBid: LeadingBid | null;
 	/**
 	 * The Auction's persisted absolute close instant, exactly as the
@@ -470,14 +487,27 @@ export type TeamMoneyState = {
  * the read path no plumbing at all. The `null`-Auction branch answers
  * `awaiting_opening_bid` and an empty list, which is what a nominated Player
  * nobody has bid on genuinely is.
+ *
+ * **Story 3.7 is the first since 2.8 to change the signature, and it had to
+ * be.** The phase is a fact about the LEAGUE, not about this Auction, so
+ * unlike `closesAt`, the contention state and the Contender list it is not
+ * already on the `Auction` this function receives — there is nowhere for it
+ * to come from but a fourth argument. It is required rather than defaulted,
+ * for `playerIsMinorLeagueEligible`'s reason: adding it made every caller a
+ * compile error, which is how a fact that changes what a gate decides is
+ * supposed to arrive. A default of `'Auction'` would have let a caller
+ * silently keep the pre-3.7 behaviour — which is bidding after the phase
+ * ended.
  */
 export function bidStateFor(
 	auction: Auction | null,
 	team: TeamMoneyState | null,
-	playerIsMinorLeagueEligible: boolean
+	playerIsMinorLeagueEligible: boolean,
+	phase: LeaguePhase
 ): BidState {
 	if (auction === null) {
 		return {
+			phase,
 			leadingBid: null,
 			closesAt: null,
 			contention: 'awaiting_opening_bid',
@@ -489,6 +519,7 @@ export function bidStateFor(
 		};
 	}
 	return {
+		phase,
 		leadingBid: { teamId: auction.leadingBid.teamId, amount: auction.leadingBid.amount },
 		closesAt: auction.closesAt,
 		contention: auction.contention,
@@ -1425,6 +1456,35 @@ function evaluateSlots(state: BidState): SlotsGateOutcome {
 }
 
 /**
+ * The phase gate: no Bid is accepted outside the Auction Phase (Story 3.7,
+ * FR-22, AD-22).
+ *
+ * **The whole rule is one comparison against the folded phase.** It reads no
+ * route, no destination catalog, no clock and no Auction. `state.phase` is
+ * `phaseReducer` over the whole log — the same value every other surface
+ * reads — so "bidding is disabled league-wide" is a rule the core states
+ * rather than a side effect of a navigation table.
+ *
+ * **It cannot see the League Clock, and its refusal must not claim to.** The
+ * Auction Phase ends when the clock runs out, but `Setup` and `Archived` fail
+ * this gate too and in neither case did any clock expire. So the outcome
+ * carries the phase and nothing else, and `gateSentence` words the refusal
+ * from the phase alone — the same discipline `rules/nomination.ts` keeps for
+ * its own phase refusal, and AD-7's "a gate that cannot see a figure cannot
+ * quote one" applied to a cause rather than to a number.
+ *
+ * It is handed no `now` and no `command`. Which amount was offered, by whom,
+ * and how long an Auction Clock had left are all questions that only mean
+ * something inside the Auction Phase.
+ */
+function evaluatePhase(state: BidState): PhaseGateOutcome {
+	return {
+		passed: state.phase === 'Auction',
+		phase: state.phase
+	};
+}
+
+/**
  * The expiry gate: an Auction whose Auction Clock has run out takes no
  * further Bid (Story 3.1, FR-13, AD-12).
  *
@@ -1472,6 +1532,12 @@ function evaluateExpiry(state: BidState, now: string): ExpiryGateOutcome {
  * identical gate set and no caller is ever handed a partial record it has to
  * guess at (AD-1).
  *
+ * Story 3.7's `phase` gate takes neither `now` nor `command`, and it still
+ * runs on every evaluation like every other: AD-1 forbids short-circuiting,
+ * so a Bid submitted after the phase ended still reports its own increment,
+ * cap and slots arithmetic beside the phase refusal, and none of the nine
+ * suppresses another.
+ *
  * `now` was declared from Story 2.5 onward against the day a gate would need
  * it, because AD-1 and the epic AC fix the signature at
  * `evaluate(state, command, now)` and changing it later would have moved a
@@ -1484,8 +1550,12 @@ function evaluateExpiry(state: BidState, now: string): ExpiryGateOutcome {
 export function evaluate(state: BidState, command: PlaceBid, now: string): PlaceBidGateResults {
 	return {
 		// First in `PLACE_BID_GATES` and first here, so the declared order and
-		// the construction order agree on sight. It is handed `now` and the
-		// others are not: expiry is the only time question in the set.
+		// the construction order agree on sight (Story 3.7). It is handed
+		// neither `now` nor `command`: outside the Auction Phase, when it is and
+		// what was offered are both beside the point.
+		phase: evaluatePhase(state),
+		// Second in both, and it is handed `now` where the others are not:
+		// expiry is the only time question in the set.
 		expiry: evaluateExpiry(state, now),
 		opening: evaluateOpening(state, command.amount),
 		// Immediately after `opening` here as well as in `PLACE_BID_GATES`, so
@@ -1607,6 +1677,35 @@ function contenderPhrase(count: number): string {
  */
 function gateSentence(gates: PlaceBidGateResults, gate: PlaceBidGate): string | null {
 	switch (gate) {
+		case 'phase': {
+			const outcome = gates.phase;
+			if (outcome.passed) return null;
+			// **Worded from the phase ALONE.** This gate compared
+			// `state.phase === 'Auction'` and knows nothing else — in particular
+			// it does not know whether the League Clock ran out, which is false
+			// in `Setup` and in `Archived`. A sentence naming a cause the gate
+			// cannot see would be AD-7's "a gate that cannot see a figure cannot
+			// quote one" broken in words instead of in numbers, on the one
+			// surface in the product that may never be wrong.
+			//
+			// It quotes no amount, no clock and no count, for the same reason:
+			// this Bid was not too small, too late or too expensive.
+			//
+			// **And it claims nothing about a transaction.**
+			// `rules/nomination.ts`'s phase refusal says "folded from the event
+			// log inside this transaction" truthfully, because `refuseNomination`
+			// runs only inside the write path. This sentence is read on three:
+			// the locked transaction, `server/auction-page.ts`'s render — which
+			// deliberately takes no lock — and the browser, which re-evaluates it
+			// off the wire on every keystroke. A borrowed clause that is false on
+			// two of the three is the same defect as a quoted figure the gate
+			// cannot see.
+			return (
+				'Bidding is open only during the Auction Phase, and the league is in ' +
+				`${outcome.phase}. The phase is folded from the event log, and it is the ` +
+				'same phase every other surface reads.'
+			);
+		}
 		case 'expiry': {
 			const outcome = gates.expiry;
 			// `closesAt` cannot be null on a refusal — `hasExpired` passes a
@@ -2034,6 +2133,13 @@ export function describeAmount(amount: Money): string {
  */
 function gateFigure(gates: PlaceBidGateResults, gate: PlaceBidGate): string {
 	switch (gate) {
+		case 'phase':
+			// ONE branch for passed and refused alike, the `slots` figure's
+			// discipline: this row states the arithmetic and the chip beside it
+			// states the outcome, so a second branch would be a second place for
+			// the two to disagree. `the league is in Auction` beside a `Passed`
+			// chip reads exactly as truly as it does beside a refused one.
+			return `the league is in ${gates.phase.phase}`;
 		case 'expiry': {
 			const outcome = gates.expiry;
 			if (outcome.closesAt === null) return 'no Bids yet, so no Auction Clock';
@@ -2263,6 +2369,11 @@ export function figuresAtCaption(renderedInstant: string): string {
 
 /** The name a gate goes by on the refusal panel. */
 const GATE_LABELS: Readonly<Record<PlaceBidGate, string>> = Object.freeze({
+	// The glossary term for the LEAGUE-wide state, so the chip reads
+	// `Auction Phase · Refused` and is never read as the `Auction Clock ·
+	// Refused` row directly beneath it. One is about this Auction's 24 hours;
+	// the other is about whether the league is bidding at all.
+	phase: 'Auction Phase',
 	// The glossary term, so the chip reads `Auction Clock · Refused` and
 	// cannot be mistaken for `Cap · Refused` or `Slots · Refused`.
 	expiry: 'Auction Clock',

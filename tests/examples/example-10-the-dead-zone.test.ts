@@ -82,7 +82,7 @@ const LOTTERY: Auction = {
 	seed: null
 };
 
-const STATE: BidState = bidStateFor(LOTTERY, RICH, false);
+const STATE: BidState = bidStateFor(LOTTERY, RICH, false, 'Auction');
 
 function bidOf(amount: number): PlaceBid {
 	return {
@@ -168,10 +168,10 @@ describe('§10 example 10 — the dead zone', () => {
 		expect(LOTTERY.contenders).toHaveLength(1);
 	});
 
-	it('reports all eight gates on the panel, each with its own figure', () => {
+	it('reports all nine gates on the panel, each with its own figure', () => {
 		const rows = bidGateReport(evaluate(STATE, bidOf(1_200_000), NOW));
 
-		expect(rows).toHaveLength(8);
+		expect(rows).toHaveLength(9);
 		for (const row of rows) {
 			expect(row.figure.length, row.gate).toBeGreaterThan(0);
 		}

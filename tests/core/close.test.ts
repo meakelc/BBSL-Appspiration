@@ -86,6 +86,7 @@ const NOMINATION: OpenNomination = {
 	playerName: 'Ausar Bright',
 	teamId: 't-n',
 	teamName: 'Team N',
+	managerId: 'm-n',
 	occurredAt: '2026-08-26T08:00:00.000Z'
 };
 

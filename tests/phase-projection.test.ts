@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { fold } from '../src/lib/core/projection/fold.ts';
-import { INITIAL_PHASE, phaseReducer } from '../src/lib/core/projection/phase.ts';
+import {
+	AUCTION_OPENED_EVENT,
+	CONTRACT_ASSIGNMENT_OPENED_EVENT,
+	INITIAL_PHASE,
+	phaseReducer
+} from '../src/lib/core/projection/phase.ts';
 import type { AppendedEvent } from '../src/lib/core/types.ts';
 
 /** Build a minimal, valid `AppendedEvent` — only `seq`/`type` usually matter. */
@@ -33,10 +38,11 @@ describe('phaseReducer', () => {
 	});
 
 	it('leaves the phase unchanged for an event type it does not recognise (the default case)', () => {
-		// Since Story 1.11 the reducer has one real case, `AuctionOpened`.
-		// Every other type still reaches `default` — this is the reducer's
-		// correct behaviour, not an unfinished switch. `tests/core/auction-open
-		// .test.ts` covers the case itself.
+		// Since Story 3.7 the reducer has two real cases, `AuctionOpened` and
+		// `ContractAssignmentOpened`. Every other type still reaches `default` —
+		// this is the reducer's correct behaviour, not an unfinished switch.
+		// `tests/core/auction-open.test.ts` covers the first case; the block at
+		// the bottom of this file covers the second.
 		const events = [event('1', 'SomeUnrelatedEvent'), event('2', 'AnotherOne')];
 		expect(fold(INITIAL_PHASE, events, phaseReducer)).toBe('Setup');
 	});
@@ -59,5 +65,68 @@ describe('phaseReducer', () => {
 
 		expect(incremental).toBe(rebuilt);
 		expect(rebuilt).toBe('Setup');
+	});
+});
+
+// --- the second case: the phase ends by falling out of the log (Story 3.7) --
+
+describe('phaseReducer — ContractAssignmentOpened, the second and last case so far', () => {
+	it('folds a running auction to Contract Assignment', () => {
+		const log = [
+			event('1', AUCTION_OPENED_EVENT),
+			event('2', CONTRACT_ASSIGNMENT_OPENED_EVENT)
+		];
+		expect(fold(INITIAL_PHASE, log, phaseReducer)).toBe('Contract Assignment');
+	});
+
+	it('is idempotent — a second one changes nothing, so a double replay converges', () => {
+		const log = [
+			event('1', AUCTION_OPENED_EVENT),
+			event('2', CONTRACT_ASSIGNMENT_OPENED_EVENT),
+			event('3', CONTRACT_ASSIGNMENT_OPENED_EVENT)
+		];
+		const once = fold(INITIAL_PHASE, log, phaseReducer);
+		expect(once).toBe('Contract Assignment');
+		expect(fold(once, log, phaseReducer)).toBe(once);
+	});
+
+	it('has NO inverse — nothing returns the phase to Auction or to Setup', () => {
+		// AD-4 forbids deleting an event and no compensating event for either
+		// transition exists or is intended. Every event type this codebase can
+		// append is tried against a phase that has already ended.
+		const ended = fold(
+			INITIAL_PHASE,
+			[event('1', AUCTION_OPENED_EVENT), event('2', CONTRACT_ASSIGNMENT_OPENED_EVENT)],
+			phaseReducer
+		);
+
+		for (const type of [
+			'NominationPlaced',
+			'BidPlaced',
+			'BidVoided',
+			'AuctionClosed',
+			'AuctionTerminated',
+			'ContentionDrawn',
+			'ContentionDissolved',
+			'MinorLeagueEligibilitySet',
+			'ImportPromoted'
+		]) {
+			expect(fold(ended, [event('9', type)], phaseReducer), type).toBe('Contract Assignment');
+		}
+
+		// Not even a second open, which is what "one-way" actually means.
+		expect(fold(ended, [event('9', AUCTION_OPENED_EVENT)], phaseReducer)).toBe('Auction');
+	});
+
+	it('is decided by log ORDER rather than by a guard — seq is the whole rule', () => {
+		// The reducer guards on nothing, deliberately: a fold must be total over
+		// any log it is handed, and the gates are what make the impossible orders
+		// unappendable. `fold()` sorts by `seq`, so the LAST transition wins
+		// whatever order the array arrived in.
+		const shuffled = [
+			event('2', CONTRACT_ASSIGNMENT_OPENED_EVENT),
+			event('1', AUCTION_OPENED_EVENT)
+		];
+		expect(fold(INITIAL_PHASE, shuffled, phaseReducer)).toBe('Contract Assignment');
 	});
 });

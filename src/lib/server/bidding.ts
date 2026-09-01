@@ -106,6 +106,7 @@ import {
 } from '../core/projection/nominations.ts';
 import type { Money } from '../core/money.ts';
 import type { OpenNomination } from '../core/projection/nominations.ts';
+import { INITIAL_PHASE, phaseReducer } from '../core/projection/phase.ts';
 import { bidRefusalDetail, bidStateFor, decide, teamMoneyStateFor } from '../core/rules/bidding.ts';
 import type {
 	BidPlacedPayload,
@@ -227,6 +228,13 @@ export async function loadBidState(
 	const nominations = fold(INITIAL_NOMINATIONS, events, nominationsReducer);
 	const auctions = fold(INITIAL_AUCTIONS, events, auctionsReducer);
 	const eligibility = fold(INITIAL_ELIGIBILITY, events, eligibilityReducer);
+	// The FIFTH fold over the same events array (Story 3.7): the League phase,
+	// which the ninth gate refuses every Bid outside. It is folded here rather
+	// than read from `locals` or from a route, because a Bid must be judged
+	// against the phase as it stands INSIDE this locked transaction — the tick
+	// can end the Auction Phase between a page render and a submit, and the
+	// render's phase is then stale by exactly the window that matters.
+	const phase = fold(INITIAL_PHASE, events, phaseReducer);
 	// The FOURTH fold over the same events array (Story 3.4): what this Team
 	// has already won. It reaches the gates only through `loadTeamRoster`,
 	// which counts a contract row exactly as it counts an imported one — so
@@ -288,7 +296,9 @@ export async function loadBidState(
 			// the same fold `teamMoneyStateFor` partitions the leads with, so
 			// the Auction and the Team's leads cannot disagree about what
 			// "eligible" means inside one transaction.
-			isEligible(eligibility, fantraxPlayerId)
+			isEligible(eligibility, fantraxPlayerId),
+			// The folded phase, from the same array (Story 3.7).
+			phase
 		),
 		nomination: nominationForPlayer(nominations, fantraxPlayerId),
 		sealedSeed

@@ -138,10 +138,10 @@ function bidOf(amount: number): PlaceBid {
 }
 
 /** Before the close: two Slots occupied, one open eligible lead. */
-const BEFORE: BidState = bidStateFor(null, teamPAfter([THE_STASH_BID], 2), true);
+const BEFORE: BidState = bidStateFor(null, teamPAfter([THE_STASH_BID], 2), true, 'Auction');
 
 /** After it: three Slots occupied, and no eligible lead left in the fold. */
-const AFTER: BidState = bidStateFor(null, teamPAfter([THE_STASH_BID, THE_CLOSE], 3), true);
+const AFTER: BidState = bidStateFor(null, teamPAfter([THE_STASH_BID, THE_CLOSE], 3), true, 'Auction');
 
 describe('§10 example 20 — a resolved win stops being exposure', () => {
 	it('drops the closed Auction out of the eligible set by folding one more event', () => {

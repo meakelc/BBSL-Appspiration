@@ -131,6 +131,8 @@ import {
 	nominationsReducer
 } from '../core/projection/nominations.ts';
 import type { OpenNomination } from '../core/projection/nominations.ts';
+import { INITIAL_PHASE, phaseReducer } from '../core/projection/phase.ts';
+import type { LeaguePhase } from '../core/projection/phase.ts';
 import { INITIAL_CONTRACTS, contractsReducer } from '../core/projection/contracts.ts';
 import {
 	INITIAL_ELIGIBILITY,
@@ -216,6 +218,21 @@ export type AuctionPageBidControl = {
 	readonly minimumLegal: number;
 	/** That figure as a finished sentence, or `null` when it cannot be rendered. */
 	readonly minimumLegalSentence: string | null;
+	/**
+	 * The folded League phase (Story 3.7) — the ninth gate's one input,
+	 * serialised so the surface rebuilds exactly the `BidState` the locked
+	 * transaction will and re-evaluates a typed amount against the same phase.
+	 *
+	 * A FACT, not a verdict: no `biddingIsOpen` boolean crosses this wire, for
+	 * `contention`'s reason. The browser is handed the phase and asks the core,
+	 * exactly as the transaction does; a transported boolean would be a
+	 * derivation the browser was trusting instead of making (AD-7, AD-9).
+	 *
+	 * The header already prints `data.phase.sentence` from the same fold, and
+	 * `+layout.svelte` states the transition in words when it has ended. This
+	 * is the same value narrowed for a gate rather than for a reader.
+	 */
+	readonly phase: LeaguePhase;
 	/** The leading Bid's amount, in integer dollars, or `null` when nothing leads. */
 	readonly leadingAmount: number | null;
 	/** The leading Bid's Team, or `null` when nothing leads. */
@@ -480,6 +497,11 @@ export async function loadAuctionPage(
 		// against move on a close through the identical derivation the locked
 		// transaction uses, and no serialised field was added for it.
 		const contracts = fold(INITIAL_CONTRACTS, events, contractsReducer);
+		// The fifth fold, over the same events array (Story 3.7): the League
+		// phase the ninth gate reads. It is folded HERE rather than taken from
+		// `locals` so the control this page disables and the gates the locked
+		// transaction runs are decided from one narrowing of one read.
+		const phase = fold(INITIAL_PHASE, events, phaseReducer);
 
 		// The DATABASE clock, read exactly once and with no lock — this module
 		// deliberately takes none, and `now()` needs none: it is Postgres'
@@ -639,7 +661,8 @@ export async function loadAuctionPage(
 				viewerTeamId,
 				nomination.fantraxPlayerId,
 				figuresAt,
-				isEligible(eligibility, fantraxPlayerId)
+				isEligible(eligibility, fantraxPlayerId),
+				phase
 			)
 		};
 	} catch (error) {
@@ -686,9 +709,11 @@ function readBidControl(
 	/** When the roster and the folds were read — the caption's instant. */
 	figuresAt: string,
 	/** The eligibility fold's answer about THIS Player (Story 2.8). */
-	playerIsMinorLeagueEligible: boolean
+	playerIsMinorLeagueEligible: boolean,
+	/** The folded League phase (Story 3.7) — the ninth gate's one input. */
+	phase: LeaguePhase
 ): AuctionPageBidControl {
-	const state: BidState = bidStateFor(auction, team, playerIsMinorLeagueEligible);
+	const state: BidState = bidStateFor(auction, team, playerIsMinorLeagueEligible, phase);
 	// **The pre-fill depends on who is asking, since Story 3.3.** Inside a
 	// live Minimum-Bid Contention a Team not yet in can join at $1,000,000
 	// and a Team already in cannot — the only amount left to them is the one
@@ -710,6 +735,10 @@ function readBidControl(
 	return {
 		available: !control.blocked,
 		detail: control.detail,
+		// The folded phase, off the SAME `BidState` the gates were just
+		// evaluated against — so what the browser rebuilds is what this module
+		// decided from, not a second narrowing of the fold.
+		phase: state.phase,
 		minimumLegal,
 		minimumLegalSentence: minimumLegalSentence(minimumLegal),
 		leadingAmount: state.leadingBid?.amount ?? null,

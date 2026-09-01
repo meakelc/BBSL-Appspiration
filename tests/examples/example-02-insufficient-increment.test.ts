@@ -79,7 +79,7 @@ const AUCTION: Auction = {
 	seed: null
 };
 
-const STATE: BidState = bidStateFor(AUCTION, RICH, false);
+const STATE: BidState = bidStateFor(AUCTION, RICH, false, 'Auction');
 
 const OFF_GRID_UNDER_INCREMENT: PlaceBid = {
 	kind: 'PlaceBid',

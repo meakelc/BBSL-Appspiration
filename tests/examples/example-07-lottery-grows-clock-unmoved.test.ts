@@ -125,7 +125,7 @@ function runTheLottery(): {
 	const payloads: BidPlacedPayload[] = [];
 
 	const opening = decide(
-		bidStateFor(null, RICH, false),
+		bidStateFor(null, RICH, false, 'Auction'),
 		joinCommand('t-e', 'Team E'),
 		OPENED_AT,
 		OPENING_SEED
@@ -138,7 +138,7 @@ function runTheLottery(): {
 	for (const [index, [teamId, teamName, at]] of JOINS.entries()) {
 		const auction = auctionForPlayer(fold(INITIAL_AUCTIONS, log, auctionsReducer), 'p-1');
 		const decided = decide(
-			bidStateFor(auction, RICH, false),
+			bidStateFor(auction, RICH, false, 'Auction'),
 			joinCommand(teamId, teamName),
 			at,
 			// A seed is supplied on every call, exactly as the shell does. A
@@ -159,7 +159,7 @@ describe('§10 example 7 — the lottery grows and the clock does not move', () 
 	it('accepts all three joins, each as a join rather than a raise', () => {
 		const log: AppendedEvent[] = [];
 		const opening = decide(
-			bidStateFor(null, RICH, false),
+			bidStateFor(null, RICH, false, 'Auction'),
 			joinCommand('t-e', 'Team E'),
 			OPENED_AT,
 			OPENING_SEED
@@ -169,7 +169,7 @@ describe('§10 example 7 — the lottery grows and the clock does not move', () 
 
 		for (const [index, [teamId, teamName, at]] of JOINS.entries()) {
 			const auction = auctionForPlayer(fold(INITIAL_AUCTIONS, log, auctionsReducer), 'p-1');
-			const state = bidStateFor(auction, RICH, false);
+			const state = bidStateFor(auction, RICH, false, 'Auction');
 			const gates = evaluate(state, joinCommand(teamId, teamName), at);
 
 			expect(allGatesPassed(gates), teamName).toBe(true);
@@ -246,7 +246,9 @@ describe('§10 example 7 — the lottery grows and the clock does not move', () 
 
 		// The LAST Bid in the log is Team H's, five minutes before the close —
 		// and it is the reset that stands, because `fold()` orders by `seq`
-		// and the latest reset in that order wins.
-		expect(clock.lastReset).toBe('2026-08-25T08:55:00.000Z');
+		// and the latest SURVIVING reset in that order wins. Nothing here is
+		// voided, so the latest survivor is simply the last entry (Story 3.7).
+		expect(clock.voidedSeqs).toEqual([]);
+		expect(clock.resets[clock.resets.length - 1]?.occurredAt).toBe('2026-08-25T08:55:00.000Z');
 	});
 });

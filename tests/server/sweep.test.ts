@@ -22,6 +22,7 @@ import { BID_PLACED_EVENT } from '../../src/lib/core/projection/auctions.ts';
 import { AUCTION_CLOSED_EVENT } from '../../src/lib/core/projection/nominations.ts';
 import { runTick } from '../../src/lib/server/sweep.ts';
 import type { TickSummary } from '../../src/lib/server/sweep.ts';
+import type { PhaseEndOutcome } from '../../src/lib/server/phase-end.ts';
 import type {
 	ConnectionGateway,
 	QueryResultRow,
@@ -697,5 +698,311 @@ describe('runTick — a pass that cannot run still says so (AD-19)', () => {
 
 		expect(summary.outcome).toBe('failed');
 		expect(String(summary.detail)).toContain('no usable "now" value');
+	});
+});
+
+// --- the League Clock evaluation in the pass (Story 3.7) -------------------
+
+/**
+ * An `endPhase` that records that it ran and answers whatever is asked of it.
+ *
+ * `evaluateLeagueClock` is a whole locked transaction of its own, driven for
+ * real in `tests/server/phase-end.test.ts`. This seam is what lets these tests
+ * make it throw, count, or observe the pass as it stood when it was called —
+ * exactly as `closeOne` is a fake here for exactly that reason.
+ */
+const PHASE_EXPIRED_AT = '2026-08-26T09:00:00.000Z';
+const PHASE_EVALUATED_AT = '2026-08-26T09:00:01.000Z';
+
+/** The outcome of a pass that looked and found nothing due. */
+const NOT_DUE: PhaseEndOutcome = {
+	ended: false,
+	terminated: [],
+	expiredAt: null,
+	evaluatedAt: null
+};
+
+/** The outcome of the one pass in a league's history that ends the phase. */
+function endedWith(terminated: readonly string[]): PhaseEndOutcome {
+	return {
+		ended: true,
+		terminated,
+		// Both instants, off the appended payload in production. The pair is
+		// what makes AD-10's "late, not wrong" readable on the heartbeat.
+		expiredAt: PHASE_EXPIRED_AT,
+		evaluatedAt: PHASE_EVALUATED_AT
+	};
+}
+
+function recordingEvaluator(outcome: PhaseEndOutcome = NOT_DUE) {
+	const calls: number[] = [];
+	return {
+		calls,
+		endPhase: async () => {
+			calls.push(calls.length);
+			return outcome;
+		}
+	};
+}
+
+describe('runTick — the League Clock is evaluated after the closes, before the drain', () => {
+	it('runs the evaluation once, between the last close and the drain', async () => {
+		const harness = fakeGateway({
+			events: [bid('p-1', '2026-08-27T07:00:00.000Z'), bid('p-2', '2026-08-27T08:00:00.000Z')]
+		});
+		const trace: string[] = [];
+
+		await runTick({
+			gateway: harness.gateway,
+			closeOne: async (id) => {
+				trace.push(`close ${id}`);
+			},
+			// The order is the assertion. The evaluation folds a log that
+			// already contains this pass's closes, which is what stops a
+			// nomination whose Auction closed moments ago from being terminated
+			// as though nobody had bid on it.
+			endPhase: async () => {
+				trace.push('evaluate');
+				return NOT_DUE;
+			},
+			drain: () => {
+				trace.push('drain');
+			}
+		});
+
+		expect(trace).toEqual(['close p-1', 'close p-2', 'evaluate', 'drain']);
+	});
+
+	it('reports not_due on the summary and the heartbeat when the clock is still running', async () => {
+		const harness = fakeGateway({ events: [bid('p-1', '2026-08-27T18:00:00.000Z')] });
+		const evaluator = recordingEvaluator();
+
+		const summary = await runTick({
+			gateway: harness.gateway,
+			closeOne: async () => {},
+			endPhase: evaluator.endPhase
+		});
+
+		expect(evaluator.calls).toHaveLength(1);
+		expect(summary.phaseEnd).toBe('not_due');
+		expect(summary.terminated).toEqual([]);
+		expect(summary.phaseEndFailure).toBeNull();
+		// Nothing was due and nothing failed, so the pass is clean.
+		expect(summary.outcome).toBe('ok');
+		expect(String(soleHeartbeat(harness).detail)).toContain(
+			'the League Clock was evaluated and the Auction Phase continues'
+		);
+	});
+
+	it('names the ended phase and every terminated Player on the heartbeat', async () => {
+		const harness = fakeGateway({ events: [bid('p-1', '2026-08-27T08:00:00.000Z')] });
+
+		const summary = await runTick({
+			gateway: harness.gateway,
+			closeOne: async () => {},
+			endPhase: async () => endedWith(['p-a', 'p-b'])
+		});
+
+		expect(summary.phaseEnd).toBe('ended');
+		expect(summary.terminated).toEqual(['p-a', 'p-b']);
+		expect(summary.outcome).toBe('ok');
+
+		expect(summary.phaseEndExpiredAt).toBe(PHASE_EXPIRED_AT);
+		expect(summary.phaseEndEvaluatedAt).toBe(PHASE_EVALUATED_AT);
+
+		const detail = String(soleHeartbeat(harness).detail);
+		// Named rather than counted: this line is written once in the history
+		// of a league, and it is the record of which nominations the phase end
+		// returned to the pool.
+		expect(detail).toContain('the League Clock expired and the Auction Phase ended');
+		expect(detail).toContain('terminating 2 (p-a, p-b)');
+		// **And BOTH instants.** The payloads carry `expiredAt` and
+		// `evaluatedAt` precisely so AD-10's "late, not wrong" is readable after
+		// the fact; a sentence stating only one of them would leave an operator
+		// unable to tell a punctual pass from a stalled one.
+		expect(detail).toContain(`due at ${PHASE_EXPIRED_AT}`);
+		expect(detail).toContain(`evaluated at ${PHASE_EVALUATED_AT}`);
+	});
+
+	it('shows a six-hour-late pass as late, on the same expiry an on-time one would carry', () => {
+		// A pure wording check on the pair, without a second `runTick`: the two
+		// passes differ ONLY in `evaluatedAt`, which is the whole of what
+		// "late, not wrong" looks like in a heartbeat row.
+		const onTime = endedWith(['p-a']);
+		const late: PhaseEndOutcome = { ...onTime, evaluatedAt: '2026-08-26T15:00:00.000Z' };
+
+		expect(late.expiredAt).toBe(onTime.expiredAt);
+		expect(late.evaluatedAt).not.toBe(onTime.evaluatedAt);
+	});
+
+	it('says so rather than printing null when the instants cannot be read', async () => {
+		// `readPhaseEndInstants` answers `null` for a payload it cannot read. A
+		// heartbeat printing "due at null" would be worse than one admitting it
+		// could not tell.
+		const harness = fakeGateway({ events: [bid('p-1', '2026-08-27T08:00:00.000Z')] });
+
+		await runTick({
+			gateway: harness.gateway,
+			closeOne: async () => {},
+			endPhase: async () => ({
+				ended: true,
+				terminated: ['p-a'],
+				expiredAt: null,
+				evaluatedAt: null
+			})
+		});
+
+		const detail = String(soleHeartbeat(harness).detail);
+		expect(detail).toContain('terminating 1 (p-a)');
+		expect(detail).toContain('could not be read off the appended event');
+		expect(detail).not.toContain('due at null');
+	});
+
+	it('records a throwing evaluation without undoing a single committed close', async () => {
+		const harness = fakeGateway({
+			events: [bid('p-1', '2026-08-27T07:00:00.000Z'), bid('p-2', '2026-08-27T08:00:00.000Z')]
+		});
+
+		const summary = await runTick({
+			gateway: harness.gateway,
+			closeOne: async () => {},
+			endPhase: async () => {
+				throw new Error('the phase-end transaction fell over');
+			}
+		});
+
+		// Both closes are committed by their own transactions. Nothing the
+		// evaluation does can reach back.
+		expect(summary.closed).toEqual(['p-1', 'p-2']);
+		expect(summary.phaseEnd).toBe('failed');
+		expect(summary.phaseEndFailure).toBe('Error: the phase-end transaction fell over');
+		expect(summary.terminated).toEqual([]);
+		expect(summary.outcome).toBe('completed_with_failures');
+
+		const heartbeat = soleHeartbeat(harness);
+		expect(heartbeat.closed).toBe(2);
+		expect(String(heartbeat.detail)).toContain('the League Clock evaluation threw');
+		expect(String(heartbeat.detail)).toContain('every close above still stands');
+	});
+
+	it('still runs the drain after a throwing evaluation', async () => {
+		const harness = fakeGateway({ events: [bid('p-1', '2026-08-27T08:00:00.000Z')] });
+		const trace: string[] = [];
+
+		await runTick({
+			gateway: harness.gateway,
+			closeOne: async () => {
+				trace.push('close');
+			},
+			endPhase: async () => {
+				trace.push('evaluate');
+				throw new Error('boom');
+			},
+			drain: () => {
+				trace.push('drain');
+			}
+		});
+
+		expect(trace).toEqual(['close', 'evaluate', 'drain']);
+	});
+
+	it('evaluates even when a close failed — one broken Auction cannot hold the league open', async () => {
+		// The whole of AD-10's "late, not wrong" at the phase boundary: the
+		// sweep keeps retrying that close on later passes, and a close is not
+		// phase-gated, so the rightful winner can still be awarded afterwards.
+		const harness = fakeGateway({
+			events: [bid('p-1', '2026-08-27T07:00:00.000Z'), bid('p-2', '2026-08-27T08:00:00.000Z')]
+		});
+		const evaluator = recordingEvaluator(endedWith(['p-unbid']));
+
+		const summary = await runTick({
+			gateway: harness.gateway,
+			closeOne: async (id) => {
+				if (id === 'p-1') throw new Error('this close keeps throwing');
+			},
+			endPhase: evaluator.endPhase
+		});
+
+		expect(evaluator.calls).toHaveLength(1);
+		expect(summary.failures).toHaveLength(1);
+		expect(summary.phaseEnd).toBe('ended');
+		expect(summary.terminated).toEqual(['p-unbid']);
+	});
+
+	it('is optional — a caller that passes none says not_evaluated rather than nothing', async () => {
+		const harness = fakeGateway({ events: [bid('p-1', '2026-08-27T08:00:00.000Z')] });
+
+		const summary = await runTick({ gateway: harness.gateway, closeOne: async () => {} });
+
+		expect(summary.phaseEnd).toBe('not_evaluated');
+		expect(summary.terminated).toEqual([]);
+		expect(summary.phaseEndFailure).toBeNull();
+		expect(String(soleHeartbeat(harness).detail)).toContain(
+			'the League Clock was not evaluated'
+		);
+	});
+});
+
+describe('runTick — the two passes that must NOT evaluate the League Clock', () => {
+	it('refuses on a version mismatch and never asks the evaluation', async () => {
+		// The fail-stop is about the WHOLE pass, not only about closing: ending
+		// the Auction Phase under different rules than the league bid under is
+		// exactly as undoable as closing an Auction under them (AD-4, AD-20).
+		const harness = fakeGateway({
+			events: [
+				logEvent(
+					BID_PLACED_EVENT,
+					{
+						fantraxPlayerId: 'p-1',
+						teamId: 't-1',
+						teamName: 'Team One',
+						managerId: 'm-1',
+						amount: 2_000_000,
+						closesAt: '2026-08-27T08:00:00.000Z'
+					},
+					CORE_VERSION + 1
+				)
+			]
+		});
+		const evaluator = recordingEvaluator(endedWith([]));
+
+		const summary = await runTick({
+			gateway: harness.gateway,
+			closeOne: async () => {
+				throw new Error('closeOne must not be reached');
+			},
+			endPhase: evaluator.endPhase
+		});
+
+		expect(summary.outcome).toBe('refused_version_mismatch');
+		expect(evaluator.calls).toEqual([]);
+		expect(summary.phaseEnd).toBe('not_evaluated');
+		// And the heartbeat SAYS so, on the branch that never ran it — silence
+		// there would read as "evaluated, nothing due", which is the wrong
+		// thing to infer about a refused pass.
+		expect(String(soleHeartbeat(harness).detail)).toContain(
+			'the League Clock was not evaluated'
+		);
+	});
+
+	it('says the same on a pass that could not run at all', async () => {
+		const harness = fakeGateway({ logThrows: true });
+		const evaluator = recordingEvaluator(endedWith([]));
+
+		const summary = await runTick({
+			gateway: harness.gateway,
+			closeOne: async () => {
+				throw new Error('closeOne must not be reached');
+			},
+			endPhase: evaluator.endPhase
+		});
+
+		expect(summary.outcome).toBe('failed');
+		expect(evaluator.calls).toEqual([]);
+		expect(summary.phaseEnd).toBe('not_evaluated');
+		expect(String(soleHeartbeat(harness).detail)).toContain('the pass could not run');
+		expect(String(soleHeartbeat(harness).detail)).toContain(
+			'the League Clock was not evaluated'
+		);
 	});
 });

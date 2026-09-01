@@ -155,7 +155,7 @@ function theLottery(): readonly AppendedEvent[] {
 	for (const [index, [teamId, teamName, at]] of CONTENDERS.entries()) {
 		const auction = auctionForPlayer(fold(INITIAL_AUCTIONS, log, auctionsReducer), 'p-1');
 		const decided = decide(
-			bidStateFor(auction, RICH, false),
+			bidStateFor(auction, RICH, false, 'Auction'),
 			bidCommand(teamId, teamName, MINIMUM_BID),
 			at,
 			// The opening commits to a fresh seed; each join is handed the

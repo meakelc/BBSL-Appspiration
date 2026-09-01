@@ -144,7 +144,7 @@ function theLottery(): readonly AppendedEvent[] {
 	for (const [index, [teamId, teamName, at]] of CONTENDERS.entries()) {
 		const auction = auctionForPlayer(fold(INITIAL_AUCTIONS, log, auctionsReducer), 'p-1');
 		const decided = decide(
-			bidStateFor(auction, RICH, false),
+			bidStateFor(auction, RICH, false, 'Auction'),
 			bidCommand(teamId, teamName, MINIMUM_BID),
 			at,
 			// The opening commits to a fresh seed; each join is handed the
@@ -165,7 +165,7 @@ function theLottery(): readonly AppendedEvent[] {
 /** Team I's $1,500,000, decided against that log. */
 function theConversion(log: readonly AppendedEvent[]) {
 	const auction = auctionForPlayer(fold(INITIAL_AUCTIONS, log, auctionsReducer), 'p-1');
-	const state = bidStateFor(auction, RICH, false);
+	const state = bidStateFor(auction, RICH, false, 'Auction');
 	const command = bidCommand('t-i', 'Team I', 1_500_000);
 	const decided = decide(state, command, CONVERTED_AT, SEALED);
 	if (decided.kind !== 'accepted') throw new Error('the conversion was refused');
@@ -188,7 +188,7 @@ describe('§10 example 9 — the lottery dissolves', () => {
 	it('accepts Team I’s $1,500,000, with `contention` reporting a PASS', () => {
 		const log = theLottery();
 		const auction = auctionForPlayer(fold(INITIAL_AUCTIONS, log, auctionsReducer), 'p-1');
-		const state = bidStateFor(auction, RICH, false);
+		const state = bidStateFor(auction, RICH, false, 'Auction');
 		const gates = evaluate(state, bidCommand('t-i', 'Team I', 1_500_000), CONVERTED_AT);
 
 		expect(allGatesPassed(gates)).toBe(true);
@@ -297,7 +297,7 @@ describe('§10 example 9 — the lottery dissolves', () => {
 		const log = [...theLottery()];
 		const auction = auctionForPlayer(fold(INITIAL_AUCTIONS, log, auctionsReducer), 'p-1');
 		const decided = decide(
-			bidStateFor(auction, RICH, false),
+			bidStateFor(auction, RICH, false, 'Auction'),
 			bidCommand('t-f', 'Team F', 1_500_000),
 			CONVERTED_AT,
 			SEALED
@@ -350,7 +350,7 @@ describe('§10 example 9 — the lottery dissolves', () => {
 		// offered, and the threshold it cleared.
 		const auction = auctionForPlayer(fold(INITIAL_AUCTIONS, theLottery(), auctionsReducer), 'p-1');
 		const gates = evaluate(
-			bidStateFor(auction, RICH, false),
+			bidStateFor(auction, RICH, false, 'Auction'),
 			bidCommand('t-f', 'Team F', 1_500_000),
 			CONVERTED_AT
 		);
@@ -370,7 +370,7 @@ describe('§10 example 9 — the lottery dissolves', () => {
 	it('makes the next valid bid $2,000,000, and refuses anything under it', () => {
 		const log = theWholeThing();
 		const auction = auctionForPlayer(fold(INITIAL_AUCTIONS, log, auctionsReducer), 'p-1');
-		const state = bidStateFor(auction, RICH, false);
+		const state = bidStateFor(auction, RICH, false, 'Auction');
 
 		// The pre-fill IS the rule: one Minimum Increment over the new high.
 		expect(minimumLegalBid(state, 't-j')).toBe(2_000_000);
@@ -411,7 +411,7 @@ describe('§10 example 9 — the lottery dissolves', () => {
 				const teamId = `t-${String(index)}`;
 				const auction = auctionForPlayer(fold(INITIAL_AUCTIONS, log, auctionsReducer), 'p-1');
 				const decided = decide(
-					bidStateFor(auction, RICH, false),
+					bidStateFor(auction, RICH, false, 'Auction'),
 					bidCommand(teamId, `Team ${String(index)}`, MINIMUM_BID),
 					OPENED_AT,
 					index === 0 ? FRESH : SEALED
@@ -425,7 +425,7 @@ describe('§10 example 9 — the lottery dissolves', () => {
 				);
 			}
 			const auction = auctionForPlayer(fold(INITIAL_AUCTIONS, log, auctionsReducer), 'p-1');
-			const state = bidStateFor(auction, RICH, false);
+			const state = bidStateFor(auction, RICH, false, 'Auction');
 			const decided = decide(state, bidCommand('t-i', 'Team I', 1_500_000), CONVERTED_AT, SEALED);
 			if (decided.kind !== 'accepted') throw new Error('the conversion was refused');
 			return decided;
@@ -462,6 +462,9 @@ describe('§10 example 9 — the lottery dissolves', () => {
 		);
 
 		const clock = fold(INITIAL_LEAGUE_CLOCK, log, leagueClockReducer);
-		expect(clock.lastReset).toBe(CONVERTED_AT);
+		// The conversion is the latest surviving reset; the `ContentionDissolved`
+		// beside it reaches `default` and resets nothing (Story 3.7).
+		expect(clock.voidedSeqs).toEqual([]);
+		expect(clock.resets[clock.resets.length - 1]?.occurredAt).toBe(CONVERTED_AT);
 	});
 });

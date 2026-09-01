@@ -88,7 +88,7 @@ const AUCTION: Auction = {
 };
 
 /** ...narrowed to what the gates decide from, through the core's own bridge. */
-const STATE: BidState = bidStateFor(AUCTION, RICH, false);
+const STATE: BidState = bidStateFor(AUCTION, RICH, false, 'Auction');
 
 /** Team B's raise, at exactly one Minimum Increment above the high. */
 const RAISE: PlaceBid = {
@@ -192,7 +192,10 @@ describe('§10 example 1 — Ordinary raise', () => {
 			],
 			leagueClockReducer
 		);
-		expect(clock.lastReset).toBe(NOW);
+		// The Bid is the ONE reset the fold recorded, and it carries the `seq`
+		// a compensating `BidVoided` would name it by (Story 3.7).
+		expect(clock.resets).toEqual([{ seq: '3', occurredAt: NOW }]);
+		expect(clock.voidedSeqs).toEqual([]);
 		expect(leagueClockExpiry(clock)).toBe('2026-08-28T12:00:00.000Z');
 	});
 

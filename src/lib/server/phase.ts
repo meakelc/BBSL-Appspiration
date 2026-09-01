@@ -35,15 +35,72 @@ export const PHASE_SENTENCES: Readonly<Record<LeaguePhase, string>> = Object.fre
 	Archived: 'Archived. This offseason is closed and the record is read-only.'
 });
 
-/** The phase and the sentence that states it, together, so they cannot drift. */
+/**
+ * The transition announcement for a phase, or `null` for a phase that is not
+ * one anybody arrives into (Story 3.7).
+ *
+ * **A standing statement, not a live one, and not the ambient sentence.**
+ * `PHASE_SENTENCES` above says what the phase IS and has been printed in the
+ * header on every page since Story 1.4; this says that it CHANGED. The two are
+ * different claims and are worded separately so neither has to carry the
+ * other's job.
+ *
+ * Only Contract Assignment carries one, and deliberately. `Setup` is where a
+ * league begins rather than a place it arrives at; `Auction` opens by a
+ * Commissioner's own deliberate act on a page they are already looking at; and
+ * `Archived` is Epic 7's to word when it exists. Contract Assignment is the
+ * one phase a Manager can find the league in without anyone having told them,
+ * because the tick moved it there while nobody was watching — which is exactly
+ * what makes the announcement worth rendering.
+ */
+export type PhaseAnnouncement = {
+	/** The heading, naming the transition. */
+	readonly heading: string;
+	/** What it means for the Manager reading it, in the product voice. */
+	readonly body: string;
+};
+
+/**
+ * One announcement per phase, or `null` — worded HERE for `PHASE_SENTENCES`'
+ * reason: two copies of a sentence are two sources, and they drift the first
+ * time one is edited. No `.svelte` file words any of this.
+ *
+ * The Contract Assignment wording states the fact, then what changed, then
+ * what the reader can still do. No apology, no exclamation mark, no advice
+ * beyond naming what happens next (`EXPERIENCE.md`). It does not say when the
+ * clock expired: the announcement is read for weeks after the transition, and
+ * a relative time on a standing statement would go stale the moment it was
+ * true.
+ */
+export const PHASE_ANNOUNCEMENTS: Readonly<Record<LeaguePhase, PhaseAnnouncement | null>> =
+	Object.freeze({
+		Setup: null,
+		Auction: null,
+		'Contract Assignment': Object.freeze({
+			heading: 'The Auction Phase has ended',
+			body:
+				'The League Clock ran out and Contract Assignment has begun. No further Bids or ' +
+				'nominations are accepted, and any Player still awaiting an Opening Bid when the ' +
+				'clock expired has returned to the Free Agent pool along with the nominating ' +
+				'Team’s Nomination Slot. Every Auction that was won still stands.'
+		}),
+		Archived: null
+	});
+
+/**
+ * The phase, the sentence that states it and the announcement that it
+ * changed, together, so they cannot drift.
+ */
 export type ResolvedPhase = {
 	readonly name: LeaguePhase;
 	readonly sentence: string;
+	/** The transition announcement, or `null` for a phase that has none. */
+	readonly announcement: PhaseAnnouncement | null;
 };
 
-/** Pair a phase with its sentence. */
+/** Pair a phase with its sentence and its announcement. */
 export function phaseOf(name: LeaguePhase): ResolvedPhase {
-	return { name, sentence: PHASE_SENTENCES[name] };
+	return { name, sentence: PHASE_SENTENCES[name], announcement: PHASE_ANNOUNCEMENTS[name] };
 }
 
 /**

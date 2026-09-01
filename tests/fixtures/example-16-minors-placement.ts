@@ -87,6 +87,9 @@ export function nominationOf(fantraxPlayerId: string, playerName: string) {
 		playerName,
 		teamId: 't-n',
 		teamName: 'Team N',
+		// The nominating Manager (Story 3.7). No close reads it — an
+		// `AuctionTerminated` does, and the fold carries it for both.
+		managerId: 'm-n',
 		occurredAt: '2026-08-26T08:00:00.000Z'
 	};
 }
