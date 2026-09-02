@@ -27,6 +27,7 @@ import type { LeaguePhase } from '../src/lib/core/projection/phase.ts';
 import { teamMoneyStateFor } from '../src/lib/core/rules/bidding.ts';
 import type { TeamMoneyState } from '../src/lib/core/rules/bidding.ts';
 import {
+	STRIP_REGION_LABEL,
 	STRIP_SHEET_LABEL,
 	baselineMaximumBid,
 	rosterCountSentence,
@@ -149,6 +150,24 @@ describe('the Roster Count sentence', () => {
 	it('states a full roster and an empty one alike, without a special case', () => {
 		expect(rosterCountSentence(0)).toBe('Roster 0 of 12');
 		expect(rosterCountSentence(12)).toBe('Roster 12 of 12');
+	});
+
+	it('states an OVERFLOWING roster as the overflow it is, never clamped to twelve', () => {
+		// A Team can genuinely hold more than ACTIVE_BENCH_SLOTS — that is
+		// what `overflowCount` exists for — so `Roster 13 of 12` is a true
+		// sentence about a real state. Clamping it would hide the overflow
+		// from the one Manager who has to resolve it, exactly as clamping a
+		// negative Maximum Bid to $0.0M would.
+		expect(rosterCountSentence(13)).toBe('Roster 13 of 12');
+		expect(rosterCountSentence(15)).toBe('Roster 15 of 12');
+	});
+
+	it('floors a corrupt negative count rather than stating a nonsense sentence', () => {
+		// Unlike an overflow, a negative count is not a state the app can
+		// reach — it is a bad read. `Roster -1 of 12` tells a Manager nothing
+		// true and nothing actionable.
+		expect(rosterCountSentence(-1)).toBe('Roster 0 of 12');
+		expect(rosterCountSentence(Number.NaN)).toBe('Roster 0 of 12');
 	});
 
 	it('is built from the constant, so the twelve cannot be spelled twice', () => {
@@ -338,9 +357,25 @@ describe('PersistentStrip.svelte — the surface, asserted against its source', 
 	it('derives the figure in the browser rather than reading a transported one', () => {
 		expect(STRIP).toContain('baselineMaximumBid(team, phase, now)');
 		// A `$derived` and not a snapshot: every reload the freshness contract
-		// forces recomputes it, so there is nothing to invalidate.
-		expect(STRIP).toMatch(/\$derived\(baselineMaximumBid/);
+		// forces recomputes it, so there is nothing to invalidate. `$derived.by`
+		// because the call is guarded — a throw here would break the render of
+		// every page in the product, not merely the strip — but it is still a
+		// derivation and still holds no state of its own.
+		expect(STRIP).toMatch(/\$derived\.by\(\(\) => \{\s*try \{\s*return baselineMaximumBid/);
+		expect(STRIP).not.toMatch(/\$state\([^)]*baselineMaximumBid/);
 		expect(STRIP_MARKUP).not.toContain('maximumBid: ');
+	});
+
+	it('guards the figure so a throw cannot take down every page', () => {
+		// The server half of this discipline is `stripTeamFor`'s catch, which
+		// resolves to `null` rather than 500ing the layout every route
+		// inherits. This is the client half: the component is mounted by the
+		// ROOT layout, so an unguarded throw in the derivation breaks the
+		// render of the whole product rather than of one strip.
+		const derivation = /const maximumBid = \$derived\.by\([\s\S]*?\n	\}\);/.exec(STRIP)?.[0] ?? '';
+		expect(derivation).toContain('try {');
+		expect(derivation).toContain('catch');
+		expect(derivation).toMatch(/catch \{\s*return null;/);
 	});
 
 	it('carries no urgency device — no countdown, no ending soon, no suggestion', () => {
@@ -355,6 +390,56 @@ describe('PersistentStrip.svelte — the surface, asserted against its source', 
 		expect(STRIP).toContain('position: fixed');
 		expect(STRIP).toContain('position: static');
 	});
+
+	it('keeps its 1px border inside the height the layout reserves for it', () => {
+		// `global.css` reserves exactly `--strip-height`. A border added on
+		// TOP of a `min-height` of the same token occupies one pixel more than
+		// was reserved, so the strip covers the last row of the page by that
+		// much — the one thing the reservation exists to prevent.
+		const strip = /\.strip\s*\{[^}]*\}/.exec(STRIP)?.[0] ?? '';
+		expect(strip).toContain('border-top: var(--border-width)');
+		expect(strip).toContain('box-sizing: border-box');
+	});
+
+	it('states one line only, so it cannot wrap past the room reserved for it', () => {
+		// The reserved room is a fixed `--strip-height`. A summary free to
+		// wrap grows past it at a narrow width and covers the last control.
+		const summary = /\.strip-summary\s*\{[^}]*\}/.exec(STRIP)?.[0] ?? '';
+		expect(summary).toContain('flex-wrap: nowrap');
+		expect(summary).toContain('white-space: nowrap');
+		// The label is what gives if something must; the facts never shrink.
+		const figure = /\.strip-figure,\s*\n\s*\.strip-roster\s*\{[^}]*\}/.exec(STRIP)?.[0] ?? '';
+		expect(figure).toContain('flex-shrink: 0');
+	});
+
+	it('gives its persistent trigger the same focus ring the rest of the app uses', () => {
+		// A `<summary>` is not covered by global.css's
+		// `:where(a, button, input, select, textarea):focus-visible` rule, so
+		// without this the one control present on every page has no ring.
+		expect(STRIP).toContain('.strip-summary:focus-visible');
+		expect(STRIP).toContain('var(--color-border-interactive)');
+	});
+
+	it('names the region and the sheet separately, because they are different things', () => {
+		// The landmark holds Maximum Bid and the Roster Count; the sheet is
+		// one control inside it. Naming both "Destinations" announced a
+		// landmark that then read out money.
+		expect(STRIP_MARKUP).toContain('aria-label={STRIP_REGION_LABEL}');
+		expect(STRIP).toContain('STRIP_SHEET_LABEL');
+		expect(STRIP_REGION_LABEL).not.toBe(STRIP_SHEET_LABEL);
+	});
+
+	it('closes the sheet on Escape and on a click outside, not only on navigation', () => {
+		// A `<details>` honours neither for free. Without them the sheet is a
+		// panel that can be opened on every page and dismissed only by finding
+		// the trigger again. Still a disclosure: nothing is trapped and
+		// nothing is made modal.
+		expect(STRIP).toContain('onWindowKeydown');
+		expect(STRIP).toContain('onWindowPointerdown');
+		expect(STRIP).toMatch(/event\.key !== 'Escape'/);
+		expect(STRIP).toContain('detailsEl.contains(event.target)');
+		expect(STRIP_MARKUP).not.toMatch(/aria-modal|role="dialog"|<dialog/);
+	});
 });
 
 // --- The mount and the gate -------------------------------------------------
@@ -364,6 +449,40 @@ describe('the strip is mounted once, by the layout, and gated server-side', () =
 		expect(LAYOUT).toContain('<PersistentStrip');
 		expect(LAYOUT).toContain('data.stripTeam !== null');
 		expect(LAYOUT).toContain('{@render children()}');
+	});
+
+	it('mounts BEFORE the page content, which is what puts it in the header on desktop', () => {
+		// The Desktop matrix row is a DOM-ORDER requirement, not merely a CSS
+		// one. At 640px the strip is `position: static`, so it renders exactly
+		// where it sits in the document: mounted after `{@render children()}`
+		// it lands at the FOOT of the page, and Maximum Bid is then reachable
+		// on desktop only by scrolling to the bottom of every surface — the
+		// inverse of "persistently visible at every width".
+		//
+		// Asserting the three positions rather than the strings, because the
+		// earlier revision of this test checked only that `position: fixed`
+		// and `position: static` appeared SOMEWHERE in the file, which is true
+		// of both the correct and the broken arrangement.
+		// Read from the comment-stripped source: prose explaining this very
+		// arrangement mentions the render tag, and matching a comment instead
+		// of the markup is how this assertion would quietly stop meaning
+		// anything.
+		const header = LAYOUT_CODE.indexOf('<HeaderMenu');
+		const strip = LAYOUT_CODE.indexOf('<PersistentStrip');
+		const children = LAYOUT_CODE.indexOf('{@render children()}');
+
+		expect(header).toBeGreaterThan(-1);
+		expect(strip).toBeGreaterThan(-1);
+		expect(children).toBeGreaterThan(-1);
+
+		expect(strip).toBeGreaterThan(header);
+		expect(strip).toBeLessThan(children);
+	});
+
+	it('mounts the strip exactly once', () => {
+		// Two mounts would put a second strip on every page — and, at 640px,
+		// one in the header and one at the foot.
+		expect(LAYOUT_CODE.match(/<PersistentStrip/g)).toHaveLength(1);
 	});
 
 	it('hands the strip FACTS and a server instant, never a derived figure', () => {
@@ -504,6 +623,15 @@ describe('the strip never covers the last control', () => {
 		expect(GLOBAL_CSS).toContain('@media (min-width: 640px)');
 		expect(GLOBAL_CSS).toContain('padding-bottom: 0');
 		expect(GLOBAL_CSS_CODE).not.toContain('52px');
+	});
+
+	it('reserves that room only where the strip actually mounts', () => {
+		// The strip does not mount for a signed-out visitor, a Manager bound
+		// to no Team, or in Setup. Reserving the room unconditionally holds
+		// 52px of dead space at the bottom of every one of those pages for
+		// something that is not there.
+		expect(GLOBAL_CSS_CODE).toContain('body:has(.strip)');
+		expect(GLOBAL_CSS_CODE).not.toMatch(/\nbody \{\s*padding-bottom/);
 	});
 });
 

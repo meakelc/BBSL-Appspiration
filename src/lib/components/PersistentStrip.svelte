@@ -33,7 +33,7 @@
 	import { MAXIMUM_BID_LABELS } from '$lib/core/freshness.ts';
 	import { describeAmount } from '$lib/core/rules/bidding.ts';
 	import type { TeamMoneyState } from '$lib/core/rules/bidding.ts';
-	import { STRIP_SHEET_LABEL, baselineMaximumBid, rosterCountSentence, stripShowsMaximumBid } from '$lib/core/strip.ts';
+	import { STRIP_REGION_LABEL, STRIP_SHEET_LABEL, baselineMaximumBid, rosterCountSentence, stripShowsMaximumBid } from '$lib/core/strip.ts';
 	import type { LeaguePhase } from '$lib/core/projection/phase.ts';
 	import { freshness } from '$lib/client/freshness.svelte.ts';
 
@@ -70,8 +70,34 @@
 	// same three lines, because a sheet still covering the page it just
 	// navigated to reads as broken rather than helpful.
 	afterNavigate(() => {
-		if (detailsEl !== undefined) detailsEl.open = false;
+		closeSheet();
 	});
+
+	function closeSheet() {
+		if (detailsEl !== undefined) detailsEl.open = false;
+	}
+
+	// Escape closes it, and a click landing anywhere outside closes it. A
+	// `<details>` gives neither for free, and without them the sheet is a
+	// panel a keyboard user can open on every page and then only dismiss by
+	// finding the trigger again. This is NOT a focus trap and does not become
+	// one: nothing is trapped, nothing is made modal, and the page underneath
+	// stays reachable throughout — the disclosure pattern the spec requires,
+	// with the two dismissals a disclosure is expected to honour.
+	function onWindowKeydown(event: KeyboardEvent) {
+		if (event.key !== 'Escape') return;
+		if (detailsEl === undefined || !detailsEl.open) return;
+		closeSheet();
+		// Return focus to the control that opened it, or the dismissal
+		// silently strands a keyboard user at the top of the document.
+		detailsEl.querySelector('summary')?.focus();
+	}
+
+	function onWindowPointerdown(event: MouseEvent) {
+		if (detailsEl === undefined || !detailsEl.open) return;
+		if (event.target instanceof Node && detailsEl.contains(event.target)) return;
+		closeSheet();
+	}
 
 	const showsMaximumBid = $derived(stripShowsMaximumBid(phase));
 
@@ -79,8 +105,29 @@
 	// renders the negative a Team over its Cap genuinely has, unclamped: a
 	// `$0.0M` in place of it would state something false to the Team that most
 	// needs told.
-	const maximumBid = $derived(baselineMaximumBid(team, phase, now));
-	const figure = $derived(maximumBid === null ? null : describeAmount(maximumBid));
+	//
+	// **Guarded, for the same reason `stripTeamFor` catches server-side.** This
+	// component is mounted by the ROOT layout, so an unexpected throw in here —
+	// a `TeamMoneyState` of an unexpected shape after a schema drift, say —
+	// would not break the strip, it would break the render of every page in the
+	// product. The server half of that discipline was already enforced; this is
+	// the client half. A caught throw yields no figure, exactly as a phase with
+	// no figure does, and the Roster Count still states what it knows.
+	const maximumBid = $derived.by(() => {
+		try {
+			return baselineMaximumBid(team, phase, now);
+		} catch {
+			return null;
+		}
+	});
+	const figure = $derived.by(() => {
+		if (maximumBid === null) return null;
+		try {
+			return describeAmount(maximumBid);
+		} catch {
+			return null;
+		}
+	});
 
 	// The label is the core's in EVERY state, including Live — the surface
 	// prints one field rather than choosing between two wordings. In anything
@@ -92,10 +139,17 @@
 	const roster = $derived(rosterCountSentence(team.rosterCount));
 </script>
 
+<svelte:window on:keydown={onWindowKeydown} on:pointerdown={onWindowPointerdown} />
+
 <!-- A `region` landmark rather than a live region: this states standing
      figures, and re-announcing them on every navigation is how a live region
-     becomes noise nobody can turn off. -->
-<section class="strip" aria-label={STRIP_SHEET_LABEL}>
+     becomes noise nobody can turn off.
+
+     The region and the sheet carry DIFFERENT names, because they are different
+     things: the landmark holds Maximum Bid and the Roster Count, and the sheet
+     is one control within it. Naming both "Destinations" announced a landmark
+     that then read out money. -->
+<section class="strip" aria-label={STRIP_REGION_LABEL}>
 	<details bind:this={detailsEl}>
 		<summary class="strip-summary">
 			<!-- The trigger names itself for a screen reader, since what is
@@ -131,9 +185,23 @@
 		position: fixed;
 		inset-inline: 0;
 		bottom: 0;
+		/*
+		 * Above page content, below nothing else yet. `HeaderMenu`'s
+		 * disclosure establishes no stacking context of its own and sits
+		 * above this in the document, so 1 is sufficient rather than
+		 * arbitrary; the value is local to the one fixed element in the
+		 * layout and there is no scale to belong to.
+		 */
 		z-index: 1;
 		background-color: var(--color-surface);
 		border-top: var(--border-width) solid var(--color-border-strong);
+		/*
+		 * The border is INSIDE the reserved height. `global.css` reserves
+		 * exactly `--strip-height` of room, so a border added on top of a
+		 * `min-height` of the same token would occupy one pixel more than was
+		 * reserved and cover the last row of the page by that much.
+		 */
+		box-sizing: border-box;
 	}
 
 	.strip-summary {
@@ -143,13 +211,48 @@
 		min-height: var(--strip-height);
 		padding: 0 var(--space-panel-padding);
 		cursor: pointer;
+		/*
+		 * One line, always. The reserved room below the page is a fixed
+		 * `--strip-height`; a strip free to wrap to two lines would grow past
+		 * the room reserved for it and cover the last control — the one thing
+		 * the reservation exists to prevent. The figure and the Roster Count
+		 * are short by construction, and the label is the part that may be
+		 * elided if a narrow viewport genuinely cannot fit all three.
+		 */
+		flex-wrap: nowrap;
+		white-space: nowrap;
+		overflow: hidden;
 	}
 
-	/* "Maximum Bid" in Georgia `brand` — DESIGN.md:222, epics.md:1435. */
+	.strip-figure,
+	.strip-roster {
+		flex-shrink: 0;
+	}
+
+	/*
+	 * A persistent control on every page needs a visible focus ring. The
+	 * global rule at `global.css:184` covers `a, button, input, select,
+	 * textarea` — a `<summary>` is none of those, so it gets the identical
+	 * treatment stated here rather than a different one invented here.
+	 */
+	.strip-summary:focus-visible {
+		outline: 2px solid var(--color-border-interactive);
+		/* Inset, not offset: an outward ring on an element flush with the
+		   viewport edge is clipped on the outer side. */
+		outline-offset: -2px;
+	}
+
+	/* "Maximum Bid" in Georgia `brand` — DESIGN.md:222, epics.md:1435.
+	   Also the one part that may shrink: the figure and the Roster Count are
+	   the facts, and the label is the word introducing one of them, so if
+	   something has to give at 320px it is the word and never the number. */
 	.strip-label {
 		font-family: var(--font-display);
 		font-size: var(--size-12);
 		color: var(--color-brand);
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 
 	/* The figure at 17px in the `ui` face — DESIGN.md:173. */
@@ -178,7 +281,13 @@
 
 	@media (min-width: 640px) {
 		/* In the header, not pinned to the bottom — Maximum Bid stays on
-		   screen and the page keeps its last control. */
+		   screen and the page keeps its last control.
+
+		   This works because the strip is mounted immediately AFTER
+		   `HeaderMenu` in `+layout.svelte` and before the page content:
+		   `static` renders it where it sits in the document, so its DOM
+		   position is what puts it under the header rather than at the foot
+		   of the page. Moving the mount moves the strip. */
 		.strip {
 			position: static;
 			border-top: none;

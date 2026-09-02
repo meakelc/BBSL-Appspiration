@@ -1,7 +1,0 @@
-## Findings
-
-- `src/lib/server/nomination.ts` (`releaseNomination`) — trigger: an `AUCTION_CLOSED_EVENT` whose payload is `null` or `undefined`. Missing guard: `if (typeof event.payload !== 'object' || event.payload === null) continue;`. Consequence: an uncaught `TypeError` reading `fantraxPlayerId` crashes the write transaction.
-
-  Evidence: the new `readClosedPlayerId` in `src/lib/core/projection/nominations.ts` explicitly guards a malformed payload, so the fold "stays total over any log it is handed" per its own docstring. The new `releaseNomination` reads the same kind of event payload with no equivalent check: `const payload = event.payload as { readonly fantraxPlayerId: string }; await client.query(...[payload.fantraxPlayerId])`. If `event.payload` is `null` or `undefined` — a malformed or historical row the reducer is explicitly designed to tolerate — `payload.fantraxPlayerId` throws before the query runs, which, since `releaseNomination` runs inside the same transaction that appends the close ("the delete commits with the close event or not at all (AD-5)"), would abort that transaction instead of being skipped the way the fold skips it.
-
-- No other unhandled paths, missing branches, or meaningful deletions were found in the reviewed hunks. `deferred-work.md` is documentation only; the doc-comment rewrite atop `nominationsReducer` replaces stale prose rather than deleting a live contract; all other changed hunks are additive test code.

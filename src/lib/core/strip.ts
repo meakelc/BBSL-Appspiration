@@ -53,6 +53,17 @@ import type { PlaceBid } from './types.ts';
 export const STRIP_SHEET_LABEL = 'Destinations';
 
 /**
+ * The strip REGION's name, which is not the sheet's.
+ *
+ * The landmark contains Maximum Bid and the Roster Count; the sheet it also
+ * carries is one control inside it. Naming the region `STRIP_SHEET_LABEL`
+ * announced a landmark called "Destinations" that then read out money, which
+ * mis-orients the one user who navigates by landmark and cannot see the strip.
+ * Two things are named because two things exist.
+ */
+export const STRIP_REGION_LABEL = 'Your Team';
+
+/**
  * Whether the strip renders at all, given the phase.
  *
  * Setup is the one phase with nothing to state: no roster has been promoted,
@@ -93,9 +104,22 @@ export function stripShowsMaximumBid(phase: LeaguePhase): boolean {
  * `ACTIVE_BENCH_SLOTS` is the source of the twelve — never a literal — so the
  * one place Roster Capacity is declared is the one place this sentence can
  * disagree with, which is nowhere.
+ *
+ * **The count is stated as it is, including over twelve.** A Team CAN hold
+ * more than `ACTIVE_BENCH_SLOTS` — `overflowCount` exists precisely because
+ * an import or a Contract expiry can leave one over the ceiling — so
+ * `Roster 13 of 12` is a true sentence about a real state, and clamping it to
+ * `Roster 12 of 12` would hide the overflow from the Manager who has to
+ * resolve it. This mirrors the negative Maximum Bid, which is likewise
+ * rendered as the fact it is rather than floored at zero.
+ *
+ * A NEGATIVE count is different: it is not a state the app can reach, it is a
+ * corrupt read. It is floored at zero because `Roster -1 of 12` tells a
+ * Manager nothing true and nothing actionable.
  */
 export function rosterCountSentence(rosterCount: number): string {
-	return `Roster ${String(rosterCount)} of ${String(ACTIVE_BENCH_SLOTS)}`;
+	const stated = Number.isFinite(rosterCount) ? Math.max(0, Math.trunc(rosterCount)) : 0;
+	return `Roster ${String(stated)} of ${String(ACTIVE_BENCH_SLOTS)}`;
 }
 
 /**

@@ -2,7 +2,7 @@
 title: 'Story 4.2: The persistent strip'
 type: 'feature'
 created: '2026-09-01'
-status: 'in-review'
+status: 'done'
 baseline_commit: '4c65c94f3e22a5d40005031529804bd55a284915'
 review_loop_iteration: 0
 context:
@@ -62,15 +62,15 @@ context:
 
 ## Code Map
 
-- `src/lib/core/strip.ts` -- NEW. `stripPresent`, `stripShowsMaximumBid`, `rosterCountSentence`, `STRIP_SHEET_LABEL`, `baselineMaximumBid`. The private `probeFor()` builds the `PlaceBid` `evaluate()` requires.
+- `src/lib/core/strip.ts` -- NEW. `stripPresent`, `stripShowsMaximumBid`, `rosterCountSentence`, `STRIP_SHEET_LABEL`, `STRIP_REGION_LABEL`, `baselineMaximumBid`. The private `probeFor()` builds the `PlaceBid` `evaluate()` requires.
 - `src/lib/server/strip.ts` -- NEW. `loadStripTeam(gateway, teamId)`; one transaction, one `loadEventsViaClient`, four folds, `loadTeamRoster`, `teamMoneyStateFor`, always `rollback`, `null` on any failure.
-- `src/lib/components/PersistentStrip.svelte` -- NEW. `<details>` + `DestinationsList`, `$derived` figure, `MAXIMUM_BID_LABELS[freshness.state]`, `afterNavigate` close, `--strip-height` / `--strip-figure-size`, the 640px reflow.
-- `tests/strip.test.ts` -- NEW. 41 assertions: the phase table, the baseline (including the negative and the null-Team rows), `loadStripTeam` executed against a fake client, and the source-text surface claims.
-- `src/lib/core/constants.ts:100` -- `NO_AUCTION_PROBE_ID`.
-- `src/lib/styles/tokens.css:131` -- `--strip-figure-size: 17px`, in the non-frontmatter block.
-- `src/lib/styles/global.css:120` -- `body { padding-bottom: var(--strip-height) }`, released at 640px.
-- `src/routes/+layout.server.ts:56` -- `stripTeamFor`; `:82` `stripTeam` on the returned object.
-- `src/routes/+layout.svelte:111` -- the mount, gated on `data.stripTeam !== null`.
+- `src/lib/components/PersistentStrip.svelte` -- NEW. `<details>` + `DestinationsList`, `$derived.by` figure (guarded), `MAXIMUM_BID_LABELS[freshness.state]`, `afterNavigate` / Escape / click-outside close, `--strip-height` / `--strip-figure-size`, the 640px reflow.
+- `tests/strip.test.ts` -- NEW. The phase table, the baseline (including the negative and the null-Team rows), `loadStripTeam` executed against a fake client, and the source-text surface claims.
+- `src/lib/core/constants.ts` -- `NO_AUCTION_PROBE_ID`.
+- `src/lib/styles/tokens.css` -- `--strip-figure-size: 17px`, in the non-frontmatter block.
+- `src/lib/styles/global.css` -- `body:has(.strip) { padding-bottom: var(--strip-height) }`, released at 640px.
+- `src/routes/+layout.server.ts` -- `stripTeamFor`; `stripTeam` on the returned object.
+- `src/routes/+layout.svelte` -- the mount, gated on `data.stripTeam !== null`, positioned between `HeaderMenu` and the page content.
 - `tests/layout.test.ts` -- `load` is async now; `loadLayout` helper, `$lib/shell/db.ts` faked, plus the strip's own gate assertions.
 
 ### As planned
@@ -110,9 +110,35 @@ context:
 
 ## Spec Change Log
 
+**2026-09-01 — code review, review loop 1.** The Desktop matrix row was implemented in CSS
+but not in DOM order: the strip mounted after the page content, so `position: static` at
+640px placed it at the FOOT of the document rather than in the header, and Maximum Bid was
+reachable on desktop only by scrolling to the bottom of every surface. The mount moved to
+sit between `HeaderMenu` and the page content. The row's test asserted only that
+`position: fixed` / `position: static` appeared somewhere in the file — true of both the
+correct and the broken arrangement — and was replaced by an assertion on the three mount
+positions, read from the comment-stripped source.
+
+Also corrected in the same pass: the strip's 1px border sat outside the height
+`global.css` reserved (`box-sizing: border-box`); the bottom room was reserved on every
+page including those where the strip does not mount (`body:has(.strip)`); the region
+landmark was named for the sheet it contains rather than for the figures it announces
+(`STRIP_REGION_LABEL`); the figure derivation had no client-side guard despite the
+component being mounted by the root layout (`$derived.by` + `try`); the summary could wrap
+past its reserved height (`flex-wrap: nowrap`, with the label as the only part that
+elides); the persistent trigger had no focus ring, since `<summary>` is not covered by
+`global.css`'s `:focus-visible` rule; the sheet closed only on navigation, not on Escape
+or a click outside; and `rosterCountSentence` floors a corrupt negative count while still
+stating a genuine overflow as the overflow it is.
+
+Documentation corrected: the probe carries `MINIMUM_BID`, not the non-existent
+`MINIMUM_OPENING_BID`, and `NO_AUCTION_PROBE_ID` as its `teamId` — verified harmless
+because no cap gate reads `command.teamId`. Stale Code Map line numbers and the "41
+assertions" count were removed rather than re-pinned, since both go stale on the next edit.
+
 ## Design Notes
 
-**Why a probe command.** `epics.md:1450` fixes the figure as `evaluate()` output, and `evaluate` takes a `PlaceBid`. The baseline builds one — `NO_AUCTION_PROBE_ID`, the Team's own id, `MINIMUM_OPENING_BID` — and reads `cap.maximumBid` alone. `passed` is deliberately ignored: the strip authorises nothing, and a probe reporting a refusal would answer a question nobody asked. `playerIsMinorLeagueEligible: false` is what makes the figure a single number rather than sometimes-unbounded.
+**Why a probe command.** `epics.md:1450` fixes the figure as `evaluate()` output, and `evaluate` takes a `PlaceBid`. The baseline builds one — `NO_AUCTION_PROBE_ID` for every id field, and `MINIMUM_BID` for the amount — and reads `cap.maximumBid` alone. `passed` is deliberately ignored: the strip authorises nothing, and a probe reporting a refusal would answer a question nobody asked. `playerIsMinorLeagueEligible: false` is what makes the figure a single number rather than sometimes-unbounded. The probe carries `NO_AUCTION_PROBE_ID` as its `teamId` rather than the real Team's, which is safe because `command.teamId` is read only by `evaluateContention` and `evaluateSelfBid` (`bidding.ts:1566-1567`) and never by `evaluateCap` — a command that named a real Manager would look appendable, and this one is never appended.
 
 **Why the strip can read lower than the Auction page.** `teamMoneyStateFor` excludes the Auction being bid on from `leading`, because a raise replaces that Team's own lead rather than adding to it. The strip excludes nothing, so a Team leading elsewhere sees its own commitments held against it — the true answer to "what can I spend on something new". The Auction page's panel keeps the per-Auction arithmetic, and 2.6's refusal remains the only place a bid is judged.
 

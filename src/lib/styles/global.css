@@ -128,15 +128,21 @@ a {
  *
  * Sized from `--strip-height` — the token, never the 52px literal — so the
  * room reserved and the strip occupying it can only ever be the same value.
- * Released at 640px, where the strip moves into the header and is in the flow
- * like any other element.
+ * The strip is `box-sizing: border-box`, so its 1px top border is inside that
+ * height rather than added to it. Released at 640px, where the strip moves
+ * into the header and is in the flow like any other element.
+ *
+ * Gated on `body:has(.strip)` so the room is reserved only where the strip
+ * actually mounts. It does not mount for a signed-out visitor, a Manager
+ * bound to no Team, or in Setup — and reserving 52px of dead space at the
+ * bottom of those pages would be room held for something that is not there.
  */
-body {
+body:has(.strip) {
 	padding-bottom: var(--strip-height);
 }
 
 @media (min-width: 640px) {
-	body {
+	body:has(.strip) {
 		padding-bottom: 0;
 	}
 }

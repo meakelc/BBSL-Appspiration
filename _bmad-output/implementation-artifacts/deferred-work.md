@@ -463,3 +463,10 @@
   deferred_reason: `_bmad-output/planning-artifacts/` is skill-owned (AD-25 discipline); a mock disagreeing with its own frontmatter is an amendment to make through the owning skill, not an inline edit from an implementation story.
   owner: `bmad-correct-course` — either add a 17px step to `DESIGN.md`'s `typography.scale`, or correct the two prose lines to a step the scale actually carries.
   status: open
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-2-the-persistent-strip.md`
+  summary: One integration test hard-FAILS rather than self-skipping when no local Postgres is reachable, so `npm test` is red on a clean checkout.
+  evidence: bmad-code-review (2026-09-01), orchestrator verification. `tests/integration/auction-events.test.ts:873` calls `writeGateway()` inside a test body rather than behind the `describe.skipIf` guard the rest of that file uses, so it throws `SUPABASE_DB_URL is not set. The transactional write path is unavailable.` instead of skipping. Confirmed pre-existing and NOT introduced by story 4.2: checked out the story's baseline `4c65c94` and ran the file there, where it fails identically. The rest of the suite is green at 2441 passing. This defeats the self-skip contract `deferred-work.md:214` describes, and it makes a genuinely failing suite indistinguishable from a machine without Docker.
+  deferred_reason: Out of scope for a presentation story; the fix belongs with whoever next touches the integration harness, and conflating it with 4.2's diff would hide it in a UI review.
+  owner: Unassigned — move the `writeGateway()` call behind the file's existing `describe.skipIf` guard, or gate it on the same `SUPABASE_DB_URL` check the sibling tests use.
+  status: open

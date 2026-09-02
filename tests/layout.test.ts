@@ -8,10 +8,23 @@ import { fileURLToPath } from 'node:url';
 // fakes it: the real `resolveDestinations`, the real phase pass-through and
 // the real server-side gating all still run. The fake answers an empty log,
 // which folds to a Team with no leads and no roster rows — a real state.
+//
+// `gatewayThrows` lets one test make `writeGateway()` ITSELF throw, which is
+// a different failure from a read failing: it is what an unset
+// `SUPABASE_DB_URL` does, and it happens before `loadStripTeam` is ever
+// reached. `stripTeamFor`'s `try` is deliberately placed to cover it, and
+// nothing asserted that until now.
+let gatewayThrows = false;
+
 vi.mock('$lib/shell/db.ts', () => ({
-	writeGateway: () => ({
-		connect: async () => ({ query: async () => ({ rows: [] }), release: () => {} })
-	})
+	writeGateway: () => {
+		if (gatewayThrows) {
+			throw new Error('SUPABASE_DB_URL is not set. The transactional write path is unavailable.');
+		}
+		return {
+			connect: async () => ({ query: async () => ({ rows: [] }), release: () => {} })
+		};
+	}
 }));
 
 const { load } = await import('../src/routes/+layout.server.ts');
@@ -150,6 +163,28 @@ describe('stripTeam — the gate, executed rather than read', () => {
 			layoutEvent(SETUP_PHASE, { kind: 'registered', manager: MANAGER })
 		);
 		expect(result.stripTeam).toBeNull();
+	});
+
+	it('resolves to null rather than 500ing every page when writeGateway() itself throws', async () => {
+		// An unset `SUPABASE_DB_URL` makes `writeGateway()` throw BEFORE
+		// `loadStripTeam` is reached, so `loadStripTeam`'s own failure tests
+		// cannot cover it. `stripTeamFor`'s `try` is placed around the
+		// gateway construction for exactly this reason, and narrowing it to
+		// wrap only the read — a very plausible tidy-up, since the placement
+		// looks redundant — would 500 the load that EVERY route inherits.
+		gatewayThrows = true;
+		try {
+			const result = await loadLayout(
+				layoutEvent(AUCTION_PHASE, { kind: 'registered', manager: MANAGER })
+			);
+			expect(result.stripTeam).toBeNull();
+			// And the rest of the page is untouched: a strip that cannot be
+			// resolved costs the strip, never the surface it sits on.
+			expect(result.destinations.length).toBeGreaterThan(0);
+			expect(result.phase).not.toBeUndefined();
+		} finally {
+			gatewayThrows = false;
+		}
 	});
 
 	it('resolves FACTS for a bound Manager in the Auction Phase', async () => {
