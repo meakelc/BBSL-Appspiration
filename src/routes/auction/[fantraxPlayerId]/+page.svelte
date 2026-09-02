@@ -74,6 +74,8 @@
 	} from '$lib/core/rules/bidding.ts';
 	import type { BidState, TeamMoneyState } from '$lib/core/rules/bidding.ts';
 	import type { PlaceBidGateResults } from '$lib/core/types.ts';
+	import { MAXIMUM_BID_LABELS, STALE_BID_REASON } from '$lib/core/freshness.ts';
+	import { freshness } from '$lib/client/freshness.svelte.ts';
 	import CapBreakdown from '$lib/components/CapBreakdown.svelte';
 	import RefusalPanel from '$lib/components/RefusalPanel.svelte';
 
@@ -370,24 +372,46 @@
 	);
 
 	/**
+	 * The freshness state, from the ONE contract the layout mounts (AD-29).
+	 *
+	 * Read, never derived: `deriveFreshness` in `core/freshness.ts` decides
+	 * which of the three states holds, and this page asks which one it is the
+	 * same way it asks which contention state the fold produced.
+	 */
+	const staleBlocked = $derived(freshness.state === 'stale');
+
+	/**
 	 * The one flag both the affordance and the stated reason read from. The
 	 * server re-derives every gate under the lock regardless — disabling a
 	 * control is never the check.
+	 *
+	 * Stale JOINS this existing path rather than adding a second one. AD-29's
+	 * obligation in Stale is "bid controls disable with the reason stated", and
+	 * this page already had exactly that mechanism for nine gates; a parallel
+	 * disable would have been a second way for this control to be off, with a
+	 * second place to word why.
 	 */
-	const blocked = $derived(typed.blocked);
+	const blocked = $derived(typed.blocked || staleBlocked);
 
 
 	/**
 	 * The one sentence beneath the control, and never two.
 	 *
-	 * A standing condition the server already stated — your Team leads, or you
-	 * are bound to none — is what a Manager is shown, because the field is
-	 * disabled on it and nothing they could type would change the answer.
-	 * Otherwise the live per-amount reason, which tracks the field. Both come
-	 * out of the same core function, so the two branches cannot word the same
-	 * refusal differently.
+	 * Stale is stated FIRST, above every gate reason. When the app cannot
+	 * confirm its own figures, the arithmetic those gates ran on is exactly what
+	 * is in doubt — printing "your Bid must exceed $14.5M" beneath a control
+	 * disabled because that figure may be hours old would be the page explaining
+	 * its refusal with the number it has just admitted it cannot vouch for.
+	 *
+	 * Otherwise: a standing condition the server already stated — your Team
+	 * leads, or you are bound to none — because the field is disabled on it and
+	 * nothing they could type would change the answer. Otherwise the live
+	 * per-amount reason, which tracks the field. All three sentences come out of
+	 * the core, so no two branches can word the same refusal differently.
 	 */
-	const reason = $derived(control.available ? typed.detail : control.detail);
+	const reason = $derived(
+		staleBlocked ? STALE_BID_REASON : control.available ? typed.detail : control.detail
+	);
 
 	/**
 	 * What confirming commits, naming the amount being confirmed. Falls back
@@ -800,7 +824,14 @@
 	     Team that is broke rather than one that does not exist. -->
 	{#if standingBreakdown.length > 0}
 		<section class="panel">
-			<p class="section-label">Maximum Bid</p>
+			<!-- Labelled LAST-KNOWN in anything but Live (AD-29): in a non-Live
+			     state money either carries its age or the control it would
+			     authorise is disabled, and while the control is still enabled
+			     this label is the carrying half. The label is the core's, in
+			     every state including Live — the surface prints one field. The
+			     age itself is stated once, by the notice the layout mounts, so
+			     it is not repeated here. -->
+			<p class="section-label">{MAXIMUM_BID_LABELS[freshness.state]}</p>
 			<CapBreakdown lines={standingBreakdown} id="auction-maximum-bid" />
 		</section>
 	{/if}
@@ -845,7 +876,11 @@
 				     condition this binding is for: no amount will change it.
 				     Without this, a tab left open across its own close would
 				     grey the submit and leave the field typable, which is the
-				     one case AD-29 exempts countdowns from freezing FOR. -->
+				     one case AD-29 exempts countdowns from freezing FOR.
+				     Stale is the third such standing condition (Story 4.1): when
+				     the app cannot confirm the figures beside the field, there is
+				     nothing to type either — and unlike the two above, it clears
+				     by itself the moment the server is reachable again. -->
 				<input
 					id="auction-bid-amount"
 					class="bid-amount"
@@ -853,7 +888,7 @@
 					type="text"
 					inputmode="numeric"
 					autocomplete="off"
-					disabled={!control.available || expired}
+					disabled={!control.available || expired || staleBlocked}
 					aria-describedby="auction-bid-availability auction-bid-minimum"
 					bind:value={amount}
 				/>

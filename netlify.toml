@@ -81,13 +81,25 @@
     #
     #   form-action  — 'self' plus discord.com, because sign-in POSTs to this
     #                  origin and the OAuth handshake then navigates to Discord.
-    #   connect-src  — 'self' only for now. When the two Supabase projects are
-    #                  provisioned (see the open entry in deferred-work.md), the
-    #                  Realtime socket is admitted by adding that project's
-    #                  literal host — `https://<ref>.supabase.co` and
-    #                  `wss://<ref>.supabase.co` — never `*.supabase.co`. This
-    #                  story ships no Realtime client, so admitting one now
-    #                  would be widening the policy ahead of the need.
+    #   connect-src  — 'self' only, and this is now BLOCKING rather than merely
+    #                  anticipated. Story 4.1 ships the Realtime client, so a
+    #                  deployed browser's watermark socket is refused by this
+    #                  directive today. That is a degradation, not a fault: the
+    #                  freshness contract's same-origin liveness poll needs no
+    #                  widening at all, so the app sits honestly in Reconnecting,
+    #                  refreshes on the poll instead of the push, and never
+    #                  reaches Stale on that account. It is admitted by adding
+    #                  the two Supabase projects' LITERAL hosts —
+    #                  `https://<ref>.supabase.co` and `wss://<ref>.supabase.co`
+    #                  — never `*.supabase.co`, which would admit every other
+    #                  tenant on the platform. Neither project is provisioned, so
+    #                  there is still no ref to name; the widening cannot be
+    #                  written without a host and must not be faked with a
+    #                  wildcard. The open entry in deferred-work.md is the
+    #                  record, and `tests/headers.test.ts` pins this directive so
+    #                  the widening cannot happen silently. The client derives
+    #                  the socket host from PUBLIC_SUPABASE_URL and writes it
+    #                  down nowhere, so naming it here is a one-line change.
     #   script-src   — 'self' plus 'unsafe-inline'. SvelteKit emits an inline
     #                  bootstrap <script> in every SSR'd document. The stronger
     #                  form is a per-response nonce or hash, which only

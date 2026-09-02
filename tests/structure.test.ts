@@ -246,6 +246,38 @@ describe('the stack configuration', () => {
 		expect(statSync(full).isDirectory(), 'src/lib/components is not a directory').toBe(true);
 	});
 
+	it('has src/lib/client — the browser-only counterpart to src/lib/server', () => {
+		// Story 4.1 is the first to need browser-only code that is not a
+		// component: the Realtime subscription, the liveness poll and the runes
+		// that hold their result. AR-2's tree names `lib/server` and `lib/shell`
+		// but no browser side, because before this story there was none. This
+		// follows `src/lib/components`' precedent above exactly — the tree
+		// growing the way a SvelteKit app does, not a spine violation.
+		const full = at('src', 'lib', 'client');
+		expect(existsSync(full), 'src/lib/client is missing').toBe(true);
+		expect(statSync(full).isDirectory(), 'src/lib/client is not a directory').toBe(true);
+	});
+
+	it('keeps src/lib/client free of anything server-only', () => {
+		// The mirror of the rule `lib/server` enforces in the other direction: a
+		// module reachable from the browser bundle must never import the
+		// service-role client or read a non-PUBLIC_ variable (AD-16).
+		const walk = (directory: string): string[] =>
+			readdirSync(directory).flatMap((entry) => {
+				const full = join(directory, entry);
+				return statSync(full).isDirectory() ? walk(full) : [full];
+			});
+		for (const file of walk(at('src', 'lib', 'client'))) {
+			const source = readFileSync(file, 'utf8');
+			expect(source, `${file} imports server-only code`).not.toMatch(
+				/\$lib\/server|\$env\/dynamic\/private|\$env\/static\/private/
+			);
+			expect(source, `${file} names a non-public variable`).not.toMatch(
+				/SERVICE_ROLE|SUPABASE_DB_URL|DISCORD_WEBHOOK/
+			);
+		}
+	});
+
 	it('states rather than hides an empty destination list — AC7', () => {
 		// The behaviour itself (`hasNothingLive`) is proven directly in
 		// tests/destinations-view.test.ts; no .svelte file can be rendered

@@ -157,12 +157,30 @@ describe('the Content-Security-Policy', () => {
 		}
 	});
 
-	it('keeps connect-src same-origin until a Supabase project exists to name', () => {
+	it('keeps connect-src same-origin, blocking the shipped socket, until a project exists to name', () => {
 		// The Realtime socket is admitted by adding that project's literal host,
 		// never `*.supabase.co`. Both projects are still unprovisioned (see
-		// deferred-work.md), and this story ships no Realtime client, so
-		// admitting one now would widen the policy ahead of the need.
+		// deferred-work.md), so there is no ref to name.
+		//
+		// **Since Story 4.1 this is blocking, not anticipatory.** The Realtime
+		// client now ships, so a deployed browser's watermark socket is refused
+		// by this exact directive. The story keeps the assertion and the policy
+		// UNCHANGED anyway, deliberately: the freshness contract degrades to
+		// Reconnecting and keeps refreshing on its same-origin poll, which needs
+		// no widening — and a wildcard host written to unblock the socket sooner
+		// would admit every other tenant on the platform, which is far wider
+		// than anything this app requires. The widening cannot be written
+		// without a host to name, and this assertion is what stops it happening
+		// silently once there is one.
 		expect(CSP_DIRECTIVES.get('connect-src')).toEqual(["'self'"]);
+	});
+
+	it('names no wildcard host in any directive, socket or otherwise', () => {
+		// AC: "no wildcard host appears anywhere in the policy". Asserted over
+		// the whole policy rather than over connect-src alone, because the
+		// temptation a shipped-but-blocked socket creates is to widen SOME
+		// directive, and default-src would admit it just as effectively.
+		expect(CSP).not.toMatch(/\*\.[a-z]/i);
 	});
 });
 

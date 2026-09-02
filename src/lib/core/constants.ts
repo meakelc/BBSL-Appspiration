@@ -58,6 +58,42 @@ export const FRESHNESS_WINDOW = 30 * 1000;
 /** No successful liveness check within this window is Stale (AD-29). */
 export const STALE_WINDOW = 120 * 1000;
 
+/**
+ * How often the browser re-reads the watermark to ask "can I still reach the
+ * server?" (AD-29, Story 4.1).
+ *
+ * **Named here rather than guessed at a call site**, for `FRESHNESS_WINDOW`'s
+ * reason: an interval typed into the client module would be a second window
+ * constant living outside this file, free to drift from the two above.
+ *
+ * Chosen AGAINST `FRESHNESS_WINDOW`, not independently. At 10s against a 30s
+ * window, one missed poll leaves the last success 20s old and the client stays
+ * Live; two consecutive misses put it at 30s and it degrades to Reconnecting.
+ * That is the intended sensitivity — a single dropped request on mobile data is
+ * not evidence of anything, and two in a row are. `STALE_WINDOW` is twelve
+ * intervals, so reaching Stale takes a sustained outage rather than a blip.
+ *
+ * It is an interval, never an instant: nothing here reads a clock (AD-3).
+ */
+export const LIVENESS_INTERVAL = 10 * 1000;
+
+/**
+ * How long a single liveness re-read may take before it is abandoned
+ * (Story 4.1).
+ *
+ * Named here for `LIVENESS_INTERVAL`'s reason, and chosen against it the same
+ * way: 8s sits INSIDE the 10s interval, so a request that hangs is aborted
+ * before the next tick rather than accumulating in flight. It is the same
+ * arithmetic `supabase/migrations/20260831000000_tick.sql` does for pg_net's
+ * response timeout against the 10-second cron interval, and for the same
+ * reason.
+ *
+ * An abandoned request is a LAPSED check, never a failure worth reporting: it
+ * does not move `lastLivenessOkAt`, so the state degrades on schedule exactly
+ * as a refused or unreachable read does.
+ */
+export const LIVENESS_TIMEOUT = 8 * 1000;
+
 /** Active/Bench Slots per Team. The Roster Capacity ceiling (FR-37). */
 export const ACTIVE_BENCH_SLOTS = 12;
 
