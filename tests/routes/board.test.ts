@@ -266,6 +266,29 @@ describe('the board page — what it renders', () => {
 		expect(PAGE).toMatch(/\.chip-lead \{[\s\S]*?--color-border-strong[\s\S]*?\}/);
 	});
 
+	it('gives a chip to You lead and Outbid ONLY — ambient states stay plain', () => {
+		// DESIGN.md:194 reserves the chip for the two states that concern the
+		// reader: filled `attention` for Outbid, outlined `border-strong` for
+		// You lead. Open, Awaiting Opening Bid, Contender and Not involved are
+		// ambient and take a plain `text-secondary` label with no chip — so
+		// the chip keeps meaning "this one is about you" instead of
+		// decorating every line on the card.
+		expect(PAGE).toMatch(
+			/class:chip=\{card\.viewerState === 'you_lead' \|\| card\.viewerState === 'outbid'\}/
+		);
+		// The Auction state line is never a chip: it describes the Auction,
+		// never the reader.
+		expect(PAGE).toMatch(/<p class="state state-ambient">/);
+		// The ambient treatment is the plain secondary label, with the fill
+		// and the outline living only on the two chip rules.
+		expect(PAGE).toMatch(/\.state-ambient \{\s*color: var\(--color-text-secondary\);\s*\}/);
+		expect(PAGE_CODE).not.toMatch(/chip-contender/);
+		// The icon-and-word pairing is NOT what was made conditional: every
+		// state, chip or not, still carries both.
+		expect(PAGE).toContain('card.viewerStateIcon');
+		expect(PAGE).toContain('card.auctionStateIcon');
+	});
+
 	it('spells no tokenised value as a literal', () => {
 		// Sizes, the touch floor, the strip height, the accent bar and the
 		// palette all have tokens; a literal here would be a second source.
@@ -306,11 +329,31 @@ describe('the board page — what it renders', () => {
 		expect(PAGE).toMatch(/formatInstant\(anchor \+ elapsedMs\)/);
 		expect(PAGE).toMatch(/elapsedMs = Math\.max\(0, Date\.now\(\) - startedAt\)/);
 		expect(PAGE_CODE).not.toMatch(/secondsRemaining|remainingSeconds|msRemaining/);
-		// Countdowns are exempt from freshness — nothing here freezes on a
-		// disconnect, so this page reads no freshness state at all.
-		expect(PAGE_CODE).not.toMatch(/freshness/);
+		// Countdowns are exempt from freshness (AD-29) — they derive from the
+		// absolute close timestamps this page already holds, so nothing here
+		// freezes on a disconnect. The exemption is the COUNTDOWN's, not the
+		// page's: the prices carry their age (see the AD-29 test below).
+		expect(PAGE).not.toMatch(/freshness\.state[^\n]*closesInPhrase/);
+		expect(PAGE).toMatch(/closesInPhrase\(card\.closesAt, nowIso\)/);
 		expect(PAGE).toMatch(/const TICK_MS = 1000/);
 		expect(PAGE).toMatch(/return \(\) => \{\s*clearInterval\(ticking\);\s*\}/);
+	});
+
+	it('carries the age of its prices in anything but Live — AD-29', () => {
+		// The board renders up to thirty prices and authorises nothing, so the
+		// "disable the control" half of AD-29 has nothing to disable and the
+		// "money carries its age" half is the whole obligation. Without this
+		// the worst failure AD-29 names is exactly what ships: a stale board
+		// that still looks live, read by a Manager deciding where to bid.
+		expect(PAGE).toContain('figuresAgeSentence');
+		expect(PAGE).toMatch(/freshness\.state === 'live'\s*\?\s*null/);
+		expect(PAGE).toMatch(/id="board-figures-age"/);
+		// The sentence is the core's, shared with the strip and the notice —
+		// an age is worded once in this codebase, not respelled here.
+		expect(PAGE).toMatch(/from '\$lib\/core\/freshness\.ts'/);
+		// Read from the ONE contract the layout mounts, never derived here.
+		expect(PAGE).toMatch(/from '\$lib\/client\/freshness\.svelte\.ts'/);
+		expect(PAGE_CODE).not.toMatch(/deriveFreshness/);
 	});
 
 	it('shows no clock at all on a nomination with no Opening Bid', () => {
@@ -344,6 +387,27 @@ describe('the board page — what it renders', () => {
 		expect(PAGE).toContain('EMPTY_BOARD_HEADING');
 		expect(PAGE).toContain('EMPTY_BOARD_STATEMENT');
 		expect(PAGE).toMatch(/href="\/nominate"/);
+	});
+
+	it('offers no Nominate link on the ARCHIVED empty board — the link would 403', () => {
+		// The board is live in two phases and the act exists in only one:
+		// `nominate` is absent from the Archived catalog, so the Auction
+		// Phase's call to action would answer with `requireLiveDestination`'s
+		// 403 — a designed empty state whose one link refuses. The frozen
+		// board states what happened and offers nothing.
+		expect(PAGE).toMatch(/\{#if data\.phase\.name === 'Archived'\}/);
+		expect(PAGE).toContain('ARCHIVED_EMPTY_BOARD_HEADING');
+		expect(PAGE).toContain('ARCHIVED_EMPTY_BOARD_STATEMENT');
+		// The Archived branch carries no action at all — the `/nominate`
+		// anchor lives only in the `:else`, which is the Auction Phase's.
+		const archivedBranch = PAGE.slice(
+			PAGE.indexOf("{#if data.phase.name === 'Archived'}"),
+			PAGE.indexOf('{:else}', PAGE.indexOf("{#if data.phase.name === 'Archived'}"))
+		);
+		expect(archivedBranch).not.toMatch(/href="\/nominate"/);
+		expect(archivedBranch).not.toContain('EMPTY_BOARD_ACTION');
+		// And both screens are still the core's words, not the page's.
+		expect(PAGE_CODE).not.toMatch(/The Auction Phase is over/);
 	});
 
 	it('spells out the fantasy Team with its Manager, and never abbreviates one', () => {

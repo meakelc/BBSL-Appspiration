@@ -33,6 +33,8 @@
 	// what AD-2 says both runtimes load, and the helpers below are the same
 	// ones the server calls.
 	import {
+		ARCHIVED_EMPTY_BOARD_HEADING,
+		ARCHIVED_EMPTY_BOARD_STATEMENT,
 		BOARD_CLOSES_LABEL,
 		BOARD_FILTER_LEGEND,
 		BOARD_LEADING_LABEL,
@@ -62,6 +64,8 @@
 		contenderCountSentence
 	} from '$lib/core/projection/auctions.ts';
 	import type { ContentionState } from '$lib/core/projection/auctions.ts';
+	import { figuresAgeSentence } from '$lib/core/freshness.ts';
+	import { freshness } from '$lib/client/freshness.svelte.ts';
 	import { formatInstant, parseInstant } from '$lib/core/instant.ts';
 
 	import type { PageData } from './$types';
@@ -170,6 +174,27 @@
 	);
 
 	/**
+	 * The age of every price on this board, in anything but Live (AD-29).
+	 *
+	 * The board renders up to thirty prices and authorises nothing — there is
+	 * no bid control here, so the "disable the control" half of AD-29's
+	 * obligation has nothing to disable and the "carry the age" half is the
+	 * whole of what applies. **Countdowns stay exempt**: they derive from
+	 * absolute close timestamps this page already holds, so they keep running.
+	 *
+	 * ONE line for the page rather than one per card: every card came from a
+	 * single transaction anchored on a single `figuresAt`, so thirty stamps
+	 * would repeat one fact thirty times and read as urgency on a surface that
+	 * refuses it. The sentence is the core's, shared with the strip and the
+	 * notice, so an age is worded once in this codebase.
+	 */
+	const figuresAge = $derived(
+		freshness.state === 'live'
+			? null
+			: figuresAgeSentence(freshness.lastLivenessOkAt, freshness.now)
+	);
+
+	/**
 	 * The absolute stamps, computed in an `$effect` and therefore only in the
 	 * browser — the SSR-leak rule the Auction page establishes.
 	 * `Intl.DateTimeFormat(undefined, ...)` resolves `undefined` to the
@@ -227,16 +252,36 @@
 	{#if board.cards.length === 0}
 		<!-- The designed empty screen, not an edge case: it explains the state
 		     and points at Nominate, which is the act that fills the board.
-		     Every word is the core's. -->
-		<section class="panel" id="board-empty">
-			<h2 class="display" id="board-empty-heading">{EMPTY_BOARD_HEADING}</h2>
-			<p class="prose" id="board-empty-statement">{EMPTY_BOARD_STATEMENT}</p>
-			<p class="prose"><a href="/nominate" id="board-empty-action">{EMPTY_BOARD_ACTION}</a></p>
-		</section>
+		     Every word is the core's.
+
+		     Phase-aware, because the board is live in TWO phases and the act
+		     only exists in one: `nominate` is absent from the Archived
+		     catalog, so offering it there would hand a Manager a link that
+		     answers with the guard's 403. A frozen empty board states what
+		     happened and offers nothing. -->
+		{#if data.phase.name === 'Archived'}
+			<section class="panel" id="board-empty">
+				<h2 class="display" id="board-empty-heading">{ARCHIVED_EMPTY_BOARD_HEADING}</h2>
+				<p class="prose" id="board-empty-statement">{ARCHIVED_EMPTY_BOARD_STATEMENT}</p>
+			</section>
+		{:else}
+			<section class="panel" id="board-empty">
+				<h2 class="display" id="board-empty-heading">{EMPTY_BOARD_HEADING}</h2>
+				<p class="prose" id="board-empty-statement">{EMPTY_BOARD_STATEMENT}</p>
+				<p class="prose"><a href="/nominate" id="board-empty-action">{EMPTY_BOARD_ACTION}</a></p>
+			</section>
+		{/if}
 	{:else}
 		<section class="panel">
 			<p class="section-label">Open Auctions</p>
 			<p class="prose" id="board-count">{countSentence}</p>
+
+			<!-- Every price on this board carries its age in anything but Live
+			     (AD-29). The countdowns are exempt and keep running; the
+			     figures are what cannot be confirmed. -->
+			{#if figuresAge !== null}
+				<p class="prose" id="board-figures-age">{figuresAge}</p>
+			{/if}
 
 			<!-- Sorting and filtering are view state. Neither posts anything,
 			     neither reloads anything, and neither changes a figure on a
@@ -299,17 +344,25 @@
 						{card.priceLabel}
 					</p>
 
-					<!-- Every state chip carries an ICON and a WORD. Neither state
-					     is ever colour alone. -->
-					<p class="chip chip-state">
+					<!-- Every state carries an ICON and a WORD, never colour
+					     alone. The CHIP, though, is reserved for the two states
+					     DESIGN.md:194 gives one to: filled `attention` for
+					     Outbid, outlined `border-strong` for You lead. Ambient
+					     states — Open, Awaiting Opening Bid, Contender and Not
+					     involved — take a plain `text-secondary` label and no
+					     chip, so the chip keeps meaning "this one concerns
+					     you" rather than decorating every line on the card. -->
+					<p class="state state-ambient">
 						<span class="chip-icon" aria-hidden="true">{card.auctionStateIcon}</span>
 						<span class="chip-word">{card.auctionStateLabel}</span>
 					</p>
 					<p
-						class="chip chip-viewer"
+						class="state"
+						class:chip={card.viewerState === 'you_lead' || card.viewerState === 'outbid'}
 						class:chip-lead={card.viewerState === 'you_lead'}
 						class:chip-outbid={card.viewerState === 'outbid'}
-						class:chip-contender={card.viewerState === 'contender'}
+						class:state-ambient={card.viewerState !== 'you_lead' &&
+							card.viewerState !== 'outbid'}
 					>
 						<span class="chip-icon" aria-hidden="true">{card.viewerStateIcon}</span>
 						<span class="chip-word">{card.viewerStateLabel}</span>
@@ -471,18 +524,29 @@
 	}
 
 	/*
-	 * A chip is an icon and a word together, always. The default is the plain
-	 * ambient treatment — a secondary label with no fill and no outline —
-	 * which is what Not involved and the two ambient Auction states get.
+	 * A state line is an icon and a word together, always — that pairing is
+	 * what makes a greyscale screenshot read, and it is unconditional.
+	 *
+	 * `.state` is the shared layout; `.state-ambient` is the plain
+	 * `text-secondary` label DESIGN.md:194 specifies for the ambient states,
+	 * and it carries no fill, no outline and no padding. `.chip` is added on
+	 * top for the two states that earn one.
 	 */
-	.chip {
+	.state {
 		display: flex;
 		align-items: center;
 		gap: var(--space-row-gap);
 		align-self: flex-start;
 		font-size: var(--size-12-5);
-		color: var(--color-text-secondary);
 		border-radius: var(--rounded-chip);
+	}
+
+	.state-ambient {
+		color: var(--color-text-secondary);
+	}
+
+	.chip {
+		padding: 2px var(--space-row-gap);
 	}
 
 	.chip-icon {
@@ -491,7 +555,6 @@
 
 	/* Outlined, never filled: leading is a standing fact, not an alert. */
 	.chip-lead {
-		padding: 2px var(--space-row-gap);
 		border: var(--border-width) solid var(--color-border-strong);
 		color: var(--color-text);
 	}
@@ -502,18 +565,7 @@
 	 * the reader rather than about the Auction.
 	 */
 	.chip-outbid {
-		padding: 2px var(--space-row-gap);
 		background-color: var(--color-attention);
 		color: var(--color-attention-ink);
-	}
-
-	/*
-	 * Its own word and its own shape, and deliberately NOT `attention`: a Team
-	 * inside a contention has not been outbid, it is waiting on a draw.
-	 */
-	.chip-contender {
-		padding: 2px var(--space-row-gap);
-		border: var(--border-width) solid var(--color-lottery);
-		color: var(--color-lottery-text);
 	}
 </style>

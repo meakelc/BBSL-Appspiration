@@ -169,11 +169,20 @@ export const VIEWER_STATE_LABELS: Readonly<Record<BoardViewerState, string>> = O
 	not_involved: 'Not involved'
 });
 
-/** Where the viewer stands, in shapes — `AUCTION_STATE_ICONS`' reason. */
+/**
+ * Where the viewer stands, in shapes — `AUCTION_STATE_ICONS`' reason.
+ *
+ * Deliberately DISJOINT from `AUCTION_STATE_ICONS`: a card in a Minimum-Bid
+ * Contention renders both records side by side, so a glyph shared across the
+ * two would put two identical shapes on one card and cost exactly the
+ * greyscale distinction the pairing exists to guarantee. `contender` takes a
+ * half-filled square — a Team that has joined and is waiting — rather than
+ * repeating the contention's own diamond.
+ */
 export const VIEWER_STATE_ICONS: Readonly<Record<BoardViewerState, string>> = Object.freeze({
 	you_lead: '\u25B2',
 	outbid: '\u25BC',
-	contender: '\u25C6',
+	contender: '\u25E7',
 	not_involved: '\u2013'
 });
 
@@ -219,6 +228,21 @@ export const EMPTY_BOARD_STATEMENT =
 	'spend their Nomination Slots, and every Auction appears here the moment its nomination is ' +
 	'placed — bid or not.';
 export const EMPTY_BOARD_ACTION = 'Nominate a Free Agent';
+
+/**
+ * The empty screen once the Auction Phase is over.
+ *
+ * A frozen board with nothing on it is a different FACT from a board waiting
+ * to fill, and it must not offer the act that fills one: `nominate` is absent
+ * from the Archived catalog (`server/destinations.ts`), so the Auction Phase's
+ * call to action would resolve to the guard's 403 — a designed empty state
+ * whose one link refuses. This screen therefore states what happened and
+ * offers nothing, which is honest rather than merely safe.
+ */
+export const ARCHIVED_EMPTY_BOARD_HEADING = 'The board is closed.';
+export const ARCHIVED_EMPTY_BOARD_STATEMENT =
+	'The Auction Phase is over and no Auction remains open, so there is nothing here to read. ' +
+	'Nominating has closed with it.';
 
 /**
  * What a filter is hiding, as a finished sentence — or `null` for the
@@ -331,8 +355,8 @@ export function priceLabel(price: Money | null): string {
  * in full and every card reads Not involved, because there is no Team for any
  * of the other three to be about.
  *
- * **Contender is tested BEFORE both of the others, and the order is the
- * rule.** Two distinct mislabels are closed by it.
+ * **Contender is tested BEFORE the other two, and only while the contention
+ * is LIVE.** Both halves are the rule; the ordering alone is not enough.
  *
  * Ahead of outbid: a Team inside a Minimum-Bid Contention holds a Bid at
  * exactly `MINIMUM_BID` that is not the leading one, so the outbid test would
@@ -348,13 +372,36 @@ export function priceLabel(price: Money | null): string {
  * invite them not to act on an Auction they are no likelier to win than
  * anyone else — the Auction page never makes that claim either, swapping its
  * Leading Bidder line for the contention panel (`auction/[fantraxPlayerId]/+page.svelte:692`).
+ *
+ * And gated on `contention === 'minimum_bid'`, because `contenders` OUTLIVES
+ * the contention: the reducer never clears the list, so a dissolved lottery
+ * is `standard` with every former joiner still in it. Ungated, the Team whose
+ * raise dissolved it — the Team that now actually leads — reads "Contender",
+ * and so does the Team that raise genuinely outbid. The `leading` filter then
+ * hides a card the viewer is winning and `contending` shows one with no
+ * contention running. `wasDissolved` is the core's predicate for that state;
+ * this asks the narrower question the label depends on.
  */
 export function viewerStateFor(
 	auction: Auction | null,
 	viewerTeamId: string | null
 ): BoardViewerState {
 	if (auction === null || viewerTeamId === null) return 'not_involved';
-	if (auction.contenders.some((contender) => contender.teamId === viewerTeamId)) return 'contender';
+	// Gated on the contention being LIVE, not merely on the list being
+	// populated. `contendersFor` derives the Contender list from every
+	// historical Bid at exactly `MINIMUM_BID` and the reducer deliberately
+	// never clears it — `auctions.ts` says so outright, because the list is
+	// what a reveal is about. So a DISSOLVED contention is `standard` with a
+	// non-empty list, and an ungated test would tell the Team that converted
+	// it, and now genuinely leads, that they are a Contender in a lottery
+	// that is no longer running — hiding the card from the `leading` filter
+	// on the one surface a Manager scans to decide where to act.
+	if (
+		auction.contention === 'minimum_bid' &&
+		auction.contenders.some((contender) => contender.teamId === viewerTeamId)
+	) {
+		return 'contender';
+	}
 	if (auction.leadingBid.teamId === viewerTeamId) return 'you_lead';
 	if (auction.bids.some((bid) => bid.teamId === viewerTeamId)) return 'outbid';
 	return 'not_involved';
@@ -438,6 +485,7 @@ function compareText(left: string, right: string): number {
  * written for the wire shape would be a second ordering rule.
  */
 type Sortable = {
+	readonly fantraxPlayerId: string;
 	readonly playerName: string;
 	readonly closesAt: string | null;
 	readonly price: number | null;
@@ -448,14 +496,15 @@ type Sortable = {
  * sorted in place, because a surface re-deriving on every projection change
  * must not mutate the list it was handed.
  *
- * **Every comparator is total and every one tie-breaks on the Player name.**
- * Two Auctions legitimately share a close instant (two Bids inside one
- * transaction clock, or a contention's fixed clock) and legitimately share a
- * price (the $500,000 grid makes collisions ordinary), so a comparator
+ * **Every comparator is total and every one tie-breaks on the Player name,
+ * then on the Player id.** Two Auctions legitimately share a close instant
+ * (two Bids inside one transaction clock, or a contention's fixed clock) and
+ * legitimately share a price (the $500,000 grid makes collisions ordinary),
+ * and two different Players can legitimately share a NAME — so a comparator
  * returning 0 would leave the order to `Array.prototype.sort` and, through
  * it, to whatever order the list happened to arrive in. On a surface that
  * re-derives while a Manager is reading it, that is a list that visibly
- * shuffles.
+ * shuffles. The Player id is unique by construction and ends every chain.
  *
  * `closing` is ascending time REMAINING as of `now`, which for a fixed `now`
  * is the same order as ascending close instant — stated in the terms the
@@ -498,7 +547,16 @@ export function sortBoard<T extends Sortable>(
 		// `name` reaches here directly; the other two reach it as the tie-break
 		// that makes them total. One expression, so the fallback cannot differ
 		// between the sort that is the Player name and the sorts that end in it.
-		return compareText(left.playerName, right.playerName);
+		const byName = compareText(left.playerName, right.playerName);
+		if (byName !== 0) return byName;
+		// Two DIFFERENT Players can share a name — the league has had them —
+		// and a comparator returning 0 there would hand the pair back to
+		// `Array.prototype.sort`, which is free to order them by whatever the
+		// input order happened to be. That is the visible reshuffle this
+		// module exists to prevent, so the last tie-break is the one key that
+		// is unique by construction: `fantrax_player_id` is `unique` on
+		// `free_agent_players` and is the id every card is already keyed on.
+		return compareText(left.fantraxPlayerId, right.fantraxPlayerId);
 	});
 }
 

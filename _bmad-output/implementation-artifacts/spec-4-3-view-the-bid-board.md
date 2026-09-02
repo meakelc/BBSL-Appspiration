@@ -2,7 +2,7 @@
 title: 'Story 4.3: View the Bid Board'
 type: 'feature'
 created: '2026-09-01'
-status: 'in-review'
+status: 'done'
 baseline_commit: '805ed496c340675d68dad072924c117d27203f89'
 review_loop_iteration: 0
 context:
@@ -92,6 +92,42 @@ context:
 - Given the board renders, when any string on it is traced, then it originates in `src/lib/core/`, and no `.svelte` file under `src/routes/board/` contains a user-facing sentence.
 - Given the viewer sorts or filters, when the list changes, then no price, count or time on any card changes with it.
 - Given a Manager on a phase whose catalog omits `bid-board`, when they request `/board`, then the response is the 403 `requireLiveDestination` produces, not a redirect and not an empty board.
+
+### Review Findings
+
+Code review 2026-09-02. Four layers ran over the full `805ed49..HEAD` diff (10 files, +2,619); no
+layer failed. The Acceptance Auditor ran at the **opus** tier because the diff touches
+`src/lib/core/**`, which overrides this story's `Safe for low-effort` row in `BMAD-EFFORT-TRIAGE.md`.
+All findings below are resolved; every fix is mutation-checked (reverted individually, the owning
+test observed to fail, then restored).
+
+- [x] [Review][Patch] A dissolved Minimum-Bid Contention mislabelled BOTH Teams [src/lib/core/board.ts:357] — `contendersFor` derives the Contender list from every historical Bid at exactly `MINIMUM_BID` and the reducer never clears it, so a dissolved lottery is `standard` with the list still populated. The ungated contender test told the Team whose raise dissolved it — the Team that now genuinely leads — that it was a Contender, and told the Team it outbid the same thing; the `leading` filter then hid a card the viewer was winning. Gated on `contention === 'minimum_bid'`. Reachable today: stories 3.2/3.3/3.6 are all `done`.
+- [x] [Review][Patch] The board rendered up to thirty prices with no freshness state [src/routes/board/+page.svelte] — AD-29 exempts **countdowns** only ("they derive from absolute close timestamps the client already holds"); the implementation widened that to the whole page, and `tests/routes/board.test.ts` pinned the violation with `expect(PAGE_CODE).not.toMatch(/freshness/)`. This is the exact failure AD-29:264 names — "a stale board that still looks live, where a manager reads a figure, believes it current, and bids against it". Now renders `figuresAgeSentence` page-level in anything but Live; the countdown exemption is preserved and tested as the countdown's.
+- [x] [Review][Patch] `sortBoard`'s tie-break was not total on duplicate Player names [src/lib/core/board.ts:544] — two different Players can share a name, and every comparator then returned 0, handing the pair to `Array.prototype.sort`. Proven by sorting the same two cards in reversed input order and getting reversed output — the visible reshuffle the module header claims to eliminate. Every chain now ends at `fantraxPlayerId`, unique by schema.
+- [x] [Review][Patch] The empty screen's only call to action was dead in Archived [src/routes/board/+page.svelte] — `nominate` is absent from the Archived catalog (`server/destinations.ts:91-96`), so the Auction Phase's `/nominate` link answered with the guard's 403 in one of the two phases this story serves. Added `ARCHIVED_EMPTY_BOARD_*` to the core and branched on phase; the Archived branch offers no act at all.
+- [x] [Review][Patch] Ambient states rendered chips DESIGN.md reserves for two states [src/routes/board/+page.svelte:307] — DESIGN.md:194 gives a chip to Outbid (filled `attention`) and You lead (outlined `border-strong`) and specifies "plain `text-secondary` label, no chip, for ambient states"; the matrix repeats it for Not involved. Every state was wrapped in `.chip`. Now `.state`/`.state-ambient` with `.chip` added only for the two. The icon-and-word pairing stayed unconditional.
+- [x] [Review][Patch] `contender` and `minimum_bid` shared the identical glyph [src/lib/core/board.ts:185] — both `◆`, rendered side by side on a lottery card, so two adjacent chips carried indistinguishable shapes. The existing test checked uniqueness *within* each record and could not see it. Changed to `◧` and the test now asserts disjointness *across* the two records.
+- [x] [Review][Patch] `loadBoard`'s card-assembly mapping ran in zero executing test [src/lib/server/board.ts:279] — the only executing test reached `cards` on an empty log, so `priceLabel`, `nameTeam`, `metadataLine` and the `pairKey` lookups never ran. Two tests added against the existing fake-client harness, including the (Manager, Team) mismatch `pairKey` exists to close.
+
+Dismissed as noise (6): a `String(null)` → `"null"` metadata defect raised as top finding by two
+recall layers independently — all three columns are `not null` in
+`supabase/migrations/20260824020000_live_reference_tables.sql:99-107` and the pattern matches
+`auction-page.ts:558-560` precedent; its empty-string variant; a `leadingTeamId ?? ''` pairKey
+concern unreachable because both fields come off the same `leadingBid`; the `formatAbsolute` /
+`parseInstant` split, copied verbatim from the Auction page; a chip-markup misreading; and
+`describeAmount` vs `formatMoney`, which delegates to `formatMoney` on-grid so no second renderer
+exists.
+
+Noted, not promoted (no spec basis, no `deferred-work.md` entry): URL/query-param sync for sort and
+filter, a zero-results affordance when a filter matches nothing, and `boardCardsFor` being called
+twice per request.
+
+**For the retrospective:** two of the seven findings — the dissolution mislabel and the freshness
+gap — are **negative invariants**, violated by absent code with a green suite either side, and the
+freshness one shipped with a test actively locking it in. `BMAD-EFFORT-TRIAGE.md` lists 4.3 as
+`Safe for low-effort` ("wide AC surface, all mechanical"); on this evidence that row is wrong and
+should be re-triaged at the epic boundary. Both were found by the Acceptance Auditor alone and were
+invisible to all three recall layers.
 
 ## Spec Change Log
 

@@ -17,6 +17,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+	ARCHIVED_EMPTY_BOARD_HEADING,
+	ARCHIVED_EMPTY_BOARD_STATEMENT,
 	AUCTION_STATE_ICONS,
 	AUCTION_STATE_LABELS,
 	DEFAULT_FILTER,
@@ -317,6 +319,31 @@ describe('the four viewer-relative states', () => {
 		expect(viewerStateFor(auction, 't-2')).toBe('you_lead');
 	});
 
+	it('a DISSOLVED contention returns both Teams to their real standing', () => {
+		// `contendersFor` derives the Contender list from every historical Bid
+		// at exactly `MINIMUM_BID`, and the reducer never clears it — so a
+		// dissolved lottery is `standard` with the list still populated. A
+		// contender test that read only the list would tell the Team whose
+		// raise dissolved it, and who now genuinely leads, that they are a
+		// Contender in a lottery that is no longer running; the `leading`
+		// filter would then hide the very card they are winning.
+		const auction = auctionWith([
+			bid('p-1', 't-2', 'Rockets', MINIMUM_BID, '2026-08-26T12:00:00.000Z', NOW),
+			bid('p-1', 't-3', 'Heat', MINIMUM_BID, '2026-08-26T13:00:00.000Z', NOW),
+			// t-2 raises above the minimum, which converts the contention.
+			bid('p-1', 't-2', 'Rockets', 2_000_000, '2026-08-26T14:00:00.000Z', NOW)
+		]);
+		// The state the guard turns on: converted, but the list survives.
+		expect(auction.contention).toBe('standard');
+		expect(auction.contenders.length).toBeGreaterThan(0);
+		expect(auction.leadingBid.teamId).toBe('t-2');
+		// The Team that actually leads is told so.
+		expect(viewerStateFor(auction, 't-2')).toBe('you_lead');
+		// And the Team its raise genuinely outbid is told THAT — `attention`
+		// belongs here now, because this Team really has been outbid.
+		expect(viewerStateFor(auction, 't-3')).toBe('outbid');
+	});
+
 	it('Not involved — a Team with no Bid at all', () => {
 		const auction = auctionWith([
 			bid('p-1', 't-2', 'Rockets', 8_500_000, '2026-08-26T12:00:00.000Z', NOW)
@@ -381,17 +408,45 @@ describe('every state carries a word AND a shape', () => {
 		const viewerIcons = Object.values(VIEWER_STATE_ICONS);
 		expect(new Set(viewerIcons).size).toBe(viewerIcons.length);
 		for (const icon of [...auctionIcons, ...viewerIcons]) expect(icon).not.toBe('');
+		// And ACROSS the two records, not merely within each: both render on
+		// the SAME card, side by side, so a glyph shared between them puts two
+		// identical shapes on one card. Uniqueness inside each record alone
+		// cannot see that — a lottery card carrying the contention's diamond
+		// beside a Contender's diamond passes every per-record check and still
+		// fails the greyscale test that is this story's acceptance criterion.
+		const everyIcon = [...auctionIcons, ...viewerIcons];
+		expect(new Set(everyIcon).size).toBe(everyIcon.length);
 	});
 });
 
 describe('sorting — view state, total, and always tie-broken on the Player name', () => {
-	type Row = { readonly playerName: string; readonly closesAt: string | null; readonly price: number | null };
+	type Row = {
+		readonly fantraxPlayerId: string;
+		readonly playerName: string;
+		readonly closesAt: string | null;
+		readonly price: number | null;
+	};
 
 	const rows: readonly Row[] = [
-		{ playerName: 'Charlie', closesAt: '2026-08-27T18:00:00.000Z', price: 9_000_000 },
-		{ playerName: 'Alice', closesAt: '2026-08-27T18:00:00.000Z', price: 9_000_000 },
-		{ playerName: 'Bob', closesAt: '2026-08-27T13:00:00.000Z', price: 1_000_000 },
-		{ playerName: 'Dana', closesAt: null, price: null }
+		{
+			fantraxPlayerId: 'p-charlie',
+			playerName: 'Charlie',
+			closesAt: '2026-08-27T18:00:00.000Z',
+			price: 9_000_000
+		},
+		{
+			fantraxPlayerId: 'p-alice',
+			playerName: 'Alice',
+			closesAt: '2026-08-27T18:00:00.000Z',
+			price: 9_000_000
+		},
+		{
+			fantraxPlayerId: 'p-bob',
+			playerName: 'Bob',
+			closesAt: '2026-08-27T13:00:00.000Z',
+			price: 1_000_000
+		},
+		{ fantraxPlayerId: 'p-dana', playerName: 'Dana', closesAt: null, price: null }
 	];
 
 	const names = (sorted: readonly Row[]) => sorted.map((row) => row.playerName);
@@ -424,6 +479,26 @@ describe('sorting — view state, total, and always tie-broken on the Player nam
 		}
 	});
 
+	it('is total even for two DIFFERENT Players who share a name', () => {
+		// The name is not unique — the league has had two Players called the
+		// same thing — so a chain ending at `playerName` still returns 0 for
+		// the pair and hands them back to `Array.prototype.sort`. That is the
+		// reshuffle this module exists to prevent, one level deeper, so every
+		// chain ends at the Player id, which is unique by construction.
+		const duplicates: readonly Row[] = [
+			{ fantraxPlayerId: 'p-aaa', playerName: 'Jalen Johnson', closesAt: null, price: null },
+			{ fantraxPlayerId: 'p-zzz', playerName: 'Jalen Johnson', closesAt: null, price: null }
+		];
+		const ids = (sorted: readonly Row[]) => sorted.map((row) => row.fantraxPlayerId);
+		const reversed = [...duplicates].reverse();
+		for (const key of SORT_KEYS) {
+			expect(ids(sortBoard(duplicates, key, NOW))).toEqual(['p-aaa', 'p-zzz']);
+			// The input order cannot change the output, which is what "total"
+			// means and what a 0-returning comparator could not promise.
+			expect(ids(sortBoard(reversed, key, NOW))).toEqual(ids(sortBoard(duplicates, key, NOW)));
+		}
+	});
+
 	it('never sorts the caller’s array in place', () => {
 		const original = [...rows];
 		sortBoard(rows, 'name', NOW);
@@ -442,8 +517,18 @@ describe('sorting — view state, total, and always tie-broken on the Player nam
 
 	it('treats an unreadable instant as no clock rather than as the earliest', () => {
 		const withGarbage: readonly Row[] = [
-			{ playerName: 'Alice', closesAt: 'not-an-instant', price: null },
-			{ playerName: 'Bob', closesAt: '2026-08-27T13:00:00.000Z', price: null }
+			{
+				fantraxPlayerId: 'p-alice',
+				playerName: 'Alice',
+				closesAt: 'not-an-instant',
+				price: null
+			},
+			{
+				fantraxPlayerId: 'p-bob',
+				playerName: 'Bob',
+				closesAt: '2026-08-27T13:00:00.000Z',
+				price: null
+			}
 		];
 		expect(names(sortBoard(withGarbage, 'closing', NOW))).toEqual(['Bob', 'Alice']);
 	});
@@ -536,5 +621,20 @@ describe('the counts and phrases the board states', () => {
 		// It explains the state AND points at the act that fills the board.
 		expect(EMPTY_BOARD_STATEMENT).toContain('Nomination Slot');
 		expect(EMPTY_BOARD_ACTION).toContain('Nominate');
+	});
+
+	it('gives the ARCHIVED empty board its own words, and no act', () => {
+		// A frozen board with nothing on it is a different fact from a board
+		// waiting to fill, and it must not offer the act that fills one —
+		// `nominate` is not a live destination in Archived, so the Auction
+		// Phase's action would resolve to a 403.
+		expect(ARCHIVED_EMPTY_BOARD_HEADING).not.toBe('');
+		expect(ARCHIVED_EMPTY_BOARD_HEADING).not.toBe(EMPTY_BOARD_HEADING);
+		expect(ARCHIVED_EMPTY_BOARD_STATEMENT).not.toBe(EMPTY_BOARD_STATEMENT);
+		// It states what happened rather than inviting an act that has closed.
+		expect(ARCHIVED_EMPTY_BOARD_STATEMENT).not.toContain('Nominate a Free Agent');
+		expect(ARCHIVED_EMPTY_BOARD_STATEMENT.toLowerCase()).toContain('auction phase is over');
+		// Reassures about STATE, not feelings: no apology, no exclamation.
+		expect(ARCHIVED_EMPTY_BOARD_STATEMENT).not.toMatch(/!|sorry|unfortunately/i);
 	});
 });
