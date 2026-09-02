@@ -2,7 +2,7 @@
 title: 'Story 4.3: View the Bid Board'
 type: 'feature'
 created: '2026-09-01'
-status: 'in-progress'
+status: 'in-review'
 baseline_commit: '805ed496c340675d68dad072924c117d27203f89'
 review_loop_iteration: 0
 context:
