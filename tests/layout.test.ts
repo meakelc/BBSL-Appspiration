@@ -8,6 +8,7 @@ import type { Destination } from '../src/lib/server/destinations.ts';
 import { PHASE_ANNOUNCEMENTS, phaseOf } from '../src/lib/server/phase.ts';
 import type { ResolvedPhase } from '../src/lib/server/phase.ts';
 import type { RegisteredManager, SessionState } from '../src/lib/server/auth.ts';
+import { parseInstant } from '../src/lib/core/instant.ts';
 
 /**
  * `load`'s declared `LayoutServerLoad` type widens its return to
@@ -16,7 +17,12 @@ import type { RegisteredManager, SessionState } from '../src/lib/server/auth.ts'
  * function's real body never returns void; this recovers that shape for the
  * assertions below rather than fighting the generic type at every call site.
  */
-type LoadResult = { phase: ResolvedPhase; destinations: readonly Destination[] };
+type LoadResult = {
+	phase: ResolvedPhase;
+	destinations: readonly Destination[];
+	watermark: string;
+	serverInstant: string;
+};
 
 /**
  * `+layout.server.ts`'s `load`, asserting it returns `{ phase, destinations }`
@@ -37,14 +43,32 @@ const COMMISSIONER: RegisteredManager = {
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function layoutEvent(phase: ResolvedPhase, session: SessionState): any {
-	return { locals: { phase, session } };
+function layoutEvent(phase: ResolvedPhase, session: SessionState, watermark = '0'): any {
+	// `watermark` rides on `locals` alongside the phase since Story 4.1 —
+	// `hooks.server.ts` folds both from one read of the log.
+	return { locals: { phase, session, watermark } };
 }
 
 describe('+layout.server.ts load', () => {
 	it('returns the phase straight from locals.phase, unmodified', () => {
 		const result = load(layoutEvent(AUCTION_PHASE, { kind: 'signed-out' })) as LoadResult;
 		expect(result.phase).toBe(AUCTION_PHASE);
+	});
+
+	it('carries the watermark straight from locals, unmodified — AD-29', () => {
+		// One watermark, from one read of the log, on the ONE load every page
+		// inherits — so a surface built later is born carrying the contract
+		// rather than retrofitting age labelling onto itself.
+		const result = load(layoutEvent(AUCTION_PHASE, { kind: 'signed-out' }, '4217')) as LoadResult;
+		expect(result.watermark).toBe('4217');
+	});
+
+	it('carries a server instant the core can parse — the seed a page is born with', () => {
+		// This is what `lastLivenessOkAt` is seeded from, which is why a freshly
+		// loaded page is never born Stale: the load coming back IS proof the
+		// server was reachable, written down.
+		const result = load(layoutEvent(AUCTION_PHASE, { kind: 'signed-out' })) as LoadResult;
+		expect(parseInstant(result.serverInstant)).not.toBeNull();
 	});
 
 	it('resolves destinations from locals.phase.name and locals.session, via resolveDestinations', () => {
@@ -155,6 +179,18 @@ describe('+layout.svelte renders the announcement on every page, and borrows no 
 	it('words none of it itself — every sentence comes from `server/phase.ts`', () => {
 		expect(LAYOUT_MARKUP).not.toContain('Auction Phase has ended');
 		expect(LAYOUT_MARKUP).not.toContain('Contract Assignment has begun');
+	});
+
+	it('mounts the freshness notice once, for every page beneath it (Story 4.1)', () => {
+		// The layout wraps `{@render children()}`, so mounting the contract here
+		// is what makes "one freshness state, one age, every surface" structural
+		// rather than a habit each new screen has to remember.
+		expect(LAYOUT_SOURCE).toContain('<FreshnessNotice');
+		expect(LAYOUT_SOURCE).toContain('freshness.start()');
+		expect(LAYOUT_SOURCE).toContain('freshness.stop()');
+		// The channel effect reads nothing reactive, so navigation does not
+		// reopen the socket; re-seeding is a separate effect that does.
+		expect(LAYOUT_SOURCE).toContain('freshness.observeServerRead');
 	});
 
 	it('is a plain landmark with a heading, never a live region', () => {

@@ -8,7 +8,9 @@
  *
  * Three facts are established, in this order:
  *
- *   1. The League phase, so every surface states the same one.
+ *   1. The League phase and the global watermark, folded from ONE read of the
+ *      event log, so every surface states the same phase and reports the same
+ *      age (AD-29).
  *   2. The break-glass marker, verified from a signed cookie with no network
  *      call at all — it must work when Supabase and Discord are both down.
  *   3. The Discord/Supabase session state, which needs the registry and so
@@ -33,17 +35,25 @@ import {
 	isBreakGlassSession,
 	verifyBreakGlassCookie
 } from '$lib/server/commissioner-recovery.ts';
-import { resolveLeaguePhaseOrDefault } from '$lib/server/phase.ts';
+import { resolveLeagueReadOrDefault } from '$lib/server/phase.ts';
 import { gatherSessionFacts, type SessionGateway } from '$lib/server/session.ts';
 import { managerRegistry, requestClient } from '$lib/server/supabase.ts';
 
 export const handle: Handle = async ({ event, resolve }) => {
-	// The fail-closed behaviour (any read failure resolves to Setup rather
-	// than 500ing the request) lives inside resolveLeaguePhaseOrDefault
-	// itself, not here — this file reads $env/dynamic/private at import time
-	// and the test suite cannot load it, so a try/catch written inline here
-	// could never be exercised by a test.
-	event.locals.phase = await resolveLeaguePhaseOrDefault();
+	// The fail-closed behaviour (any read failure resolves to Setup and the
+	// watermark to '0' rather than 500ing the request) lives inside
+	// resolveLeagueReadOrDefault itself, not here — this file reads
+	// $env/dynamic/private at import time and the test suite cannot load it, so
+	// a try/catch written inline here could never be exercised by a test.
+	//
+	// ONE read of the log, TWO folds off the same events array (Story 4.1): the
+	// phase every surface states, and the global watermark AD-29 requires every
+	// projection read to carry. A second read for the watermark would be a
+	// second source for a number that must have one, and the two could disagree
+	// by whatever committed between them.
+	const read = await resolveLeagueReadOrDefault();
+	event.locals.phase = read.phase;
+	event.locals.watermark = read.watermark;
 
 	event.locals.breakGlass = isBreakGlassSession(
 		verifyBreakGlassCookie({

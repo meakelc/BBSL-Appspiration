@@ -49,8 +49,13 @@ enabled = true
 # Fantrax import, which is an application-level upload, not a fixture.
 enabled = false
 
+# Story 4.1 turns this on. A channel is the push half of AD-29's freshness
+# contract, and with Realtime off the local stack cannot serve one at all --
+# nothing about the watermark subscription could be exercised, and the manual
+# check in the story's own Verification section would have nothing to check.
+# The same-origin liveness poll works either way; the socket does not.
 [realtime]
-enabled = false
+enabled = true
 
 [studio]
 enabled = true

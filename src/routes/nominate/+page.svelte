@@ -25,6 +25,16 @@
 	// Types are declared structurally rather than imported from a server-only
 	// module: nothing in the server-only library may ever be reachable from a
 	// `.svelte` file.
+	//
+	// Since Story 4.1 the Nomination control joins the freshness contract: in
+	// Stale it is disabled with its reason stated, from the same one derivation
+	// every other surface reads. `$lib/core` is the pure core and is what AD-2
+	// says both runtimes load, so importing the sentence from it is the same
+	// move the Auction page already makes; nothing server-only is reachable
+	// from here.
+	import { STALE_NOMINATION_REASON } from '$lib/core/freshness.ts';
+	import { freshness } from '$lib/client/freshness.svelte.ts';
+
 	import type { ActionData, PageData } from './$types';
 
 	type PoolPlayer = {
@@ -68,11 +78,23 @@
 	const chosen = $derived(pool.players.find((player) => player.fantraxPlayerId === selected) ?? null);
 
 	/**
+	 * The freshness state, from the ONE contract the layout mounts (AD-29).
+	 * Read, never derived — `core/freshness.ts` decides it.
+	 */
+	const staleBlocked = $derived(freshness.state === 'stale');
+
+	/**
 	 * The one flag both the affordance and the stated reason read from. The
 	 * server re-derives every gate under the lock regardless — disabling a
 	 * control is never the check.
+	 *
+	 * Stale JOINS this existing path rather than adding a second one: AD-29's
+	 * obligation is a disabled control with its reason stated, and that
+	 * mechanism is already right here.
 	 */
-	const blocked = $derived(!pool.slotAvailable || chosen === null || !confirmed);
+	const blocked = $derived(
+		!pool.slotAvailable || chosen === null || !confirmed || staleBlocked
+	);
 </script>
 
 <svelte:head>
@@ -114,7 +136,12 @@
 		     below is static and can never dangle. The server refuses
 		     regardless — disabling a control is never the check. -->
 		<p class="prose" id="nominate-availability">
-			{#if !pool.slotAvailable}
+			<!-- Stale is stated FIRST, above every other reason. When the app
+			     cannot confirm the pool or the Slot, the facts the other
+			     branches speak from are exactly what is in doubt. -->
+			{#if staleBlocked}
+				{STALE_NOMINATION_REASON}
+			{:else if !pool.slotAvailable}
 				You cannot nominate right now. The reason is stated above; nothing below will
 				change it.
 			{:else if chosen === null}

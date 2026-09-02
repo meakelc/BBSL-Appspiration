@@ -17,6 +17,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { fold } from '../core/projection/fold.ts';
 import { INITIAL_PHASE, phaseReducer } from '../core/projection/phase.ts';
+import { INITIAL_WATERMARK, watermarkReducer } from '../core/projection/watermark.ts';
 import { loadAppendedEvents } from './event-log.ts';
 import { serviceRoleClient } from './supabase.ts';
 
@@ -98,6 +99,20 @@ export type ResolvedPhase = {
 	readonly announcement: PhaseAnnouncement | null;
 };
 
+/**
+ * What one read of the event log resolves: the phase, and the global watermark
+ * that read was folded to (AD-29).
+ *
+ * They ride together because they come from ONE array of events. A watermark
+ * resolved separately from the phase would be a second read of the log and
+ * therefore a second answer, and the whole of AD-29 is that there is one.
+ */
+export type ResolvedLeagueRead = {
+	readonly phase: ResolvedPhase;
+	/** The highest `auction_events.seq` folded. `'0'` for an empty log. */
+	readonly watermark: string;
+};
+
 /** Pair a phase with its sentence and its announcement. */
 export function phaseOf(name: LeaguePhase): ResolvedPhase {
 	return { name, sentence: PHASE_SENTENCES[name], announcement: PHASE_ANNOUNCEMENTS[name] };
@@ -119,9 +134,33 @@ export function phaseOf(name: LeaguePhase): ResolvedPhase {
 export async function resolveLeaguePhase(
 	client: SupabaseClient = serviceRoleClient()
 ): Promise<ResolvedPhase> {
+	return (await resolveLeagueRead(client)).phase;
+}
+
+/**
+ * The phase and the global watermark, folded from ONE read of the log
+ * (Story 4.1, AD-29).
+ *
+ * **One read, two folds, one watermark.** `hooks.server.ts` already folded the
+ * whole log once per request to resolve the phase; the highest `seq` is
+ * available in that same array for the cost of a second `fold()` over events
+ * already in memory. Reading the log twice, or issuing a separate
+ * `select max(seq)` beside it, would be two sources for a number AD-29 requires
+ * to have one — and they could disagree by whatever committed between them.
+ *
+ * The two folds are deliberately not merged into one pass. `fold()` is the
+ * function AD-5 fixes as "the fold", each reducer is pure and independently
+ * testable, and a hand-written loop accumulating both would be a third
+ * traversal implementation living in the shell.
+ */
+export async function resolveLeagueRead(
+	client: SupabaseClient = serviceRoleClient()
+): Promise<ResolvedLeagueRead> {
 	const events = await loadAppendedEvents(client);
-	const phase = fold(INITIAL_PHASE, events, phaseReducer);
-	return phaseOf(phase);
+	return {
+		phase: phaseOf(fold(INITIAL_PHASE, events, phaseReducer)),
+		watermark: fold(INITIAL_WATERMARK, events, watermarkReducer)
+	};
 }
 
 /**
@@ -151,9 +190,30 @@ export async function resolveLeaguePhase(
 export async function resolveLeaguePhaseOrDefault(
 	client?: SupabaseClient
 ): Promise<ResolvedPhase> {
+	return (await resolveLeagueReadOrDefault(client)).phase;
+}
+
+/**
+ * The phase and the watermark together, failing closed on any read failure.
+ *
+ * The phase half fails closed to `Setup` for the reason
+ * `resolveLeaguePhaseOrDefault` states above. The watermark half fails closed
+ * to `INITIAL_WATERMARK` — `'0'` — which is the same value an empty log
+ * produces and is a value no row can hold, so a surface can never mistake a
+ * failed read for a real height. It cannot make a page look FRESHER than it is:
+ * `'0'` is lower than every real `seq`, so the first successful liveness
+ * re-read raises it and reloads, rather than the other way round.
+ *
+ * `client` takes no default parameter here for the reason spelled out above: a
+ * default-parameter expression runs before this function's body, so a throwing
+ * `serviceRoleClient()` there would reject before the `try` ever ran.
+ */
+export async function resolveLeagueReadOrDefault(
+	client?: SupabaseClient
+): Promise<ResolvedLeagueRead> {
 	try {
-		return await resolveLeaguePhase(client ?? serviceRoleClient());
+		return await resolveLeagueRead(client ?? serviceRoleClient());
 	} catch {
-		return phaseOf('Setup');
+		return { phase: phaseOf('Setup'), watermark: INITIAL_WATERMARK };
 	}
 }

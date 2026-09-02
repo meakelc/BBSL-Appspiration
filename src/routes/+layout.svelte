@@ -24,17 +24,75 @@
 	// `.panel` — the shared 1px border and one-step-lighter surface — inside a
 	// `.page` band, and it introduces no token, no colour and no sizing
 	// literal.
+	//
+	// **Since Story 4.1 it also mounts the freshness contract, once.** AD-29
+	// requires ONE freshness state and ONE age across every surface; mounting the
+	// notice here rather than per page is what makes that structural instead of
+	// a habit each new screen has to remember. 4.2's strip, 4.3's board, 4.4's
+	// landing and 4.6's index inherit it by existing.
+	//
+	// The notice itself renders nothing while Live, so on a healthy client this
+	// adds no element to any page.
+	//
+	// **And it runs ONLY for a signed-in Manager.** A visitor with no session has
+	// no figures to protect and no controls to disable, and the liveness
+	// endpoint's `401` is indistinguishable from an outage on the client — so an
+	// ungated contract showed `/signin` an assertive "cannot reach the server"
+	// alert two minutes in, about the server that had just rendered the page.
+	// Both the mount and `start()` are gated on the one boolean
+	// `+layout.server.ts` sends. A session that lapses MID-VISIT is a different
+	// case and is deliberately NOT gated out: the contract is already running,
+	// the `401` degrades it on schedule, and "these figures are no longer
+	// refreshable" is then true and worth saying.
 	import '$lib/styles/global.css';
 	import type { Snippet } from 'svelte';
 
+	import { freshness } from '$lib/client/freshness.svelte.ts';
+	import FreshnessNotice from '$lib/components/FreshnessNotice.svelte';
 	import HeaderMenu from '$lib/components/HeaderMenu.svelte';
 
 	import type { LayoutData } from './$types';
 
 	let { data, children }: { data: LayoutData; children: Snippet } = $props();
+
+	// Every server read re-anchors the contract, including the very first one.
+	// A load that came back IS proof the server was reachable, which is why a
+	// freshly rendered page is never born Stale — and why an `invalidateAll()`
+	// triggered by a raised watermark pays for its own liveness check on the way
+	// through. Reactive on purpose: this re-runs on every navigation and every
+	// reload, and does no network work of its own.
+	$effect(() => {
+		if (!data.signedIn) return;
+		freshness.observeServerRead({ watermark: data.watermark, at: data.serverInstant });
+	});
+
+	// The channel and the poll, started once and torn down with the layout.
+	// `data.signedIn` is the ONLY reactive value it reads, so it does not re-run
+	// on navigation — a socket reopened on every page change would churn the
+	// connection the contract exists to watch — but it does re-run when a
+	// Manager signs out, which tears the contract down through the cleanup
+	// below. `start()` is idempotent regardless.
+	$effect(() => {
+		if (!data.signedIn) return;
+		freshness.start();
+		return () => {
+			freshness.stop();
+		};
+	});
 </script>
 
 <HeaderMenu destinations={data.destinations} phaseSentence={data.phase.sentence} />
+
+<!-- Gated on the session, not merely on the state: a signed-out visitor must
+     get no notice and no live region at all, not an empty one that could
+     later be filled by a contract that should never have started. -->
+{#if data.signedIn}
+	<FreshnessNotice
+		state={freshness.state}
+		lastLivenessOkAt={freshness.lastLivenessOkAt}
+		now={freshness.now}
+	/>
+{/if}
 
 {#if data.phase.announcement !== null}
 	<div class="page">

@@ -323,7 +323,10 @@ describe('the Auction page — the bid control (AC7)', () => {
 		// locked transaction ask.
 		expect(PAGE).toContain('bidControlState');
 		expect(PAGE).toMatch(/amountText:\s*amount/);
-		expect(PAGE).toMatch(/blocked = \$derived\(typed\.blocked\)/);
+		// Story 4.1 adds Stale to the SAME flag rather than a second one — a
+		// parallel disable would be a second way for this control to be off,
+		// with a second place to word why.
+		expect(PAGE).toMatch(/blocked = \$derived\(typed\.blocked \|\| staleBlocked\)/);
 		// The gate facts it evaluates against come from the server, and are
 		// re-branded at this boundary rather than cast (AD-8).
 		expect(PAGE).toContain('control.leadingAmount');
@@ -362,12 +365,20 @@ describe('the Auction page — the bid control (AC7)', () => {
 	});
 
 	it('disables the field itself, not just the submit, on a standing condition', () => {
-		expect(PAGE).toMatch(/disabled=\{!control\.available \|\| expired\}/);
+		// Three standing conditions now: the server's answer at load, an expired
+		// clock, and (Story 4.1) a client that cannot confirm the figures beside
+		// the field. No amount typed changes any of them.
+		expect(PAGE).toMatch(/disabled=\{!control\.available \|\| expired \|\| staleBlocked\}/);
 		expect(PAGE).toMatch(/disabled=\{blocked\}/);
 	});
 
 	it('states ONE reason beneath the control, never the same refusal twice', () => {
-		expect(PAGE).toMatch(/const reason = \$derived\(control\.available \? typed\.detail : control\.detail\)/);
+		// Stale is stated FIRST (Story 4.1): when the app cannot confirm its own
+		// figures, the arithmetic the gate reasons speak from is exactly what is
+		// in doubt. All three sentences come out of the core.
+		expect(PAGE).toMatch(
+			/staleBlocked \? STALE_BID_REASON : control\.available \? typed\.detail : control\.detail/
+		);
 		expect(PAGE).toContain('id="auction-bid-availability">{reason}');
 	});
 
@@ -468,11 +479,11 @@ describe('the Auction page — the clock it counts down on (Story 3.1)', () => {
 		// to name `expired` to move with it. A clock that has run out is a
 		// standing condition no amount will change, which is what that
 		// binding is for.
-		expect(PAGE).toMatch(/disabled=\{!control\.available \|\| expired\}/);
+		expect(PAGE).toMatch(/disabled=\{!control\.available \|\| expired \|\| staleBlocked\}/);
 		// Both controls, and both reachable from the ticking instant: `expired`
 		// and `blocked` are each derived from `nowIso`.
 		expect(PAGE).toMatch(/disabled=\{blocked\}/);
-		expect(PAGE).toMatch(/const blocked = \$derived\(typed\.blocked\)/);
+		expect(PAGE).toMatch(/const blocked = \$derived\(typed\.blocked \|\| staleBlocked\)/);
 		expect(PAGE).toMatch(/const expired = \$derived\(hasExpired\(auction\.closesAt, nowIso\)\)/);
 	});
 

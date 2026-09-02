@@ -35,6 +35,14 @@ declare global {
 			 * included — states it from this one source.
 			 */
 			phase: ResolvedPhase;
+			/**
+			 * The global watermark: the highest `auction_events.seq` the phase
+			 * above was folded to (AD-29, Story 4.1). One watermark, from one
+			 * read of the log, so no two surfaces can report different ages.
+			 * `'0'` for an empty log and for a read that failed — a value no
+			 * row can hold, so it can never be mistaken for a real height.
+			 */
+			watermark: string;
 		}
 		// interface PageData {}
 		// interface PageState {}
