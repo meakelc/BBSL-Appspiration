@@ -126,4 +126,15 @@
 	   already, made for the same reason: measured, not assumed.
 	   tests/commissioner.test.ts asserts the ratio so it cannot regress. */
 	--control-fill: #1D2922;
+
+	/* DESIGN.md:173 puts `ui` "at 17px in the persistent strip" and :222
+	   repeats "the figure at 17px", but its own frontmatter type scale has no
+	   17px step — the ten declared above are 10/11/12/12.5/13/15/18/19/21/26.
+	   tests/tokens.test.ts:216-230 asserts exactly ten `--size-*` tokens
+	   matching that scale, so a `--size-17` would fail the suite against a
+	   document no story may hand-edit. Declared here instead, following the
+	   `--control-fill` precedent above, so the value still lives in exactly
+	   one place. Recorded in deferred-work.md under Story 4.2 rather than
+	   silently folded into the scale. */
+	--strip-figure-size: 17px;
 }
