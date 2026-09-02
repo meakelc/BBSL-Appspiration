@@ -50,6 +50,7 @@
 	import { freshness } from '$lib/client/freshness.svelte.ts';
 	import FreshnessNotice from '$lib/components/FreshnessNotice.svelte';
 	import HeaderMenu from '$lib/components/HeaderMenu.svelte';
+	import PersistentStrip from '$lib/components/PersistentStrip.svelte';
 
 	import type { LayoutData } from './$types';
 
@@ -106,3 +107,23 @@
 {/if}
 
 {@render children()}
+
+<!-- The persistent strip, mounted ONCE for every surface beneath the layout —
+     the same AD-29 reason the freshness notice is mounted here rather than
+     per page. It is gated on `data.stripTeam`, which the server load resolves
+     to `null` for a signed-out visitor, for a Manager bound to no Team, in
+     Setup, and on any read failure: one gate, decided server-side, rather
+     than four conditions restated in markup.
+
+     It carries FACTS and derives the figure itself (AD-7). The `serverInstant`
+     it is handed is the same one the freshness contract anchors on, so the one
+     gate that asks what time it is is answered by the server's clock and never
+     the device's. -->
+{#if data.stripTeam !== null}
+	<PersistentStrip
+		team={data.stripTeam}
+		phase={data.phase.name}
+		destinations={data.destinations}
+		now={data.serverInstant}
+	/>
+{/if}

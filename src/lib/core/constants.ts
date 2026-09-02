@@ -97,6 +97,25 @@ export const LIVENESS_TIMEOUT = 8 * 1000;
 /** Active/Bench Slots per Team. The Roster Capacity ceiling (FR-37). */
 export const ACTIVE_BENCH_SLOTS = 12;
 
+/**
+ * The `fantraxPlayerId` the persistent strip's baseline probe carries
+ * (Story 4.2).
+ *
+ * The strip's Maximum Bid is `evaluate()`'s own output, and `evaluate()` takes
+ * a `PlaceBid` — which needs a Player id. The baseline addresses NO Auction:
+ * it is the money ceiling that applies to every non-eligible Auction, not to
+ * any particular one. So the probe carries this id rather than a real one.
+ *
+ * **It is a named constant rather than an empty string or a literal** because
+ * it is not inert: AD-5 sorts the Minors Exposure sequence by
+ * `fantraxPlayerId` as its tiebreak, so the probe's id participates in an
+ * ordering and must therefore be a value written down once, in the core, where
+ * anybody reading the sort can see what it is. The `no-auction:` prefix is a
+ * shape no Fantrax id has, so it can never collide with a Player and be
+ * excluded from a Team's own leads by `teamMoneyStateFor`.
+ */
+export const NO_AUCTION_PROBE_ID = 'no-auction:strip-baseline';
+
 /** Injury Reserve Slots per Team. PRD §11 "2 IR"; ARCHITECTURE-SPINE Config row. */
 export const INJURY_RESERVE_SLOTS = 2;
 

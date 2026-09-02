@@ -1,8 +1,20 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { load } from '../src/routes/+layout.server.ts';
+// The layout load reaches the database since Story 4.2 — the persistent
+// strip's FACTS ride on the ONE load every page inherits. Only the
+// I/O-touching layer is faked, exactly as `tests/routes/nominate.test.ts`
+// fakes it: the real `resolveDestinations`, the real phase pass-through and
+// the real server-side gating all still run. The fake answers an empty log,
+// which folds to a Team with no leads and no roster rows — a real state.
+vi.mock('$lib/shell/db.ts', () => ({
+	writeGateway: () => ({
+		connect: async () => ({ query: async () => ({ rows: [] }), release: () => {} })
+	})
+}));
+
+const { load } = await import('../src/routes/+layout.server.ts');
 import { SIGN_IN_DESTINATION } from '../src/lib/server/destinations.ts';
 import type { Destination } from '../src/lib/server/destinations.ts';
 import { PHASE_ANNOUNCEMENTS, phaseOf } from '../src/lib/server/phase.ts';
@@ -22,7 +34,14 @@ type LoadResult = {
 	destinations: readonly Destination[];
 	watermark: string;
 	serverInstant: string;
+	stripTeam: unknown;
 };
+
+/** `load` is async since Story 4.2; every call awaits it. */
+async function loadLayout(event: unknown): Promise<LoadResult> {
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	return (await load(event as any)) as unknown as LoadResult;
+}
 
 /**
  * `+layout.server.ts`'s `load`, asserting it returns `{ phase, destinations }`
@@ -50,36 +69,36 @@ function layoutEvent(phase: ResolvedPhase, session: SessionState, watermark = '0
 }
 
 describe('+layout.server.ts load', () => {
-	it('returns the phase straight from locals.phase, unmodified', () => {
-		const result = load(layoutEvent(AUCTION_PHASE, { kind: 'signed-out' })) as LoadResult;
+	it('returns the phase straight from locals.phase, unmodified', async () => {
+		const result = await loadLayout(layoutEvent(AUCTION_PHASE, { kind: 'signed-out' }));
 		expect(result.phase).toBe(AUCTION_PHASE);
 	});
 
-	it('carries the watermark straight from locals, unmodified — AD-29', () => {
+	it('carries the watermark straight from locals, unmodified — AD-29', async () => {
 		// One watermark, from one read of the log, on the ONE load every page
 		// inherits — so a surface built later is born carrying the contract
 		// rather than retrofitting age labelling onto itself.
-		const result = load(layoutEvent(AUCTION_PHASE, { kind: 'signed-out' }, '4217')) as LoadResult;
+		const result = await loadLayout(layoutEvent(AUCTION_PHASE, { kind: 'signed-out' }, '4217'));
 		expect(result.watermark).toBe('4217');
 	});
 
-	it('carries a server instant the core can parse — the seed a page is born with', () => {
+	it('carries a server instant the core can parse — the seed a page is born with', async () => {
 		// This is what `lastLivenessOkAt` is seeded from, which is why a freshly
 		// loaded page is never born Stale: the load coming back IS proof the
 		// server was reachable, written down.
-		const result = load(layoutEvent(AUCTION_PHASE, { kind: 'signed-out' })) as LoadResult;
+		const result = await loadLayout(layoutEvent(AUCTION_PHASE, { kind: 'signed-out' }));
 		expect(parseInstant(result.serverInstant)).not.toBeNull();
 	});
 
-	it('resolves destinations from locals.phase.name and locals.session, via resolveDestinations', () => {
-		const result = load(layoutEvent(SETUP_PHASE, { kind: 'signed-out' })) as LoadResult;
+	it('resolves destinations from locals.phase.name and locals.session, via resolveDestinations', async () => {
+		const result = await loadLayout(layoutEvent(SETUP_PHASE, { kind: 'signed-out' }));
 		expect(result.destinations).toEqual([SIGN_IN_DESTINATION]);
 	});
 
-	it('a registered Commissioner in Setup gets the Commissioner-only Setup catalog', () => {
-		const result = load(
+	it('a registered Commissioner in Setup gets the Commissioner-only Setup catalog', async () => {
+		const result = await loadLayout(
 			layoutEvent(SETUP_PHASE, { kind: 'registered', manager: COMMISSIONER })
-		) as LoadResult;
+		);
 		expect(result.destinations.map((d) => d.id)).toEqual([
 			'import',
 			'minor-league-eligibility',
@@ -88,12 +107,66 @@ describe('+layout.server.ts load', () => {
 		]);
 	});
 
-	it('changing only locals.phase changes the returned destinations, with the same session', () => {
+	it('changing only locals.phase changes the returned destinations, with the same session', async () => {
 		const session: SessionState = { kind: 'registered', manager: COMMISSIONER };
-		const setupResult = load(layoutEvent(SETUP_PHASE, session)) as LoadResult;
-		const auctionResult = load(layoutEvent(AUCTION_PHASE, session)) as LoadResult;
+		const setupResult = await loadLayout(layoutEvent(SETUP_PHASE, session));
+		const auctionResult = await loadLayout(layoutEvent(AUCTION_PHASE, session));
 		expect(setupResult.destinations).not.toEqual(auctionResult.destinations);
 	});
+});
+
+// --- the persistent strip's gate (Story 4.2) -------------------------------
+
+/**
+ * A Manager bound to a Team — the only viewer the strip states figures about.
+ */
+const MANAGER: RegisteredManager = {
+	id: '00000000-0000-4000-8000-000000000003',
+	discordUserId: '333333333333333330',
+	displayName: 'Alice',
+	teamId: '00000000-0000-4000-8000-0000000000aa',
+	teamName: 'Lakers',
+	isCommissioner: false
+};
+
+/** A Commissioner bound to NO Team — a real, supported state. */
+const UNBOUND: RegisteredManager = { ...COMMISSIONER, teamId: null, teamName: null };
+
+describe('stripTeam — the gate, executed rather than read', () => {
+	it('is null for a signed-out visitor, and costs no server read', async () => {
+		const result = await loadLayout(layoutEvent(AUCTION_PHASE, { kind: 'signed-out' }));
+		expect(result.stripTeam).toBeNull();
+	});
+
+	it('is null for a Manager bound to no Team — no figure and no Slots', async () => {
+		const result = await loadLayout(
+			layoutEvent(AUCTION_PHASE, { kind: 'registered', manager: UNBOUND })
+		);
+		expect(result.stripTeam).toBeNull();
+	});
+
+	it('is null in Setup, where no roster has been promoted', async () => {
+		const result = await loadLayout(
+			layoutEvent(SETUP_PHASE, { kind: 'registered', manager: MANAGER })
+		);
+		expect(result.stripTeam).toBeNull();
+	});
+
+	it('resolves FACTS for a bound Manager in the Auction Phase', async () => {
+		const result = await loadLayout(
+			layoutEvent(AUCTION_PHASE, { kind: 'registered', manager: MANAGER })
+		);
+		expect(result.stripTeam).not.toBeNull();
+		// Facts only (AD-7): the money the core derives from, never a derived
+		// figure. A `maximumBid` on this object would BE the check.
+		expect(result.stripTeam).toHaveProperty('capSpace');
+		expect(result.stripTeam).toHaveProperty('rosterCount');
+		expect(result.stripTeam).toHaveProperty('leading');
+		expect(result.stripTeam).not.toHaveProperty('maximumBid');
+		expect(result.stripTeam).not.toHaveProperty('committedBids');
+		expect(result.stripTeam).not.toHaveProperty('rosterReserve');
+	});
+
 });
 
 // --- the phase-end announcement (Story 3.7, AC6) ---------------------------
@@ -149,7 +222,7 @@ describe('PHASE_ANNOUNCEMENTS — the transition is worded in one place', () => 
 		expect(PHASE_ANNOUNCEMENTS.Archived).toBeNull();
 	});
 
-	it('rides on `phaseOf`, so every surface reads it from the same fold', () => {
+	it('rides on `phaseOf`, so every surface reads it from the same fold', async () => {
 		// `hooks.server.ts` resolves the phase once per request into
 		// `locals.phase` and `+layout.server.ts` passes it straight through, so
 		// the banner is decided by exactly the fold the header sentence and the
@@ -159,9 +232,9 @@ describe('PHASE_ANNOUNCEMENTS — the transition is worded in one place', () => 
 		);
 		expect(phaseOf('Auction').announcement).toBeNull();
 
-		const result = load(
+		const result = await loadLayout(
 			layoutEvent(phaseOf('Contract Assignment'), { kind: 'signed-out' })
-		) as LoadResult;
+		);
 		expect(result.phase.announcement?.heading).toBe('The Auction Phase has ended');
 	});
 });

@@ -117,6 +117,30 @@ a {
 	gap: var(--space-section-gap);
 }
 
+/*
+ * Room for the persistent strip (Story 4.2).
+ *
+ * The strip is fixed to the bottom of the viewport on a phone, so without
+ * this the last control on the longest page sits underneath it and cannot be
+ * tapped. Reserved on `body` rather than on `.page`, because a surface that
+ * does not use the `.page` band still ends somewhere and still has a last
+ * control.
+ *
+ * Sized from `--strip-height` — the token, never the 52px literal — so the
+ * room reserved and the strip occupying it can only ever be the same value.
+ * Released at 640px, where the strip moves into the header and is in the flow
+ * like any other element.
+ */
+body {
+	padding-bottom: var(--strip-height);
+}
+
+@media (min-width: 640px) {
+	body {
+		padding-bottom: 0;
+	}
+}
+
 .panel {
 	background-color: var(--color-surface);
 	border: var(--border-width) solid var(--color-border);

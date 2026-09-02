@@ -33,17 +33,58 @@
  * (AD-30) — this bit gates a subscription, never an authorisation.
  */
 
+import { stripPresent } from '$lib/core/strip.ts';
 import { resolveDestinations } from '$lib/server/destinations.ts';
+import { loadStripTeam } from '$lib/server/strip.ts';
 import { serverInstant } from '$lib/server/watermark.ts';
+import { writeGateway } from '$lib/shell/db.ts';
 
 import type { LayoutServerLoad } from './$types';
 
-export const load: LayoutServerLoad = ({ locals }) => {
+/**
+ * The Team the persistent strip states figures about, or `null` (Story 4.2).
+ *
+ * Three gates, in this order, and each rules out a state with nothing to say:
+ * a visitor with no session (no figures to protect, and no server read at
+ * all); a registered Manager bound to no Team, which is a real supported
+ * state — a Commissioner with no Team has no Maximum Bid and no Slots; and a
+ * phase in which the strip does not render, decided by the core's own
+ * `stripPresent` rather than by a second phase table written here.
+ *
+ * The read is attempted only once all three pass, so the signed-out case
+ * costs no connection.
+ */
+async function stripTeamFor(locals: App.Locals) {
+	if (locals.session.kind !== 'registered') return null;
+	const { teamId } = locals.session.manager;
+	if (teamId === null) return null;
+	if (!stripPresent(locals.phase.name)) return null;
+	try {
+		// `loadStripTeam` already answers `null` rather than throwing on any
+		// read failure. The `try` covers `writeGateway()` itself, which throws
+		// when `SUPABASE_DB_URL` is unset — a configuration failure rather than
+		// a read one, and the matrix's requirement is the same either way: the
+		// layout load must not 500 a whole page over a strip.
+		return await loadStripTeam(writeGateway(), teamId);
+	} catch {
+		return null;
+	}
+}
+
+export const load: LayoutServerLoad = async ({ locals }) => {
 	return {
 		phase: locals.phase,
 		destinations: resolveDestinations(locals.phase.name, locals.session),
 		watermark: locals.watermark,
 		serverInstant: serverInstant(),
-		signedIn: locals.session.kind === 'registered'
+		signedIn: locals.session.kind === 'registered',
+		/**
+		 * FACTS only (AD-7): Cap Space, Roster Count, Minor League occupancy
+		 * and the leads. No `maximumBid` field exists on anything this load
+		 * serialises — the browser calls `evaluate()` itself, so the figure
+		 * recomputes on every reload the freshness contract forces rather than
+		 * being a transported number nobody can date.
+		 */
+		stripTeam: await stripTeamFor(locals)
 	};
 };
