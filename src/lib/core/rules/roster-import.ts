@@ -109,8 +109,16 @@ export function checkSlotCeilings(rows: readonly ParsedRosterRow[]): readonly Sl
 
 // --- Refusal wording (product voice: state the fact, then the arithmetic) --
 
-/** Slot kind labels for a refusal sentence, matching the glossary phrasing. */
-const SLOT_LABELS: Readonly<Record<RosterSlotKind, string>> = Object.freeze({
+/**
+ * Slot kind labels for a refusal sentence, matching the glossary phrasing.
+ *
+ * Exported since Story 4.5, for the one kind `PLACEMENT_LABELS` cannot name:
+ * `SlotPlacement` is what a CLOSE can produce and holds no `injury_reserve`,
+ * while an imported roster row can be on IR — so a Team view grouping a roster
+ * by `RosterSlotKind` needs this record's third entry, and taking all three
+ * from here would respell the two the placement record already words.
+ */
+export const SLOT_LABELS: Readonly<Record<RosterSlotKind, string>> = Object.freeze({
 	active_bench: 'Active/Bench',
 	injury_reserve: 'Injury Reserve',
 	minor_league: 'Minor League'

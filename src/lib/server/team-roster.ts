@@ -35,7 +35,7 @@
  * computes `M`.
  */
 
-import { contractRowsFor } from '../core/projection/contracts.ts';
+import { contractsWonBy } from '../core/projection/contracts.ts';
 import type { AuctionContracts } from '../core/projection/contracts.ts';
 import { computeCapSpace } from '../core/rules/roster-import.ts';
 import type { CapHitRow } from '../core/rules/roster-import.ts';
@@ -110,29 +110,88 @@ export type TeamRosterFigures = {
  * as non-Active/Bench is the conservative reading if it ever were reached,
  * because it cannot then silently consume one of the twelve.
  */
-export async function loadTeamRoster(
+/**
+ * One roster row, NAMED — the shape a roster LISTING needs and the Cap
+ * arithmetic does not (Story 4.5).
+ *
+ * `CapHitRow` carries a cap hit and a slot kind and nothing else, because that
+ * is all `computeCapSpace` sums over. A Team view lists the Players, so it
+ * needs the name and the id beside those two — and `won` beside them again,
+ * because a won Player is a roster row on the same footing as an imported one
+ * and the surface still states where the close placed him.
+ *
+ * It is returned from the SAME read and the SAME concatenation the three
+ * figures are counted from. A second query for the names would produce a row
+ * set that could disagree with the counted one at the moment a close commits.
+ */
+export type TeamRosterEntryRow = {
+	readonly fantraxPlayerId: string;
+	readonly playerName: string;
+	readonly capHit: Money;
+	readonly rosterSlotKind: RosterSlotKind;
+	/** Whether this row is an Auction Contract rather than an imported row. */
+	readonly won: boolean;
+};
+
+/** The three figures, plus the rows they were counted from. */
+export type TeamRosterDetail = TeamRosterFigures & {
+	readonly rows: readonly TeamRosterEntryRow[];
+};
+
+/**
+ * Read one Team's roster rows, append the Auction Contracts it has won, and
+ * return BOTH the named rows and the three figures — one read, one
+ * concatenation, one loop.
+ *
+ * **The contract half's names come from `contractsWonBy`, not
+ * `contractRowsFor`.** The Cap bridge yields `CapHitRow`, which has no name;
+ * `contractsWonBy` yields the contracts themselves, newest close first, and
+ * carries `playerName`, `capHit` and `placement` together. Using the second
+ * for both halves is what keeps the counted rows and the listed rows the same
+ * rows: `contractRowsFor` and `contractsWonBy` filter the identical fold by
+ * the identical Team id, so the two projections of one contract set cannot
+ * differ in membership — and taking only one of them here means nothing has to
+ * verify that they do not.
+ *
+ * `loadTeamRoster` below keeps its signature and delegates, so the locked
+ * transaction and the read path are unchanged and the gates see exactly the
+ * figures they saw before.
+ */
+export async function loadTeamRosterDetail(
 	client: TransactionalClient,
 	teamId: string,
 	contracts: AuctionContracts
-): Promise<TeamRosterFigures> {
+): Promise<TeamRosterDetail> {
 	const result = await client.query(
-		`select cap_hit, roster_slot_kind
+		`select fantrax_player_id::text as fantrax_player_id, player_name, cap_hit, roster_slot_kind
 		from ${TEAM_ROSTERS_TABLE}
 		where team_id = $1`,
 		[teamId]
 	);
 
-	const rows: CapHitRow[] = [
+	const rows: TeamRosterEntryRow[] = [
 		...result.rows.map((row) => ({
+			fantraxPlayerId: String(row['fantrax_player_id'] ?? ''),
+			playerName: String(row['player_name'] ?? ''),
 			capHit: parseMoney(row['cap_hit']),
-			rosterSlotKind: String(row['roster_slot_kind']) as RosterSlotKind
+			rosterSlotKind: String(row['roster_slot_kind']) as RosterSlotKind,
+			won: false
 		})),
 		// What this Team has WON, folded from the log — the auction's own
 		// output, on the same footing as an imported row and counted by the
 		// same loop (Story 3.4). A `minor_league` placement carries a `$0` Cap
 		// Hit and occupies a Minor League Slot; an `active_bench` one carries
 		// the winning amount and takes one of the twelve.
-		...contractRowsFor(contracts, teamId)
+		...contractsWonBy(contracts, teamId).map((contract) => ({
+			fantraxPlayerId: contract.fantraxPlayerId,
+			playerName: contract.playerName,
+			// The Cap Hit the close PERSISTED, never re-derived from the
+			// winning amount (AD-23) — `contractRowsFor` carries the identical
+			// field through to `computeCapSpace`.
+			capHit: contract.capHit,
+			rosterSlotKind: contract.placement as RosterSlotKind,
+			won: true
+		}))
 	];
 
 	let rosterCount = 0;
@@ -142,5 +201,31 @@ export async function loadTeamRoster(
 		if (row.rosterSlotKind === 'minor_league') minorLeagueOccupied += 1;
 	}
 
-	return { capSpace: computeCapSpace(rows).capSpace, rosterCount, minorLeagueOccupied };
+	// `CapHitRow` is the shape the Cap arithmetic sums over, and these rows are
+	// a widening of it — narrowed back here rather than kept as two arrays, so
+	// the figures are still computed from exactly the rows the surface lists.
+	const capHitRows: CapHitRow[] = rows.map((row) => ({
+		capHit: row.capHit,
+		rosterSlotKind: row.rosterSlotKind
+	}));
+
+	return {
+		rows,
+		capSpace: computeCapSpace(capHitRows).capSpace,
+		rosterCount,
+		minorLeagueOccupied
+	};
+}
+
+export async function loadTeamRoster(
+	client: TransactionalClient,
+	teamId: string,
+	contracts: AuctionContracts
+): Promise<TeamRosterFigures> {
+	const { capSpace, rosterCount, minorLeagueOccupied } = await loadTeamRosterDetail(
+		client,
+		teamId,
+		contracts
+	);
+	return { capSpace, rosterCount, minorLeagueOccupied };
 }
