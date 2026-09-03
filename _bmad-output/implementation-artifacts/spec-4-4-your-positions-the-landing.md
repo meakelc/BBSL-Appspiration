@@ -2,9 +2,9 @@
 title: 'Story 4.4: Your Positions — the landing'
 type: 'feature'
 created: '2026-09-02'
-status: 'in-review'
+status: 'done'
 baseline_commit: '5921c1357446c5b564389bc06ed845cbc416ca72'
-review_loop_iteration: 0
+review_loop_iteration: 1
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-4-context.md'
   - '{project-root}/_bmad-output/planning-artifacts/architecture/architecture-BBSL-Appspiration-2026-08-16/ARCHITECTURE-SPINE.md'
@@ -106,6 +106,41 @@ context:
 - Given the full board is wanted, when the Manager follows the board link from Your Positions, then `/board` opens unfiltered.
 
 ## Spec Change Log
+
+**2026-09-02 — code review, orchestrator.** Five corrections from the review's four layers.
+None touches `evaluate()` or any gate; all five are in this story's own modules.
+
+*A won Player is no longer a link.* Raised by the Acceptance Auditor. `auctionPathFor` on a
+won Player resolves to a page that raises `error(404)`, because a close deletes the Player
+from the folds the Auction route reads — so the **first** group on the landing page was
+entirely dead links. `WonCard.href` is now `string | null` and `null`; the surface renders a
+plain span in that branch. Appended to `deferred-work.md` beside the spec-3-6 entry that
+already owns the closed-Auction surface, which is what will restore the link.
+
+*The empty screen no longer offers Nominate to a Manager whose Slot is spent.* `empty`
+counts the four Auction groups only — deliberate, and documented, because a free Slot is
+what the screen points at — but a Manager who nominated a Player nobody has bid on yet
+reaches it with a **spent** Slot, and read "Your Nomination Slot is already spent" directly
+above a Nominate link `/nominate` refuses, with the Player they hold named nowhere. The
+branch now tests the Slot's actual state and names and links that Player.
+
+*The re-entry answer reports the gate that actually refused.* `bidControlState` blocks on
+any of the nine `PLACE_BID_GATES`, but the card reported `cap` and `slots` alone — so a
+paused Phase or an expired-but-unswept Auction rendered "You cannot re-enter at $15.0M"
+above `Cap · Passed` and `Slots · Passed`. The sentence was right, but a card arguing with
+itself on the one surface built to answer before being asked is the same defect as being
+wrong. `reportedGates` now returns the AD-7 floor **plus** any refusing gate, in
+`PLACE_BID_GATES` order; the floor is unchanged and untouchable. Mutation-checked: pinning
+it back to the two gates fails both the core and the server suite.
+
+*The leading bidder has its own label.* `POSITIONS_LEADING_LABEL` existed in the core and
+was never imported, so the rival's Team-Manager sat as a second bare line under "Your Bid" —
+in greyscale, reading as part of the viewer's own bid.
+
+*`POSITIONS_GROUP_ORDER` is now load-bearing.* Its docblock claims the surface iterates it;
+the page hard-codes five `{#if}` sections, and the route test listed the five ids by hand
+beside a `toHaveLength` check — so reordering the core constant left page and test green.
+The ids are now derived from the constant.
 
 **2026-09-02 — step-03 exit audit, orchestrator.** One correction before the story left
 implementation.

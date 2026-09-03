@@ -74,7 +74,8 @@ export type WonCardView = {
 	readonly placement: SlotPlacement;
 	readonly sentence: string;
 	readonly closedAt: string;
-	readonly href: string;
+	/** `null` until a closed Auction has a page — see `core/positions.ts`. */
+	readonly href: string | null;
 };
 
 /** One Auction the viewer has been outbid on, as the surface renders it. */

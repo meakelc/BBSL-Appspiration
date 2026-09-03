@@ -26,7 +26,11 @@
  * never be read as a cap refusal, and a cap refusal always has the capacity
  * outcome stated beside it. That is structural here for the reason it is
  * structural on the Auction page's panel: the rows are built by iterating the
- * declared gate list, not by a template deciding what to show.
+ * declared gate list, not by a template deciding what to show. **Any OTHER
+ * gate that refuses is reported too** — a card whose sentence says the Bid is
+ * impossible while every row on it says the Bid is fine states the truth and
+ * argues with itself, which on a page whose whole purpose is to answer before
+ * being asked is the same defect as being wrong.
  *
  * **Every figure is computed at read and transported as a rendering only**
  * (AD-7). Nothing in this module is stored, memoised or cached, and no
@@ -84,7 +88,8 @@ import {
 	minimumLegalBid
 } from './rules/bidding.ts';
 import type { BidState } from './rules/bidding.ts';
-import type { PlaceBidGate, SlotPlacement } from './types.ts';
+import { PLACE_BID_GATES } from './types.ts';
+import type { PlaceBidGate, PlaceBidGateResults, SlotPlacement } from './types.ts';
 
 /**
  * The five groups. `nomination_slot` is one of them rather than a footer,
@@ -161,7 +166,31 @@ export type ReEntryGateRow = {
  * Both, always: AD-7 forbids reporting a capacity refusal as a cap refusal,
  * and two rows each stating their own arithmetic cannot be read as one.
  */
-const REPORTED_GATES: readonly PlaceBidGate[] = Object.freeze(['cap', 'slots'] as const);
+const ALWAYS_REPORTED_GATES: readonly PlaceBidGate[] = Object.freeze(['cap', 'slots'] as const);
+
+/**
+ * The rows one card carries: `cap` and `slots` unconditionally, plus **any
+ * other gate that actually refused**.
+ *
+ * The floor is AD-7's and never moves. The addition closes a contradiction:
+ * `bidControlState` blocks on any of the nine `PLACE_BID_GATES`
+ * (`types.ts:654-664`), so a paused Phase or an expired-but-unswept Auction
+ * used to render "You cannot re-enter at $15.0M" directly above `Cap · Passed`
+ * and `Slots · Passed` — every row on the card agreeing the Bid was fine, over
+ * a sentence saying it was not. The sentence was right (`bidRefusalDelta`
+ * iterates every gate), but a Manager reading two passing rows under a refusal
+ * has been shown a card that argues with itself, and this page exists to state
+ * the answer rather than to be interpreted.
+ *
+ * Adding the refusing gate rather than replacing the two keeps the floor
+ * intact: the capacity outcome is still stated beside the cap outcome even
+ * when neither is the ground of the refusal.
+ */
+function reportedGates(gates: PlaceBidGateResults): readonly PlaceBidGate[] {
+	return PLACE_BID_GATES.filter(
+		(gate) => ALWAYS_REPORTED_GATES.includes(gate) || !gates[gate].passed
+	);
+}
 
 /**
  * Whether a Manager can legally re-enter one Auction, and at what.
@@ -290,7 +319,7 @@ export function reEntryFor(input: {
 		input.now
 	);
 
-	const rows = bidGateReport(gates).filter((row) => REPORTED_GATES.includes(row.gate));
+	const rows = bidGateReport(gates).filter((row) => reportedGates(gates).includes(row.gate));
 	const maximumBid = gates.cap.maximumBid;
 
 	const facts: ReEntryFacts = {
@@ -352,7 +381,24 @@ export type WonCard = {
 	readonly sentence: string;
 	/** The Auction's own persisted expiry — the surface renders it absolutely. */
 	readonly closedAt: string;
-	readonly href: string;
+	/**
+	 * **`null` until a closed Auction has a page.**
+	 *
+	 * A close DELETES the Player from `auctionsReducer` and
+	 * `nominationsReducer` (`projection/auctions.ts:806-815`), and
+	 * `routes/auction/[fantraxPlayerId]/+page.server.ts:93` raises `error(404)`
+	 * on that null read — so `auctionPathFor(...)` on a won Player is a link
+	 * to a 404, and the Won group is the FIRST group on the landing page. A
+	 * card that names the Player, the amount, the placement and the Cap Hit
+	 * already carries everything the close produced; a link that refuses adds
+	 * nothing to it and costs the tap that discovers so.
+	 *
+	 * `deferred-work.md`'s spec-3-6 entry assigns the closed-Auction surface
+	 * (winner, amount, placement, and the lottery's seed and Contender list)
+	 * to Epic 4. When it exists this becomes `auctionPathFor(...)` and the
+	 * surface's `{#if}` falls away — the one place either changes.
+	 */
+	readonly href: string | null;
 };
 
 /** What an Auction the viewer has been outbid on says. */
@@ -693,7 +739,9 @@ export function positionsFor(input: {
 			placement: contract.placement,
 			sentence: wonCardSentence(contract.placement, contract.capHit),
 			closedAt: contract.closedAt,
-			href: auctionPathFor(contract.fantraxPlayerId)
+			// No link: a closed Auction has no page yet, and the Won group is
+			// the first thing on the landing. See `WonCard.href`.
+			href: null
 		})
 	);
 

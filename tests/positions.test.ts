@@ -295,7 +295,12 @@ describe('Won — every Auction the viewer’s Team has won this phase', () => {
 		expect(card?.winningAmountLabel).toBe('$11.0M');
 		expect(card?.placement).toBe('active_bench');
 		expect(card?.closedAt).toBe(CLOSES);
-		expect(card?.href).toBe(`${AUCTION_PATH_PREFIX}p-1`);
+		// **No link.** A close DELETES the Player from `auctionsReducer`, and
+		// the Auction route 404s on that null read, so `auctionPathFor` on a
+		// won Player is a link to a refusal — in the FIRST group on the
+		// landing page. A review finding; `deferred-work.md`'s spec-3-6 entry
+		// owns the closed-Auction surface that will restore it.
+		expect(card?.href).toBeNull();
 	});
 
 	it('states the placement AND the Cap Hit, because they are independent (AD-23)', () => {
@@ -434,6 +439,43 @@ describe('Outbid — the card answers whether a re-entry is legal before it is a
 			expect(gates.map((row) => row.gate)).toEqual(['cap', 'slots']);
 			for (const row of gates) expect(row.figure, row.gate).not.toBe('');
 		}
+	});
+
+	it('reports the gate that ACTUALLY refused, beside the two that always show', () => {
+		// A review finding. `bidControlState` blocks on any of the nine
+		// `PLACE_BID_GATES`, but the card used to report `cap` and `slots`
+		// alone — so an Auction that has passed its close renders "You cannot
+		// re-enter at $15.0M" directly above `Cap · Passed` and
+		// `Slots · Passed`: every row on the card agreeing the Bid is fine,
+		// over a sentence saying it is not. The sentence was right, but a
+		// Manager reading two passing rows under a refusal has been handed a
+		// card that argues with itself, on the one surface built to answer
+		// before being asked.
+		const expired = '2026-08-27T00:00:00.000Z'; // twelve hours before NOW
+		const positions = build([
+			nominated('p-1', 'Jalen Duren', RIVAL),
+			bid('p-1', VIEWER, 14_000_000, '2026-08-26T01:00:00.000Z', expired),
+			bid('p-1', RIVAL, 14_500_000, '2026-08-26T02:00:00.000Z', expired)
+		]);
+		const reEntry = positions.outbid[0]?.reEntry;
+		expect(reEntry?.blocked).toBe(true);
+		expect(reEntry?.refusingGates).toContain('expiry');
+
+		const gates = reEntry?.gateRows ?? [];
+		// The refusing gate is ON the card...
+		expect(gates.map((row) => row.gate)).toContain('expiry');
+		expect(gates.find((row) => row.gate === 'expiry')?.passed).toBe(false);
+		// ...and the AD-7 floor is untouched: both money and slots are still
+		// stated, each with its own arithmetic, even though neither refused.
+		const cap = gates.find((row) => row.gate === 'cap');
+		const slots = gates.find((row) => row.gate === 'slots');
+		expect(cap?.passed).toBe(true);
+		expect(slots?.passed).toBe(true);
+		for (const row of gates) expect(row.figure, row.gate).not.toBe('');
+		// `PLACE_BID_GATES` order throughout, never the order they refused in.
+		expect(gates.map((row) => row.gate)).toEqual(['expiry', 'cap', 'slots']);
+		// No card can now say "cannot re-enter" with every row reading Passed.
+		expect(gates.some((row) => !row.passed)).toBe(true);
 	});
 
 	it('orders by close instant, tie-broken totally on the Player id', () => {

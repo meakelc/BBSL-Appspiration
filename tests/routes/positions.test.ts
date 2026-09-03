@@ -259,14 +259,21 @@ describe('the Positions page — what it renders', () => {
 		// The order IS the answer to the wake-up's question, so it is not a
 		// sort and there is no control that changes it. The five section ids
 		// appear in the source in exactly the declared sequence.
-		const ids = [
+		//
+		// The ids are DERIVED from `POSITIONS_GROUP_ORDER` rather than listed
+		// beside it — a review finding. Written out by hand, this assertion
+		// stayed green when the core constant was reordered and the page was
+		// not, which is precisely the divergence it exists to catch: the page
+		// hard-codes five `{#if}` sections, so the constant is the only thing
+		// that can hold the order, and nothing was checking that it did.
+		const ids = POSITIONS_GROUP_ORDER.map((group) => `group-${group.replaceAll('_', '-')}`);
+		expect(ids).toEqual([
 			'group-won',
 			'group-outbid',
 			'group-you-lead',
 			'group-contending',
 			'group-nomination-slot'
-		];
-		expect(POSITIONS_GROUP_ORDER).toHaveLength(ids.length);
+		]);
 		let previous = -1;
 		for (const id of ids) {
 			const index = PAGE.indexOf(`id="${id}"`);
@@ -376,12 +383,63 @@ describe('the Positions page — what it renders', () => {
 		expect(PAGE_CODE).not.toMatch(/deriveFreshness/);
 	});
 
-	it('renders the designed empty screen, pointing at the board and the free Slot', () => {
+	it('renders the designed empty screen, pointing at the board and the Slot', () => {
 		expect(PAGE).toMatch(/\{#if positions\.empty\}/);
 		expect(PAGE).toContain('id="positions-empty"');
 		expect(PAGE).toContain('id="positions-empty-count"');
 		expect(PAGE).toContain('id="positions-empty-board"');
 		expect(PAGE).toContain('id="positions-empty-nominate"');
+	});
+
+	it('never offers Nominate on the empty screen when the Slot is already spent', () => {
+		// A review finding. `empty` counts the four Auction groups only (by
+		// design — a free Slot is what the screen points AT), so a Manager
+		// who has nominated a Player nobody has bid on yet reaches this
+		// branch with a SPENT Slot. The screen then said "Your Nomination
+		// Slot is already spent" directly above a Nominate link `/nominate`
+		// refuses, and never named the Player they hold — the whole
+		// Nomination Slot group lives in the `{:else}`.
+		const empty = PAGE.slice(
+			PAGE.indexOf('id="positions-empty"'),
+			PAGE.indexOf('id="positions-empty-board"')
+		);
+		expect(empty).toMatch(/\{#if positions\.nominationSlot\.used/);
+		expect(empty).toContain('id="positions-empty-nomination"');
+		// The offer is inside the `{:else}` of that test, never beside it.
+		expect(empty.indexOf('{:else}')).toBeLessThan(empty.indexOf('id="positions-empty-nominate"'));
+		// And the held Player is named and linked rather than merely stated.
+		expect(empty).toMatch(/positions\.nominationSlot\.playerName/);
+		expect(empty).toMatch(/href=\{positions\.nominationSlot\.href\}/);
+	});
+
+	it('does not link a won Player to an Auction page that 404s', () => {
+		// A review finding. A close DELETES the Player from `auctionsReducer`
+		// and `nominationsReducer`, and the Auction route raises `error(404)`
+		// on that null read — so every card in the FIRST group on the landing
+		// page was a link to a refusal. `WonCard.href` is `null` until Epic
+		// 4's closed-Auction surface exists (`deferred-work.md`, spec-3-6).
+		const won = PAGE.slice(PAGE.indexOf('id="group-won"'), PAGE.indexOf('id="group-outbid"'));
+		expect(won).toMatch(/\{#if card\.href !== null\}/);
+		expect(won).toMatch(/\{:else\}[\s\S]*card-player[\s\S]*\{\/if\}/);
+	});
+
+	it('labels the leading bidder as its own figure, never under “Your Bid”', () => {
+		// A review finding. Two bare sibling lines under one `Your Bid`
+		// heading read, in greyscale, as though the rival's `Rockets — Dana`
+		// were part of the viewer's own bid. `POSITIONS_LEADING_LABEL` exists
+		// in the core for exactly this and was never imported.
+		expect(PAGE).toContain('POSITIONS_LEADING_LABEL');
+		const outbid = PAGE.slice(
+			PAGE.indexOf('id="group-outbid"'),
+			PAGE.indexOf('id="group-you-lead"')
+		);
+		const yourBid = outbid.indexOf('{POSITIONS_YOUR_BID_LABEL}');
+		const leadingLabel = outbid.indexOf('{POSITIONS_LEADING_LABEL}');
+		const leadingValue = outbid.indexOf('{card.leadingBidder}');
+		// The label sits between the viewer's own amount and the rival's name.
+		expect(yourBid).toBeGreaterThan(-1);
+		expect(leadingLabel).toBeGreaterThan(yourBid);
+		expect(leadingValue).toBeGreaterThan(leadingLabel);
 	});
 
 	it('links to the full board, which opens unfiltered', () => {

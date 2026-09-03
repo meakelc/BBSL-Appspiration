@@ -36,6 +36,7 @@
 		POSITIONS_BOARD_ACTION,
 		POSITIONS_CLOSED_LABEL,
 		POSITIONS_CLOSES_LABEL,
+		POSITIONS_LEADING_LABEL,
 		POSITIONS_NOMINATE_ACTION,
 		POSITIONS_PRICE_LABEL,
 		POSITIONS_TITLE,
@@ -67,7 +68,7 @@
 		readonly placement: string;
 		readonly sentence: string;
 		readonly closedAt: string;
-		readonly href: string;
+		readonly href: string | null;
 	};
 
 	type OutbidCardView = {
@@ -272,15 +273,31 @@
 
 	{#if positions.empty}
 		<!-- The designed empty screen, not an edge case: it states what the
-		     state is and points at the board and at the unused Nomination
-		     Slot, with the open-Auction count. Every word is the core's. -->
+		     state is and points at the board and at the Nomination Slot,
+		     with the open-Auction count. Every word is the core's. -->
 		<section class="panel" id="positions-empty">
 			<h2 class="display" id="positions-empty-heading">{EMPTY_POSITIONS_HEADING}</h2>
 			<p class="prose" id="positions-empty-statement">{EMPTY_POSITIONS_STATEMENT}</p>
 			<p class="prose" id="positions-empty-count">{emptySentence}</p>
-			<p class="prose">
-				<a href={NOMINATE_PATH} id="positions-empty-nominate">{POSITIONS_NOMINATE_ACTION}</a>
-			</p>
+			<!-- The Slot's ACTUAL state decides the offer. `empty` counts the
+			     four Auction groups only, so a Manager who has nominated a
+			     Player nobody has bid on yet lands here with a SPENT Slot —
+			     and offering them Nominate under a sentence that says the
+			     Slot is already spent is a link `/nominate` will refuse and
+			     a screen arguing with itself. They get the Player they
+			     nominated, named and linked, exactly as the Nomination Slot
+			     group states it below. -->
+			{#if positions.nominationSlot.used && positions.nominationSlot.href !== null}
+				<p class="prose">
+					<a href={positions.nominationSlot.href} id="positions-empty-nomination">
+						{positions.nominationSlot.playerName}
+					</a>
+				</p>
+			{:else}
+				<p class="prose">
+					<a href={NOMINATE_PATH} id="positions-empty-nominate">{POSITIONS_NOMINATE_ACTION}</a>
+				</p>
+			{/if}
 			<p class="prose"><a href={BOARD_PATH} id="positions-empty-board">{POSITIONS_BOARD_ACTION}</a></p>
 		</section>
 	{:else}
@@ -290,9 +307,17 @@
 				<ul class="cards">
 					{#each positions.won as card (card.fantraxPlayerId)}
 						<li class="card">
-							<a class="card-link" href={card.href}>
+							<!-- No link on a won Player: a closed Auction 404s
+							     until Epic 4's closed state exists, and this
+							     is the first group on the landing. The card
+							     already carries everything the close made. -->
+							{#if card.href !== null}
+								<a class="card-link" href={card.href}>
+									<span class="display card-player">{card.playerName}</span>
+								</a>
+							{:else}
 								<span class="display card-player">{card.playerName}</span>
-							</a>
+							{/if}
 							{#if card.metadata !== null}
 								<p class="card-metadata">{card.metadata}</p>
 							{/if}
@@ -341,6 +366,11 @@
 							<p class="card-price">{card.priceLabel}</p>
 							<p class="section-label">{POSITIONS_YOUR_BID_LABEL}</p>
 							<p class="prose card-leader">{card.yourBidLabel}</p>
+							<!-- The rival's Team gets its OWN label. Two bare
+							     lines under one "Your Bid" heading read, in
+							     greyscale, as though `Rockets — Dana` were
+							     part of the viewer's own bid. -->
+							<p class="section-label">{POSITIONS_LEADING_LABEL}</p>
 							<p class="prose card-leader">{card.leadingBidder}</p>
 
 							<p class="section-label">{POSITIONS_CLOSES_LABEL}</p>

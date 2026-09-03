@@ -222,10 +222,24 @@ describe('loadPositions — executed against a fake client', () => {
 		expect(card?.stateIcon).not.toBe('');
 		expect(card?.stateLabel).not.toBe('');
 		expect(card?.href).toBe('/auction/p-1');
-		// The re-entry answer ran: a real sentence and BOTH gates, always.
+		// The re-entry answer ran: a real sentence, and BOTH gates always.
 		expect(card?.reEntrySentence).not.toBe('');
-		expect(card?.reEntryGates.map((gate) => gate.gate)).toEqual(['cap', 'slots']);
+		const reported = card?.reEntryGates.map((gate) => gate.gate) ?? [];
+		expect(reported).toContain('cap');
+		expect(reported).toContain('slots');
 		for (const gate of card?.reEntryGates ?? []) expect(gate.figure).not.toBe('');
+
+		// And the gate that ACTUALLY refused is on the card beside them — a
+		// review finding. This fixture opens no Phase and its Auction closed
+		// in the past, so `bidControlState` blocks on `phase` and `expiry`
+		// while `cap` and `slots` both pass. Reporting only the two would
+		// render "You cannot re-enter" over two rows reading `Passed`: a card
+		// stating a refusal whose ground appears nowhere on it.
+		expect(card?.reEntryBlocked).toBe(true);
+		expect(reported).toContain('phase');
+		expect(reported).toContain('expiry');
+		// `PLACE_BID_GATES` order, never the order they refused in.
+		expect(reported).toEqual(['phase', 'expiry', 'cap', 'slots']);
 	});
 
 	it('names the Team alone when the Manager cannot be resolved for that Team', async () => {
