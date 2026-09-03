@@ -78,7 +78,12 @@ function fakeClient(rows: QueryResultRow[]) {
 		async query(text: string, params: readonly unknown[] = []) {
 			const sql = text.trim();
 			statements.push({ sql, params });
-			if (/^select cap_hit, roster_slot_kind\s+from team_rosters/i.test(sql)) {
+			// Matched on the TABLE rather than on the column list: Story 4.5
+			// widened the select to carry the Player id and name the Team
+			// view's roster listing needs from the same one read, and pinning
+			// the columns here would make that widening read as an unexpected
+			// statement. Any OTHER table still throws.
+			if (/from team_rosters/i.test(sql)) {
 				return { rows };
 			}
 			throw new Error(`unexpected statement: ${sql}`);

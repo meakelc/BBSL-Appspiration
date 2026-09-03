@@ -40,7 +40,7 @@ import type { Money } from './money.ts';
 import type { LeaguePhase } from './projection/phase.ts';
 import { bidStateFor, evaluate } from './rules/bidding.ts';
 import type { TeamMoneyState } from './rules/bidding.ts';
-import type { PlaceBid } from './types.ts';
+import type { CapGateOutcome, PlaceBid } from './types.ts';
 
 /**
  * The strip's own trigger label — the one word on the control that opens the
@@ -188,11 +188,30 @@ function probeFor(): PlaceBid {
  * it is: an overcommitted Team is over its Cap, and clamping that to `$0.0M`
  * would state something false about a Team that most needs told.
  */
+export function baselineCapOutcome(
+	team: TeamMoneyState | null,
+	phase: LeaguePhase,
+	now: string
+): CapGateOutcome {
+	const state = bidStateFor(null, team, false, phase);
+	return evaluate(state, probeFor(), now).cap;
+}
+
+/**
+ * The strip's Maximum Bid — the one field of the outcome above the strip
+ * reads.
+ *
+ * **One probe, not two.** Story 4.5 needed the whole `CapGateOutcome` for a
+ * Team view, and the choice was a second probe beside this one or lifting the
+ * outcome out of it. A second probe would be a second answer to "what does
+ * this Team hold", and the first to drift when a gate changes; this way the
+ * strip and the Team view are structurally incapable of printing different
+ * numbers, because there is one expression and both read fields off it.
+ */
 export function baselineMaximumBid(
 	team: TeamMoneyState | null,
 	phase: LeaguePhase,
 	now: string
 ): Money | null {
-	const state = bidStateFor(null, team, false, phase);
-	return evaluate(state, probeFor(), now).cap.maximumBid;
+	return baselineCapOutcome(team, phase, now).maximumBid;
 }

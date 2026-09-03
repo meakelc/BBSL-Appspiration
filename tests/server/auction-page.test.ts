@@ -255,7 +255,10 @@ function fakeGateway(options: {
 			// The viewer Team's Cap figures (Story 2.6). A label, not a
 			// loosened fake: the read is skipped entirely for a viewer bound
 			// to no Team, and `order` is what proves it.
-			if (/^select cap_hit, roster_slot_kind\s+from team_rosters/i.test(sql)) {
+			// Matched on the TABLE rather than on the column list: Story 4.5
+			// widened this select to carry the Player id and name the Team
+			// view's roster listing needs from the same one read.
+			if (/from team_rosters/i.test(sql)) {
 				order.push('read-roster');
 				return { rows: roster };
 			}

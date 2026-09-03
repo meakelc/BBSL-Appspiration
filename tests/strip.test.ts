@@ -29,6 +29,7 @@ import type { TeamMoneyState } from '../src/lib/core/rules/bidding.ts';
 import {
 	STRIP_REGION_LABEL,
 	STRIP_SHEET_LABEL,
+	baselineCapOutcome,
 	baselineMaximumBid,
 	rosterCountSentence,
 	stripPresent,
@@ -263,6 +264,40 @@ describe('the baseline Maximum Bid — evaluate() output, never a stored figure'
 		// writes down once.
 		expect(NO_AUCTION_PROBE_ID).toContain('no-auction');
 		expect(CORE_STRIP).toContain('NO_AUCTION_PROBE_ID');
+	});
+
+	it('is the SAME probe the Team view reads, so the two cannot fork (Story 4.5)', () => {
+		// `baselineMaximumBid` is `baselineCapOutcome(...).maximumBid` and
+		// nothing else. Asserted over a bounded state, an unbounded one and a
+		// null-Team one, because a refactor that forked would most likely fork
+		// on exactly one of the three branches.
+		const bounded = teamWith();
+		expect(baselineMaximumBid(bounded, 'Auction', NOW)).toBe(
+			baselineCapOutcome(bounded, 'Auction', NOW).maximumBid
+		);
+
+		// The probe treats the Player as NOT eligible, so `unbounded` is false
+		// for every state it can be handed — which is itself the claim, and it
+		// is asserted here rather than assumed.
+		const wouldBeUnbounded = teamWith({ minorLeagueOccupied: 0, eligibleLeading: [] });
+		const outcome = baselineCapOutcome(wouldBeUnbounded, 'Auction', NOW);
+		expect(outcome.unbounded).toBe(false);
+		expect(baselineMaximumBid(wouldBeUnbounded, 'Auction', NOW)).toBe(outcome.maximumBid);
+
+		// ...and the null-Team state, where every figure nulls together.
+		expect(baselineMaximumBid(null, 'Auction', NOW)).toBe(
+			baselineCapOutcome(null, 'Auction', NOW).maximumBid
+		);
+		expect(baselineCapOutcome(null, 'Auction', NOW).maximumBid).toBeNull();
+	});
+
+	it('exists exactly once in the source — one probe, not two', () => {
+		// The refactor's whole point: the probe is CALLED from one place — the
+		// declaration is the other match — and `baselineMaximumBid` reaches it
+		// through `baselineCapOutcome`.
+		expect(CORE_STRIP_CODE.match(/evaluate\(state, probeFor\(\), now\)/g)).toHaveLength(1);
+		expect(CORE_STRIP_CODE).toContain('baselineCapOutcome(team, phase, now).maximumBid');
+		expect(CORE_STRIP_CODE.match(/bidStateFor\(null, team, false, phase\)/g)).toHaveLength(1);
 	});
 });
 
@@ -526,7 +561,13 @@ function fakeGateway(rows: ReadonlyArray<Record<string, unknown>> = []) {
 					statements.push(sql);
 					if (/^begin$|^rollback$/i.test(sql)) return { rows: [] };
 					if (/^select \* from auction_events/i.test(sql)) return { rows: [] };
-					if (/^select cap_hit, roster_slot_kind/i.test(sql)) return { rows };
+					// Matched on the TABLE rather than on the column list, so
+					// widening the select (Story 4.5 adds the Player id and
+					// name for the Team view's roster listing, from the same
+					// one read) does not silently turn this fake's answer into
+					// an "unexpected statement" throw. It still throws on any
+					// OTHER table, which is what the discipline is for.
+					if (/from team_rosters/i.test(sql)) return { rows };
 					throw new Error(`unexpected statement: ${sql}`);
 				},
 				release: () => {}

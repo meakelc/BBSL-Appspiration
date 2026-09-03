@@ -498,8 +498,18 @@ export type Positions = {
 
 // --- The wording -----------------------------------------------------------
 
-/** What each placement is called, in the glossary's own words. */
-const PLACEMENT_LABELS: Readonly<Record<SlotPlacement, string>> = Object.freeze({
+/**
+ * What each placement is called, in the glossary's own words.
+ *
+ * Exported since Story 4.5. A Team view lists a won Player as a roster row and
+ * states where he landed, and `wonCardSentence` below is the sentence that
+ * says it — but the Team view also groups its roster by slot kind, and the
+ * headings for THAT come from `rules/roster-import.ts`'s `SLOT_LABELS`,
+ * because this record is the article-form ("an Active/Bench Slot") a sentence
+ * needs and holds no `injury_reserve` entry at all. Two spellings already
+ * existed for two registers; Story 4.5 adds neither.
+ */
+export const PLACEMENT_LABELS: Readonly<Record<SlotPlacement, string>> = Object.freeze({
 	active_bench: 'an Active/Bench Slot',
 	minor_league: 'a Minor League Slot'
 });
