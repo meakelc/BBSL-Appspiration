@@ -75,6 +75,15 @@ const AR2_DIRECTORIES: Array<[path: string, purpose: string]> = [
  * `BidVoided`, because nothing in this codebase appends a void — Story 7.2
  * owns that, and this test is what lets it append one against a fold already
  * proven to survive it.
+ *
+ * **Story 4.6 added ONE — 28** — the League Median, and it is the first §10
+ * example that is not about a gate at all. It drives `core/money.ts`'
+ * `medianMoney` and `medianCount` directly, because the median is a read-model
+ * aggregate that authorises nothing and therefore lives with the money
+ * arithmetic rather than behind `evaluate()` (`ARCHITECTURE-SPINE.md:122`).
+ * Both halves — the money and the slots — are in the one file, because they
+ * are one rule with two comparators and the file is where they would be caught
+ * disagreeing.
  */
 const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 	['example-01-ordinary-raise.test.ts', '1 — Ordinary raise'],
@@ -128,6 +137,10 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 	[
 		'example-27-a-voided-bid-shortens-the-clock.test.ts',
 		'27 — A voided Bid shortens the League Clock'
+	],
+	[
+		'example-28-the-median-lands-between-two-grid-values.test.ts',
+		'28 — The median lands between two grid values'
 	]
 ];
 

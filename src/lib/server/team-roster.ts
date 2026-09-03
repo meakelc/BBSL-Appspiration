@@ -171,14 +171,44 @@ export async function loadTeamRosterDetail(
 		[teamId]
 	);
 
+	return detailFor(teamId, importedRowsFrom(result.rows), contracts);
+}
+
+/**
+ * The `team_rosters` half of one read, mapped — the imported rows only.
+ *
+ * Split out because the league-wide read below runs the identical mapping over
+ * rows it has already grouped by `team_id`. Two spellings of the same five
+ * fields is exactly the duplication Story 4.5's review removed for
+ * `TeamRosterEntryRow`.
+ */
+function importedRowsFrom(rows: readonly Record<string, unknown>[]): TeamRosterEntryRow[] {
+	return rows.map((row) => ({
+		fantraxPlayerId: String(row['fantrax_player_id'] ?? ''),
+		playerName: String(row['player_name'] ?? ''),
+		capHit: parseMoney(row['cap_hit']),
+		rosterSlotKind: String(row['roster_slot_kind']) as RosterSlotKind,
+		won: false
+	}));
+}
+
+/**
+ * The concatenation and the ONE counting loop, for one Team.
+ *
+ * **Extracted rather than copied for the league-wide read.** The loop sums
+ * across all the rows it is given into one Team's three figures, so a
+ * league-wide read must group by `team_id` BEFORE reaching it — calling this
+ * once per Team, over that Team's rows, is what makes the grouping structural
+ * instead of a comment. One Team's answer is therefore computed by the
+ * identical expression whether it was read alone or with twenty-nine others.
+ */
+function detailFor(
+	teamId: string,
+	importedRows: readonly TeamRosterEntryRow[],
+	contracts: AuctionContracts
+): TeamRosterDetail {
 	const rows: TeamRosterEntryRow[] = [
-		...result.rows.map((row) => ({
-			fantraxPlayerId: String(row['fantrax_player_id'] ?? ''),
-			playerName: String(row['player_name'] ?? ''),
-			capHit: parseMoney(row['cap_hit']),
-			rosterSlotKind: String(row['roster_slot_kind']) as RosterSlotKind,
-			won: false
-		})),
+		...importedRows,
 		// What this Team has WON, folded from the log — the auction's own
 		// output, on the same footing as an imported row and counted by the
 		// same loop (Story 3.4). A `minor_league` placement carries a `$0` Cap
@@ -217,6 +247,57 @@ export async function loadTeamRosterDetail(
 		rosterCount,
 		minorLeagueOccupied
 	};
+}
+
+/**
+ * Every named Team's roster detail, from ONE statement (Story 4.6).
+ *
+ * `server/positions.ts:164-169`'s batch shape — `::text = any($1::text[])` —
+ * for its reason: thirty single-Team reads inside one transaction is thirty
+ * round trips answering one question, and the Teams index must be able to
+ * claim that one fold and one set of reads produced all thirty rows.
+ *
+ * **Rows are grouped by `team_id` BEFORE the counting loop.** That loop sums
+ * across everything it is handed into a single Team's figures, so a league-wide
+ * row set reaching it ungrouped would report the whole League's Cap Space as
+ * one Team's. The grouping is the whole difference between this function and
+ * `loadTeamRosterDetail`, and it happens here.
+ *
+ * **A Team with no rows yields a real empty detail, never a missing entry.**
+ * `computeCapSpace` over zero rows already returns exactly `SALARY_CAP` with a
+ * Roster Count of 0 — a real state a Team is in before the import promotes
+ * anything — and a caller that had to distinguish "absent from the map" from
+ * "holds nothing" would be re-deriving that answer for itself. Every requested
+ * id is in the returned map.
+ */
+export async function loadLeagueRosterDetail(
+	client: TransactionalClient,
+	teamIds: readonly string[],
+	contracts: AuctionContracts
+): Promise<Map<string, TeamRosterDetail>> {
+	const details = new Map<string, TeamRosterDetail>();
+	if (teamIds.length === 0) return details;
+
+	const result = await client.query(
+		`select team_id::text as team_id, fantrax_player_id::text as fantrax_player_id,
+			player_name, cap_hit, roster_slot_kind
+		from ${TEAM_ROSTERS_TABLE}
+		where team_id::text = any($1::text[])`,
+		[[...teamIds]]
+	);
+
+	const byTeam = new Map<string, Record<string, unknown>[]>();
+	for (const row of result.rows) {
+		const teamId = String(row['team_id'] ?? '');
+		const existing = byTeam.get(teamId);
+		if (existing === undefined) byTeam.set(teamId, [row]);
+		else existing.push(row);
+	}
+
+	for (const teamId of teamIds) {
+		details.set(teamId, detailFor(teamId, importedRowsFrom(byTeam.get(teamId) ?? []), contracts));
+	}
+	return details;
 }
 
 export async function loadTeamRoster(

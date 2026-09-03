@@ -197,3 +197,79 @@ export function formatMoney(amount: Money): DisplayMoney {
 export function toExportDollars(amount: Money): ExportCell {
 	return String(amount) as ExportCell;
 }
+
+// --- The League Median -----------------------------------------------------
+
+/**
+ * The index of the median value in an ASCENDING sequence of `count` values —
+ * the lower of the two middles when the count is even (Story 4.6).
+ *
+ * **The rule is spelled exactly once, here.** `medianMoney` and `medianCount`
+ * differ only in their comparator; they must not differ in where they look,
+ * because the money half and the slot half of PRD §10 example 28 are the same
+ * rule and two spellings of it are two things that can drift.
+ *
+ * `ceil(count / 2) - 1` is that index: 1 value gives 0; 2 give 0, the LOWER
+ * middle; 3 give 1; 29 give 14; 30 give 14, which is the 15th row and exactly
+ * what example 28 asks for.
+ *
+ * `null` for an empty sequence. There is no median of nothing, and `0` would
+ * be a figure — `$0.0M`, or a Team with no free Slots — where the truth is
+ * that the question was never answerable. `amountLabel`'s policy in
+ * `core/team-view.ts`, in the one module that can state it.
+ */
+function lowerMiddleIndex(count: number): number | null {
+	if (!Number.isFinite(count) || count <= 0) return null;
+	return Math.ceil(count / 2) - 1;
+}
+
+/**
+ * The League Median of a set of money figures — the lower of the two middle
+ * values, NEVER their mean (Story 4.6, `epic-4-context.md:24`).
+ *
+ * **Why the mean is refused.** The mean of `$4,000,000` and `$4,500,000` is
+ * `$4,250,000`, which lands at $250,000 granularity — off the
+ * `MINIMUM_INCREMENT` grid, which is precisely what `formatMoney` throws a
+ * `RangeError` on. Rounding it back onto the grid would publish a figure no
+ * Team holds and no Manager can reproduce by hand from the same rows. The
+ * lower middle is always some real Team's own number, so it is always on the
+ * grid — assertable through `isOnMoneyGrid` rather than argued — and always
+ * renders losslessly at one decimal, which is the property every abbreviated
+ * figure in this product rests on.
+ *
+ * This is a READ-MODEL AGGREGATE and not a rule: it authorises nothing, so it
+ * lives here with the money arithmetic rather than behind `evaluate()` or
+ * `decide()` (`ARCHITECTURE-SPINE.md:122`).
+ *
+ * The input is sorted as a COPY through `compareMoney` — the module's existing
+ * ordering primitive, which exists for exactly this ("explicitly sorted
+ * sequences") — so a caller's array is never reordered underneath it and the
+ * answer is identical whatever order the values arrive in.
+ */
+export function medianMoney(values: readonly Money[]): Money | null {
+	const at = lowerMiddleIndex(values.length);
+	if (at === null) return null;
+	const ascending = [...values].sort(compareMoney);
+	return ascending[at] ?? null;
+}
+
+/**
+ * The League Median of a set of whole counts — free roster Slots (Story 4.6).
+ *
+ * The slot half of §10 example 28: 2 and 3 give **2**, never `2.5`. Half a
+ * roster Slot is not a thing that exists, and this is `medianMoney`'s rule
+ * through `lowerMiddleIndex` rather than a second one — the only difference
+ * between the two functions is the comparator.
+ *
+ * `null` for an empty sequence, for `medianMoney`'s reason.
+ */
+export function medianCount(values: readonly number[]): number | null {
+	const at = lowerMiddleIndex(values.length);
+	if (at === null) return null;
+	const ascending = [...values].sort((a, b) => {
+		if (a < b) return -1;
+		if (a > b) return 1;
+		return 0;
+	});
+	return ascending[at] ?? null;
+}
