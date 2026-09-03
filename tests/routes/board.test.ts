@@ -424,7 +424,13 @@ describe('the board page — what it renders', () => {
 		expect(PAGE_CODE).not.toMatch(/maximumBid|capSpace|evaluate\(/i);
 	});
 
-	it('links each card to its own Auction', () => {
-		expect(PAGE).toMatch(/href=\{`\/auction\/\$\{card\.fantraxPlayerId\}`\}/);
+	it('links each card to its own Auction, through the core’s one shape', () => {
+		// The literal `/auction/${...}` template that stood here is gone: the
+		// deep-link shape is written once in `core/auction-link.ts`, so
+		// `/board`, `/positions` and Story 5.3's Discord notification cannot
+		// emit three shapes that agree only by coincidence.
+		expect(PAGE).toMatch(/href=\{auctionPathFor\(card\.fantraxPlayerId\)\}/);
+		expect(PAGE).toContain("from '$lib/core/auction-link.ts'");
+		expect(PAGE_CODE).not.toMatch(/`\/auction\//);
 	});
 });

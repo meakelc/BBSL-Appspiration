@@ -58,6 +58,9 @@
 		unbidPhrase
 	} from '$lib/core/board.ts';
 	import type { BoardFilter, BoardSort, BoardViewerState } from '$lib/core/board.ts';
+	// The Auction deep-link shape is written ONCE, in the core, so `/board`,
+	// `/positions` and Story 5.3's Discord notification all emit one shape.
+	import { auctionPathFor } from '$lib/core/auction-link.ts';
 	import {
 		CONTENTION_CLOCK_UNMOVED,
 		closesInPhrase,
@@ -332,7 +335,7 @@
 				     the icon and the word beside it are what make a greyscale
 				     screenshot read identically. -->
 				<li class="card" class:lottery={card.contention === 'minimum_bid'}>
-					<a class="card-link" href={`/auction/${card.fantraxPlayerId}`}>
+					<a class="card-link" href={auctionPathFor(card.fantraxPlayerId)}>
 						<span class="display card-player">{card.playerName}</span>
 					</a>
 					{#if card.metadata !== null}

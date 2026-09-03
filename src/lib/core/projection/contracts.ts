@@ -166,6 +166,56 @@ export function contractRowsFor(
 }
 
 /**
+ * One Team's Auction Contracts as CONTRACTS — newest close first (Story 4.4).
+ *
+ * **Beside `contractRowsFor`, never instead of it.** That one is the Cap
+ * bridge and yields `CapHitRow`, which carries a cap hit and a slot kind and
+ * nothing else: no Player name, no winning amount and no `closedAt`. Your
+ * Positions' Won group names the Player, states what the Auction was won for
+ * and states when it closed, so it needs the contract itself. Widening
+ * `CapHitRow` to carry those three would push presentation fields into the
+ * shape `computeCapSpace` sums over, which is the opposite of what makes the
+ * Cap arithmetic have one definition.
+ *
+ * **Bounded by construction, which is why no time window is needed.** A Team
+ * holds at most twelve Active/Bench Slots plus its Minor League Slots, so
+ * this list cannot grow without limit however long the Auction Phase runs.
+ * A "last 24 hours" cut would not be a rendering choice: it would be a
+ * decision about when a Manager last looked, and nothing in the log records
+ * that.
+ *
+ * **Newest `closedAt` first, tie-broken TOTALLY on `fantraxPlayerId`.**
+ * Several Auctions legitimately share a close instant — a sweep closes every
+ * expired Auction in one transaction, and `closedAt` is the Auction's own
+ * nominal expiry rather than the transaction clock — so a comparator
+ * returning 0 would leave `Array.prototype.sort` free to reorder them between
+ * two renders of the same state. That is `sortBoard`'s and `byCloseThenPlayer`'s
+ * rule, and it is why the instants are compared as STRINGS: `closedAt` is
+ * ISO-8601 UTC as the payload persisted it, which sorts lexicographically in
+ * instant order, and parsing it here would make an unreadable historical
+ * value a reordering rather than a stable position.
+ */
+export function contractsWonBy(
+	contracts: AuctionContracts,
+	teamId: string
+): readonly AuctionContract[] {
+	const won: AuctionContract[] = [];
+	// Sorted keys first (AD-5), so the input to the sort is itself a sequence
+	// rather than an incidental object key order.
+	for (const playerId of Object.keys(contracts.byPlayer).sort()) {
+		const contract = contractForPlayer(contracts, playerId);
+		if (contract === null) continue;
+		if (contract.teamId !== teamId) continue;
+		won.push(contract);
+	}
+	return won.sort((left, right) => {
+		if (left.closedAt !== right.closedAt) return left.closedAt < right.closedAt ? 1 : -1;
+		if (left.fantraxPlayerId === right.fantraxPlayerId) return 0;
+		return left.fantraxPlayerId < right.fantraxPlayerId ? -1 : 1;
+	});
+}
+
+/**
  * The `AuctionClosed` payload as this reducer needs it, read defensively.
  *
  * `AppendedEvent.payload` is `unknown` — whatever JSON the column holds — and
