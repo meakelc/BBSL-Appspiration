@@ -137,6 +137,22 @@ beforeEach(() => {
 		activeBenchSentence: 'Free Active/Bench Slots 12 of 12',
 		minorLeagueSentence: 'Minor League 0 of 3, Free Minor League Slots 3',
 		injuryReserveSentence: 'Injury Reserve 0 of 2, outside the 12',
+		rosterCountHalves: { full: 'Roster 0 of 12', lead: 'Roster 0', qualifier: ' of 12' },
+		activeBenchHalves: {
+			full: 'Free Active/Bench Slots 12 of 12',
+			lead: 'Free Active/Bench Slots 12',
+			qualifier: ' of 12'
+		},
+		minorLeagueHalves: {
+			full: 'Minor League 0 of 3, Free Minor League Slots 3',
+			lead: 'Minor League 0',
+			qualifier: ' of 3, Free Minor League Slots 3'
+		},
+		injuryReserveHalves: {
+			full: 'Injury Reserve 0 of 2, outside the 12',
+			lead: 'Injury Reserve 0',
+			qualifier: ' of 2, outside the 12'
+		},
 		roster: [],
 		nominationSlot: {
 			used: false,
@@ -352,6 +368,32 @@ describe('the Team page — what it renders', () => {
 		);
 		expect(heading).toContain('{team.teamName}');
 		expect(heading).toContain('{team.managerSuffix}');
+	});
+
+	/*
+	 * The count/ceiling pair, pinned the same way the Team/Manager pair is —
+	 * a whole-file check that `--color-text-secondary` appears somewhere is
+	 * satisfied by the inverted layout just as well.
+	 */
+	it('sets the slot count at full strength and the `of 12` beside it one step quieter', () => {
+		const qualifier = /\.figure-qualifier\s*\{[\s\S]*?\}/.exec(PAGE)?.[0] ?? '';
+		const figure = /\.figure\s*\{[\s\S]*?\}/.exec(PAGE)?.[0] ?? '';
+
+		expect(qualifier).toContain('var(--color-text-secondary)');
+		expect(figure).toContain('var(--color-text)');
+		expect(figure, 'the count carries the information and is never dimmed').not.toContain(
+			'var(--color-text-secondary)'
+		);
+
+		// Both halves come from the core, and the page never searches a
+		// string for the separator itself.
+		for (const half of ['rosterCountHalves', 'activeBenchHalves', 'minorLeagueHalves']) {
+			expect(PAGE, half).toContain(`team.${half}.lead`);
+			expect(PAGE, half).toContain(`team.${half}.qualifier`);
+		}
+		expect(PAGE_CODE, 'the page splits a sentence itself').not.toMatch(/indexOf\(|\.split\(/);
+		// The whole sentence still reaches a screen reader unbroken.
+		expect(PAGE).toContain('aria-label={team.rosterCountHalves.full}');
 	});
 
 	it('spells no size, colour or spacing literal — every value is a token', () => {

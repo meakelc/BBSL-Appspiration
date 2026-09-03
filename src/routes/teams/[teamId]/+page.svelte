@@ -67,6 +67,12 @@
 		readonly kind: 'term' | 'detail' | 'subtotal';
 	};
 
+	type SlotSentenceHalves = {
+		readonly full: string;
+		readonly lead: string;
+		readonly qualifier: string;
+	};
+
 	type TeamViewState = {
 		readonly teamId: string;
 		readonly teamName: string;
@@ -83,6 +89,10 @@
 		readonly activeBenchSentence: string;
 		readonly minorLeagueSentence: string;
 		readonly injuryReserveSentence: string;
+		readonly rosterCountHalves: SlotSentenceHalves;
+		readonly activeBenchHalves: SlotSentenceHalves;
+		readonly minorLeagueHalves: SlotSentenceHalves;
+		readonly injuryReserveHalves: SlotSentenceHalves;
 		readonly roster: readonly RosterGroup[];
 		readonly nominationSlot: NominationSlotStatus;
 		readonly maximumBidLabel?: string;
@@ -172,13 +182,40 @@
 
 	<!-- Band two: slots. The Roster Count is Active/Bench only; Minor League
 	     renders `N of 3`; Injury Reserve is stated and visibly outside the
-	     twelve, in its own quieter row. -->
+	     twelve, in its own quieter row.
+
+	     Each sentence is set in TWO registers (DESIGN.md:183): the count
+	     carries the information and reads first, the `of 12` beside it is one
+	     step quieter. Both halves come from the core — this file never
+	     searches a string for ` of `. The whole sentence rides on
+	     `aria-label` so a screen reader gets it unbroken rather than as two
+	     fragments. -->
 	<section class="panel" id="team-slots">
 		<h2 class="section-label">{TEAM_VIEW_LABELS.slots}</h2>
-		<p class="figure" id="team-roster-count">{team.rosterCountSentence}</p>
-		<p class="figure-secondary" id="team-active-bench">{team.activeBenchSentence}</p>
-		<p class="figure-secondary" id="team-minor-league">{team.minorLeagueSentence}</p>
-		<p class="figure-tertiary" id="team-injury-reserve">{team.injuryReserveSentence}</p>
+		<p class="figure" id="team-roster-count" aria-label={team.rosterCountHalves.full}>
+			<span>{team.rosterCountHalves.lead}</span><span class="figure-qualifier"
+				>{team.rosterCountHalves.qualifier}</span
+			>
+		</p>
+		<p class="figure" id="team-active-bench" aria-label={team.activeBenchHalves.full}>
+			<span>{team.activeBenchHalves.lead}</span><span class="figure-qualifier"
+				>{team.activeBenchHalves.qualifier}</span
+			>
+		</p>
+		<p class="figure" id="team-minor-league" aria-label={team.minorLeagueHalves.full}>
+			<span>{team.minorLeagueHalves.lead}</span><span class="figure-qualifier"
+				>{team.minorLeagueHalves.qualifier}</span
+			>
+		</p>
+		<p
+			class="figure-tertiary"
+			id="team-injury-reserve"
+			aria-label={team.injuryReserveHalves.full}
+		>
+			<span>{team.injuryReserveHalves.lead}</span><span class="figure-qualifier"
+				>{team.injuryReserveHalves.qualifier}</span
+			>
+		</p>
 	</section>
 
 	<!-- Band three: money. Every figure is a field of one `CapGateOutcome`;
@@ -363,11 +400,14 @@
 		letter-spacing: -0.025em;
 	}
 
-	/* `of 12` reads second: the number carrying the information reads first. */
-	.figure-secondary {
-		font-family: var(--font-ui);
-		font-size: var(--size-15);
-		font-variant-numeric: var(--numerals);
+	/*
+	 * The ceiling half of a slot sentence — `of 12`, `of 3` — one step
+	 * quieter than the count beside it (DESIGN.md:183), so the number
+	 * carrying the information reads first. It inherits size and face from
+	 * the `.figure` it sits inside; only the colour steps back, which is what
+	 * keeps the pair on one baseline.
+	 */
+	.figure-qualifier {
 		color: var(--color-text-secondary);
 	}
 

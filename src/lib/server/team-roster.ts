@@ -37,6 +37,7 @@
 
 import { contractsWonBy } from '../core/projection/contracts.ts';
 import type { AuctionContracts } from '../core/projection/contracts.ts';
+import type { TeamRosterRow } from '../core/team-view.ts';
 import { computeCapSpace } from '../core/rules/roster-import.ts';
 import type { CapHitRow } from '../core/rules/roster-import.ts';
 import { parseMoney } from '../core/money.ts';
@@ -123,15 +124,16 @@ export type TeamRosterFigures = {
  * It is returned from the SAME read and the SAME concatenation the three
  * figures are counted from. A second query for the names would produce a row
  * set that could disagree with the counted one at the moment a close commits.
+ *
+ * **It is the CORE's `TeamRosterRow`, re-exported rather than restated.**
+ * Story 4.5's code review found the same five fields declared twice, here and
+ * in `core/team-view.ts` — two structurally identical types that nothing
+ * forces to stay identical, which is the drift this story removed for
+ * `PLACEMENT_LABELS`/`SLOT_LABELS` in the same diff. The core owns the shape
+ * because the core is what consumes it; this alias keeps the server-side name
+ * every call site already reads.
  */
-export type TeamRosterEntryRow = {
-	readonly fantraxPlayerId: string;
-	readonly playerName: string;
-	readonly capHit: Money;
-	readonly rosterSlotKind: RosterSlotKind;
-	/** Whether this row is an Auction Contract rather than an imported row. */
-	readonly won: boolean;
-};
+export type TeamRosterEntryRow = TeamRosterRow;
 
 /** The three figures, plus the rows they were counted from. */
 export type TeamRosterDetail = TeamRosterFigures & {

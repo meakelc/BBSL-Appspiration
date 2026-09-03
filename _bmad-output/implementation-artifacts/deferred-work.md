@@ -522,3 +522,26 @@
   deferred_reason: Building the index here would be building Story 4.6 — the thirty-row list, its sort chips, its `30 teams` count and the League Median are that story's whole subject, and spec-4-5's **Never** list forbids each by name. The seam is deliberate: `teamViewFor` takes one Team so 4.6 is a `map` over it, which is what makes "the index and the Team view cannot disagree" (`epic-4-context.md:56`) structural.
   owner: Story 4.6 — build `/teams`, link each row to `/teams/<id>`, and call `teamViewFor` per Team rather than re-deriving any figure.
   status: open
+
+## Deferred from: code review of spec-4-5-view-any-team (2026-09-03)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-5-view-any-team.md`
+  summary: `loadTeamView` reads the whole event log and runs all five folds before it checks the Team exists, so an unknown or typo'd `teamId` pays for a full fold to reach a 404.
+  evidence: `src/lib/server/team-view.ts:145-159` — `loadEventsViaClient`, five folds and `select now()` all precede `loadTeamIdentity` at `:159`. Identity resolution reads only `teams left join managers` and depends on no event.
+  deferred_reason: Reordering is a real improvement but the cost is irrelevant at 31 users and a few thousand events, and moving the identity read above the clock read would separate `figuresAt` from the fold it anchors. Not caused by this change in any behavioural sense.
+  owner: Any later story touching this read path.
+  status: open
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-5-view-any-team.md`
+  summary: `formatTeamManagers` joins three or more Managers with a flat ` & ` (`A & B & C`) rather than a comma list with a trailing `&`, and no test exercises more than two.
+  evidence: `src/lib/core/team-identity.ts:69-77` joins on `MANAGER_SEPARATOR` unconditionally. `tests/team-view.test.ts:413` covers the two-Manager case only.
+  deferred_reason: No Team in this 30-team League is co-managed by three, and inventing a list form now would be a wording decision made without a real case to check it against.
+  owner: Whichever story first meets a three-Manager Team.
+  status: open
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-5-view-any-team.md`
+  summary: `loadTeamIdentity`'s `order by m.display_name asc` has no secondary sort key, so two Managers sharing a display name have an incidental order (AD-1 forbids incidental order elsewhere in the same diff).
+  evidence: `src/lib/server/team-view.ts:104`. Every other ordering this story adds tie-breaks totally — roster rows on `fantraxPlayerId` (`core/team-view.ts:341-344`), Auction entries likewise (`:369`).
+  deferred_reason: Pre-existing: the query is `server/auction-open.ts:87-115`'s, copied deliberately, and fixing it here would fork the two. `managers.display_name` is also unique in practice.
+  owner: A story that revisits `server/auction-open.ts`'s join; fix both together.
+  status: open

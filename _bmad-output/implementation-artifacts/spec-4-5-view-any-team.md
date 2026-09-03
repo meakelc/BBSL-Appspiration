@@ -2,7 +2,7 @@
 title: 'Story 4.5: View any Team'
 type: 'feature'
 created: '2026-09-03'
-status: 'in-review'
+status: 'done'
 baseline_commit: 'e94f0123474824ff608975d9dfa9efa3437100e4'
 review_loop_iteration: 0
 context:
@@ -21,7 +21,8 @@ context:
 ## Boundaries & Constraints
 
 **Always:**
-- Every figure comes from `evaluate()`'s `CapGateOutcome` against the **no-Auction baseline probe** (`core/strip.ts:153-198`) — Cap Space, Committed Bids, of-which Minors Exposure, Available Cap Space, Roster Reserve, Maximum Bid, `freeMinorLeagueSlots`, `eligibleLeadingBids`, `overflowCount`. No figure is added, re-derived or recomputed by this story (AD-7:109). `baselineMaximumBid` is refactored to read the same outcome, so one probe exists and not two.
+- Every figure comes from `evaluate()`'s `CapGateOutcome` against the **no-Auction baseline probe** (`core/strip.ts:153-198`) — Cap Space, Committed Bids, of-which Minors Exposure, Available Cap Space, Roster Reserve, Maximum Bid, `freeMinorLeagueSlots`, `eligibleLeadingBids`, `overflowCount`. That outcome is the **source** of every money figure this story renders; it is not a list of figures that must all appear. No *money* figure is added, re-derived or recomputed by this story (AD-7:109) — a pure slot count against a league constant, such as Free Active/Bench Slots, is not a money figure and is not what AD-7 governs. What actually renders is the I/O matrix's published set. `baselineMaximumBid` is refactored to read the same outcome, so one probe exists and not two.
+- **Roster Reserve, Eligible Leading Bids and Overflow Count are NOT published.** They reach the viewer's own Team through `capBreakdown` and no other Team, because `maximumBid = availableCapSpace − rosterReserve` and Available Cap Space is public — publishing Roster Reserve beside it would let any Manager recover a rival's Maximum Bid by subtraction, defeating the single exception `epic-4-context.md:20` carves out. Withholding them is what makes that exception hold.
 - `teamViewFor` takes **one** Team and is called per Team. That is the whole of "the index and the Team view cannot disagree" (`epic-4-context.md:56`) — a shape 4.6 iterates, not a shape 4.6 re-derives.
 - Both gates always run and both are reported where a refusal is stated; a slot figure never stands in for a money one and vice versa (AD-7:111).
 - One transaction, one `loadEventsViaClient`, batched reference selects, always `rollback`, rethrow on failure — `server/positions.ts:238-380`'s discipline exactly. No advisory lock.
@@ -48,7 +49,8 @@ context:
 
 | Scenario | Input / State | Expected Output / Behavior | Error Handling |
 |---|---|---|---|
-| Any Team, any viewer | a `teams` row exists | Cap Space, Committed Bids, of-which Minors Exposure, Available Cap Space, Roster Count `N of 12`, Free Active/Bench Slots, Minor League `N of 3`, Free Minor League Slots, Minors Exposure and Nomination Slot status all render | N/A |
+| Any Team, any viewer | a `teams` row exists | Cap Space, Committed Bids, of-which Minors Exposure, Available Cap Space, Roster Count `N of 12`, Free Active/Bench Slots, Minor League `N of 3`, Free Minor League Slots, Minors Exposure and Nomination Slot status all render. Each slot sentence sets its count and its ceiling in two registers (`DESIGN.md:183`) | N/A |
+| Any Team, any viewer | a Minor League roster row | the row is listed at the `$0.0M` it **charges**, never the figure `team_rosters.cap_hit` stores, so the listing reconciles with the Cap Space above it | N/A |
 | Rival Team | `teamId !== viewerTeamId` | **no** Maximum Bid field and no cap breakdown anywhere on the page | N/A |
 | Viewer's own Team | `teamId === viewerTeamId` | additionally Maximum Bid, its `capBreakdown` rows, and the Auctions this Team leads or contends in | N/A |
 | Own Team, unbounded Maximum Bid | `cap.unbounded` | stated in words, never as a number (FR-35) | N/A |
@@ -110,7 +112,61 @@ context:
 - Given the viewer's own Team view and the persistent strip on the same page, when both render, then their Maximum Bid figures are the same number, because both are `baselineCapOutcome` over the same fold.
 - Given a Team whose figures a Manager reproduces by hand from the Bid Board, when they compare, then every figure agrees — none is privileged information.
 
+### Review Findings
+
+**2026-09-03 — bmad-code-review, four layers over `e94f012..d32f33e` (21 files, 2,951 lines).**
+
+- [x] [Review][Decision] Roster Reserve, Eligible Leading Bids and Overflow Count are in the **Always** published set but reach no viewer — **resolved 2026-09-03: code kept, spec amended.** Publishing Roster Reserve would defeat the Maximum Bid exception by arithmetic (`maximumBid = availableCapSpace − rosterReserve`, and Available Cap Space is public), so withholding the three is what makes `epic-4-context.md:20` hold. The Always bullet now reads as a *sourcing* rule and a new bullet states the withholding and its reason. The dead `TEAM_VIEW_LABELS.rosterReserve` was deleted, with the reasoning left in its place so it is not re-added.
+- [x] [Review][Decision] A Minor League roster row prints its raw Cap Hit — **resolved 2026-09-03: real defect, code fixed.** `chargedCapHit(row)` is now exported from `rules/roster-import.ts` and is the single definition of the `minor_league → $0` rule; `computeCapSpace` sums over it and `entryFor` renders it. Two tests added: an imported minors row with a non-zero stored hit rendering `$0.0M` beside an untouched Cap Space, and an Active/Bench row still charging its real figure. Mutation-checked — reverting to `row.capHit` fails exactly one test.
+- [x] [Review][Decision] `Free Active/Bench Slots` is a figure this story derives — **resolved 2026-09-03: code kept, spec amended.** AD-7 governs *money*; a slot count against a league constant authorises nothing and no gate produces this figure (`unfilledSlots` is post-bid). `core/strip.ts`'s `rosterCountSentence` set the precedent in 4.2. The Always bullet now says "no *money* figure".
+- [x] [Review][Patch] Slot counts render in one register — `of 12` and `of 3` should read second [src/routes/teams/[teamId]/+page.svelte:178-181] — **fixed.** `slotSentenceHalves` in the core derives both halves by slicing at a separator it spells itself, so no `.svelte` file searches a string for ` of `; the page sets `.figure` and `.figure-qualifier` and carries the whole sentence on `aria-label` so a screen reader gets it unbroken. Mutation-checked — flattening the two colours fails exactly one test.
+- [x] [Review][Patch] No test drives the malformed-id claim [src/lib/server/team-view.ts:103] — **fixed.** `answers null for a MALFORMED id rather than failing the query` drives a non-UUID id through `loadTeamView` and pins `t.id::text = $1` against a `$1::uuid` "correction".
+- [x] [Review][Patch] `TeamRosterEntryRow` duplicates `TeamRosterRow` field for field [src/lib/server/team-roster.ts:130-137] — **fixed.** The server-side name is now an alias of the core type, which owns the shape because the core consumes it.
+- [x] [Review][Patch] `countOf` invents a `0` where the module's stated rule is to state the absence [src/lib/core/team-view.ts:215-217] — **fixed.** `countOf` is deleted; `minorLeagueSlotSentence` takes `number | null` and states `FIGURE_UNAVAILABLE`, matching the money labels' policy for the same null.
+- [x] [Review][Defer] `loadTeamView` folds the whole event log before checking the Team exists [src/lib/server/team-view.ts:145-159] — deferred, cost is irrelevant at 31 users.
+- [x] [Review][Defer] `formatTeamManagers` joins three or more Managers as `A & B & C` with no list form, and nothing tests past two [src/lib/core/team-identity.ts:69-77] — deferred, no Team in the League is co-managed by three.
+- [x] [Review][Defer] `order by m.display_name asc` has no id tie-break for two Managers sharing a display name [src/lib/server/team-view.ts:104] — deferred, pre-existing pattern from `server/auction-open.ts`.
+
 ## Spec Change Log
+
+**2026-09-03 — bmad-code-review, post-review amendments.** Two changes inside the
+frozen block, both authorised by the human after the review presented them as
+decision-needed, and both correcting the SPEC rather than the code.
+
+*The Always bullet was read as a render-everything mandate and is not one.* It listed
+nine `CapGateOutcome` fields as "every figure comes from"; three of them — Roster
+Reserve, Eligible Leading Bids, Overflow Count — are not in the I/O matrix's published
+set, and three reviewers independently read the mismatch as a defect. The matrix is
+right and the bullet was ambiguous. It now says the outcome is the **source** of every
+money figure rather than a list that must all appear.
+
+The withholding turns out to be load-bearing rather than incidental, which is why a new
+bullet states it outright: `maximumBid = availableCapSpace − rosterReserve`, and
+Available Cap Space is public, so a published Roster Reserve would let any Manager
+recover a rival's Maximum Bid by subtraction. The single exception `epic-4-context.md:20`
+carves out survives *because* those three are withheld — publishing them would defeat it
+by arithmetic while appearing to increase transparency. `TEAM_VIEW_LABELS.rosterReserve`
+was dead and is deleted, with the reasoning left at the site so it is not re-added.
+
+*AD-7 governs money, and the bullet did not say so.* `Free Active/Bench Slots` is
+`ACTIVE_BENCH_SLOTS − rosterCount` — a slot count against a league constant that
+authorises nothing, and one no gate produces, since `unfilledSlots` is a post-bid
+derivation counting the bid being placed. `core/strip.ts`'s `rosterCountSentence`
+established the precedent in Story 4.2 unremarked. The bullet now reads "no *money*
+figure".
+
+One defect was found and fixed in code rather than argued away: a Minor League roster row
+rendered the figure `team_rosters.cap_hit` stores while the Cap Space directly above it
+charged `$0` for that row, so the arithmetic a Manager does by hand did not reconcile
+(AC #5). The fix puts the `minor_league → $0` rule in one exported function,
+`chargedCapHit`, which `computeCapSpace` sums over and the listing now renders — a
+ternary at the render site would have been a second spelling of the rule and the first to
+drift. The existing suite could not catch it: its only minors row is a *won* one, whose
+stored and charged figures agree by construction because the close persisted `$0`.
+
+Both register fixes were mutation-checked, each failing exactly one test and restoring
+green: reverting `capHitLabel` to `row.capHit` fails the imported-minors test alone, and
+flattening `.figure-qualifier` to full strength fails the two-registers test alone.
 
 **2026-09-03 — step-03 exit audit, orchestrator.** One correction before the story left
 implementation, in the half of this repository nothing can execute.

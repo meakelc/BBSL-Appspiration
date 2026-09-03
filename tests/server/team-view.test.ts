@@ -150,6 +150,32 @@ describe('loadTeamView — executed against a fake client', () => {
 		expect(statements.at(-1)).toMatch(/^rollback$/i);
 	});
 
+	/**
+	 * The reason `loadTeamIdentity` compares `t.id::text = $1` rather than
+	 * casting the parameter to `uuid`: a malformed id in the URL must produce
+	 * a MISSING Team — and therefore a 404 — rather than a failed cast that
+	 * 500s the page. The claim was documented but nothing drove it, so the
+	 * cast could have been "corrected" to `$1::uuid` with every test green.
+	 *
+	 * The fake cannot reproduce Postgres' cast error, so this asserts the
+	 * half that is observable here: the id reaches the query as text, the
+	 * read completes, and the answer is the same `null` an unknown-but-valid
+	 * id gets. `tests/routes/team-view.test.ts` then turns that `null` into
+	 * the 404.
+	 */
+	it('answers null for a MALFORMED id rather than failing the query', async () => {
+		const { gateway, statements } = fakeGateway({ events: LOG, teams: [] });
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const view = await loadTeamView(gateway as any, 'not-a-uuid-at-all', VIEWER);
+		expect(view).toBeNull();
+		// The comparison is against `::text`, so no cast of the parameter can
+		// throw before the row set comes back empty.
+		const identityRead = statements.find((sql) => /from teams/i.test(sql)) ?? '';
+		expect(identityRead).toContain('t.id::text = $1');
+		expect(identityRead).not.toMatch(/\$1::uuid/);
+		expect(statements.at(-1)).toMatch(/^rollback$/i);
+	});
+
 	it('rethrows a read failure rather than rendering a page of zeroes', async () => {
 		const { gateway, statements, releases } = fakeGateway({
 			events: LOG,

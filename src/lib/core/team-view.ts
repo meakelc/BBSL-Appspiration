@@ -46,7 +46,7 @@ import type { OpenNomination } from './projection/nominations.ts';
 import type { LeaguePhase } from './projection/phase.ts';
 import { capBreakdown, describeAmount } from './rules/bidding.ts';
 import type { CapBreakdownLine, TeamMoneyState } from './rules/bidding.ts';
-import { SLOT_LABELS } from './rules/roster-import.ts';
+import { SLOT_LABELS, chargedCapHit } from './rules/roster-import.ts';
 import { baselineCapOutcome, rosterCountSentence } from './strip.ts';
 import { formatTeamManagers, teamManagerSuffix } from './team-identity.ts';
 import type { CapGateOutcome, RosterSlotKind, SlotPlacement } from './types.ts';
@@ -80,7 +80,14 @@ export const TEAM_VIEW_LABELS = Object.freeze({
 	minorsExposure: 'of which Minors Exposure',
 	availableCapSpace: 'Available Cap Space',
 	maximumBid: 'Maximum Bid',
-	rosterReserve: 'Roster Reserve',
+	// **No Roster Reserve row, deliberately.** It was declared here and read
+	// by nothing until Story 4.5's code review; publishing it would not merely
+	// be an extra figure but would DEFEAT the one exception
+	// `epic-4-context.md:20` carves out, because
+	// `maximumBid = availableCapSpace − rosterReserve` and Available Cap Space
+	// is public. Any Manager could then recover a rival's Maximum Bid by
+	// subtraction. It reaches the viewer's own Team through `capBreakdown`,
+	// which owns that label (`rules/bidding.ts:2048`) and is own-Team-gated.
 	roster: 'Roster',
 	slots: 'Slots',
 	money: 'Money',
@@ -104,11 +111,57 @@ export const TEAM_VIEW_TITLE = 'Team';
  */
 export const FIGURE_UNAVAILABLE = 'not available';
 
+/**
+ * The ` of ` that separates a count from the ceiling it is against — spelled
+ * ONCE, here, and used both to build a slot sentence and to split one.
+ */
+const CEILING_SEPARATOR = ' of ';
+
+/**
+ * A slot sentence in the two registers `DESIGN.md:183` sets: the count that
+ * carries the information, and the ceiling it is measured against, which
+ * reads second.
+ *
+ * `mockups/Teams.dc.html:41` draws exactly that — `9` at the row's own
+ * strength, ` of 12` one step quieter — and a single joined string cannot
+ * carry two colours. This is `teamManagerSuffix`'s problem and takes
+ * `teamManagerSuffix`'s answer: the core supplies both halves, DERIVED from
+ * the one sentence by slicing at the separator it spelled itself, so the
+ * halves can never disagree with the whole and no `.svelte` file ever
+ * searches a string for ` of `.
+ *
+ * `qualifier` is the empty string for any sentence with no ceiling in it, so
+ * a surface may render it unconditionally.
+ */
+export type SlotSentenceHalves = {
+	/** The whole sentence, for a screen reader and for any single-register use. */
+	readonly full: string;
+	/** Up to and including the count — `Roster 9`. */
+	readonly lead: string;
+	/** The ceiling and anything after it — ` of 12`. Empty when there is none. */
+	readonly qualifier: string;
+};
+
+/** Split a slot sentence at its first ceiling, deriving both halves. */
+export function slotSentenceHalves(sentence: string): SlotSentenceHalves {
+	const at = sentence.indexOf(CEILING_SEPARATOR);
+	if (at === -1) return { full: sentence, lead: sentence, qualifier: '' };
+	return {
+		full: sentence,
+		lead: sentence.slice(0, at),
+		qualifier: sentence.slice(at)
+	};
+}
+
 /** One row of a Team's roster, as the surface renders it. */
 export type TeamRosterEntry = {
 	readonly fantraxPlayerId: string;
 	readonly playerName: string;
-	/** What this row charges against the Cap — `$0.0M` on a minors row (AD-23). */
+	/**
+	 * What this row CHARGES against the Cap — `$0.0M` on a minors row
+	 * (AD-23), whatever `team_rosters.cap_hit` stores for it. The figure is
+	 * `chargedCapHit`'s, the same one `computeCapSpace` sums.
+	 */
 	readonly capHitLabel: string;
 	readonly slotKind: RosterSlotKind;
 	/** Whether the row is an Auction Contract rather than an imported one. */
@@ -178,6 +231,16 @@ export type TeamView = {
 	readonly minorLeagueSentence: string;
 	readonly injuryReserveSentence: string;
 
+	/**
+	 * The same four sentences split into the two registers `DESIGN.md:183`
+	 * sets — the count first, the ceiling one step quieter. The whole
+	 * sentence stays on each so a screen reader reads it unbroken.
+	 */
+	readonly rosterCountHalves: SlotSentenceHalves;
+	readonly activeBenchHalves: SlotSentenceHalves;
+	readonly minorLeagueHalves: SlotSentenceHalves;
+	readonly injuryReserveHalves: SlotSentenceHalves;
+
 	readonly roster: readonly TeamRosterGroup[];
 	readonly nominationSlot: NominationSlotStatus;
 
@@ -206,14 +269,6 @@ export type TeamRosterRow = {
 /** A money figure, or the stated absence of one. Never an invented zero. */
 function amountLabel(amount: Money | null): string {
 	return amount === null ? FIGURE_UNAVAILABLE : describeAmount(amount);
-}
-
-/**
- * A count, or the stated absence of one — `amountLabel`'s counterpart, for
- * the same reason and with the same unreachability.
- */
-function countOf(value: number | null): number {
-	return value ?? 0;
 }
 
 /**
@@ -246,12 +301,23 @@ export function rosterSlotSentence(rosterCount: number): string {
  * fact off `team_rosters` plus the Team's won minors placements — never `M`,
  * which is the clamped derivation `evaluateCap` returns and which this
  * sentence prints as the separate figure it is.
+ *
+ * **A null Free Minor League Slots states its absence, never a `0`.** The
+ * gate nulls every figure together for a viewer bound to no Team, and the
+ * money labels on the same object already answer that condition with
+ * `FIGURE_UNAVAILABLE`. Printing `Free Minor League Slots 0` there would
+ * state a fact — that this Team has no room — where the truth is that the
+ * question was never answered, and would leave two opposite policies for one
+ * null in a single object literal.
  */
-export function minorLeagueSlotSentence(occupied: number, freeMinorLeagueSlots: number): string {
+export function minorLeagueSlotSentence(
+	occupied: number,
+	freeMinorLeagueSlots: number | null
+): string {
 	const held = Number.isFinite(occupied) ? Math.max(0, Math.trunc(occupied)) : 0;
+	const free = freeMinorLeagueSlots === null ? FIGURE_UNAVAILABLE : String(freeMinorLeagueSlots);
 	return (
-		`Minor League ${String(held)} of ${String(MINOR_LEAGUE_SLOTS)}, ` +
-		`Free Minor League Slots ${String(freeMinorLeagueSlots)}`
+		`Minor League ${String(held)} of ${String(MINOR_LEAGUE_SLOTS)}, ` + `Free Minor League Slots ${free}`
 	);
 }
 
@@ -303,7 +369,15 @@ function entryFor(row: TeamRosterRow): TeamRosterEntry {
 	return {
 		fantraxPlayerId: row.fantraxPlayerId,
 		playerName: row.playerName,
-		capHitLabel: describeAmount(row.capHit),
+		// **What the row CHARGES, not what the column stores.** A Minor
+		// League row's stated hit is preserved on `team_rosters.cap_hit` and
+		// zeroed only by the Cap rule, so rendering the stored figure here
+		// would print `$3.0M` beside a Cap Space that never counted him and
+		// the sum a Manager does by hand would not reconcile (AC #5). The
+		// rule is asked for rather than restated: `chargedCapHit` is the one
+		// `computeCapSpace` sums over, so the listing and the figure above it
+		// cannot disagree.
+		capHitLabel: describeAmount(chargedCapHit(row)),
 		slotKind: row.rosterSlotKind,
 		won: row.won,
 		// A won Player is a roster row on the same footing as an imported one,
@@ -415,6 +489,16 @@ export function teamViewFor(input: {
 	// one of them is computed here (AD-7).
 	const outcome: CapGateOutcome = baselineCapOutcome(input.team, input.phase, input.now);
 
+	const rosterCountLine = rosterCountSentence(input.team.rosterCount);
+	const activeBenchLine = rosterSlotSentence(input.team.rosterCount);
+	const minorLeagueLine = minorLeagueSlotSentence(
+		input.team.minorLeagueOccupied,
+		outcome.freeMinorLeagueSlots
+	);
+	const injuryReserveLine = injuryReserveSentence(
+		input.rosterRows.filter((row) => row.rosterSlotKind === 'injury_reserve').length
+	);
+
 	const published = {
 		teamName: input.teamName,
 		identity: formatTeamManagers(input.teamName, input.managerNames),
@@ -430,15 +514,15 @@ export function teamViewFor(input: {
 		rosterCount: input.team.rosterCount,
 		// The strip's own sentence, reused verbatim — including its refusal to
 		// clamp an overflowing count to twelve.
-		rosterCountSentence: rosterCountSentence(input.team.rosterCount),
-		activeBenchSentence: rosterSlotSentence(input.team.rosterCount),
-		minorLeagueSentence: minorLeagueSlotSentence(
-			input.team.minorLeagueOccupied,
-			countOf(outcome.freeMinorLeagueSlots)
-		),
-		injuryReserveSentence: injuryReserveSentence(
-			input.rosterRows.filter((row) => row.rosterSlotKind === 'injury_reserve').length
-		),
+		rosterCountSentence: rosterCountLine,
+		activeBenchSentence: activeBenchLine,
+		minorLeagueSentence: minorLeagueLine,
+		injuryReserveSentence: injuryReserveLine,
+
+		rosterCountHalves: slotSentenceHalves(rosterCountLine),
+		activeBenchHalves: slotSentenceHalves(activeBenchLine),
+		minorLeagueHalves: slotSentenceHalves(minorLeagueLine),
+		injuryReserveHalves: slotSentenceHalves(injuryReserveLine),
 
 		roster: groupRoster(input.rosterRows),
 		nominationSlot: nominationStatusFor(input.nomination)

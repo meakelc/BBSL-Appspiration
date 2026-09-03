@@ -45,23 +45,41 @@ export type CapHitRow = {
 };
 
 /**
- * Cap Space = SALARY_CAP − Σ(cap hits), with a Minor League row's cap hit
- * always treated as $0 regardless of what the file states for it — a Minor
- * League contract does not count against the Cap by rule, and this
- * computation enforces that itself rather than trusting the import to have
- * already zeroed it (the imported figure is preserved exactly as supplied in
- * `import_staged_rosters.cap_hit`; only this computation zeroes it).
+ * What one roster row actually CHARGES against the Cap.
+ *
+ * A Minor League row's cap hit is always $0 regardless of what the file
+ * states for it — a Minor League contract does not count against the Cap by
+ * rule — while the stated figure is preserved exactly as supplied in
+ * `import_staged_rosters.cap_hit` and on `team_rosters.cap_hit`
+ * (`20260824020000_live_reference_tables.sql:50-55`). Only this function
+ * zeroes it.
  *
  * **Injury Reserve is NOT zeroed**, and that asymmetry is the rule rather
  * than an omission: an IR contract counts against the Cap in full, and only
  * against Roster Count does it drop out (PRD §3 "Roster Count", §10 ex 23).
- * Story 2.6 counts the two separately for exactly that reason.
+ *
+ * **Exported since Story 4.5's code review.** The Team view LISTS the rows
+ * this sum is taken over, and rendering the stored figure beside a Cap Space
+ * that charged $0 for it made the two disagree on screen: an imported minors
+ * Player showed `$3.0M` under a Cap Space that never counted him, so the
+ * arithmetic a Manager does by hand did not reconcile (AC #5). A ternary at
+ * the render site would have been a second spelling of this rule and the
+ * first to drift, so the rule stays in one function and both callers ask it.
+ */
+export function chargedCapHit(row: CapHitRow): Money {
+	return row.rosterSlotKind === 'minor_league' ? parseMoney(0) : row.capHit;
+}
+
+/**
+ * Cap Space = SALARY_CAP − Σ(charged cap hits).
+ *
+ * The Minor League and Injury Reserve rules both live in `chargedCapHit`
+ * above; this is the sum over it.
  */
 export function computeCapSpace(rows: readonly CapHitRow[]): CapSpaceResult {
 	let total: Money = parseMoney(0);
 	for (const row of rows) {
-		const hit: Money = row.rosterSlotKind === 'minor_league' ? parseMoney(0) : row.capHit;
-		total = addMoney(total, hit);
+		total = addMoney(total, chargedCapHit(row));
 	}
 	return { capHitTotal: total, capSpace: subtractMoney(parseMoney(SALARY_CAP), total) };
 }

@@ -31,7 +31,7 @@ import {
 } from '../src/lib/core/projection/auctions.ts';
 import { fold } from '../src/lib/core/projection/fold.ts';
 import type { OpenNomination } from '../src/lib/core/projection/nominations.ts';
-import { teamMoneyStateFor } from '../src/lib/core/rules/bidding.ts';
+import { teamMoneyStateFor, describeAmount } from '../src/lib/core/rules/bidding.ts';
 import type { TeamMoneyState } from '../src/lib/core/rules/bidding.ts';
 import { baselineCapOutcome } from '../src/lib/core/strip.ts';
 import {
@@ -43,6 +43,7 @@ import {
 	minorLeagueSlotSentence,
 	nominationSlotStatusSentence,
 	rosterSlotSentence,
+	slotSentenceHalves,
 	teamViewFor
 } from '../src/lib/core/team-view.ts';
 import type { TeamRosterRow, TeamView } from '../src/lib/core/team-view.ts';
@@ -352,6 +353,42 @@ describe('the roster listing — grouped by slot kind, IR outside the twelve', (
 		expect(active?.entries[0]?.wonSentence).toBeNull();
 	});
 
+	/**
+	 * The imported half of the roster, where the stored figure and the
+	 * charged one genuinely differ. The won-minors case above cannot catch
+	 * this: a close persists `$0` for a minors placement, so its stored and
+	 * charged figures agree by construction and the row renders correctly
+	 * either way.
+	 */
+	it('charges $0.0M for an IMPORTED minors row, whatever the column stores', () => {
+		const view = viewFor({
+			team: teamWith({ rosterCount: 0, minorLeagueOccupied: 1 }),
+			rosterRows: [
+				row({
+					fantraxPlayerId: 'p-minors',
+					playerName: 'Imported Minors',
+					// `team_rosters.cap_hit` carries exactly what the file
+					// stated, even for a Minor League row.
+					capHit: parseMoney(3_000_000),
+					rosterSlotKind: 'minor_league'
+				})
+			]
+		});
+		const minors = view.roster.find((group) => group.slotKind === 'minor_league');
+		// The Cap Space above the listing never counted him, so the listing
+		// must not charge him either — AC #5, reproduce it by hand.
+		expect(minors?.entries[0]?.capHitLabel).toBe('$0.0M');
+		expect(view.capSpaceLabel).toBe(describeAmount(parseMoney(SALARY_CAP)));
+	});
+
+	it('still states an Active/Bench row at the figure it genuinely charges', () => {
+		const view = viewFor({
+			rosterRows: [row({ capHit: parseMoney(4_000_000), rosterSlotKind: 'active_bench' })]
+		});
+		const active = view.roster.find((group) => group.slotKind === 'active_bench');
+		expect(active?.entries[0]?.capHitLabel).toBe('$4.0M');
+	});
+
 	it('sorts rows by Player name, tie-broken totally on the Player id', () => {
 		const view = viewFor({
 			rosterRows: [
@@ -462,6 +499,47 @@ describe('the sentences, built from the constants and never a literal', () => {
 });
 
 // --- No comparison, anywhere ----------------------------------------------
+
+describe('slot sentences carry their two registers', () => {
+	it('splits a sentence at its ceiling, and the halves rebuild the whole', () => {
+		const view = viewFor({ team: teamWith({ rosterCount: 9 }) });
+		for (const halves of [
+			view.rosterCountHalves,
+			view.activeBenchHalves,
+			view.minorLeagueHalves,
+			view.injuryReserveHalves
+		]) {
+			// The relationship is what makes the split safe — and unlike the
+			// colours, it is checkable in a repo that cannot render.
+			expect(halves.lead + halves.qualifier).toBe(halves.full);
+			expect(halves.qualifier.startsWith(' of ')).toBe(true);
+		}
+	});
+
+	it('puts the COUNT in the lead half and the ceiling in the qualifier', () => {
+		const view = viewFor({ team: teamWith({ rosterCount: 9 }) });
+		expect(view.rosterCountHalves.lead).toBe('Roster 9');
+		expect(view.rosterCountHalves.qualifier).toBe(' of 12');
+		expect(view.rosterCountHalves.full).toBe(view.rosterCountSentence);
+	});
+
+	it('leaves the qualifier empty for a sentence with no ceiling in it', () => {
+		expect(slotSentenceHalves('The Nomination Slot is free.')).toEqual({
+			full: 'The Nomination Slot is free.',
+			lead: 'The Nomination Slot is free.',
+			qualifier: ''
+		});
+	});
+
+	it('states an unanswered Free Minor League Slots rather than inventing a 0', () => {
+		// The gate nulls every figure together for a viewer bound to no Team.
+		// The money labels answer that with `not available`; this sentence
+		// must not answer the same null with a fact.
+		expect(minorLeagueSlotSentence(1, null)).toContain(FIGURE_UNAVAILABLE);
+		expect(minorLeagueSlotSentence(1, null)).not.toMatch(/Free Minor League Slots 0/);
+		expect(minorLeagueSlotSentence(1, 2)).toContain('Free Minor League Slots 2');
+	});
+});
 
 describe('no comparison, no median, no verdict', () => {
 	it('exports no string containing median, average, above or below', () => {
