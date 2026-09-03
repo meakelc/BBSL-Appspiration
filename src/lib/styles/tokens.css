@@ -137,4 +137,15 @@
 	   one place. Recorded in deferred-work.md under Story 4.2 rather than
 	   silently folded into the scale. */
 	--strip-figure-size: 17px;
+
+	/* DESIGN.md:185 marks the viewer's own row on the Teams index with a "2px
+	   `border-strong` left edge", and is explicit that it must NOT be the
+	   `--accent-bar-width` 3px bar, which belongs to Minimum-Bid Contention and
+	   which nothing else may borrow. 2px is therefore a second, deliberately
+	   distinct rule width and not a variant of the first, so it is declared
+	   here — following the `--control-fill` and `--strip-figure-size`
+	   precedents above — rather than spelled as a literal in
+	   routes/teams/+page.svelte. It is neither a `--size-*` nor a `--color-*`,
+	   so tests/tokens.test.ts' counts are untouched. */
+	--own-row-edge-width: 2px;
 }

@@ -521,7 +521,7 @@
   evidence: The `teams` destination resolves to `/teams` in three phases (`src/lib/server/destinations.ts:79,87,94`), and `/teams` has no route — Story 4.6 builds the thirty-row index there, and this story ships the single-Team view plus the computation the index will call. Nothing under `src/routes/` or `src/lib/components/` emits a `/teams/<id>` href: `src/lib/core/auction-link.ts` is the only path builder in the core and it builds Auction paths alone. So the destinations sheet and the header menu both offer `Teams`, which 404s, while the page this story built is reachable only by typing an id. The route itself is complete and guarded (`requireLiveDestination` first, 404 on an unknown Team) and its tests execute both.
   deferred_reason: Building the index here would be building Story 4.6 — the thirty-row list, its sort chips, its `30 teams` count and the League Median are that story's whole subject, and spec-4-5's **Never** list forbids each by name. The seam is deliberate: `teamViewFor` takes one Team so 4.6 is a `map` over it, which is what makes "the index and the Team view cannot disagree" (`epic-4-context.md:56`) structural.
   owner: Story 4.6 — build `/teams`, link each row to `/teams/<id>`, and call `teamViewFor` per Team rather than re-deriving any figure.
-  status: open
+  status: closed by Story 4.6 (2026-09-03). `/teams` now exists (`src/routes/teams/+page.server.ts`, `+page.svelte`), guarded by `requireLiveDestination(..., 'teams')` before any read, and every row links to `/teams/<id>` through `teamPathFor` in `src/lib/core/teams-index.ts` — the one place that path shape is spelled, following `core/auction-link.ts`'s precedent. The index calls `teamViewFor` once per Team over one fold (`src/lib/server/teams-index.ts`) and computes no figure of its own, so the destinations sheet and the header menu now resolve to a page rather than a 404.
 
 ## Deferred from: code review of spec-4-5-view-any-team (2026-09-03)
 
@@ -544,4 +544,22 @@
   evidence: `src/lib/server/team-view.ts:104`. Every other ordering this story adds tie-breaks totally — roster rows on `fantraxPlayerId` (`core/team-view.ts:341-344`), Auction entries likewise (`:369`).
   deferred_reason: Pre-existing: the query is `server/auction-open.ts:87-115`'s, copied deliberately, and fixing it here would fork the two. `managers.display_name` is also unique in practice.
   owner: A story that revisits `server/auction-open.ts`'s join; fix both together.
+  status: open
+
+## Deferred from: spec-4-6-the-teams-index-and-the-league-median (2026-09-03)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-6-the-teams-index-and-the-league-median.md`
+  summary: The Teams index renders its cap and slot columns unchanged in the **Contract Assignment** phase. The **Year Allotment** column swap `epic-4-context.md:26` describes is not built — the third story in a row (4.2 from the strip, 4.5 from the Team view, 4.6 from the index) to log the same missing projection.
+  evidence: spec-4-6's **Never** list resolves it outright on 2026-09-03: "The Contract Assignment Year Allotment column swap — deferred to Epic 6. No `ContractLengthAssigned` event, no allotment projection and no `contract_length` column exists (`constants.ts:133` is a bare constant)". The repository agrees, unchanged since Story 4.5 logged it: `src/lib/core/constants.ts:133` declares `YEAR_ALLOTMENT` as a bare number that no event, reducer or column backs; `src/lib/core/projection/contracts.ts:100` still types `AuctionContract.contractYears` as `null` with the comment "Recorded UNSET at a close. Epic 6 assigns it"; there is no `ContractLengthAssigned` anywhere under `src/lib/core/projection/` and no `contract_length` column on any migration under `supabase/migrations/`. `tests/routes/teams-index.test.ts` drives the route through all three phases whose catalog carries `teams` and asserts the load succeeds identically in each, which pins the current honest behaviour rather than the intended one.
+  deferred_reason: Swapping the columns requires the allotment mechanics themselves — an event, a fold and a persisted column — which is Epic 6's subject matter. Rendering a Year Allotment figure the app cannot derive would be inventing one on the surface a Manager reads thirty Teams from; rendering the cap and slot columns is honest about what the app knows.
+  owner: Story 6.1 — build `ContractLengthAssigned`, the allotment projection and the `contract_length` column, then swap the columns on `/teams`, on `/teams/[teamId]` and in the strip from that one derivation. `src/lib/core/team-view.ts` decides the Team view's columns and `src/lib/core/teams-index.ts` decides the index's; both read the same `TeamView`, so the swap is one change reaching both.
+  status: open
+
+## Deferred from: code review of spec-4-6-the-teams-index-and-the-league-median (2026-09-03)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-4-6-the-teams-index-and-the-league-median.md`
+  summary: Database `roster_slot_kind` values are cast straight to `RosterSlotKind` with an unchecked `as`, so an unrecognised slot kind is accepted silently and lands in the roster counts and the Cap arithmetic.
+  evidence: `src/lib/server/team-roster.ts:188` maps `String(row['roster_slot_kind']) as RosterSlotKind` with no membership check; the counting loop then tests only `=== 'active_bench'` and `=== 'minor_league'`, so an unknown value counts as neither and a Team silently reads a smaller Roster Count than it holds. Raised by the Edge Case Hunter against Story 4.6's diff.
+  deferred_reason: Pre-existing and not caused by this story — the cast is Story 4.5's, inherited verbatim when `loadLeagueRosterDetail` was extracted from `loadTeamRosterDetail`, and the column is constrained at the database. Fixing it here would put a validation rule in a read path this story only widened, and the same unchecked cast appears on every other reader of the table, so it should be fixed in one place for all of them rather than forked.
+  owner: A story that revisits `team_rosters` reads, or the first one to add a `roster_slot_kind` value.
   status: open

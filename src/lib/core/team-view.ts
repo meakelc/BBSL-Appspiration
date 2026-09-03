@@ -225,7 +225,39 @@ export type TeamView = {
 	readonly minorsExposureLabel: string;
 	readonly availableCapSpaceLabel: string;
 
+	/**
+	 * The same four money figures as NUMBERS, beside the labels above
+	 * (Story 4.6).
+	 *
+	 * The Teams index must sort on these and take a League Median of them, and
+	 * a median needs the number rather than the rendering. The two ways to get
+	 * one are to widen this type or to re-derive the figure in the index — and
+	 * the second is exactly the second computation `epic-4-context.md:56`
+	 * exists to forbid. Each is taken from the SAME `outcome` field its label
+	 * is taken from, on one line, so the number and the rendering are provably
+	 * one value.
+	 *
+	 * `Money | null` because the outcome's own fields are: `evaluateCap` nulls
+	 * every figure together for a viewer bound to no Team, which is the
+	 * condition `amountLabel` already answers with `FIGURE_UNAVAILABLE`. A
+	 * Team contributing `null` contributes no value to the median, and the
+	 * median line states the count it actually covers.
+	 *
+	 * **These are renderings of committed state, never an authority.** Nothing
+	 * on this object decides anything; the gates remain `evaluate()`'s (AD-7).
+	 */
+	readonly capSpace: Money | null;
+	readonly committedBids: Money | null;
+	readonly minorsExposure: Money | null;
+	readonly availableCapSpace: Money | null;
+
 	readonly rosterCount: number;
+	/**
+	 * How many of the twelve are unfilled — the figure `activeBenchSentence`
+	 * states in words, from the one `freeActiveBenchSlots` derivation, so the
+	 * number the index sorts by cannot disagree with the words on the row.
+	 */
+	readonly freeActiveBenchSlots: number;
 	readonly rosterCountSentence: string;
 	readonly activeBenchSentence: string;
 	readonly minorLeagueSentence: string;
@@ -272,6 +304,15 @@ function amountLabel(amount: Money | null): string {
 }
 
 /**
+ * What the unfilled half of the twelve is CALLED — spelled once, here.
+ *
+ * It heads the sentence below and it names the same figure on Story 4.6's
+ * sort control and median line, so the row, the chip and the foot of the
+ * index cannot call one figure three things.
+ */
+export const FREE_ACTIVE_BENCH_SLOTS_LABEL = 'Free Active/Bench Slots';
+
+/**
  * The Active/Bench occupancy, in words: the twelve, and how many are free.
  *
  * `ACTIVE_BENCH_SLOTS` is the source of the ceiling — never a literal — so the
@@ -288,9 +329,27 @@ function amountLabel(amount: Money | null): string {
  * 12` beside this.
  */
 export function rosterSlotSentence(rosterCount: number): string {
+	const free = freeActiveBenchSlots(rosterCount);
+	return `${FREE_ACTIVE_BENCH_SLOTS_LABEL} ${String(free)} of ${String(ACTIVE_BENCH_SLOTS)}`;
+}
+
+/**
+ * How many of the twelve this Team has NOT filled, as a number (Story 4.6).
+ *
+ * The arithmetic `rosterSlotSentence` above states in words, extracted so the
+ * sentence and the figure are the SAME derivation rather than two. Story 4.6's
+ * index sorts on this and takes a League Median of it, and a second clamped
+ * subtraction written beside the sentence is the first thing that would drift
+ * from it — the figure would then disagree with the words printed on the same
+ * row.
+ *
+ * Clamped at zero in both directions for the reasons above: a Team over the
+ * ceiling has no free Slots rather than a negative number of them, and a
+ * corrupt count is not a state to publish arithmetic about.
+ */
+export function freeActiveBenchSlots(rosterCount: number): number {
 	const held = Number.isFinite(rosterCount) ? Math.max(0, Math.trunc(rosterCount)) : 0;
-	const free = Math.max(0, ACTIVE_BENCH_SLOTS - held);
-	return `Free Active/Bench Slots ${String(free)} of ${String(ACTIVE_BENCH_SLOTS)}`;
+	return Math.max(0, ACTIVE_BENCH_SLOTS - held);
 }
 
 /**
@@ -511,7 +570,17 @@ export function teamViewFor(input: {
 		minorsExposureLabel: amountLabel(outcome.minorsExposure),
 		availableCapSpaceLabel: amountLabel(outcome.availableCapSpace),
 
+		// The identical `outcome` fields the four labels above are taken
+		// from, on the four lines beneath them — which is what makes the
+		// number and its rendering incapable of describing different values
+		// (Story 4.6). Nothing is computed here.
+		capSpace: outcome.capSpace,
+		committedBids: outcome.committedBids,
+		minorsExposure: outcome.minorsExposure,
+		availableCapSpace: outcome.availableCapSpace,
+
 		rosterCount: input.team.rosterCount,
+		freeActiveBenchSlots: freeActiveBenchSlots(input.team.rosterCount),
 		// The strip's own sentence, reused verbatim — including its refusal to
 		// clamp an overflowing count to twelve.
 		rosterCountSentence: rosterCountLine,

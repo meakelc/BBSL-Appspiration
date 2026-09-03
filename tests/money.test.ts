@@ -10,6 +10,8 @@ import {
 	compareMoney,
 	formatMoney,
 	isOnMoneyGrid,
+	medianCount,
+	medianMoney,
 	multiplyMoney,
 	parseMoney,
 	subtractMoney,
@@ -292,5 +294,74 @@ describe('no float reaches the money path', () => {
 		for (const name of ['decimal.js', 'big.js', 'bignumber.js', 'dinero.js', 'currency.js']) {
 			expect(installed, `${name} must not be a dependency`).not.toContain(name);
 		}
+	});
+});
+
+
+describe('the League Median — the lower of two middles, never their mean', () => {
+	const money = (dollars: number): Money => parseMoney(dollars);
+
+	it('answers the single middle of an odd count', () => {
+		expect(medianMoney([money(1_000_000), money(3_000_000), money(2_000_000)])).toBe(2_000_000);
+		expect(medianCount([1, 3, 2])).toBe(2);
+	});
+
+	it('answers the LOWER middle of an even count, never the mean', () => {
+		expect(medianMoney([money(4_000_000), money(4_500_000)])).toBe(4_000_000);
+		expect(medianCount([2, 3])).toBe(2);
+		// The mean would be off the $500,000 grid, which is the whole reason.
+		expect(isOnMoneyGrid(money(4_250_000))).toBe(false);
+	});
+
+	it('answers a single value as itself', () => {
+		expect(medianMoney([money(8_500_000)])).toBe(8_500_000);
+		expect(medianCount([7])).toBe(7);
+	});
+
+	it('answers null for an empty input — never 0, which would be a figure', () => {
+		expect(medianMoney([])).toBeNull();
+		expect(medianCount([])).toBeNull();
+	});
+
+	it('answers identically whatever order the input arrives in', () => {
+		const values = [money(9_000_000), money(1_000_000), money(5_000_000), money(3_000_000)];
+		const answer = medianMoney(values);
+		expect(answer).toBe(3_000_000);
+		expect(medianMoney([...values].reverse())).toBe(answer);
+		expect(medianMoney([...values].sort((a, b) => a - b))).toBe(answer);
+		expect(medianMoney([...values].sort((a, b) => b - a))).toBe(answer);
+
+		const counts = [9, 1, 5, 3];
+		expect(medianCount(counts)).toBe(3);
+		expect(medianCount([...counts].reverse())).toBe(3);
+	});
+
+	it('orders negative amounts as amounts, not as text', () => {
+		// Available Cap Space is legitimately negative for an overcommitted
+		// Team, and a lexical sort would place −$9.0M above −$1.0M.
+		const values = [money(-9_000_000), money(-1_000_000), money(1_000_000)];
+		expect(medianMoney(values)).toBe(-1_000_000);
+		expect(medianCount([-9, -1, 1])).toBe(-1);
+	});
+
+	it('does not mutate the array it is given', () => {
+		const values = [money(9_000_000), money(1_000_000), money(5_000_000)];
+		const before = [...values];
+		medianMoney(values);
+		expect(values).toEqual(before);
+
+		const counts = [9, 1, 5];
+		const countsBefore = [...counts];
+		medianCount(counts);
+		expect(counts).toEqual(countsBefore);
+	});
+
+	it('lands on the grid for every input, because it is always a real value', () => {
+		const values = [money(500_000), money(4_000_000), money(4_500_000), money(20_000_000)];
+		const answer = medianMoney(values);
+		expect(answer).not.toBeNull();
+		expect(isOnMoneyGrid(answer as Money)).toBe(true);
+		expect(() => formatMoney(answer as Money)).not.toThrow();
+		expect(values).toContain(answer);
 	});
 });
