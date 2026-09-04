@@ -77,9 +77,20 @@
  * Assignment, `decidePhaseEnd` answers "nothing to do" from the very event
  * that made it fold. There is no flag, no cursor and no memory.
  *
- * **The drain is a named no-op seam**, ordered after the sweep exactly as
- * `enqueue` is ordered after commit in `shell/write.ts`. Epic 5.1 gives it an
- * implementation; its throwing is recorded and cannot undo a committed close.
+ * **The drain is `server/outbox.ts`'s dispatcher since Story 5.1**, ordered
+ * after the sweep and after the League Clock, exactly as `enqueue` is ordered
+ * inside the appending transaction in `shell/write.ts`. It re-derives which
+ * delivery intents are still pending, posts at most the per-pass budget's worth
+ * through the injected channel port and appends one `NotificationDispatched`
+ * per attempt (AD-17, AD-18). Its throwing is recorded as `drainFailure` and
+ * cannot undo a committed close — every close in the pass is already committed
+ * by its own transaction before the drain opens a connection, which is the
+ * whole of "a Discord outage costs a notification and never a bid".
+ *
+ * **This module still knows nothing about Discord**, and the seam is why: it
+ * decides WHEN the drain runs and what a failure of it means for the pass, and
+ * `drainOutbox` decides what draining IS. Injecting it is what lets these tests
+ * make the drain throw or count without a transport.
  *
  * **Every pass writes exactly one heartbeat row**, refusals and failures
  * included (AD-19). A pass that recorded nothing is indistinguishable from a
@@ -87,9 +98,11 @@
  * apart.
  *
  * Not this story: no pause check (Epic 7 — no pause event or flag exists to
- * read), no outbox and no Discord (5.1), no external heartbeat detector (8.2).
+ * read), no message composition or mention copy (5.2, 5.3), no mute settings
+ * (5.4), no external heartbeat detector and no outbox-backlog alert (8.2).
  * The League Clock evaluation and the terminated unbid Nominations arrived
- * with Story 3.7 and are described above.
+ * with Story 3.7, and the drain stopped being a no-op with Story 5.1; both are
+ * described above.
  */
 
 import { CORE_VERSION } from '../core/constants.ts';
@@ -216,9 +229,18 @@ export type CloseOneFn = (fantraxPlayerId: string) => Promise<unknown>;
 export type EndPhaseFn = () => Promise<PhaseEndOutcome>;
 
 /**
- * Epic 5.1's outbox drain (AD-17). Ordered after the sweep, always, and a
- * documented no-op until that story gives it an implementation — the same
- * shape and the same promise as `shell/write.ts`'s `EnqueueFn`.
+ * The outbox drain (AD-17) — `server/outbox.ts`'s `drainOutbox`, injected here
+ * for `CloseOneFn`'s and `EndPhaseFn`'s reason: the pass has to be able to make
+ * it throw, count and run against a log this test controls, none of which a
+ * real transport would allow.
+ *
+ * Ordered after the sweep, always. Optional, exactly as `endPhase` is: a caller
+ * that omits it gets a pass that drains nothing and records `null` for
+ * `drainFailure`, which is what every unit test of the sweep itself does.
+ *
+ * Answers `void`: whatever the drain has to say for itself goes into the log it
+ * writes, not into the heartbeat. Only its FAILURE is the pass's business, and
+ * that arrives as a throw.
  */
 export type DrainFn = () => Promise<void> | void;
 

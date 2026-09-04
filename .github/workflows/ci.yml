@@ -104,3 +104,24 @@ jobs:
       # projection/ files are covered as the purity walk covers them.
       - name: Type-check the core under Deno
         run: find src/lib/core -name '*.ts' -print0 | xargs -0 --no-run-if-empty deno check --no-config --no-lock --node-modules-dir=none
+
+      # The OTHER half of AD-2, and the half nothing else covers. The core is
+      # not all Deno loads: the tick's entry point pulls in `server/sweep.ts`,
+      # `server/close.ts`, `server/phase-end.ts`, `server/outbox.ts` and
+      # `adapters/discord/webhook.ts`, every one of which is ordinary
+      # TypeScript that Node also unit-tests. A `node:` builtin, a `$env`
+      # import or a bare specifier in any of them is invisible to `npm test`,
+      # to `npm run check` and to the purity gate — which walks `src/lib/core`
+      # only — and breaks nothing until the deployed Edge Function tries to
+      # load it. This step is the only thing standing between that and
+      # production.
+      #
+      # `--config` is load-bearing and is NOT the `--no-config` used above:
+      # Deno discovers a config file by walking up from the CWD rather than
+      # from the entry module, so the bare form fails at the repository root
+      # with `Import "postgres" not a dependency` — which looks like a broken
+      # import and is really a missing flag. The tick DOES resolve remote
+      # dependencies (deno.land/x/postgres, npm:@supabase/supabase-js), which
+      # is exactly why it has its own import map and its own deno.lock.
+      - name: Type-check the tick under Deno
+        run: deno check --config supabase/functions/tick/deno.json supabase/functions/tick/index.ts

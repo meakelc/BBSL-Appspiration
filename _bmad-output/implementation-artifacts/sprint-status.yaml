@@ -79,8 +79,8 @@ development_status:
   4-6-the-teams-index-and-the-league-median: done
   epic-4-retrospective: optional
 
-  epic-5: backlog
-  5-1-the-transactional-outbox-and-its-dispatcher: backlog
+  epic-5: in-progress
+  5-1-the-transactional-outbox-and-its-dispatcher: done
   5-2-broadcast-auction-events-to-the-league-channel: backlog
   5-3-notify-managers-by-discord-mention: backlog
   5-4-notification-settings-three-mutable-categories-and-only-thre: backlog

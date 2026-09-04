@@ -171,11 +171,7 @@ describe('the AR-2 source tree', () => {
 		// first to write into either — a .gitkeep the directory no longer needs
 		// is what deferred-work.md's own entry flagged: "each marker should be
 		// deleted the moment a real file lands there."
-		const wouldBeEmpty = [
-			'src/lib/adapters/discord',
-			'src/lib/server',
-			'supabase/migrations'
-		];
+		const wouldBeEmpty = ['src/lib/server', 'supabase/migrations'];
 		for (const path of wouldBeEmpty) {
 			const marker = at(...path.split('/'), '.gitkeep');
 			expect(existsSync(marker), `${path}/.gitkeep is missing — git will not track it`).toBe(true);
@@ -214,7 +210,14 @@ describe('the AR-2 source tree', () => {
 			// (adapt.ts and auth.ts are the pieces held structurally typed and
 			// import-free so `npm test` can execute them; gateway.ts and
 			// index.ts are what genuinely needs Deno.)
-			'supabase/functions/tick'
+			'supabase/functions/tick',
+			// Story 5.1 writes the first real file into
+			// src/lib/adapters/discord — `webhook.ts`, AR-2's "webhook posts +
+			// @mention payloads (allowed_mentions)". The last of the AR-2
+			// directories to be filled, and the same trap moved the same way:
+			// the entry leaves `wouldBeEmpty` above and the marker is deleted in
+			// the one change, or the suite fails either way.
+			'src/lib/adapters/discord'
 		]) {
 			const marker = at(...path.split('/'), '.gitkeep');
 			expect(existsSync(marker), `${path}/.gitkeep should be gone now that it holds real files`).toBe(
