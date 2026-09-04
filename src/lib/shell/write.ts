@@ -19,10 +19,22 @@
  * only depends on the port below, so a unit test substitutes a fake client
  * the way `ManagerRegistry`/`DiscordOAuthPort` already do.
  *
- * `enqueue` is Epic 5.1's outbox dispatcher seam (AD-17) and is a documented
- * no-op today: nothing calls it with an implementation. It fires once, after
- * commit, with the events just appended — never before, and never at all on
- * a `Rejected` result.
+ * `enqueue` is AD-17's transactional-outbox seam, and since Story 5.1 it runs
+ * INSIDE the transaction — after the projections, before `COMMIT`, on
+ * acceptance only. That placement is the whole of the AD: "the transaction
+ * that appends events also inserts delivery intents". An enqueue that fired
+ * after commit would leave a window in which the events are durable and the
+ * notices they owe are not, and a crash inside that window would lose a notice
+ * with nothing left to re-derive it from. Now the intents commit with the
+ * events or neither does, and a throwing `enqueue` rolls the whole write back
+ * exactly as a throwing projection does.
+ *
+ * **This is not the delivery.** Nothing here opens a socket. `enqueue` is
+ * given the same `client` a `ProjectionUpdater` is given and does one thing
+ * with it — INSERT rows into `notification_outbox`. The HTTP post lives in
+ * `server/outbox.ts`'s drain, which runs in the tick long after this
+ * transaction committed and therefore can never fail or reverse an auction
+ * action (AD-17).
  */
 
 import { CORE_VERSION, EVENT_SCHEMA_VERSION, GLOBAL_WRITE_LOCK_KEY } from '../core/constants.ts';
@@ -81,40 +93,35 @@ export type ProjectionUpdater = (
 ) => Promise<void>;
 
 /**
- * Epic 5.1's outbox seam (AD-17). Called once, after commit, with the events
- * just appended, on acceptance only. A documented no-op until that story
- * gives it an implementation.
+ * AD-17's outbox seam: insert the delivery intents the events just appended
+ * owe, THROUGH `client`, so they commit in the same transaction as the events
+ * that produced them (Story 5.1). Called once, on acceptance only, after every
+ * registered projection and before `COMMIT`.
+ *
+ * **Structurally identical to `ProjectionUpdater` above, and deliberately a
+ * separate name.** Both write inside the transaction through the same client;
+ * they differ in what they mean. A projection folds the events into state the
+ * app READS back. The outbox records an obligation the app OWES the outside
+ * world, and the dispatcher that discharges it is a different process at a
+ * different time (`server/outbox.ts`). Collapsing the two into one list would
+ * make the ordering guarantee — projections first, then intents — an accident
+ * of array position rather than something stated.
+ *
+ * A throw here rolls the whole write back and persists nothing, which is the
+ * correct direction: an event whose notice could not even be RECORDED is an
+ * event the log should not carry, because nothing downstream could ever
+ * re-derive the notice it owed. That is the opposite of a DELIVERY failure,
+ * which happens in the tick and can never reach this transaction at all.
  */
-export type EnqueueFn = (appended: readonly AppendedEvent[]) => Promise<void> | void;
+export type EnqueueFn = (
+	client: TransactionalClient,
+	appended: readonly AppendedEvent[]
+) => Promise<void> | void;
 
 /** What `runTransactionalWrite` answers. */
 export type WriteOutcome =
 	| { readonly kind: 'accepted'; readonly events: readonly AppendedEvent[] }
 	| { readonly kind: 'rejected'; readonly reason?: unknown };
-
-/**
- * Thrown when `enqueue` itself throws. This is deliberately never a
- * `ROLLBACK` signal — by the time `enqueue` runs, the transaction has already
- * `COMMIT`ed and the events are durably persisted, so attempting a rollback
- * against it would be a no-op at best and a misleading second error at worst.
- *
- * The caller must not lose the fact that the write was accepted just because
- * the outbox seam blew up afterwards: `outcome` carries the same `Accepted`
- * `WriteOutcome` — persisted events, assigned `seq`s and all — that would have
- * been returned had `enqueue` not thrown. A caller that only checks `catch`
- * can still recover it from `error.outcome`.
- */
-export class EnqueueError extends Error {
-	readonly outcome: Extract<WriteOutcome, { kind: 'accepted' }>;
-
-	constructor(outcome: Extract<WriteOutcome, { kind: 'accepted' }>, cause: unknown) {
-		super('enqueue failed after a successful commit; the write was already accepted and persisted', {
-			cause
-		});
-		this.name = 'EnqueueError';
-		this.outcome = outcome;
-	}
-}
 
 // --- The pipeline ---------------------------------------------------------
 
@@ -233,7 +240,6 @@ export async function runTransactionalWrite<TState>(input: {
 	readonly enqueue?: EnqueueFn;
 }): Promise<WriteOutcome> {
 	const client = await input.gateway.connect();
-	let outcome: Extract<WriteOutcome, { kind: 'accepted' }> | undefined;
 	try {
 		await client.query(BEGIN_SQL);
 
@@ -285,9 +291,23 @@ export async function runTransactionalWrite<TState>(input: {
 			await updateProjection(client, appended);
 		}
 
+		// enqueue — INSIDE the transaction, after the projections and before
+		// `COMMIT` (AD-17, Story 5.1). The delivery intents this inserts commit
+		// with the events that owe them or roll back with them; there is no
+		// window in which the log carries an event whose notice was never
+		// recorded. Nothing here talks to Discord: the HTTP post is the tick's
+		// drain, which cannot reach this transaction.
+		if (input.enqueue !== undefined) {
+			await input.enqueue(client, appended);
+		}
+
 		await client.query(COMMIT_SQL);
 
-		outcome = { kind: 'accepted', events: appended };
+		// Returned from inside the `try`, so the `finally` below still releases
+		// the client. Nothing runs after the commit any more — `enqueue` used to,
+		// and moving it above the commit is what let this become a plain return
+		// instead of an outcome variable plus an unreachable narrowing guard.
+		return { kind: 'accepted', events: appended };
 	} catch (error) {
 		await client.query(ROLLBACK_SQL).catch(() => {
 			/* the original error is what the caller needs to see */
@@ -296,29 +316,4 @@ export async function runTransactionalWrite<TState>(input: {
 	} finally {
 		client.release();
 	}
-
-	if (outcome === undefined) {
-		// Unreachable: every path through the try block above that does not
-		// assign `outcome` either returns directly (the rejected branch) or
-		// throws (rethrown from the catch block above). This guard exists only
-		// to give TypeScript the narrowing it cannot otherwise prove through a
-		// try/catch/finally, and to fail loudly instead of silently if that
-		// invariant is ever broken by a future edit.
-		throw new Error('runTransactionalWrite: reached the end with no outcome computed');
-	}
-
-	// enqueue — after commit, accepted only, and deliberately outside the
-	// try/catch above: the transaction is already committed by this point, so
-	// a throwing `enqueue` must never attempt a rollback against it, and must
-	// never cause the caller to lose the fact that the write was accepted
-	// (see `EnqueueError`).
-	if (input.enqueue !== undefined) {
-		try {
-			await input.enqueue(outcome.events);
-		} catch (error) {
-			throw new EnqueueError(outcome, error);
-		}
-	}
-
-	return outcome;
 }

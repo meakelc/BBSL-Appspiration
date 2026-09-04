@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { EnqueueError, runTransactionalWrite, toAppendedEvent } from '../src/lib/shell/write.ts';
+import { runTransactionalWrite, toAppendedEvent } from '../src/lib/shell/write.ts';
 import type {
 	ConnectionGateway,
 	Decision,
@@ -117,7 +117,11 @@ describe('runTransactionalWrite — the accepted path', () => {
 
 		await runTransactionalWrite({ gateway, load, decide, enqueue });
 
-		expect(order).toEqual(['begin', 'lock', 'load', 'decide', 'persist', 'commit', 'enqueue']);
+		// `enqueue` sits BEFORE `commit`, and that is AD-17 (Story 5.1): the
+		// transaction that appends the events also inserts the delivery intents
+		// they owe. It used to fire after the commit, which left a window in
+		// which the events were durable and the notices they owed were not.
+		expect(order).toEqual(['begin', 'lock', 'load', 'decide', 'persist', 'enqueue', 'commit']);
 	});
 
 	it('takes the lock with the exact GLOBAL_WRITE_LOCK_KEY constant, verbatim', async () => {
@@ -224,6 +228,38 @@ describe('runTransactionalWrite — the accepted path', () => {
 		expect(order).toEqual(['begin', 'lock', 'persist', 'projection', 'commit']);
 		expect(seenByProjection).toHaveLength(1);
 		expect(seenByProjection[0]).toHaveLength(1);
+	});
+
+	it('runs enqueue after every projection and before commit, through the SAME client', async () => {
+		// The order between the two matters: a projection may append rows the
+		// outbox intent's foreign key or a later reader depends on, and both
+		// must be inside the one transaction. `sameClient` is the half that
+		// proves the intent insert is transactional rather than merely
+		// early — a seam handed a different connection would commit separately.
+		const { gateway, order } = fakeGateway();
+		let projectionClient: TransactionalClient | undefined;
+		let enqueueClient: TransactionalClient | undefined;
+
+		const projection: ProjectionUpdater = async (client) => {
+			order.push('projection');
+			projectionClient = client;
+		};
+		const enqueue: EnqueueFn = async (client, appended) => {
+			order.push('enqueue');
+			enqueueClient = client;
+			expect(appended.map((event) => event.seq)).toEqual(['1']);
+		};
+
+		await runTransactionalWrite({
+			gateway,
+			load: async () => ({}),
+			decide: async (): Promise<Decision> => ({ kind: 'accepted', events: [acceptedEvent] }),
+			projections: [projection],
+			enqueue
+		});
+
+		expect(order).toEqual(['begin', 'lock', 'persist', 'projection', 'enqueue', 'commit']);
+		expect(enqueueClient).toBe(projectionClient);
 	});
 
 	it('releases the client after a successful commit', async () => {
@@ -373,41 +409,54 @@ describe('runTransactionalWrite — a thrown error is a bug, not a rejection', (
 	});
 });
 
-describe('runTransactionalWrite — a throwing enqueue, after a successful commit', () => {
-	it('never attempts a rollback against the already-committed transaction, and lets the caller recover the accepted outcome', async () => {
-		const { gateway, order } = fakeGateway();
+describe('runTransactionalWrite — a throwing enqueue rolls the whole write back', () => {
+	it('never commits, and persists neither the events nor the intents', async () => {
+		// **The behaviour this story inverted.** `enqueue` used to run after
+		// `COMMIT`, so a throwing outbox insert left the events durably
+		// appended and the notices they owed recorded nowhere — and the
+		// pipeline had to carry an `EnqueueError` whose whole job was to hand
+		// the caller back an outcome it could not undo. Inside the
+		// transaction there is nothing to hand back: the rollback discards the
+		// insert along with whatever the enqueue managed to write, exactly as
+		// a throwing projection does (AD-17).
+		const { gateway, order, released } = fakeGateway();
 		const enqueue: EnqueueFn = async () => {
+			order.push('enqueue');
 			throw new Error('outbox unreachable');
 		};
 
-		let thrown: unknown;
-		try {
-			await runTransactionalWrite({
+		await expect(
+			runTransactionalWrite({
 				gateway,
 				load: async () => ({}),
 				decide: async (): Promise<Decision> => ({ kind: 'accepted', events: [acceptedEvent] }),
 				enqueue
-			});
-		} catch (error) {
-			thrown = error;
-		}
+			})
+		).rejects.toThrow('outbox unreachable');
 
-		// commit already happened, and nothing after it attempts a rollback —
-		// a `ROLLBACK` against an already-committed transaction would be the
-		// bug this test exists to catch.
-		expect(order).toEqual(['begin', 'lock', 'persist', 'commit']);
+		// `persist` ran, `commit` never did, and the rollback discarded it.
+		expect(order).toEqual(['begin', 'lock', 'persist', 'enqueue', 'rollback']);
+		expect(released).toEqual([true]);
+	});
 
-		expect(thrown).toBeInstanceOf(EnqueueError);
-		const enqueueError = thrown as EnqueueError;
-		expect(enqueueError.cause).toBeInstanceOf(Error);
-		expect((enqueueError.cause as Error).message).toBe('outbox unreachable');
+	it('propagates the original error rather than wrapping it', async () => {
+		// `EnqueueError` is gone with the post-commit call it existed for.
+		// Nothing wraps a thrown enqueue any more, so a caller sees the same
+		// shape it sees from a thrown `load`, `decide` or projection.
+		const { gateway } = fakeGateway();
+		const cause = new Error('outbox unreachable');
+		const enqueue: EnqueueFn = () => {
+			throw cause;
+		};
 
-		// the caller does not lose the fact that the write was accepted: the
-		// persisted, seq-assigned events are still reachable off the thrown
-		// error.
-		expect(enqueueError.outcome.kind).toBe('accepted');
-		expect(enqueueError.outcome.events).toHaveLength(1);
-		expect(enqueueError.outcome.events[0]?.type).toBe('Test.Event');
+		await expect(
+			runTransactionalWrite({
+				gateway,
+				load: async () => ({}),
+				decide: async (): Promise<Decision> => ({ kind: 'accepted', events: [acceptedEvent] }),
+				enqueue
+			})
+		).rejects.toBe(cause);
 	});
 });
 

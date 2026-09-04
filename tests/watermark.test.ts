@@ -444,7 +444,7 @@ describe('the migration', () => {
 		expect(sql).toContain('pg_publication_tables');
 	});
 
-	it('sorts after the newest migration it follows', () => {
+	it('sorts after every migration it depends on', () => {
 		// Read the directory, never two literals. Comparing hardcoded strings
 		// asserts something about this test file and nothing whatever about the
 		// repository — it would pass with the migration deleted, renamed, or
@@ -455,9 +455,22 @@ describe('the migration', () => {
 		const mine = '20260902000000_watermark.sql';
 
 		expect(names, 'the migration is missing from the tree').toContain(mine);
-		expect(names[names.length - 1], 'a later migration has landed — re-check the ordering').toBe(
-			mine
-		);
+
+		// **This used to assert `mine` was the LAST file in the tree**, which
+		// was a proxy for the real requirement and expired the moment any later
+		// migration landed — Story 5.1's `20260903000000_notification_outbox.sql`
+		// is the first. The requirement itself is a DEPENDENCY: this migration
+		// creates a trigger on `public.auction_events` and seeds itself from
+		// `max(seq)`, so the log's own migration and every migration that alters
+		// it must be applied first. That is what is asserted now, and unlike
+		// "is last" it stays true for every migration that ever follows.
+		const before = names.slice(0, names.indexOf(mine));
+		for (const dependency of [
+			'20260821020000_auction_events.sql',
+			'20260901000000_system_actor.sql'
+		]) {
+			expect(before, `${dependency} must be applied before ${mine}`).toContain(dependency);
+		}
 	});
 });
 

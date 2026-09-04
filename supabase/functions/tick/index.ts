@@ -54,16 +54,39 @@
  * stated at the one place all three are wired together, exactly as `drain`
  * already was.
  *
- * Not this story: no pause check (Epic 7), no outbox and no Discord (5.1), no
- * external heartbeat detector (8.2).
+ * **The outbox is drained behind this entry point since Story 5.1.** `drain`
+ * below is `drainOutbox`, which re-derives which delivery intents are still
+ * pending, posts at most the per-pass budget's worth through the Discord
+ * webhook and appends one `NotificationDispatched` per attempt (AD-17, AD-18).
+ * Nothing about that is decided here either; this file supplies the two
+ * runtime-specific things the dispatcher cannot have — the webhook URL, read
+ * from the environment, and `fetch`.
+ *
+ * **The webhook URL is read LAZILY, on the first message of a pass that has
+ * one to send.** `required('DISCORD_WEBHOOK_URL')` throws on a misconfigured
+ * deployment. Read beside the gateway it would take the whole pass down with it
+ * — no sweep, no League Clock, no heartbeat — for a missing NOTIFICATION
+ * secret. Read once per pass it would instead write a `drainFailure` every ten
+ * seconds forever on a deployment that has nothing to notify about, which is
+ * noise where there was previously silence. Read on the first actual `post`, it
+ * is caught by `runTick`'s drain guard, recorded as `drainFailure` and as a
+ * failed delivery attempt against the notice it belongs to, and retried — which
+ * is exactly what "a Discord outage costs a notification and never a bid" means
+ * for the configuration case too.
+ *
+ * Not this story: no pause check (Epic 7), no message composition or mention
+ * copy (5.2, 5.3), no mute settings (5.4), no external heartbeat detector
+ * (8.2).
  */
 
+import { createDiscordWebhookPort } from '../../../src/lib/adapters/discord/webhook.ts';
 import { closeAuction } from '../../../src/lib/server/close.ts';
+import { DISCORD_CHANNEL, drainOutbox } from '../../../src/lib/server/outbox.ts';
 import { evaluateLeagueClock } from '../../../src/lib/server/phase-end.ts';
 import { runTick } from '../../../src/lib/server/sweep.ts';
 import type { TickSummary } from '../../../src/lib/server/sweep.ts';
 import { isAuthorisedRequest } from './auth.ts';
-import { tickGateway } from './gateway.ts';
+import { required, tickGateway } from './gateway.ts';
 
 /**
  * Is this request the cron job?
@@ -87,6 +110,42 @@ function summaryResponse(summary: TickSummary, status: number): Response {
 		status,
 		headers: { 'content-type': 'application/json' }
 	});
+}
+
+/**
+ * The Discord channel port, built on the FIRST message and not before.
+ *
+ * **The laziness is the whole point of this wrapper.** `required` throws when
+ * `DISCORD_WEBHOOK_URL` is unset, and the drain cannot know whether it has
+ * anything to deliver until it has read the outbox. Constructing the port
+ * eagerly — even inside the drain closure — evaluated `required` on every
+ * single pass, so a deployment without the variable wrote a `drainFailure` to
+ * `tick_heartbeats` every ten seconds for a drain that had nothing to do.
+ * Before Story 5.1 an unset webhook URL had no effect on the tick at all, and
+ * it should not have acquired one for the empty case.
+ *
+ * Built here, the refusal only ever reaches a pass that had a real notice to
+ * send — where it is genuine news, is recorded as a failed delivery attempt
+ * against that notice, backs off, and retries the moment the variable is set.
+ *
+ * One instance per drain, memoised across the batches of a single pass: the
+ * isolate may be torn down between requests, so nothing is cached beyond it.
+ */
+function discordChannel() {
+	let port: ReturnType<typeof createDiscordWebhookPort> | undefined;
+	return {
+		post(message: { readonly body: string; readonly recipients: readonly string[] }) {
+			port ??= createDiscordWebhookPort({
+				webhookUrl: required('DISCORD_WEBHOOK_URL'),
+				// The runtime's own `fetch`, injected rather than reached for
+				// inside the adapter — which is what keeps
+				// `adapters/discord/webhook.ts` testable under Vitest with no
+				// global patching.
+				fetch: (url, init) => fetch(url, init)
+			});
+			return port.post(message);
+		}
+	};
 }
 
 Deno.serve(async (request: Request): Promise<Response> => {
@@ -118,14 +177,20 @@ Deno.serve(async (request: Request): Promise<Response> => {
 			// already carries this pass's closes and a throw inside it rolls back
 			// nothing that has already committed.
 			endPhase: () => evaluateLeagueClock(gateway),
-			// Epic 5.1's outbox drain (AD-17): ordered after the sweep, always,
-			// and a documented no-op until that story gives it an
-			// implementation. It is passed explicitly rather than omitted so
-			// that the ORDER — sweep, then drain, then heartbeat — is stated
-			// here at the one place both halves are wired together, exactly as
-			// `enqueue` is stated in `shell/write.ts`.
-			drain: () => {
-				/* Epic 5.1's outbox dispatcher. Nothing to drain yet. */
+			// The outbox drain (AD-17), and the ORDER is the thing stated here:
+			// sweep, then the League Clock, then the drain, then the heartbeat.
+			// It runs last of the three because every close and every phase-end
+			// event it might have to notify about must already be committed —
+			// and because nothing it does can reach back into them.
+			//
+			// The port is built LAZILY, on the first message there is actually
+			// something to send. See `discordChannel` below.
+			// The braces are load-bearing: `DrainFn` answers `void`, and an
+			// expression body would return the `DrainSummary` into it.
+			drain: async () => {
+				await drainOutbox(gateway, {
+					channels: { [DISCORD_CHANNEL]: discordChannel() }
+				});
 			}
 		});
 		return summaryResponse(summary, 200);

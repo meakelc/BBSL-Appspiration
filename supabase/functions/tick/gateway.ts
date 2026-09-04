@@ -50,11 +50,22 @@ import type { ConnectionGateway } from '../../../src/lib/shell/write.ts';
  */
 const POOL_SIZE = 2;
 
-/** Read a required variable, failing with the name that is missing. */
-function required(name: string): string {
+/**
+ * Read a required variable, failing with the name that is missing.
+ *
+ * Exported since Story 5.1: `index.ts` reads `DISCORD_WEBHOOK_URL` the same
+ * way, and a second copy of six lines would be two statements of what "missing"
+ * means for a secret this function's whole job is to refuse without.
+ *
+ * The sentence names the variable and stops there. It used to say "the tick
+ * cannot open a connection", which was true of the only caller at the time and
+ * would have been a lie beside a missing webhook URL — the message a Manager's
+ * missing notice is diagnosed from must not describe the wrong subsystem.
+ */
+export function required(name: string): string {
 	const value = Deno.env.get(name);
 	if (value === undefined || value.trim() === '') {
-		throw new Error(`${name} is not set. The tick cannot open a connection.`);
+		throw new Error(`${name} is not set in this deployment's environment.`);
 	}
 	return value;
 }
