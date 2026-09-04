@@ -124,7 +124,7 @@ import type {
 } from '../shell/write.ts';
 import { CONTENTION_SEEDS_TABLE, readContentionSeed } from './contention-seed.ts';
 import { loadEventsViaClient } from './event-log.ts';
-import { enqueueBroadcasts } from './outbox.ts';
+import { enqueueBroadcastsAndMentions } from './outbox.ts';
 import { loadTeamRoster } from './team-roster.ts';
 
 /** Who acted, resolved server-side from application tables (AD-4). */
@@ -402,6 +402,40 @@ export function recordContentionSeed(seed: string): ProjectionUpdater {
 }
 
 /**
+ * The Team this Bid displaced, as `outbox.ts`'s `AffectedTeamsFn` answer —
+ * empty for every Bid that displaced nobody (Story 5.3).
+ *
+ * **Three silences, and each is a matrix row rather than a guard.**
+ *
+ *  - No leading Bid at all: the first Bid on an Auction outbids nobody, so the
+ *    broadcast notice posts alone.
+ *  - Inside a Minimum-Bid Contention: `auctionsReducer` reports a leader
+ *    because some Bid has to be the highest, but a lottery has no Leading
+ *    Bidder — `evaluateSelfBid` nulls it for exactly this reason, and reading
+ *    the fold artifact as a real leader would ping whichever Team's money
+ *    happened to open the lottery every time somebody else joined it.
+ *  - A Team displacing ITSELF: nobody is notified of their own act. The gates
+ *    refuse a self-bid outright, so this is unreachable through `placeBid` —
+ *    it is stated here because the matrix names it and because the rule
+ *    "the displaced Team, unless it is you" should be readable in one place.
+ *
+ * `null` state is the pre-`load` window, which the enqueue can never actually
+ * observe (`enqueue` runs after `load` and after the append). Answering empty
+ * is the safe direction: a missing mention is a notice nobody was pinged by,
+ * and a wrong one is a Manager pinged about somebody else's Team.
+ */
+export function displacedTeamsFor(
+	state: LoadedBidState | null,
+	actingTeamId: string
+): readonly string[] {
+	if (state === null) return [];
+	const displaced =
+		state.bid.contention === 'minimum_bid' ? null : (state.bid.leadingBid?.teamId ?? null);
+	if (displaced === null || displaced === actingTeamId) return [];
+	return [displaced];
+}
+
+/**
  * Place a Bid: one transaction appending exactly one `BidPlaced` event, or
  * nothing at all.
  *
@@ -441,6 +475,15 @@ export async function placeBid(
 	// the same string by construction.
 	const seed = generateSeed();
 
+	// **The state `load` folded, captured for the enqueue** (Story 5.3). The
+	// displaced Leading Bidder exists only in the state read under this
+	// transaction's lock: `BidPlacedPayload` names the BIDDER and nothing else,
+	// and adding a displaced-leader field to it would be an edit to
+	// `core/rules/bidding.ts` this story's boundaries put behind an ask. So the
+	// shell — which already holds the answer — carries it the few lines from
+	// `load` to `enqueue`, and the drain re-derives nothing.
+	let loaded: LoadedBidState | null = null;
+
 	return await runTransactionalWrite<LoadedBidState>({
 		gateway,
 		// Story 5.2 broadcasts this write: a `BidPlaced` moves the price and
@@ -449,8 +492,17 @@ export async function placeBid(
 		// broadcast set. `eligibility.ts` and `import-promotion.ts` pass no
 		// `enqueue` at all: Commissioner bookkeeping is not league news, and a
 		// notice for it would be channel noise nothing can mute.
-		enqueue: enqueueBroadcasts,
-		load: (client) => loadBidState(client, fantraxPlayerId, actor.teamId),
+		//
+		// Story 5.3 mentions the Team this Bid DISPLACED, and only that one:
+		// the outbid Manager is not the bidder, so the event's own `team_id` is
+		// the wrong Team and `enqueueMentions` takes the right one from here.
+		enqueue: enqueueBroadcastsAndMentions((event) =>
+			event.type === BID_PLACED_EVENT ? displacedTeamsFor(loaded, actor.teamId) : []
+		),
+		load: async (client) => {
+			loaded = await loadBidState(client, fantraxPlayerId, actor.teamId);
+			return loaded;
+		},
 		// The ONE projection, and it fires only when the core published a
 		// `seedHash` — which is only on the Bid that opens a Minimum-Bid
 		// Contention. Nothing else derived is stored: there is still no

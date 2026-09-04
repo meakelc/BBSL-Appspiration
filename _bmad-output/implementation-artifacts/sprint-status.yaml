@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 08-18-2026 13:11
-last_updated: 2026-09-03
+last_updated: 2026-09-04
 project: BBSL-Appspiration
 project_key: NOKEY
 tracking_system: file-system
@@ -82,7 +82,7 @@ development_status:
   epic-5: in-progress
   5-1-the-transactional-outbox-and-its-dispatcher: done
   5-2-broadcast-auction-events-to-the-league-channel: done
-  5-3-notify-managers-by-discord-mention: backlog
+  5-3-notify-managers-by-discord-mention: review
   5-4-notification-settings-three-mutable-categories-and-only-thre: backlog
   epic-5-retrospective: optional
 

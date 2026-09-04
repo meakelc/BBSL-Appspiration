@@ -36,8 +36,10 @@ import {
 	backoffMsFor,
 	drainOutbox,
 	duePendingIntents,
+	EVERY_TEAM,
 	enqueueBroadcasts,
-	enqueueIntents
+	enqueueBroadcastsAndMentions,
+	enqueueMentions
 } from '../../src/lib/server/outbox.ts';
 import type {
 	ChannelPostResult,
@@ -70,8 +72,9 @@ type OutboxRow = {
 };
 
 /**
- * One `managers` row. `enqueueIntents` reads the snowflake; Story 5.2's
- * directory read reads the id, the display name and the Team.
+ * One `managers` row. `enqueueMentions` reads the snowflake to ADDRESS an
+ * intent; the directory read reads the id, the display name, the Team and —
+ * since Story 5.3 — the snowflake again, to say whose Team one acts for.
  */
 type ManagerRow = {
 	teamId: string | null;
@@ -168,6 +171,14 @@ function fakeGateway(
 				stagedEvents.push(row);
 				return { rows: [row] };
 			}
+			if (/^select discord_user_id from managers where team_id is not null/i.test(sql)) {
+				return {
+					rows: managers
+						.filter((manager) => manager.teamId !== null)
+						.map((manager) => ({ discord_user_id: manager.discordUserId }))
+						.sort((a, b) => (a.discord_user_id < b.discord_user_id ? -1 : 1))
+				};
+			}
 			if (/^select discord_user_id from managers where team_id = \$1/i.test(sql)) {
 				return {
 					rows: managers
@@ -229,12 +240,13 @@ function fakeGateway(
 			if (/^select id, name from teams$/i.test(sql)) {
 				return { rows: teams.map((team) => ({ id: team.id, name: team.name })) };
 			}
-			if (/^select id, display_name, team_id from managers/i.test(sql)) {
+			if (/^select id, display_name, team_id, discord_user_id from managers/i.test(sql)) {
 				return {
 					rows: managers.map((manager) => ({
 						id: manager.id ?? manager.discordUserId,
 						display_name: manager.displayName ?? manager.discordUserId,
-						team_id: manager.teamId
+						team_id: manager.teamId,
+						discord_user_id: manager.discordUserId
 					}))
 				};
 			}
@@ -292,10 +304,25 @@ function fakeChannel(
 }
 
 /**
+ * The Manager-shaped enqueue the mechanism suites drive: one intent per Manager
+ * of the event's OWN Team.
+ *
+ * **Not a production shape, and deliberately so.** Story 5.3 moved targeting to
+ * the write site precisely because the event's own `team_id` is the ACTING Team
+ * and every mention trigger names somebody else. Nothing in `src/` asks for
+ * this. It is reconstructed here from the same factory because the mechanism
+ * suites below are about WHICH intents are attempted, in what order and how
+ * often — questions that need Manager-addressed intents and care nothing about
+ * who deserved one. The trigger rules are proved at the write sites instead.
+ */
+const enqueueActingTeam = enqueueMentions((event) =>
+	event.teamId === null ? [] : [event.teamId]
+);
+
+/**
  * One accepted write, appending `events` and enqueuing their intents.
  *
- * `enqueue` defaults to `enqueueIntents` — Story 5.1's Manager-shaped enqueue,
- * which every mechanism suite below drives. Story 5.2's cases pass
+ * `enqueue` defaults to `enqueueActingTeam` above. Story 5.2's cases pass
  * `enqueueBroadcasts` explicitly, and the eligibility case passes `undefined`
  * to model a write that registers no enqueue at all.
  */
@@ -303,7 +330,7 @@ async function write(
 	gateway: ConnectionGateway,
 	events: readonly EventEnvelope[],
 	kind: 'accepted' | 'rejected' = 'accepted',
-	enqueue: EnqueueFn | undefined = enqueueIntents
+	enqueue: EnqueueFn | undefined = enqueueActingTeam
 ): Promise<void> {
 	await runTransactionalWrite({
 		gateway,
@@ -413,26 +440,37 @@ function outcomes(harness: ReturnType<typeof fakeGateway>): QueryResultRow[] {
 
 // --- the intent side ------------------------------------------------------
 
-describe('enqueueIntents — the intents commit with the events they describe', () => {
-	it('inserts one intent per Manager of the Team, inside the SAME transaction (AC1)', async () => {
-		// The matrix's first row: one appended event with `team_id` T, two
-		// `managers` rows sharing T — co-management. AD-17 keys on
+describe('enqueueMentions — the intents commit with the events they describe', () => {
+	it('inserts one intent per Manager of the AFFECTED Team, inside the SAME transaction (AC1)', async () => {
+		// The matrix's co-managed row. One appended event, two `managers` rows
+		// sharing the affected Team — co-management. AD-17 keys on
 		// `(event seq, channel, recipient)` precisely so the second Manager is
 		// not deduplicated away, and FR-27 requires both receive it.
+		//
+		// **The affected Team is not the acting one**, which is the whole of
+		// this story's change: the event is appended for `TEAM` (the bidder)
+		// and the intents are filed for `OTHER_TEAM` (the Team it outbid).
 		const harness = fakeGateway({
 			managers: [
-				{ teamId: TEAM, discordUserId: ALICE },
-				{ teamId: TEAM, discordUserId: BOB },
-				{ teamId: OTHER_TEAM, discordUserId: '9999' }
+				{ teamId: OTHER_TEAM, discordUserId: ALICE },
+				{ teamId: OTHER_TEAM, discordUserId: BOB },
+				{ teamId: TEAM, discordUserId: '9999' }
 			]
 		});
 
-		await write(harness.gateway, [teamEvent('BidPlaced')]);
+		await write(
+			harness.gateway,
+			[teamEvent('BidPlaced')],
+			'accepted',
+			enqueueMentions(() => [OTHER_TEAM])
+		);
 
 		expect(harness.outbox).toEqual([
 			{ eventSeq: '1', channel: DISCORD_CHANNEL, recipient: ALICE, createdAt: expect.any(String) },
 			{ eventSeq: '1', channel: DISCORD_CHANNEL, recipient: BOB, createdAt: expect.any(String) }
 		]);
+		// The bidder's own Manager is NOT notified of their own act.
+		expect(harness.outbox.map((row) => row.recipient)).not.toContain('9999');
 
 		// The intent INSERTs are between the event INSERT and the COMMIT —
 		// which is what "in the same transaction" means operationally.
@@ -456,6 +494,75 @@ describe('enqueueIntents — the intents commit with the events they describe', 
 		]);
 	});
 
+	it('files nothing when the write site names no affected Team', async () => {
+		// Three matrix rows at once, and all three reach here identically: a
+		// Team outbidding ITSELF, the FIRST Bid on an Auction, and any event
+		// outside the trigger set. The write site answered with an empty list,
+		// so the broadcast posts alone and nobody is pinged.
+		const harness = fakeGateway({ managers: [{ teamId: TEAM, discordUserId: ALICE }] });
+
+		await write(
+			harness.gateway,
+			[teamEvent('BidPlaced')],
+			'accepted',
+			enqueueMentions(() => [])
+		);
+
+		expect(harness.events).toHaveLength(1);
+		expect(harness.outbox).toEqual([]);
+		// And it asked the registry nothing: no affected Team, no lookup.
+		expect(harness.statements.filter((sql) => /from managers/i.test(sql))).toEqual([]);
+	});
+
+	it('files nothing for a Team with no Manager rows, and never loses the broadcast', async () => {
+		// The matrix's "A Team has no Manager rows" row. An unmanaged Team is a
+		// supported state (a nullable `managers.team_id`); the broadcast still
+		// posts and still names the Team, which IS the record. Only the ping is
+		// absent — which is precisely what 5.4 will let a Manager choose.
+		const harness = fakeGateway({ managers: [{ teamId: TEAM, discordUserId: ALICE }] });
+
+		await write(
+			harness.gateway,
+			[bidPlaced()],
+			'accepted',
+			enqueueBroadcastsAndMentions(() => [OTHER_TEAM])
+		);
+
+		expect(harness.outbox).toEqual([
+			{
+				eventSeq: '1',
+				channel: DISCORD_CHANNEL,
+				recipient: BROADCAST_RECIPIENT,
+				createdAt: expect.any(String)
+			}
+		]);
+	});
+
+	it('resolves EVERY_TEAM to every Manager who acts for any Team', async () => {
+		// The matrix's "The phase opens" row: `ContractAssignmentOpened` carries
+		// a null `team_id` and affects the whole league. Resolved in the enqueue
+		// rather than enumerated at the write site, because `evaluateLeagueClock`
+		// runs every ten seconds and appends nothing on almost all of them.
+		const harness = fakeGateway({
+			managers: [
+				{ teamId: TEAM, discordUserId: ALICE },
+				{ teamId: OTHER_TEAM, discordUserId: BOB },
+				// A Manager with no Team: a supported state, and not a party to
+				// a league-wide auction notice.
+				{ teamId: null, discordUserId: '9999' }
+			]
+		});
+
+		await write(
+			harness.gateway,
+			[teamEvent('ContractAssignmentOpened', null)],
+			'accepted',
+			enqueueMentions(() => [EVERY_TEAM])
+		);
+
+		expect(harness.outbox.map((row) => row.recipient)).toEqual([ALICE, BOB]);
+	});
+
 	it('stamps created_at from the event’s own clock read, never a second now()', async () => {
 		const harness = fakeGateway({ managers: [{ teamId: TEAM, discordUserId: ALICE }] });
 
@@ -464,18 +571,6 @@ describe('enqueueIntents — the intents commit with the events they describe', 
 		const occurredAt = harness.events[0]?.['occurred_at'];
 		expect(occurredAt).toBeInstanceOf(Date);
 		expect(harness.outbox[0]?.createdAt).toBe((occurredAt as Date).toISOString());
-	});
-
-	it('creates no intent for an event with a null team_id — a system event mentions nobody', async () => {
-		// The matrix's "Event with a null `team_id`" row. Since Story 3.7 the
-		// actor pair may be null together, and that means the tick read a clock
-		// rather than a Manager acting.
-		const harness = fakeGateway({ managers: [{ teamId: TEAM, discordUserId: ALICE }] });
-
-		await write(harness.gateway, [teamEvent('ContractAssignmentOpened', null)]);
-
-		expect(harness.events).toHaveLength(1);
-		expect(harness.outbox).toEqual([]);
 	});
 
 	it('persists neither events nor intents when the write is rejected', async () => {
@@ -503,6 +598,48 @@ describe('enqueueIntents — the intents commit with the events they describe', 
 		expect(harness.outbox).toHaveLength(3);
 	});
 
+	it('files ONE intent for a Manager named by two affected Teams on one event', async () => {
+		// A close whose leader and nominator are the same Team, or a Manager who
+		// somehow acts for two affected Teams. `on conflict do nothing` would
+		// absorb the duplicate, but the enqueue should not be relying on it —
+		// and the composer would otherwise be handed the same snowflake twice.
+		const harness = fakeGateway({ managers: [{ teamId: TEAM, discordUserId: ALICE }] });
+
+		await write(
+			harness.gateway,
+			[teamEvent('AuctionClosed')],
+			'accepted',
+			enqueueMentions(() => [TEAM, TEAM, OTHER_TEAM])
+		);
+
+		expect(harness.outbox.map((row) => row.recipient)).toEqual([ALICE]);
+	});
+
+	it('files the broadcast row BESIDE the mention rows, on the one write', async () => {
+		// The two coexist on the same event rather than colliding, which is what
+		// the sentinel bought (`BROADCAST_RECIPIENT`'s own note in 5.2). One
+		// event, three intents: the channel and both co-managers.
+		const harness = fakeGateway({
+			managers: [
+				{ teamId: OTHER_TEAM, discordUserId: ALICE },
+				{ teamId: OTHER_TEAM, discordUserId: BOB }
+			]
+		});
+
+		await write(
+			harness.gateway,
+			[bidPlaced()],
+			'accepted',
+			enqueueBroadcastsAndMentions(() => [OTHER_TEAM])
+		);
+
+		expect(harness.outbox.map((row) => row.recipient)).toEqual([
+			BROADCAST_RECIPIENT,
+			ALICE,
+			BOB
+		]);
+	});
+
 	it('is idempotent on the key, so a duplicate intent can never fail an auction write', async () => {
 		const harness = fakeGateway({ managers: [{ teamId: TEAM, discordUserId: ALICE }] });
 
@@ -513,7 +650,7 @@ describe('enqueueIntents — the intents commit with the events they describe', 
 		// back a Manager's Bid.
 		const client = await harness.gateway.connect();
 		await client.query('begin');
-		await enqueueIntents(client, [
+		await enqueueActingTeam(client, [
 			{
 				seq: '1',
 				occurredAt: (harness.events[0]?.['occurred_at'] as Date).toISOString(),
@@ -669,6 +806,53 @@ describe('duePendingIntents — pending is re-derived, never remembered', () => 
 		).toEqual([]);
 	});
 
+	it('slices on EVENT boundaries, never inside one event’s group', () => {
+		// **The property Story 5.3 needed.** Before it, every event owed one
+		// intent and the cut could only fall between events. A co-managed
+		// outbid owes three — the broadcast and two mentions — and a cut
+		// inside that group would post the FACT this pass and the mention next
+		// pass, as a second message repeating the same line with a ping on it.
+		const intents = [
+			intent('1', BROADCAST_RECIPIENT),
+			intent('1', ALICE),
+			intent('1', BOB),
+			intent('2', BROADCAST_RECIPIENT),
+			intent('2', ALICE),
+			intent('2', BOB)
+		];
+
+		// Four would land in the middle of event 2's group. Three go instead.
+		const due = duePendingIntents({ intents, attempts: [], now: NOW, budget: 4 });
+
+		expect(due.map((pending) => pending.eventSeq)).toEqual(['1', '1', '1']);
+	});
+
+	it('takes a whole event even when that ONE event exceeds the budget', () => {
+		// `ContractAssignmentOpened` mentions every Manager in the league —
+		// thirty-odd intents on one event against a budget of five. A rule
+		// that took whole groups ONLY would take nothing, forever, and stall
+		// the outbox on the one notice the whole league is waiting for.
+		// `broadcastBodyFor` makes the identical exception at the message
+		// ceiling: it is the only exit that terminates (AD-17).
+		const intents = Array.from({ length: PER_PASS_BUDGET + 3 }, (_unused, index) =>
+			intent('1', `recipient-${String(index)}`)
+		);
+
+		const due = duePendingIntents({ intents, attempts: [], now: NOW });
+
+		expect(due).toHaveLength(PER_PASS_BUDGET + 3);
+	});
+
+	it('attempts nothing at all when the budget is zero or negative', () => {
+		// The override has to be able to express “post nothing”, or the
+		// first-group exception above would make a zero budget dispatch a
+		// whole group.
+		const intents = [intent('1', ALICE), intent('1', BOB)];
+
+		expect(duePendingIntents({ intents, attempts: [], now: NOW, budget: 0 })).toEqual([]);
+		expect(duePendingIntents({ intents, attempts: [], now: NOW, budget: -2 })).toEqual([]);
+	});
+
 	it('caps at the budget and leaves the rest pending', () => {
 		const intents = Array.from({ length: PER_PASS_BUDGET + 3 }, (_unused, index) =>
 			intent(String(index + 1), ALICE)
@@ -811,9 +995,68 @@ describe('drainOutbox — one pass', () => {
 		});
 
 		expect(channel.posts).toHaveLength(1);
+		// The fact once, the mention once, and both Managers of the co-managed
+		// Team on the one line as two distinct `<@id>` (Story 5.3). The mention
+		// rides its own event's notice rather than the head of the message,
+		// which is what lets a reader of a five-event post tell which line is
+		// theirs.
 		expect(channel.posts[0]?.body).toBe(
-			`Lakers — Meakel bid $14.5M on Anthony Davis. Closes ${CLOSES_AT_MARKUP}.`
+			`Lakers — Meakel bid $14.5M on Anthony Davis. Closes ${CLOSES_AT_MARKUP}.
+` +
+				`<@${ALICE}> <@${BOB}> — Lakers — Meakel & Dana no longer hold the leading Bid.`
 		);
+		expect(channel.posts[0]?.recipients).toEqual([ALICE, BOB]);
+	});
+
+	it('joins the origin onto the Auction path, and posts without a link when there is none', async () => {
+		// The matrix's "The app origin is unset" row, both halves. The origin
+		// is a THUNK the drain calls only once a notice is owed, and
+		// `core/auction-link.ts` is the one place the path shape is spelled.
+		const league = {
+			managers: [{ teamId: TEAM, discordUserId: ALICE, id: MANAGER, displayName: 'Meakel' }],
+			teams: [{ id: TEAM, name: 'Lakers' }],
+			players: [{ fantraxPlayerId: PLAYER, playerName: 'Anthony Davis' }]
+		};
+
+		const linked = fakeGateway(league);
+		await write(linked.gateway, [bidPlaced()]);
+		const withOrigin = fakeChannel();
+		await drainOutbox(linked.gateway, {
+			channels: { [DISCORD_CHANNEL]: withOrigin.port },
+			// A trailing slash, because a deployment variable arrives however
+			// somebody typed it and `/auction/x` already carries a leading one.
+			origin: () => 'https://bbsl.example/'
+		});
+		expect(withOrigin.posts[0]?.body).toContain(`https://bbsl.example/auction/${PLAYER}`);
+
+		const bare = fakeGateway(league);
+		await write(bare.gateway, [bidPlaced()]);
+		const withoutOrigin = fakeChannel();
+		await drainOutbox(bare.gateway, {
+			channels: { [DISCORD_CHANNEL]: withoutOrigin.port },
+			origin: () => undefined
+		});
+		// The mention still posts — without a link rather than not at all.
+		expect(withoutOrigin.posts[0]?.body).toContain(`<@${ALICE}>`);
+		expect(withoutOrigin.posts[0]?.body).not.toContain('http');
+	});
+
+	it('never evaluates the origin on an idle pass', async () => {
+		// `readDueIntents` returns before anything is composed, and the tick
+		// fires every ten seconds forever: an idle league must not pay for a
+		// notification setting it has no notice to use.
+		const harness = fakeGateway();
+		let reads = 0;
+
+		await drainOutbox(harness.gateway, {
+			channels: { [DISCORD_CHANNEL]: fakeChannel().port },
+			origin: () => {
+				reads += 1;
+				return 'https://bbsl.example';
+			}
+		});
+
+		expect(reads).toBe(0);
 	});
 });
 
@@ -894,13 +1137,17 @@ describe('drainOutbox — the budget', () => {
 		// ONE request, carrying both Teams' notices and both Managers.
 		expect(channel.posts).toHaveLength(1);
 		expect(channel.posts[0]).toEqual({
-			// Real composed copy for both, one line each, in log order — which
-			// is what makes the grouping question `deferred-work.md` raises
-			// visible: Alice is pinged by a message whose second line is about
-			// Bob's Team, and nothing in the text says which line is whose.
+			// Real composed copy for both, in log order — and since Story 5.3
+			// each mention sits UNDER the notice for its own event. That closes
+			// the batching-granularity item `deferred-work.md` raised against 5.1
+			// without regrouping the batch by `(channel, recipient)`: Alice is
+			// still pinged by a message that also carries Bob's Team's notice, but
+			// the text now says which line is whose.
 			body:
 				`Lakers — Meakel bid $14.5M on Anthony Davis. Closes ${CLOSES_AT_MARKUP}.\n` +
-				'Kevin Durant to Bulls — Ari for $3.0M.',
+				`<@${ALICE}> — Lakers — Meakel no longer hold the leading Bid.\n` +
+				'Kevin Durant to Bulls — Ari for $3.0M.\n' +
+				`<@${BOB}> — Bulls — Ari led this Auction at its close.`,
 			recipients: [ALICE, BOB]
 		});
 		expect(summary).toMatchObject({ attempted: 2, delivered: 2 });
@@ -924,11 +1171,18 @@ describe('drainOutbox — the budget', () => {
 			managers: [{ teamId: TEAM, discordUserId: ALICE, id: MANAGER, displayName: 'Meakel' }],
 			teams: [{ id: TEAM, name: 'Lakers' }]
 		});
-		await write(harness.gateway, [
-			nominationOf('Anthony Davis'),
-			nominationOf('Kevin Durant'),
-			nominationOf('Jayson Tatum')
-		]);
+		// Broadcast intents only: this case is about the ORDER a backlog
+		// drains in, and a `NominationPlaced` triggers no mention.
+		await write(
+			harness.gateway,
+			[
+				nominationOf('Anthony Davis'),
+				nominationOf('Kevin Durant'),
+				nominationOf('Jayson Tatum')
+			],
+			'accepted',
+			enqueueBroadcasts
+		);
 		const channel = fakeChannel();
 
 		await drainOutbox(harness.gateway, {
@@ -1190,7 +1444,7 @@ describe('enqueueBroadcasts — one channel-addressed intent per broadcast event
 			);
 			expect(source, `${name}.ts must register no enqueue`).not.toMatch(/\benqueue\s*:/);
 			expect(source, `${name}.ts must import no enqueue function`).not.toMatch(
-				/\benqueue(Broadcasts|Intents)\b/
+				/\benqueue(Broadcasts|Mentions|BroadcastsAndMentions|Intents)\b/
 			);
 		}
 	});

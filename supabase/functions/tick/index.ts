@@ -74,9 +74,23 @@
  * is exactly what "a Discord outage costs a notification and never a bid" means
  * for the configuration case too.
  *
- * Not this story: no pause check (Epic 7), no message composition or mention
- * copy (5.2, 5.3), no mute settings (5.4), no external heartbeat detector
- * (8.2).
+ * **`APP_ORIGIN` reaches the drain the same lazy way since Story 5.3.** A
+ * mention carries an absolute deep link to the Auction, and
+ * `src/lib/core/auction-link.ts` answers a PATH and explicitly no origin —
+ * a host is deployment configuration the core may not read, and the tick has no
+ * request to take one from. It is passed as a THUNK the drain calls only once
+ * it knows a notice is owed, so an idle pass evaluates no notification setting
+ * at all. Unlike the webhook URL it is read with `Deno.env.get` rather than
+ * `required`: an unset origin costs the LINK, never the ping, so failing a pass
+ * over it would trade a working notification for a missing one.
+ *
+ * `APP_ORIGIN` is server-only and must never take a `PUBLIC_` prefix (AD-16).
+ * It is not a secret, but nothing in the browser needs it — the browser already
+ * knows its own origin — and putting it behind the prefix would inline a
+ * deployment's host into the client bundle for no reader.
+ *
+ * Not this story: no pause check (Epic 7), no mute settings (5.4), no external
+ * heartbeat detector (8.2).
  */
 
 import { createDiscordWebhookPort } from '../../../src/lib/adapters/discord/webhook.ts';
@@ -189,7 +203,18 @@ Deno.serve(async (request: Request): Promise<Response> => {
 			// expression body would return the `DrainSummary` into it.
 			drain: async () => {
 				await drainOutbox(gateway, {
-					channels: { [DISCORD_CHANNEL]: discordChannel() }
+					channels: { [DISCORD_CHANNEL]: discordChannel() },
+					// The app's own origin, for the deep link a mention carries
+					// (Story 5.3). A THUNK for `discordChannel`'s reason: the
+					// drain calls it only once it knows a notice is owed, so an
+					// idle pass — by far the commonest — evaluates no
+					// notification setting at all.
+					//
+					// `Deno.env.get` rather than `required`: an unset
+					// `APP_ORIGIN` must not fail a pass. The mention posts
+					// without a link rather than not at all, which is the
+					// matrix's "the app origin is unset" row.
+					origin: () => Deno.env.get('APP_ORIGIN') ?? null
 				});
 			}
 		});

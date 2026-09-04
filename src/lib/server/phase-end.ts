@@ -60,7 +60,7 @@ import { runTransactionalWrite } from '../shell/write.ts';
 import type { ConnectionGateway, TransactionalClient } from '../shell/write.ts';
 import { loadEventsViaClient } from './event-log.ts';
 import { releaseNomination } from './nomination.ts';
-import { enqueueBroadcasts } from './outbox.ts';
+import { EVERY_TEAM, enqueueBroadcastsAndMentions } from './outbox.ts';
 
 /**
  * What one evaluation did, as the tick has to report it.
@@ -167,7 +167,22 @@ export async function evaluateLeagueClock(gateway: ConnectionGateway): Promise<P
 		// broadcast set. `eligibility.ts` and `import-promotion.ts` pass no
 		// `enqueue` at all: Commissioner bookkeeping is not league news, and a
 		// notice for it would be channel noise nothing can mute.
-		enqueue: enqueueBroadcasts,
+		//
+		// Story 5.3 mentions EVERY Manager of every Team on the phase open, and
+		// this is the one trigger where that is the honest answer: the phase
+		// ends for the whole league at once, and until now the transition was
+		// stated only to a Manager who happened to open the app
+		// (`deferred-work.md`, from spec 3.7). `EVERY_TEAM` is resolved inside
+		// the enqueue rather than enumerated here — this function runs on every
+		// tick and appends nothing on almost all of them, and reading `teams`
+		// in `load` would cost a full-table read 8,640 times a day.
+		//
+		// `AuctionTerminated` gets no mention: it carries no Team, it is one
+		// row per unbid nomination, and the phase notice every Manager receives
+		// already states how many there were.
+		enqueue: enqueueBroadcastsAndMentions((event) =>
+			event.type === CONTRACT_ASSIGNMENT_OPENED_EVENT ? [EVERY_TEAM] : []
+		),
 		load: (client) => loadPhaseEndState(client),
 		projections: [releaseNomination],
 		decide: ({ state, now }) => {

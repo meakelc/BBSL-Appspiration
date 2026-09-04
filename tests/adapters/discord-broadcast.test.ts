@@ -49,6 +49,21 @@ const DIRECTORY: LeagueDirectory = {
 	managersOfTeam: new Map([
 		[LAKERS, [MEAKEL]],
 		[BULLS, [ARI]]
+	]),
+	// Story 5.3's two edges. Nothing in `broadcast.ts` reads either — the
+	// broadcast copy is addressed to the channel and mentions nobody — but the
+	// directory is one snapshot shared with `mention.ts`, so the fixture
+	// carries them.
+	managerIdsByDiscordUserId: new Map([
+		['1111', MEAKEL],
+		['2222', ARI],
+		['3333', DANA]
+	]),
+	// The exact inverse of `managersOfTeam` — Dana holds no Team here, which is
+	// a supported state (a nullable `managers.team_id`).
+	teamOfManager: new Map([
+		[MEAKEL, LAKERS],
+		[ARI, BULLS]
 	])
 };
 

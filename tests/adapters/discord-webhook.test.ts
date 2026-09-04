@@ -98,10 +98,15 @@ describe('the payload', () => {
 		expect(payload.allowed_mentions.users).toEqual(['111']);
 	});
 
-	it('whitelists exactly the recipients it mentions — both halves, or nobody pings', () => {
-		const payload = payloadFor({ body: 'a notice', recipients: ['111', '222'] });
+	it('whitelists exactly the recipients the body mentions — both halves, or nobody pings', () => {
+		// **Both halves, and since Story 5.3 they meet in the BODY rather than in
+		// a prefix.** `server/outbox.ts` composes the `<@id>`s inline, on the
+		// notice for each one's own event, and sends here exactly the snowflakes
+		// that body spells. This file's remaining job is the whitelist.
+		const body = `${mentionFor('111')} — Bulls — Ari no longer hold the leading Bid.`;
+		const payload = payloadFor({ body, recipients: ['111', '222'] });
 
-		expect(payload.content).toBe(`${mentionFor('111')} ${mentionFor('222')} a notice`);
+		expect(payload.content).toBe(body);
 		expect(payload.allowed_mentions.users).toEqual(['111', '222']);
 	});
 
@@ -111,27 +116,44 @@ describe('the payload', () => {
 		const payload = payloadFor({ body: 'a notice', recipients: ['111', ' 111 ', '', '  '] });
 
 		expect(payload.allowed_mentions.users).toEqual(['111']);
-		expect(payload.content).toBe('<@111> a notice');
+		// And the body is untouched: it is composed elsewhere, and de-duping the
+		// whitelist must never rewrite what a Manager reads.
+		expect(payload.content).toBe('a notice');
 	});
 
-	it('leads with the mentions, because a mobile preview truncates', () => {
-		expect(contentFor({ body: 'the body', recipients: ['9'] })).toBe('<@9> the body');
+	it('never prepends a mention to the head of the message (Story 5.3)', () => {
+		// **The property that replaced “mentions lead”.** The drain batches by
+		// channel, so one post can cover several events; a Manager pinged at the
+		// top of a five-event post cannot tell which line is theirs, and with
+		// several links in one body “links directly to the relevant Auction”
+		// stops being true. Placement moved to `adapters/discord/mention.ts`;
+		// addressing stayed here.
+		const content = contentFor({ body: 'the body', recipients: ['9'] });
+
+		expect(content).toBe('the body');
+		expect(content).not.toContain(mentionFor('9'));
 	});
 
-	it('emits no stray separator when the body is empty', () => {
-		expect(contentFor({ body: '', recipients: ['9'] })).toBe('<@9>');
+	it('leaves an already-inline mention exactly where the composer put it', () => {
+		const body =
+			'Lakers — Meakel bid $14.5M on Anthony Davis.\n' +
+			'<@9> — Bulls — Ari no longer hold the leading Bid.';
+
+		expect(contentFor({ body, recipients: ['9'] })).toBe(body);
 	});
 
 	it('treats a whitespace-only body as absent, not as a word', () => {
-		// A filter on `!== ''` let `'   '` through and rendered `<@9>    ` —
-		// a trailing separator on the message a Manager actually reads.
-		expect(contentFor({ body: '   ', recipients: ['9'] })).toBe('<@9>');
-		expect(contentFor({ body: '\n\t ', recipients: ['9'] })).toBe('<@9>');
-		expect(payloadFor({ body: '  ', recipients: ['9'] }).content).toBe('<@9>');
+		// Discord rejects an empty `content`, and a body of `'   '` is as absent
+		// as one of `''`. Nothing is left to separate it from now that the
+		// mentions no longer lead, but the normalisation is still the honest one.
+		expect(contentFor({ body: '', recipients: ['9'] })).toBe('');
+		expect(contentFor({ body: '   ', recipients: ['9'] })).toBe('');
+		expect(contentFor({ body: '\n\t ', recipients: ['9'] })).toBe('');
+		expect(payloadFor({ body: '  ', recipients: ['9'] }).content).toBe('');
 	});
 
 	it('trims a body that has real content, without eating the content', () => {
-		expect(contentFor({ body: '  a notice  ', recipients: ['9'] })).toBe('<@9> a notice');
+		expect(contentFor({ body: '  a notice  ', recipients: ['9'] })).toBe('a notice');
 	});
 });
 
@@ -147,7 +169,8 @@ describe('the request', () => {
 		expect(sent[0]?.method).toBe('POST');
 		expect(sent[0]?.headers['content-type']).toBe('application/json');
 		expect(JSON.parse(String(sent[0]?.body))).toEqual({
-			content: '<@111> a notice',
+			// The body verbatim: the mention is the composer's now.
+			content: 'a notice',
 			allowed_mentions: { parse: [], users: ['111'] }
 		});
 	});

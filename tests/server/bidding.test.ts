@@ -41,7 +41,7 @@ import type {
 } from '../../src/lib/core/rules/bidding.ts';
 import { PLACE_BID_GATES } from '../../src/lib/core/types.ts';
 import { loadAuctionPage } from '../../src/lib/server/auction-page.ts';
-import { loadBidState, placeBid } from '../../src/lib/server/bidding.ts';
+import { displacedTeamsFor, loadBidState, placeBid } from '../../src/lib/server/bidding.ts';
 import { AUCTION_OPENED_EVENT } from '../../src/lib/core/projection/phase.ts';
 import type { BidRejection } from '../../src/lib/server/bidding.ts';
 import type {
@@ -104,6 +104,15 @@ function auctionOpened(occurredAt = '2026-08-25T09:00:00.000Z'): QueryResultRow 
 	};
 }
 
+/**
+ * The Teams `EVERY_TEAM` resolves to in this fake's league (Story 5.3).
+ *
+ * A constant rather than an option, because the one trigger that reaches it
+ * is `ContractAssignmentOpened` and what matters about it is that the enqueue
+ * asked the whole-league question at all.
+ */
+const EVERY_LEAGUE_TEAM: readonly string[] = ['t-one', 't-two'];
+
 function fakeGateway(
 	options: {
 		events?: QueryResultRow[];
@@ -133,6 +142,13 @@ function fakeGateway(
 	let released = 0;
 	let committed = false;
 	let rolledBack = false;
+
+	/**
+	 * The delivery intents this transaction filed (Story 5.3): the event they
+	 * describe and who they address. Recorded rather than merely tolerated, so
+	 * “this write mentioned exactly these Teams” is observable.
+	 */
+	const outboxIntents: Array<{ eventSeq: string; recipient: string }> = [];
 
 	const client: TransactionalClient & { release(): void } = {
 		async query(text: string, queryParams: readonly unknown[] = []) {
@@ -219,7 +235,24 @@ function fakeGateway(
 			// on in `tests/server/outbox.test.ts`, which owns the outbox; here
 			// it only has to be a statement the fake recognises rather than one
 			// it rejects.
+			// Story 5.3 registered a Manager-shaped enqueue beside the
+			// broadcast one, so the transaction now also asks which Managers
+			// act for each AFFECTED Team — the Team the write site named, never
+			// the event's own. One synthetic snowflake per Team, so a test can
+			// read the affected set straight off the intents it filed.
+			if (/^select discord_user_id\s+from managers\s+where team_id = \$1/i.test(sql)) {
+				return { rows: [{ discord_user_id: `discord-${String(queryParams[0])}` }] };
+			}
+			if (/^select discord_user_id\s+from managers\s+where team_id is not null/i.test(sql)) {
+				return {
+					rows: EVERY_LEAGUE_TEAM.map((teamId) => ({ discord_user_id: `discord-${teamId}` }))
+				};
+			}
 			if (/^insert into notification_outbox/i.test(sql)) {
+				outboxIntents.push({
+					eventSeq: String(queryParams[0]),
+					recipient: String(queryParams[2])
+				});
 				return { rows: [] };
 			}
 			throw new Error(`unexpected statement: ${sql}`);
@@ -232,6 +265,7 @@ function fakeGateway(
 	const gateway: ConnectionGateway = { connect: async () => client };
 
 	return {
+		outboxIntents,
 		gateway,
 		client,
 		order,
@@ -362,6 +396,86 @@ function rejectionOf(outcome: { kind: string; reason?: unknown }): BidRejection 
 }
 
 // --- The happy path ---------------------------------------------------------
+
+describe('placeBid — the mention intents it owes (Story 5.3, AC1)', () => {
+	it('mentions the DISPLACED Team, and never the bidder', async () => {
+		// The matrix's “A Manager is outbid” row. `t-1` held the leading Bid;
+		// `ACTOR` bids from `t-2` and takes it. The event's own `team_id` is the
+		// bidder's, which is exactly why the affected Team cannot be read off it.
+		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 8_000_000)] });
+
+		await placeBid(harness.gateway, ACTOR, 'p-1', parseMoney(8_500_000), DEVICE_CLASS);
+
+		expect(harness.outboxIntents.map((intent) => intent.recipient)).toEqual([
+			// The channel's broadcast row (Story 5.2) — it still commits beside
+			// the mention rather than instead of it.
+			'#channel',
+			'discord-t-1'
+		]);
+	});
+
+	it('mentions nobody on the FIRST Bid of an Auction', async () => {
+		// The matrix's “The first Bid on an Auction” row: an opening Bid
+		// displaces nobody, so the broadcast notice posts alone.
+		const harness = fakeGateway({ events: [nominated()] });
+
+		await placeBid(harness.gateway, ACTOR, 'p-1', parseMoney(2_000_000), DEVICE_CLASS);
+
+		expect(harness.outboxIntents.map((intent) => intent.recipient)).toEqual(['#channel']);
+	});
+
+	it('files nothing at all when the Bid is refused', async () => {
+		// `enqueue` runs inside the transaction and after the append, so a
+		// rejected write never reaches it — and a rolled-back one would take
+		// the intents with it either way (AD-17).
+		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 8_000_000)] });
+
+		await placeBid(harness.gateway, ACTOR, 'p-1', parseMoney(8_000_000), DEVICE_CLASS);
+
+		expect(harness.outboxIntents).toEqual([]);
+	});
+
+	it('names NOBODY when a Team would displace ITSELF', async () => {
+		// The matrix's “A Team outbids itself” row, asserted on the rule
+		// directly because the `selfBid` gate refuses that Bid outright — so
+		// no `placeBid` call can ever reach the enqueue in this state, and an
+		// end-to-end case would prove the gate rather than the silence.
+		// The state is a real one, folded from a real log, not a literal.
+		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 8_000_000)] });
+		await harness.client.query('begin');
+		const loaded = await loadBidState(harness.client, 'p-1', 't-2');
+
+		// `t-1` holds the leading Bid, and `t-1` is the Team acting.
+		expect(loaded.bid.leadingBid?.teamId).toBe('t-1');
+		expect(displacedTeamsFor(loaded, 't-1')).toEqual([]);
+		// The same state, acted on by anyone else, still names the leader —
+		// so the silence above is the self-check and not an empty fold.
+		expect(displacedTeamsFor(loaded, 't-2')).toEqual(['t-1']);
+	});
+
+	it('names nobody inside a Minimum-Bid Contention, which has no Leading Bidder', async () => {
+		// `auctionsReducer` reports a leader because some Bid has to be the
+		// highest, but a lottery has none. Reading that fold artifact as a
+		// real leader would ping whichever Team opened the lottery every time
+		// somebody else joined it.
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, 1_000_000)],
+			sealedSeed: 'c'.repeat(64)
+		});
+		await harness.client.query('begin');
+		const loaded = await loadBidState(harness.client, 'p-1', 't-1');
+
+		expect(loaded.bid.contention).toBe('minimum_bid');
+		expect(displacedTeamsFor(loaded, 't-1')).toEqual([]);
+	});
+
+	it('names nobody for the pre-load window it can never actually observe', () => {
+		// `enqueue` runs after `load` and after the append, so a null state is
+		// unreachable. Empty is the safe direction either way: a missing
+		// mention pings nobody, a wrong one pings the wrong Manager.
+		expect(displacedTeamsFor(null, 't-1')).toEqual([]);
+	});
+});
 
 describe('placeBid — the gate holds (AC4)', () => {
 	it('appends exactly one BidPlaced, stamped by the database clock and naming the actor', async () => {

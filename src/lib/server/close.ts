@@ -63,6 +63,7 @@ import {
 	auctionsReducer,
 	hasExpired
 } from '../core/projection/auctions.ts';
+import { CONTENTION_DRAWN_EVENT } from '../core/projection/draws.ts';
 import { INITIAL_CONTRACTS, contractsReducer } from '../core/projection/contracts.ts';
 import {
 	INITIAL_ELIGIBILITY,
@@ -70,6 +71,7 @@ import {
 	isEligible
 } from '../core/projection/eligibility.ts';
 import {
+	AUCTION_CLOSED_EVENT,
 	INITIAL_NOMINATIONS,
 	nominationForPlayer,
 	nominationsReducer
@@ -82,7 +84,7 @@ import type { ConnectionGateway, TransactionalClient, WriteOutcome } from '../sh
 import { readContentionSeed } from './contention-seed.ts';
 import { loadEventsViaClient } from './event-log.ts';
 import { releaseNomination } from './nomination.ts';
-import { enqueueBroadcasts } from './outbox.ts';
+import { enqueueBroadcastsAndMentions } from './outbox.ts';
 import { loadTeamRoster } from './team-roster.ts';
 
 /**
@@ -166,6 +168,59 @@ export async function loadCloseState(
 }
 
 /**
+ * Which Teams each of a close's events affects, as `outbox.ts`'s
+ * `AffectedTeamsFn` (Story 5.3).
+ *
+ * **Three roles, and every one of them comes off the state this transaction
+ * already folded** — never off the payload, which names the WINNER and nobody
+ * else:
+ *
+ *  - `ContentionDrawn` mentions every Contender, in the fold's own order
+ *    (AD-14). They are the Teams that had money in the lottery, and the draw is
+ *    the only event that can tell them how it went.
+ *  - `AuctionClosed` mentions the Team that LED the Auction into its close —
+ *    the winner, for every Standard close — and the Team whose Nomination Slot
+ *    the close released, which is the nominator and is frequently somebody
+ *    else. The Slot release is not an event of its own (`nominationsReducer`
+ *    simply drops the key), so this close is where it is stated.
+ *
+ * The leader is nulled inside a Minimum-Bid Contention for `server/bidding.ts`'s
+ * reason: `auctionsReducer` reports one because some Bid has to be the highest,
+ * but a lottery has no Leading Bidder. The Contenders already have their
+ * mention on the draw, and the drawn winner is one of them.
+ *
+ * A `null` state is the pre-`load` window the enqueue cannot observe; empty is
+ * the safe answer there.
+ */
+function affectedTeamsForClose(eventType: string, state: CloseState | null): readonly string[] {
+	if (state === null) return [];
+	const auction = state.auction;
+
+	if (eventType === CONTENTION_DRAWN_EVENT) {
+		return auction === null ? [] : auction.contenders.map((contender) => contender.teamId);
+	}
+	if (eventType !== AUCTION_CLOSED_EVENT) return [];
+
+	const teams: string[] = [];
+	// Optional-chained exactly as `server/bidding.ts`'s `displacedTeamsFor` is,
+	// and for a sharper reason: `enqueue` runs INSIDE the write transaction, so
+	// a `TypeError` here would roll back an otherwise valid close over a notice.
+	// Unreachable today — `decideClose` throws before this if nobody ever bid —
+	// but "a Discord outage costs a notification and never a bid" has to hold
+	// for the outbox's own targeting too.
+	const leader =
+		auction === null || auction.contention === 'minimum_bid'
+			? null
+			: (auction.leadingBid?.teamId ?? null);
+	if (leader !== null) teams.push(leader);
+	// The nominating Team, off the nominations fold — `AuctionClosedPayload`
+	// names the winner and could never answer this.
+	const nominator = state.nomination?.teamId ?? null;
+	if (nominator !== null) teams.push(nominator);
+	return teams;
+}
+
+/**
  * Close one Player's Auction: one transaction, one `AuctionClosed`, one
  * claim-row delete.
  *
@@ -186,6 +241,10 @@ export async function closeAuction(
 	gateway: ConnectionGateway,
 	fantraxPlayerId: string
 ): Promise<WriteOutcome> {
+	// The state `load` folded, captured for the enqueue — `server/bidding.ts`'s
+	// note, for the same reason: who a close AFFECTS is on no payload.
+	let loaded: CloseState | null = null;
+
 	return await runTransactionalWrite<CloseState>({
 		gateway,
 		// Story 5.2 broadcasts this write: it appends the `ContentionDrawn` reveal
@@ -196,8 +255,14 @@ export async function closeAuction(
 		// broadcast set. `eligibility.ts` and `import-promotion.ts` pass no
 		// `enqueue` at all: Commissioner bookkeeping is not league news, and a
 		// notice for it would be channel noise nothing can mute.
-		enqueue: enqueueBroadcasts,
-		load: (client) => loadCloseState(client, fantraxPlayerId),
+		//
+		// Story 5.3 mentions the Contenders on the draw, and the leader and the
+		// nominating Team on the close — see `affectedTeamsForClose`.
+		enqueue: enqueueBroadcastsAndMentions((event) => affectedTeamsForClose(event.type, loaded)),
+		load: async (client) => {
+			loaded = await loadCloseState(client, fantraxPlayerId);
+			return loaded;
+		},
 		// The one-line registration Story 2.3 wrote `releaseNomination` for.
 		// It goes through the `projections` hook because that is the one seam
 		// that persists INSIDE the appending transaction (AD-5), so the claim
