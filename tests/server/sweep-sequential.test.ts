@@ -185,6 +185,16 @@ function fakeGateway(seed: QueryResultRow[]) {
 				appendedEvents.length = committedThrough;
 				return { rows: [] };
 			}
+			// Story 5.2 registered `enqueueBroadcasts` on this write, so the
+			// appending transaction now also files one channel-addressed
+			// delivery intent per broadcast-worthy event (AD-17). It is
+			// recorded in `statements` like every other statement and asserted
+			// on in `tests/server/outbox.test.ts`, which owns the outbox; here
+			// it only has to be a statement the fake recognises rather than one
+			// it rejects.
+			if (/^insert into notification_outbox/i.test(sql)) {
+				return { rows: [] };
+			}
 			throw new Error(`unexpected statement: ${sql}`);
 		},
 		release() {

@@ -124,6 +124,7 @@ import type {
 } from '../shell/write.ts';
 import { CONTENTION_SEEDS_TABLE, readContentionSeed } from './contention-seed.ts';
 import { loadEventsViaClient } from './event-log.ts';
+import { enqueueBroadcasts } from './outbox.ts';
 import { loadTeamRoster } from './team-roster.ts';
 
 /** Who acted, resolved server-side from application tables (AD-4). */
@@ -442,6 +443,13 @@ export async function placeBid(
 
 	return await runTransactionalWrite<LoadedBidState>({
 		gateway,
+		// Story 5.2 broadcasts this write: a `BidPlaced` moves the price and
+		// resets the Auction Clock, which is the fact every other Team needs.
+		// `enqueueBroadcasts` files one channel-addressed intent per event in the
+		// broadcast set. `eligibility.ts` and `import-promotion.ts` pass no
+		// `enqueue` at all: Commissioner bookkeeping is not league news, and a
+		// notice for it would be channel noise nothing can mute.
+		enqueue: enqueueBroadcasts,
 		load: (client) => loadBidState(client, fantraxPlayerId, actor.teamId),
 		// The ONE projection, and it fires only when the core published a
 		// `seedHash` — which is only on the Bid that opens a Minimum-Bid

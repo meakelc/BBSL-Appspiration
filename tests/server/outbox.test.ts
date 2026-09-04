@@ -19,9 +19,13 @@
  * in this repository.
  */
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
 import { describe, expect, it } from 'vitest';
 
 import {
+	BROADCAST_RECIPIENT,
 	DELIVERY_DELIVERED,
 	DELIVERY_FAILED,
 	DELIVERY_RATE_LIMITED,
@@ -32,18 +36,20 @@ import {
 	backoffMsFor,
 	drainOutbox,
 	duePendingIntents,
-	enqueueIntents,
-	genericBodyFor
+	enqueueBroadcasts,
+	enqueueIntents
 } from '../../src/lib/server/outbox.ts';
 import type {
 	ChannelPostResult,
 	NotificationChannelPort,
 	OutboxIntent
 } from '../../src/lib/server/outbox.ts';
+import { payloadFor } from '../../src/lib/adapters/discord/webhook.ts';
 import { runTransactionalWrite } from '../../src/lib/shell/write.ts';
 import type {
 	ConnectionGateway,
 	Decision,
+	EnqueueFn,
 	QueryResultRow,
 	TransactionalClient
 } from '../../src/lib/shell/write.ts';
@@ -63,12 +69,28 @@ type OutboxRow = {
 	createdAt: string;
 };
 
-/** One `managers` row, as much of it as `enqueueIntents` reads. */
-type ManagerRow = { teamId: string | null; discordUserId: string };
+/**
+ * One `managers` row. `enqueueIntents` reads the snowflake; Story 5.2's
+ * directory read reads the id, the display name and the Team.
+ */
+type ManagerRow = {
+	teamId: string | null;
+	discordUserId: string;
+	id?: string;
+	displayName?: string;
+};
+
+/** One `teams` row, as much of it as the directory read takes. */
+type TeamRow = { id: string; name: string };
+
+/** One `free_agent_players` row — the join that gives `BidPlaced` a name. */
+type PlayerRow = { fantraxPlayerId: string; playerName: string };
 
 function fakeGateway(
 	options: {
 		managers?: readonly ManagerRow[];
+		teams?: readonly TeamRow[];
+		players?: readonly PlayerRow[];
 		now?: Date;
 		/** Throw on the Nth outcome INSERT (1-based), as a lost connection would. */
 		failOutcomeInsert?: number;
@@ -83,6 +105,8 @@ function fakeGateway(
 } {
 	const statements: string[] = [];
 	const managers = options.managers ?? [];
+	const teams = options.teams ?? [];
+	const players = options.players ?? [];
 	// Committed state.
 	const events: QueryResultRow[] = [];
 	const outbox: OutboxRow[] = [];
@@ -172,12 +196,26 @@ function fakeGateway(
 					.flatMap((intent) => {
 						const event = events.find((candidate) => String(candidate['seq']) === intent.eventSeq);
 						if (event === undefined) return [];
+						// The left join on `payload ->> 'fantraxPlayerId'`, as the
+						// real statement spells it.
+						const payload = event['payload'];
+						const fantraxPlayerId =
+							typeof payload === 'object' && payload !== null
+								? (payload as Record<string, unknown>)['fantraxPlayerId']
+								: undefined;
+						const player = players.find(
+							(candidate) => candidate.fantraxPlayerId === fantraxPlayerId
+						);
 						return [
 							{
 								event_seq: intent.eventSeq,
 								channel: intent.channel,
 								recipient: intent.recipient,
-								event_type: event['event_type']
+								event_type: event['event_type'],
+								payload: event['payload'],
+								manager_id: event['manager_id'],
+								occurred_at: event['occurred_at'],
+								player_name: player?.playerName ?? null
 							}
 						];
 					})
@@ -187,6 +225,18 @@ function fakeGateway(
 						return a.recipient < b.recipient ? -1 : 1;
 					});
 				return { rows };
+			}
+			if (/^select id, name from teams$/i.test(sql)) {
+				return { rows: teams.map((team) => ({ id: team.id, name: team.name })) };
+			}
+			if (/^select id, display_name, team_id from managers/i.test(sql)) {
+				return {
+					rows: managers.map((manager) => ({
+						id: manager.id ?? manager.discordUserId,
+						display_name: manager.displayName ?? manager.discordUserId,
+						team_id: manager.teamId
+					}))
+				};
 			}
 			if (/^select occurred_at, payload, delivery_outcome from auction_events/i.test(sql)) {
 				return {
@@ -241,19 +291,107 @@ function fakeChannel(
 	return { port, posts };
 }
 
-/** One accepted write, appending `events` and enqueuing their intents. */
+/**
+ * One accepted write, appending `events` and enqueuing their intents.
+ *
+ * `enqueue` defaults to `enqueueIntents` — Story 5.1's Manager-shaped enqueue,
+ * which every mechanism suite below drives. Story 5.2's cases pass
+ * `enqueueBroadcasts` explicitly, and the eligibility case passes `undefined`
+ * to model a write that registers no enqueue at all.
+ */
 async function write(
 	gateway: ConnectionGateway,
 	events: readonly EventEnvelope[],
-	kind: 'accepted' | 'rejected' = 'accepted'
+	kind: 'accepted' | 'rejected' = 'accepted',
+	enqueue: EnqueueFn | undefined = enqueueIntents
 ): Promise<void> {
 	await runTransactionalWrite({
 		gateway,
 		load: async () => ({}),
 		decide: (): Decision =>
 			kind === 'accepted' ? { kind: 'accepted', events } : { kind: 'rejected', reason: 'no' },
-		enqueue: enqueueIntents
+		enqueue
 	});
+}
+
+const PLAYER = 'p-1';
+const CLOSES_AT = '2026-09-04T02:30:00.000Z';
+/** Discord's own timestamp markup for `CLOSES_AT` — the reader's local time. */
+const CLOSES_AT_MARKUP = `<t:${String(Math.floor(Date.parse(CLOSES_AT) / 1000))}:f>`;
+
+/** A real `BidPlaced`, payload and all — Story 5.2 composes from the payload. */
+function bidPlaced(): EventEnvelope {
+	return {
+		type: 'BidPlaced',
+		payload: {
+			fantraxPlayerId: PLAYER,
+			teamId: TEAM,
+			teamName: 'Lakers',
+			managerId: MANAGER,
+			amount: 14_500_000,
+			closesAt: CLOSES_AT
+		},
+		managerId: MANAGER,
+		teamId: TEAM
+	};
+}
+
+/** A real `NominationPlaced` — a second broadcast whose copy differs from the Bid's. */
+function nominationPlaced(): EventEnvelope {
+	return {
+		type: 'NominationPlaced',
+		payload: {
+			fantraxPlayerId: PLAYER,
+			playerName: 'Anthony Davis',
+			teamId: TEAM,
+			teamName: 'Lakers',
+			managerId: MANAGER
+		},
+		managerId: MANAGER,
+		teamId: TEAM
+	};
+}
+
+/** A real `AuctionClosed`, for a Team and Player the caller names. */
+function auctionClosed(input: {
+	readonly teamId: string;
+	readonly teamName: string;
+	readonly managerId: string;
+	readonly playerName: string;
+	readonly winningAmount: number;
+}): EventEnvelope {
+	return {
+		type: 'AuctionClosed',
+		payload: {
+			fantraxPlayerId: `p-${input.playerName}`,
+			playerName: input.playerName,
+			teamId: input.teamId,
+			teamName: input.teamName,
+			managerId: input.managerId,
+			winningAmount: input.winningAmount,
+			capHit: input.winningAmount,
+			contractYears: null,
+			closedAt: CLOSES_AT
+		},
+		managerId: input.managerId,
+		teamId: input.teamId
+	};
+}
+
+/** A real `NominationPlaced` naming one Player, so a backlog reads in order. */
+function nominationOf(playerName: string): EventEnvelope {
+	return {
+		type: 'NominationPlaced',
+		payload: {
+			fantraxPlayerId: `p-${playerName}`,
+			playerName,
+			teamId: TEAM,
+			teamName: 'Lakers',
+			managerId: MANAGER
+		},
+		managerId: MANAGER,
+		teamId: TEAM
+	};
 }
 
 /** A team-affecting event envelope. */
@@ -404,7 +542,13 @@ describe('duePendingIntents — pending is re-derived, never remembered', () => 
 		eventSeq,
 		channel: DISCORD_CHANNEL,
 		recipient,
-		eventType: 'BidPlaced'
+		eventType: 'BidPlaced',
+		// The derivation reads none of the joined columns — it decides WHICH
+		// intents are due, never what they say.
+		payload: null,
+		managerId: MANAGER,
+		occurredAt: NOW.toISOString(),
+		playerName: null
 	});
 
 	it('treats an intent with no recorded attempt as due now', () => {
@@ -635,32 +779,41 @@ describe('drainOutbox — one pass', () => {
 		expect(summary.attempted).toBe(0);
 		expect(channel.posts).toEqual([]);
 		expect(harness.events).toEqual([]);
+
+		// **And it read no names.** The tick fires every ten seconds forever
+		// and this is by far its commonest outcome, so an unconditional
+		// directory read would cost an idle league two full-table reads 8,640
+		// times a day to compose nothing. `readDueIntents` derives the due set
+		// first — inside the same transaction, so the snapshot property still
+		// holds for the reads that do run.
+		expect(harness.statements.filter((sql) => /from teams|from managers/i.test(sql))).toEqual(
+			[]
+		);
 	});
 
-	it('sends a generic body naming each event once, with no per-type copy', async () => {
-		// Story 5.1 ships the mechanism and a generic payload; 5.2/5.3 own what
-		// a notice says. The body names an event once even though a co-managed
-		// Team contributes two intents for it.
+	it('sends the composed copy, naming an event ONCE however many intents it owes', async () => {
+		// Story 5.2 replaced 5.1's placeholder. The body states what happened —
+		// and states it once even though a co-managed Team contributes two
+		// intents for the one event, because composition groups by `event_seq`.
 		const harness = fakeGateway({
 			managers: [
-				{ teamId: TEAM, discordUserId: ALICE },
-				{ teamId: TEAM, discordUserId: BOB }
-			]
+				{ teamId: TEAM, discordUserId: ALICE, id: MANAGER, displayName: 'Meakel' },
+				{ teamId: TEAM, discordUserId: BOB, id: 'm-2', displayName: 'Dana' }
+			],
+			teams: [{ id: TEAM, name: 'Lakers' }],
+			players: [{ fantraxPlayerId: PLAYER, playerName: 'Anthony Davis' }]
 		});
-		await write(harness.gateway, [teamEvent('BidPlaced')]);
+		await write(harness.gateway, [bidPlaced()]);
 		const channel = fakeChannel();
 
 		await drainOutbox(harness.gateway, {
 			channels: { [DISCORD_CHANNEL]: channel.port }
 		});
 
-		expect(channel.posts[0]?.body).toBe('BBSL auction update — BidPlaced (event #1).');
-		expect(
-			genericBodyFor([
-				{ eventSeq: '1', channel: DISCORD_CHANNEL, recipient: ALICE, eventType: 'BidPlaced' },
-				{ eventSeq: '1', channel: DISCORD_CHANNEL, recipient: BOB, eventType: 'BidPlaced' }
-			])
-		).toBe('BBSL auction update — BidPlaced (event #1).');
+		expect(channel.posts).toHaveLength(1);
+		expect(channel.posts[0]?.body).toBe(
+			`Lakers — Meakel bid $14.5M on Anthony Davis. Closes ${CLOSES_AT_MARKUP}.`
+		);
 	});
 });
 
@@ -709,13 +862,24 @@ describe('drainOutbox — the budget', () => {
 		// nobody noticed, and so a change to it goes red here first.
 		const harness = fakeGateway({
 			managers: [
-				{ teamId: TEAM, discordUserId: ALICE },
-				{ teamId: OTHER_TEAM, discordUserId: BOB }
-			]
+				{ teamId: TEAM, discordUserId: ALICE, id: MANAGER, displayName: 'Meakel' },
+				{ teamId: OTHER_TEAM, discordUserId: BOB, id: 'm-2', displayName: 'Ari' }
+			],
+			teams: [
+				{ id: TEAM, name: 'Lakers' },
+				{ id: OTHER_TEAM, name: 'Bulls' }
+			],
+			players: [{ fantraxPlayerId: PLAYER, playerName: 'Anthony Davis' }]
 		});
 		await write(harness.gateway, [
-			teamEvent('BidPlaced', TEAM),
-			teamEvent('AuctionClosed', OTHER_TEAM)
+			bidPlaced(),
+			auctionClosed({
+				teamId: OTHER_TEAM,
+				teamName: 'Bulls',
+				managerId: 'm-2',
+				playerName: 'Kevin Durant',
+				winningAmount: 3_000_000
+			})
 		]);
 		expect(harness.outbox).toEqual([
 			{ eventSeq: '1', channel: DISCORD_CHANNEL, recipient: ALICE, createdAt: expect.any(String) },
@@ -730,7 +894,13 @@ describe('drainOutbox — the budget', () => {
 		// ONE request, carrying both Teams' notices and both Managers.
 		expect(channel.posts).toHaveLength(1);
 		expect(channel.posts[0]).toEqual({
-			body: 'BBSL auction update — BidPlaced (event #1), AuctionClosed (event #2).',
+			// Real composed copy for both, one line each, in log order — which
+			// is what makes the grouping question `deferred-work.md` raises
+			// visible: Alice is pinged by a message whose second line is about
+			// Bob's Team, and nothing in the text says which line is whose.
+			body:
+				`Lakers — Meakel bid $14.5M on Anthony Davis. Closes ${CLOSES_AT_MARKUP}.\n` +
+				'Kevin Durant to Bulls — Ari for $3.0M.',
 			recipients: [ALICE, BOB]
 		});
 		expect(summary).toMatchObject({ attempted: 2, delivered: 2 });
@@ -747,11 +917,18 @@ describe('drainOutbox — the budget', () => {
 	});
 
 	it('takes the oldest events first, so a backlog drains in log order', async () => {
-		const harness = fakeGateway({ managers: [{ teamId: TEAM, discordUserId: ALICE }] });
-		await write(
-			harness.gateway,
-			Array.from({ length: PER_PASS_BUDGET + 1 }, (_unused, index) => teamEvent(`Event${index}`))
-		);
+		// Asserted on the composed SENTENCES rather than on `event #n`: the
+		// Player named in each line is the only thing that ties a notice back to
+		// the event it came from now that the placeholder body is gone.
+		const harness = fakeGateway({
+			managers: [{ teamId: TEAM, discordUserId: ALICE, id: MANAGER, displayName: 'Meakel' }],
+			teams: [{ id: TEAM, name: 'Lakers' }]
+		});
+		await write(harness.gateway, [
+			nominationOf('Anthony Davis'),
+			nominationOf('Kevin Durant'),
+			nominationOf('Jayson Tatum')
+		]);
 		const channel = fakeChannel();
 
 		await drainOutbox(harness.gateway, {
@@ -759,9 +936,10 @@ describe('drainOutbox — the budget', () => {
 			budget: 2
 		});
 
-		expect(channel.posts[0]?.body).toContain('event #1');
-		expect(channel.posts[0]?.body).toContain('event #2');
-		expect(channel.posts[0]?.body).not.toContain('event #3');
+		expect(channel.posts[0]?.body).toBe(
+			'Lakers — Meakel nominated Anthony Davis.\nLakers — Meakel nominated Kevin Durant.'
+		);
+		expect(channel.posts[0]?.body).not.toContain('Jayson Tatum');
 	});
 });
 
@@ -913,6 +1091,314 @@ describe('drainOutbox — a failure is recorded first and reported second', () =
 		const summary = await drainOutbox(harness.gateway, {
 			channels: { [DISCORD_CHANNEL]: channel.port }
 		});
+		expect(summary.delivered).toBe(1);
+	});
+});
+
+
+// --- Story 5.2: the broadcast intent and the composed post -----------------
+
+describe('enqueueBroadcasts — one channel-addressed intent per broadcast event', () => {
+	it('files exactly one intent, keyed on the sentinel and not on a Manager (AC1)', async () => {
+		// The matrix's "A Bid is placed" row. One row, whatever the Team's
+		// Manager count — a broadcast is addressed to the channel.
+		const harness = fakeGateway({
+			managers: [
+				{ teamId: TEAM, discordUserId: ALICE, id: MANAGER, displayName: 'Meakel' },
+				{ teamId: TEAM, discordUserId: BOB, id: 'm-2', displayName: 'Dana' }
+			]
+		});
+
+		await write(harness.gateway, [bidPlaced()], 'accepted', enqueueBroadcasts);
+
+		expect(harness.outbox).toEqual([
+			{
+				eventSeq: '1',
+				channel: DISCORD_CHANNEL,
+				recipient: BROADCAST_RECIPIENT,
+				createdAt: expect.any(String)
+			}
+		]);
+		// And it never asked `managers` anything: the broadcast set is a
+		// property of the event TYPE, not of who is affected.
+		expect(harness.statements.filter((sql) => /where team_id = \$1/i.test(sql))).toEqual([]);
+	});
+
+	it('files one for a phase event carrying a NULL team_id', async () => {
+		// The matrix's "The phase ends" row, and the reason `enqueueIntents`
+		// could not have been reused: it skips a null `teamId` outright.
+		const harness = fakeGateway();
+
+		await write(
+			harness.gateway,
+			[
+				{
+					type: 'ContractAssignmentOpened',
+					payload: {
+						expiredAt: CLOSES_AT,
+						evaluatedAt: CLOSES_AT,
+						terminatedPlayerIds: ['p-9', 'p-8']
+					},
+					managerId: null,
+					teamId: null
+				}
+			],
+			'accepted',
+			enqueueBroadcasts
+		);
+
+		expect(harness.outbox).toHaveLength(1);
+		expect(harness.outbox[0]?.recipient).toBe(BROADCAST_RECIPIENT);
+	});
+
+	it('files nothing for a write outside the broadcast set (AC1, second half)', async () => {
+		// The matrix's "An eligibility or import write commits" row. Those
+		// writes register no `enqueue` at all, so the mechanism cannot fire —
+		// and even if one did, the type is not in the broadcast set.
+		const harness = fakeGateway();
+		const eligibility: EventEnvelope = {
+			type: 'MinorLeagueEligibilityChanged',
+			payload: {},
+			managerId: MANAGER,
+			teamId: TEAM
+		};
+
+		await write(harness.gateway, [eligibility], 'accepted', undefined);
+		await write(harness.gateway, [eligibility], 'accepted', enqueueBroadcasts);
+
+		expect(harness.outbox).toEqual([]);
+	});
+
+	it('leaves eligibility.ts and import-promotion.ts registering NO enqueue at all', async () => {
+		// The case above drives this suite's own `write()` helper, which proves
+		// the broadcast SET excludes those event types — but it says nothing
+		// about the two production call sites, and the spec's **Never** list is
+		// about the call sites: "eligibility.ts:272 and import-promotion.ts:273
+		// must stay unwired". Wiring either one would enqueue an intent for
+		// Commissioner bookkeeping and post it to the league channel, and no
+		// other test in this repository would go red.
+		//
+		// Asserted against the source text because there is nothing else to
+		// assert against: an enqueue that is never registered leaves no runtime
+		// trace to observe. `tests/structure.test.ts` reads source the same way
+		// for the same reason. Two independent checks, because wiring one needs
+		// BOTH the symbol and the property — either alone catches it.
+		for (const name of ['eligibility', 'import-promotion']) {
+			const source = readFileSync(
+				fileURLToPath(new URL(`../../src/lib/server/${name}.ts`, import.meta.url)),
+				'utf8'
+			);
+			expect(source, `${name}.ts must register no enqueue`).not.toMatch(/\benqueue\s*:/);
+			expect(source, `${name}.ts must import no enqueue function`).not.toMatch(
+				/\benqueue(Broadcasts|Intents)\b/
+			);
+		}
+	});
+});
+
+describe('drainOutbox — the broadcast post', () => {
+	/** A league with one named Team, one named Manager and one named Player. */
+	function league(): Parameters<typeof fakeGateway>[0] {
+		return {
+			managers: [{ teamId: TEAM, discordUserId: ALICE, id: MANAGER, displayName: 'Meakel' }],
+			teams: [{ id: TEAM, name: 'Lakers' }],
+			players: [{ fantraxPlayerId: PLAYER, playerName: 'Anthony Davis' }]
+		};
+	}
+
+	it('mentions NOBODY: the sentinel never reaches recipients (AC2)', async () => {
+		// `recipients` becomes both the `<@id>` prefix and
+		// `allowed_mentions.users`, so a sentinel in it would render a literal
+		// `<@#channel>` and hand Discord a non-snowflake. 5.2 mentions nobody.
+		const harness = fakeGateway(league());
+		await write(harness.gateway, [bidPlaced()], 'accepted', enqueueBroadcasts);
+		const channel = fakeChannel();
+
+		await drainOutbox(harness.gateway, { channels: { [DISCORD_CHANNEL]: channel.port } });
+
+		expect(channel.posts[0]?.recipients).toEqual([]);
+		expect(channel.posts[0]?.body).not.toContain(BROADCAST_RECIPIENT);
+		// The POST's own recipients, never a literal `[]` — handing `payloadFor`
+		// an empty list would feed it the answer this case exists to prove.
+		expect(
+			payloadFor({
+				body: channel.posts[0]?.body ?? '',
+				recipients: channel.posts[0]?.recipients ?? ['a sentinel that must not survive']
+			})
+		).toEqual({
+			content: `Lakers — Meakel bid $14.5M on Anthony Davis. Closes ${CLOSES_AT_MARKUP}.`,
+			allowed_mentions: { parse: [], users: [] }
+		});
+	});
+
+	it('batches a draw and the close it caused into ONE post', async () => {
+		// The matrix's "A Minimum-Bid Contention closes" row: one transaction
+		// appends `ContentionDrawn` then `AuctionClosed`, so both intents are
+		// due together and both lines go out in one message, cause first.
+		const harness = fakeGateway({
+			managers: [
+				{ teamId: TEAM, discordUserId: ALICE, id: MANAGER, displayName: 'Meakel' },
+				{ teamId: OTHER_TEAM, discordUserId: BOB, id: 'm-2', displayName: 'Ari' }
+			],
+			teams: [
+				{ id: TEAM, name: 'Lakers' },
+				{ id: OTHER_TEAM, name: 'Bulls' }
+			],
+			players: [{ fantraxPlayerId: PLAYER, playerName: 'Anthony Davis' }]
+		});
+
+		await write(
+			harness.gateway,
+			[
+				{
+					type: 'ContentionDrawn',
+					payload: {
+						fantraxPlayerId: PLAYER,
+						seed: '9f3c8a1d',
+						seedHash: 'h',
+						contenders: [TEAM, OTHER_TEAM],
+						selectedIndex: 0,
+						winningTeamId: TEAM,
+						winningTeamName: 'Lakers',
+						winningManagerId: MANAGER,
+						drawnAt: CLOSES_AT
+					},
+					managerId: MANAGER,
+					teamId: TEAM
+				},
+				{
+					type: 'AuctionClosed',
+					payload: {
+						fantraxPlayerId: PLAYER,
+						playerName: 'Anthony Davis',
+						teamId: TEAM,
+						teamName: 'Lakers',
+						managerId: MANAGER,
+						winningAmount: 14_500_000,
+						capHit: 14_500_000,
+						contractYears: null,
+						closedAt: CLOSES_AT
+					},
+					managerId: MANAGER,
+					teamId: TEAM
+				}
+			],
+			'accepted',
+			enqueueBroadcasts
+		);
+		const channel = fakeChannel();
+
+		const summary = await drainOutbox(harness.gateway, {
+			channels: { [DISCORD_CHANNEL]: channel.port }
+		});
+
+		expect(channel.posts).toHaveLength(1);
+		expect(channel.posts[0]?.body).toBe(
+			'Anthony Davis drawn to Lakers — Meakel. Seed: 9f3c8a1d. ' +
+				'Contenders, in order: Lakers — Meakel, Bulls — Ari.\n' +
+				'Anthony Davis to Lakers — Meakel for $14.5M.'
+		);
+		expect(summary).toMatchObject({ attempted: 2, delivered: 2 });
+	});
+
+	it('names a phase end with no Team at all', async () => {
+		const harness = fakeGateway(league());
+		await write(
+			harness.gateway,
+			[
+				{
+					type: 'ContractAssignmentOpened',
+					payload: {
+						expiredAt: CLOSES_AT,
+						evaluatedAt: CLOSES_AT,
+						terminatedPlayerIds: ['p-9']
+					},
+					managerId: null,
+					teamId: null
+				}
+			],
+			'accepted',
+			enqueueBroadcasts
+		);
+		const channel = fakeChannel();
+
+		await drainOutbox(harness.gateway, { channels: { [DISCORD_CHANNEL]: channel.port } });
+
+		expect(channel.posts[0]?.body).toBe(
+			'The Auction Phase has ended and Contract Assignment is open. ' +
+				'1 nominated Player ended with no Bid.'
+		);
+		expect(channel.posts[0]?.recipients).toEqual([]);
+	});
+
+	it('leaves a notice the ceiling excluded PENDING, and posts it on the next pass', async () => {
+		// The second half of the matrix's "A batch would exceed the message
+		// ceiling" row, and the reason the ceiling drops whole notices instead
+		// of truncating the joined body: an excluded intent is given no
+		// outcome, so the next pass re-derives it as pending. Asserting this at
+		// the composer alone would prove the split and not the recovery.
+		const harness = fakeGateway(league());
+		await write(harness.gateway, [bidPlaced()], 'accepted', enqueueBroadcasts);
+		await write(harness.gateway, [nominationPlaced()], 'accepted', enqueueBroadcasts);
+		const channel = fakeChannel();
+
+		// A ceiling that fits the first notice and not both.
+		const first = await drainOutbox(harness.gateway, {
+			channels: { [DISCORD_CHANNEL]: channel.port },
+			ceiling: 80
+		});
+		// BOTH counters, because they are four independent statements now
+		// counting `message.posted.length`: asserting only `delivered` would let
+		// a revert of the `attempted` line ship silently, and `attempted` is the
+		// number the tick puts in its JSON response for an operator to read.
+		expect(first.attempted).toBe(1);
+		expect(first.delivered).toBe(1);
+		expect(channel.posts).toHaveLength(1);
+
+		// Nothing recorded an outcome for the excluded one, so it is still owed.
+		const second = await drainOutbox(harness.gateway, {
+			channels: { [DISCORD_CHANNEL]: channel.port }
+		});
+		expect(second.delivered).toBe(1);
+		expect(channel.posts).toHaveLength(2);
+
+		// And the two passes together said everything exactly once.
+		expect(channel.posts[0]?.body).not.toEqual(channel.posts[1]?.body);
+
+		// A third pass owes nothing at all.
+		expect((await drainOutbox(harness.gateway, {
+			channels: { [DISCORD_CHANNEL]: channel.port }
+		})).attempted).toBe(0);
+	});
+
+	it('settles every posted intent, so a retry after a delivered post sends nothing', async () => {
+		// The matrix's "Retry after a delivered post" row, against real copy.
+		const harness = fakeGateway(league());
+		await write(harness.gateway, [bidPlaced()], 'accepted', enqueueBroadcasts);
+		const channel = fakeChannel();
+		const ports = { channels: { [DISCORD_CHANNEL]: channel.port } };
+
+		expect((await drainOutbox(harness.gateway, ports)).delivered).toBe(1);
+		expect((await drainOutbox(harness.gateway, ports)).attempted).toBe(0);
+		expect(channel.posts).toHaveLength(1);
+	});
+
+	it('degrades an unrecognised payload to a plain factual line, and never throws', async () => {
+		// The matrix's "A payload is unrecognised or malformed" row.
+		const harness = fakeGateway(league());
+		await write(
+			harness.gateway,
+			[{ type: 'BidPlaced', payload: { amount: 'not a number' }, managerId: null, teamId: null }],
+			'accepted',
+			enqueueBroadcasts
+		);
+		const channel = fakeChannel();
+
+		const summary = await drainOutbox(harness.gateway, {
+			channels: { [DISCORD_CHANNEL]: channel.port }
+		});
+
+		expect(channel.posts[0]?.body).toBe('A BidPlaced was recorded (event #1).');
 		expect(summary.delivered).toBe(1);
 	});
 });

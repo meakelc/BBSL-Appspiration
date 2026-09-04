@@ -599,7 +599,8 @@
   evidence: `src/lib/server/outbox.ts`'s `genericBodyFor` performs no truncation and has no length ceiling; the batch it renders is capped only by `PER_PASS_BUDGET`. Surfaced by the step-04 Blind Hunter layer on 2026-09-03. Unreachable at today's generic one-line-per-event body and a budget of five, which is why it is recorded rather than fixed.
   deferred_reason: The limit binds on message COPY, and this story is forbidden by its own **Never** list from composing any. Whatever 5.2 writes determines how many events fit, so a truncation rule written now would be guessing at a body that does not exist yet.
   owner: Story 5.2 — it owns the post's content and is the first point at which a realistic character budget can be computed.
-  status: open
+  resolved: 2026-09-03 by Story 5.2. `genericBodyFor` is gone; `broadcastBodyFor` (`src/lib/adapters/discord/broadcast.ts`) replaces it and takes the ceiling as a parameter defaulting to `DISCORD_MESSAGE_CEILING = 2000`, Discord's own documented limit on `content`. It joins WHOLE notices, one per line, until the next would not fit, and reports how many it included. `composeBatch` in `src/lib/server/outbox.ts` records an outcome for only the intents behind the included notices, so an excluded notice has no `NotificationDispatched`, re-derives as pending, and goes out on the next pass — never dropped, never split mid-notice (AD-17). The one case that truncates is a SINGLE notice already over the ceiling (a draw with thirty contenders): it cannot be split and dropping it would stall the outbox forever, so it is cut to fit with one U+2026 and marked delivered. Both halves are proven in `tests/adapters/discord-broadcast.test.ts` ("posts whole notices up to the ceiling and leaves the remainder out", "truncates the ONE notice that alone exceeds the ceiling", and a real 30-contender draw asserted under the limit) and end to end in `tests/server/outbox.test.ts`.
+  status: closed
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-5-1-the-transactional-outbox-and-its-dispatcher.md`
   summary: **A Team with no Manager rows produces no intent and no record that a notification was owed.** `enqueueIntents` inserts one row per Manager of the event's Team; a Team with none silently yields zero, and nothing anywhere observes that the notice went nowhere.
@@ -613,4 +614,18 @@
   evidence: `readDueIntents` and `postBatch` in `src/lib/server/outbox.ts` run outside any lock; only `appendOutcomes` goes through `runTransactionalWrite`, which takes `GLOBAL_WRITE_LOCK_KEY`. The tick is scheduled every 10 seconds with `timeout_milliseconds := 8000` (`supabase/migrations/20260831000000_tick.sql:230`), so overlap requires a pass to exceed its own timeout. Surfaced by the step-04 Blind Hunter layer on 2026-09-03.
   deferred_reason: The exposure is the same at-least-once floor the spec's Design Notes already state for a non-idempotent HTTP sink, and the mitigation — holding the global write lock across an outbound HTTP call — would be strictly worse, blocking every bid and nomination for the duration of a Discord round trip.
   owner: Story 8.1 (replay against a synthetic clock) or 8.2, where burst and overlap behaviour first becomes observable; AD-10's single schedule is what keeps it theoretical today.
+  status: open
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-2-broadcast-auction-events-to-the-league-channel.md`
+  summary: **A drain pass reports no count of what the message ceiling excluded.** `DrainSummary` now counts only intents actually posted, so ceiling-driven backlog is invisible in the tick's own response — an operator sees a healthy pass whether nothing was excluded or four notices were.
+  evidence: `drainOutbox` in `src/lib/server/outbox.ts` counts `message.posted.length`; the excluded count exists only as `due.length - attempted` and is returned nowhere. `supabase/functions/tick/index.ts` serialises `DrainSummary` as the tick's response body. Surfaced by the step-04 Blind Hunter layer on 2026-09-03.
+  deferred_reason: Unreachable at today's figures — a full 30-Team draw renders at roughly 670 characters against a 2000 ceiling, so nothing is excluded in practice. Adding a counter now would ship an operator signal with no way to observe it firing, and the right shape depends on what a backlog detector actually consumes.
+  owner: Story 8.2 (detect that the tick has stopped), which owns the growing-outbox-backlog alert AD-19 requires; the ceiling exclusion is one more input to that same detector.
+  status: open
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-5-2-broadcast-auction-events-to-the-league-channel.md`
+  summary: **The batch packer stops at the first notice that does not fit, rather than skipping it.** Given a small notice, an oversized one, and a second small one, the pass posts only the first — the third is held even though it would have fit.
+  evidence: `broadcastBodyFor` in `src/lib/adapters/discord/broadcast.ts` breaks out of its loop on the first notice exceeding the remaining room instead of continuing past it. Surfaced by the step-04 Blind Hunter layer on 2026-09-03.
+  deferred_reason: Not a defect against AD-17, which requires that a notice is never dropped, not that it is delivered in the earliest possible pass — the held notice goes out next tick, ten seconds later. Skip-ahead packing would also reorder the channel against log order, which the drain deliberately preserves, so the fix is a real trade rather than a cleanup.
+  owner: Story 8.1 or 8.2, where burst behaviour against the 30 req/min ceiling is first observed and the delivery-shape decision is revisited.
   status: open

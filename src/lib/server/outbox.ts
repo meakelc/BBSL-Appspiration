@@ -54,12 +54,29 @@
  * supabase/functions/tick/deno.json supabase/functions/tick/index.ts` is what
  * proves it, and `--config` is load-bearing.
  *
- * Not this story: no message composition, no event-type-to-copy mapping and no
- * mention text beyond the generic sentence below (5.2, 5.3); no mute or
- * settings logic (5.4); no Commissioner-visible failure screen (deferred,
- * 2026-09-03 — see `deferred-work.md`); no backlog detector (8.2).
+ * **Story 5.2 wired the first enqueue and replaced the placeholder body.**
+ * `enqueueBroadcasts` writes one channel-addressed intent per broadcast-worthy
+ * event, and the drain composes through `adapters/discord/broadcast.ts` —
+ * which is why this module now imports an adapter at all. The import is
+ * one-directional and pure (`noticeFor`, `broadcastBodyFor`, the type list):
+ * `NotificationChannelPort` below is still declared here rather than imported,
+ * so the TRANSPORT stays anonymous and a second channel is still a second
+ * entry in `channels`. What this file gained is a notion of what a notice
+ * says, not a notion of how one is sent.
+ *
+ * Not this story: no mention text and no `@` of any Manager — `enqueueIntents`
+ * stays exported and unwired for Story 5.3; no mute or settings logic (5.4);
+ * no Commissioner-visible failure screen (deferred, 2026-09-03 — see
+ * `deferred-work.md`); no backlog detector (8.2).
  */
 
+import {
+	EMPTY_LEAGUE_DIRECTORY,
+	broadcastBodyFor,
+	isBroadcastEventType,
+	noticeFor
+} from '../adapters/discord/broadcast.ts';
+import type { BroadcastEvent, LeagueDirectory } from '../adapters/discord/broadcast.ts';
 import type { AppendedEvent } from '../core/types.ts';
 import { requireDatabaseClock, runTransactionalWrite } from '../shell/write.ts';
 import type {
@@ -81,6 +98,25 @@ export const NOTIFICATION_OUTBOX_TABLE = 'notification_outbox';
  * AD-17 anticipates is a new value here plus a new port, not a migration.
  */
 export const DISCORD_CHANNEL = 'discord';
+
+/**
+ * The `recipient` of a BROADCAST intent: the league channel itself, not a
+ * person (Story 5.2).
+ *
+ * **A sentinel rather than a nullable column.** `recipient` is `not null`,
+ * carries a non-blank check, and sits in the unique key
+ * (`20260903000000_notification_outbox.sql`) — so a broadcast needs no
+ * migration, the idempotency key stays declarative, and Story 5.3's
+ * per-Manager rows for the SAME event coexist with this one instead of
+ * colliding with it.
+ *
+ * `#channel` specifically, because it can never collide with a Discord
+ * snowflake: those are 64-bit integers serialised as digits, and this is
+ * neither. It is NEVER a mention — `composeBatch` filters it out of
+ * `recipients` before the payload is built, or `allowed_mentions.users` would
+ * carry a non-snowflake and the message would render a literal `<@#channel>`.
+ */
+export const BROADCAST_RECIPIENT = '#channel';
 
 /**
  * The dispatcher's own event type. Not declared in `core/types.ts` and not
@@ -162,6 +198,31 @@ export type OutboxIntent = {
 	readonly recipient: string;
 	/** The `event_type` of the event this notice is about. */
 	readonly eventType: string;
+	/**
+	 * That event's `payload`, verbatim and unnarrowed (Story 5.2).
+	 *
+	 * `unknown` for `AppendedEvent.payload`'s reason: the log is insert-only, a
+	 * historical row cannot be corrected in place, and the composer narrows it
+	 * itself rather than trusting a cast made by the code that read the row.
+	 * Without this the drain could not say what an event MEANT — which is why
+	 * 5.1 could only ship a placeholder body.
+	 */
+	readonly payload: unknown;
+	/** The acting Manager's id, or `null` for a system event. */
+	readonly managerId: string | null;
+	/** The event's own `occurred_at`, ISO-8601. Never read as "now". */
+	readonly occurredAt: string;
+	/**
+	 * The Player's name, left-joined off the payload's `fantraxPlayerId`.
+	 *
+	 * `BidPlacedPayload` carries no `playerName` and adding one would mean
+	 * editing `core/rules/bidding.ts` — which this story's boundaries put
+	 * behind an ask. The reference join resolves it instead:
+	 * `free_agent_players.player_name` is stable for the whole Auction, since a
+	 * close writes neither that table nor `teams`. `null` for an event that
+	 * names no Player at all, which is every phase event.
+	 */
+	readonly playerName: string | null;
 };
 
 /** Every Manager of one Team, in a total order. */
@@ -245,6 +306,45 @@ export const enqueueIntents: EnqueueFn = async (
 				event.occurredAt
 			]);
 		}
+	}
+};
+
+/**
+ * Story 5.2's enqueue: ONE intent per broadcast-worthy event, addressed to the
+ * league channel.
+ *
+ * **Not `enqueueIntents`, and deliberately not built on it.** That one is
+ * Manager-shaped — it fans out per Manager of the event's Team and skips a null
+ * `team_id` entirely. A broadcast is neither: it is one row keyed on the event
+ * TYPE, addressed to `BROADCAST_RECIPIENT`, and `ContractAssignmentOpened`
+ * carries a null `team_id` precisely because nobody acted. Reusing the
+ * Manager-shaped enqueue would drop the phase events and duplicate the rest.
+ *
+ * **Membership of `BROADCAST_EVENT_TYPES` is the whole rule**, and it lives in
+ * `adapters/discord/broadcast.ts` beside the copy — because deciding which
+ * events deserve a notice and deciding what each one says is one decision, and
+ * splitting it across two modules is how a type gets an intent and no sentence.
+ *
+ * `created_at` is the event's own `occurredAt`: the transaction's single clock
+ * read (AD-3), never a second `now()`.
+ *
+ * Nothing here composes anything. Composition happens in the drain, in another
+ * process, at another time — a throw in here would roll back the auction
+ * transaction, and "a Discord outage costs a notification and never a bid" has
+ * to hold for a copy bug too.
+ */
+export const enqueueBroadcasts: EnqueueFn = async (
+	client: TransactionalClient,
+	appended: readonly AppendedEvent[]
+): Promise<void> => {
+	for (const event of appended) {
+		if (!isBroadcastEventType(event.type)) continue;
+		await client.query(INSERT_INTENT_SQL, [
+			event.seq,
+			DISCORD_CHANNEL,
+			BROADCAST_RECIPIENT,
+			event.occurredAt
+		]);
 	}
 };
 
@@ -405,11 +505,26 @@ export type OutboxPorts = {
 	readonly channels: Readonly<Record<string, NotificationChannelPort>>;
 	/** Override `PER_PASS_BUDGET`. Tests use it; the tick does not. */
 	readonly budget?: number;
+	/**
+	 * Override `DISCORD_MESSAGE_CEILING`. Tests use it; the tick does not.
+	 *
+	 * It exists for the same reason `budget` does: the real ceiling is 2000
+	 * characters, and reaching it honestly takes three 30-contender draws in
+	 * one pass. That setup would make the test about its own fixtures rather
+	 * than about the property — that an excluded intent gets no outcome and is
+	 * re-offered next pass.
+	 */
+	readonly ceiling?: number;
 };
 
 /** What one drain pass did. Returned for tests and for the tick's log line. */
 export type DrainSummary = {
-	/** Intents this pass attempted — never more than the budget. */
+	/**
+	 * Intents this pass actually POSTED — never more than the budget, and
+	 * fewer when the message ceiling excluded a notice (Story 5.2). An excluded
+	 * intent is never counted here and never given an outcome, so it is
+	 * re-derived as pending on the next pass.
+	 */
 	readonly attempted: number;
 	readonly delivered: number;
 	readonly rateLimited: number;
@@ -424,7 +539,8 @@ export type DrainSummary = {
 const CLOCK_SQL = 'select now() as now';
 
 /**
- * Every intent, joined to the type of the event it describes.
+ * Every intent, joined to the EVENT it describes — type, payload, actor,
+ * instant — and to the Player its payload names.
  *
  * The whole table, unpaginated, for the reason `server/event-log.ts`'s
  * `loadEventsViaClient` reads the whole log: this is a 30-team private league,
@@ -433,11 +549,31 @@ const CLOCK_SQL = 'select now() as now';
  * cursor is the thing "re-derives, never remembers" exists to avoid.
  */
 const PENDING_INTENTS_SQL = `
-	select o.event_seq, o.channel, o.recipient, e.event_type
+	select o.event_seq, o.channel, o.recipient,
+	       e.event_type, e.payload, e.manager_id, e.occurred_at,
+	       p.player_name
 	from ${NOTIFICATION_OUTBOX_TABLE} o
 	join auction_events e on e.seq = o.event_seq
+	left join free_agent_players p
+	       on p.fantrax_player_id = e.payload ->> 'fantraxPlayerId'
 	order by o.event_seq asc, o.channel asc, o.recipient asc
 `;
+
+/**
+ * Every Team's name, and every Manager's display name and Team.
+ *
+ * Two statements rather than one join, because they answer two questions and a
+ * join would repeat every Team name once per Manager. Read inside the same
+ * transaction as the intents (see `readDueIntents`), so one pass composes
+ * against ONE snapshot of the registry and a rename landing mid-pass cannot
+ * put two spellings of a Team in one message.
+ *
+ * `managers.display_name`, never `managers.discord_user_id`: the snowflake is
+ * an address, not a name, and rendering it would put a bare integer where
+ * `Lakers — Meakel` belongs.
+ */
+const TEAM_NAMES_SQL = 'select id, name from teams';
+const MANAGER_NAMES_SQL = 'select id, display_name, team_id from managers order by id asc';
 
 /**
  * Every recorded dispatch attempt. Filtered by `event_type` in SQL rather than
@@ -477,7 +613,7 @@ export async function drainOutbox(
 	gateway: ConnectionGateway,
 	ports: OutboxPorts
 ): Promise<DrainSummary> {
-	const due = await readDueIntents(gateway, ports.budget);
+	const { due, directory } = await readDueIntents(gateway, ports.budget);
 	if (due.length === 0) {
 		return { attempted: 0, delivered: 0, rateLimited: 0, failed: 0, failures: [] };
 	}
@@ -496,16 +632,23 @@ export async function drainOutbox(
 	let rateLimited = 0;
 	let failed = 0;
 
+	let attempted = 0;
 	for (const [channel, batch] of [...batches.entries()].sort(([a], [b]) => (a < b ? -1 : 1))) {
-		const result = await postBatch(ports.channels[channel], channel, batch);
-		for (const intent of batch) outcomes.push({ intent, result });
+		// Composed BEFORE the post, so the message ceiling decides which intents
+		// this pass is even attempting. The ones it excluded are never posted
+		// and never given an outcome, which leaves them pending for the next
+		// pass — see `broadcastBodyFor`.
+		const message = composeBatch(batch, directory, ports.ceiling);
+		const result = await postBatch(ports.channels[channel], channel, message);
+		for (const intent of message.posted) outcomes.push({ intent, result });
+		attempted += message.posted.length;
 
 		if (result.kind === 'delivered') {
-			delivered += batch.length;
+			delivered += message.posted.length;
 		} else if (result.kind === 'rate_limited') {
-			rateLimited += batch.length;
+			rateLimited += message.posted.length;
 		} else {
-			failed += batch.length;
+			failed += message.posted.length;
 			failures.push(`${channel}: ${result.detail}`);
 		}
 	}
@@ -517,12 +660,12 @@ export async function drainOutbox(
 
 	if (failures.length > 0) {
 		throw new Error(
-			`the outbox drain could not deliver ${failed} of ${due.length} pending notice(s); ` +
+			`the outbox drain could not deliver ${failed} of ${attempted} attempted notice(s); ` +
 				`every attempt is recorded and will be retried: ${failures.join('; ')}`
 		);
 	}
 
-	return { attempted: due.length, delivered, rateLimited, failed, failures };
+	return { attempted, delivered, rateLimited, failed, failures };
 }
 
 /** One intent and the result of the batch it travelled in. */
@@ -537,13 +680,23 @@ const ROLLBACK_SQL = 'rollback';
  * The clock, the intents and the attempts, off ONE connection and inside ONE
  * transaction — then the pure derivation.
  *
- * **The transaction is what makes the three reads agree.** Three autocommit
- * statements get three snapshots, and a close committing between the second and
- * the third would let this pass see an intent whose delivery it cannot see, or
- * a clock from before an intent it can. Wrapped, all three read the same
- * instant of the database, which is what `server/close.ts`'s "fold everything
- * out of ONE read" discipline means when the reads are separate statements
- * rather than one.
+ * **The transaction is what makes the reads agree.** Separate autocommit
+ * statements get separate snapshots, and a close committing between two of them
+ * would let this pass see an intent whose delivery it cannot see, or a clock
+ * from before an intent it can. Wrapped, every one of them reads the same
+ * instant of the database — the registry reads included, so composition cannot
+ * see a Team renamed halfway through its own pass. That is what
+ * `server/close.ts`'s "fold everything out of ONE read" discipline means when
+ * the reads are separate statements rather than one.
+ *
+ * **The registry is read only when something is actually due**, and the
+ * conditional is a real cost rather than a micro-optimisation: the tick fires
+ * every ten seconds forever, and the overwhelmingly common outcome is that
+ * nothing is pending. Two unconditional full-table reads would make an idle
+ * league pay for a directory no notice will ever be composed against — 8,640
+ * pairs of reads a day to answer "nothing to do". The derivation is pure, so
+ * asking it first costs nothing, and it happens INSIDE the transaction so the
+ * snapshot property above still holds for the reads that do run.
  *
  * **No lock, deliberately** — `server/sweep.ts`'s reasoning, unchanged. This
  * read only decides which intents to OFFER; the outcome writes take
@@ -554,7 +707,7 @@ const ROLLBACK_SQL = 'rollback';
 async function readDueIntents(
 	gateway: ConnectionGateway,
 	budget: number | undefined
-): Promise<readonly OutboxIntent[]> {
+): Promise<{ readonly due: readonly OutboxIntent[]; readonly directory: LeagueDirectory }> {
 	const client = await gateway.connect();
 	try {
 		await client.query(BEGIN_SQL);
@@ -567,8 +720,20 @@ async function readDueIntents(
 				await client.query(DISPATCH_ATTEMPTS_SQL, [NOTIFICATION_DISPATCHED_EVENT])
 			).rows.map(toDispatchAttempt);
 
+			// Derived before the registry is read, so an idle pass asks for no
+			// names at all. Pure, and still inside the transaction.
+			const due = duePendingIntents({ intents, attempts, now, budget });
+
+			const directory =
+				due.length === 0
+					? EMPTY_LEAGUE_DIRECTORY
+					: toLeagueDirectory(
+							(await client.query(TEAM_NAMES_SQL)).rows,
+							(await client.query(MANAGER_NAMES_SQL)).rows
+						);
+
 			await client.query(COMMIT_SQL);
-			return duePendingIntents({ intents, attempts, now, budget });
+			return { due, directory };
 		} catch (error) {
 			// Defensively wrapped, `shell/write.ts`'s pattern: the original read
 			// failure is what the caller needs to see, never a second error from
@@ -597,8 +762,51 @@ function toOutboxIntent(row: QueryResultRow): OutboxIntent {
 		eventSeq: String(row['event_seq']),
 		channel: String(row['channel']),
 		recipient: String(row['recipient']),
-		eventType: String(row['event_type'])
+		eventType: String(row['event_type']),
+		payload: row['payload'],
+		managerId: row['manager_id'] === null || row['manager_id'] === undefined
+			? null
+			: String(row['manager_id']),
+		// `timestamptz` arrives as a `Date` through `pg` and may arrive as text
+		// through another driver — `toDispatchAttempt`'s idiom, restated.
+		occurredAt:
+			row['occurred_at'] instanceof Date
+				? row['occurred_at'].toISOString()
+				: String(row['occurred_at'] ?? ''),
+		playerName:
+			typeof row['player_name'] === 'string' && row['player_name'].trim() !== ''
+				? row['player_name']
+				: null
 	};
+}
+
+/** The two registry reads, folded into what the composer takes. */
+function toLeagueDirectory(
+	teamRows: readonly QueryResultRow[],
+	managerRows: readonly QueryResultRow[]
+): LeagueDirectory {
+	const teamNames = new Map<string, string>();
+	for (const row of teamRows) {
+		teamNames.set(String(row['id']), String(row['name']));
+	}
+
+	const managerNames = new Map<string, string>();
+	const managersOfTeam = new Map<string, string[]>();
+	for (const row of managerRows) {
+		const managerId = String(row['id']);
+		managerNames.set(managerId, String(row['display_name']));
+		// A Manager with no Team yet is a real, supported state (a nullable
+		// `managers.team_id`), not an error — they simply appear in no Team's
+		// list.
+		const teamId = row['team_id'];
+		if (teamId === null || teamId === undefined) continue;
+		const key = String(teamId);
+		const bucket = managersOfTeam.get(key);
+		if (bucket === undefined) managersOfTeam.set(key, [managerId]);
+		else bucket.push(managerId);
+	}
+
+	return { teamNames, managerNames, managersOfTeam };
 }
 
 /** One `NotificationDispatched` row, read back as an attempt. */
@@ -652,16 +860,13 @@ function readPayload(value: unknown): Record<string, unknown> {
 async function postBatch(
 	port: NotificationChannelPort | undefined,
 	channel: string,
-	batch: readonly OutboxIntent[]
+	message: ComposedBatch
 ): Promise<ChannelPostResult> {
 	if (port === undefined) {
 		return { kind: 'failed', detail: `no port is registered for the "${channel}" channel` };
 	}
 	try {
-		return await port.post({
-			body: genericBodyFor(batch),
-			recipients: [...new Set(batch.map((intent) => intent.recipient))]
-		});
+		return await port.post({ body: message.body, recipients: message.recipients });
 	} catch (error) {
 		return {
 			kind: 'failed',
@@ -670,27 +875,86 @@ async function postBatch(
 	}
 }
 
+/** One channel's batch, composed: what to send, to whom, and for which intents. */
+type ComposedBatch = {
+	readonly body: string;
+	readonly recipients: readonly string[];
+	/**
+	 * The intents this message actually carries — never more than `batch`, and
+	 * fewer when the ceiling excluded a notice. Only these get an outcome.
+	 */
+	readonly posted: readonly OutboxIntent[];
+};
+
 /**
- * The GENERIC payload this story ships, and deliberately nothing more.
+ * Turn one channel's due intents into one message (Story 5.2).
  *
- * It names the event types and their `seq`s and says nothing about what any of
- * them MEANS — there is no event-type-to-copy mapping here, no amount, no
- * Player name and no Team. Story 5.2 and 5.3 own what a notice says; this
- * sentence exists so the mechanism can be exercised end to end before they land,
- * and it is the first thing those stories replace.
+ * **Grouped by event, not by intent.** A single event can owe several intents
+ * — the broadcast row this story writes, and 5.3's per-Manager rows for the
+ * same event — and the message should state what happened ONCE. So the batch is
+ * folded into groups keyed on `event_seq`, in the order the reader produced,
+ * and each group composes to exactly one notice.
  *
- * De-duplicated by `seq`: a co-managed Team contributes two intents for one
- * event, and the message should name that event once.
+ * **The ceiling decides membership, and membership decides outcomes.** Whole
+ * notices go in until the next one would not fit; the intents behind the
+ * excluded ones are simply not returned, so they get no outcome event and are
+ * re-derived as pending next pass. Never dropped, never split mid-notice
+ * (AD-17).
+ *
+ * **`BROADCAST_RECIPIENT` is filtered out of `recipients` here**, which is the
+ * one place it could otherwise leak: `recipients` becomes both the `<@id>`
+ * prefix and `allowed_mentions.users` in `adapters/discord/webhook.ts`, and a
+ * sentinel in either would render a literal `<@#channel>` and hand Discord a
+ * non-snowflake. Story 5.2 mentions nobody, so today this leaves the list
+ * empty for a pure-broadcast batch.
  */
-export function genericBodyFor(batch: readonly OutboxIntent[]): string {
-	const seen = new Set<string>();
-	const notices: string[] = [];
+function composeBatch(
+	batch: readonly OutboxIntent[],
+	directory: LeagueDirectory,
+	ceiling?: number
+): ComposedBatch {
+	const groups: Array<{ readonly intents: OutboxIntent[] }> = [];
+	const bySeq = new Map<string, { readonly intents: OutboxIntent[] }>();
 	for (const intent of batch) {
-		if (seen.has(intent.eventSeq)) continue;
-		seen.add(intent.eventSeq);
-		notices.push(`${intent.eventType} (event #${intent.eventSeq})`);
+		const existing = bySeq.get(intent.eventSeq);
+		if (existing === undefined) {
+			const group = { intents: [intent] };
+			bySeq.set(intent.eventSeq, group);
+			groups.push(group);
+		} else {
+			existing.intents.push(intent);
+		}
 	}
-	return `BBSL auction update — ${notices.join(', ')}.`;
+
+	const notices = groups.map((group) => {
+		// Every intent in a group describes the SAME event, so any of them
+		// carries the same joined columns. The first is as good as any.
+		const [first] = group.intents;
+		return first === undefined ? '' : noticeFor(broadcastEventOf(first), directory);
+	});
+
+	const { body, included } = broadcastBodyFor(notices, ceiling);
+	const posted = groups.slice(0, included).flatMap((group) => group.intents);
+
+	return {
+		body,
+		recipients: [...new Set(posted.map((intent) => intent.recipient))].filter(
+			(recipient) => recipient !== BROADCAST_RECIPIENT
+		),
+		posted
+	};
+}
+
+/** One intent's joined event columns, as the pure composer takes them. */
+function broadcastEventOf(intent: OutboxIntent): BroadcastEvent {
+	return {
+		seq: intent.eventSeq,
+		eventType: intent.eventType,
+		payload: intent.payload,
+		managerId: intent.managerId,
+		occurredAt: intent.occurredAt,
+		playerName: intent.playerName
+	};
 }
 
 /**
