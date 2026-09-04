@@ -92,6 +92,7 @@ import type {
 	WriteOutcome
 } from '../shell/write.ts';
 import { loadEventsViaClient } from './event-log.ts';
+import { enqueueBroadcasts } from './outbox.ts';
 import { constraintOf, isUniqueViolation } from './pg-errors.ts';
 
 const FREE_AGENT_PLAYERS_TABLE = 'free_agent_players';
@@ -584,6 +585,14 @@ export async function placeNomination(
 	try {
 		return await runTransactionalWrite<NominationState>({
 			gateway,
+			// Story 5.2 broadcasts this write: a `NominationPlaced` puts a Player
+			// on the Board, which is the whole league's business and the cue to
+			// bid. `enqueueBroadcasts` files one channel-addressed intent per
+			// event in the broadcast set. `eligibility.ts` and
+			// `import-promotion.ts` pass no `enqueue` at all: Commissioner
+			// bookkeeping is not league news, and a notice for it would be channel
+			// noise nothing can mute.
+			enqueue: enqueueBroadcasts,
 			load: (client) => loadNominationState(client, fantraxPlayerId),
 			// The claim row, written inside the appending transaction (Story
 			// 2.2). Nothing reads it; it exists so a second writer collides.

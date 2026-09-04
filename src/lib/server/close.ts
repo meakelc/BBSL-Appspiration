@@ -82,6 +82,7 @@ import type { ConnectionGateway, TransactionalClient, WriteOutcome } from '../sh
 import { readContentionSeed } from './contention-seed.ts';
 import { loadEventsViaClient } from './event-log.ts';
 import { releaseNomination } from './nomination.ts';
+import { enqueueBroadcasts } from './outbox.ts';
 import { loadTeamRoster } from './team-roster.ts';
 
 /**
@@ -187,6 +188,15 @@ export async function closeAuction(
 ): Promise<WriteOutcome> {
 	return await runTransactionalWrite<CloseState>({
 		gateway,
+		// Story 5.2 broadcasts this write: it appends the `ContentionDrawn` reveal
+		// and the `AuctionClosed` that awards the Player — the two events the
+		// league most needs stated out loud, and the pair that batches into one
+		// post because they commit together.
+		// `enqueueBroadcasts` files one channel-addressed intent per event in the
+		// broadcast set. `eligibility.ts` and `import-promotion.ts` pass no
+		// `enqueue` at all: Commissioner bookkeeping is not league news, and a
+		// notice for it would be channel noise nothing can mute.
+		enqueue: enqueueBroadcasts,
 		load: (client) => loadCloseState(client, fantraxPlayerId),
 		// The one-line registration Story 2.3 wrote `releaseNomination` for.
 		// It goes through the `projections` hook because that is the one seam

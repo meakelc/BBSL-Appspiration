@@ -60,6 +60,7 @@ import { runTransactionalWrite } from '../shell/write.ts';
 import type { ConnectionGateway, TransactionalClient } from '../shell/write.ts';
 import { loadEventsViaClient } from './event-log.ts';
 import { releaseNomination } from './nomination.ts';
+import { enqueueBroadcasts } from './outbox.ts';
 
 /**
  * What one evaluation did, as the tick has to report it.
@@ -158,6 +159,15 @@ export async function loadPhaseEndState(client: TransactionalClient): Promise<Ph
 export async function evaluateLeagueClock(gateway: ConnectionGateway): Promise<PhaseEndOutcome> {
 	const outcome = await runTransactionalWrite<PhaseEndState>({
 		gateway,
+		// Story 5.2 broadcasts this write: `ContractAssignmentOpened` ends the
+		// phase for everyone. Note it carries a NULL `team_id` — a broadcast is
+		// not keyed on a Team, which is exactly why `enqueueIntents` (which skips
+		// a null Team) could not have been reused here.
+		// `enqueueBroadcasts` files one channel-addressed intent per event in the
+		// broadcast set. `eligibility.ts` and `import-promotion.ts` pass no
+		// `enqueue` at all: Commissioner bookkeeping is not league news, and a
+		// notice for it would be channel noise nothing can mute.
+		enqueue: enqueueBroadcasts,
 		load: (client) => loadPhaseEndState(client),
 		projections: [releaseNomination],
 		decide: ({ state, now }) => {

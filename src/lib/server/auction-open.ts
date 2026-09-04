@@ -45,6 +45,7 @@ import type { EventEnvelope } from '../core/types.ts';
 import { runTransactionalWrite } from '../shell/write.ts';
 import type { ConnectionGateway, TransactionalClient, WriteOutcome } from '../shell/write.ts';
 import { loadEventsViaClient } from './event-log.ts';
+import { enqueueBroadcasts } from './outbox.ts';
 
 /** Who acted, resolved server-side from application tables (AD-4). */
 export type AuctionOpenActor = {
@@ -182,6 +183,13 @@ export async function openAuction(
 ): Promise<WriteOutcome> {
 	return runTransactionalWrite<AuctionOpenState>({
 		gateway,
+		// Story 5.2 broadcasts this write: `AuctionOpened` is the moment the
+		// league may start nominating, so nobody should have to poll for it.
+		// `enqueueBroadcasts` files one channel-addressed intent per event in the
+		// broadcast set. `eligibility.ts` and `import-promotion.ts` pass no
+		// `enqueue` at all: Commissioner bookkeeping is not league news, and a
+		// notice for it would be channel noise nothing can mute.
+		enqueue: enqueueBroadcasts,
 		load: (client) => loadAuctionOpenState(client),
 		decide: ({ state }) => {
 			const refusal = refuseAuctionOpen(state);
