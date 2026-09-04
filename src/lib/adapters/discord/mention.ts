@@ -35,12 +35,34 @@
  * urgency framing, no "ending soon", no suggested action. A mention states what
  * happened to the reader and stops.
  *
+ * **SUPPRESSION IS COMPOSITION'S** (Story 5.4). A Manager who has muted the one
+ * mutable category (`core/notification-categories.ts`'s `slot_release`) has
+ * their snowflake withheld HERE, before the grouping loop — so a Team whose
+ * every addressee has muted emits no line at all, and a co-managed Team with
+ * one muted Manager emits one `<@id>` rather than two. It is withheld at
+ * composition and not at enqueue on purpose: the enqueue receives a flat list
+ * of Team ids with no role attached, so filtering there would mean editing
+ * every auction write site and putting a settings decision inside the
+ * transaction that closes an Auction. Here the category is already known —
+ * `categoryFor` derives leader-vs-nominator from the payload — and the mute
+ * costs one left join on a read that happens once per pass.
+ *
+ * **`allowed_mentions` follows from `addressees`, UNCHANGED.** `server/outbox.ts`
+ * filters the wire recipients through `mentionsPresentIn` against the body this
+ * module actually rendered, so a withheld snowflake drops out of
+ * `allowed_mentions.users` by construction rather than by a second filter
+ * somebody has to remember to apply. Nothing about the wire narrowing was
+ * touched for 5.4, and that is the point: suppression flows THROUGH it, never
+ * around it.
+ *
  * **Deno-loadable** (AD-2): relative `.ts` imports only, no `$lib`, no `$env`,
  * no Node builtin — `server/outbox.ts` reaches this and the tick reaches
  * `server/outbox.ts`.
  */
 
 import { auctionPathFor } from '../../core/auction-link.ts';
+import { MUTABLE_NOTIFICATION_CATEGORY } from '../../core/notification-categories.ts';
+import type { NotificationCategory } from '../../core/notification-categories.ts';
 import { formatTeamManagers } from '../../core/team-identity.ts';
 import type { BroadcastEvent, LeagueDirectory } from './broadcast.ts';
 // `mentionFor` is the one place `<@id>` is spelled (AR-2 puts Discord's message
@@ -128,31 +150,105 @@ function auctionLink(event: BroadcastEvent, origin: string | null): string | nul
 	return `${origin}${auctionPathFor(fantraxPlayerId)}`;
 }
 
+/** One clause per category, so the two never drift apart. */
+const CLAUSE_FOR_CATEGORY: Readonly<Record<NotificationCategory, string>> = {
+	outbid: OUTBID_CLAUSE,
+	led_at_close: LED_AT_CLOSE_CLAUSE,
+	slot_release: SLOT_RELEASED_CLAUSE,
+	contender: CONTENDER_CLAUSE,
+	contract_assignment: CONTRACT_ASSIGNMENT_CLAUSE
+};
+
+/**
+ * Which category one addressed Team's mention on one event belongs to, or
+ * `null` when this event type carries no mention copy.
+ *
+ * **The whole reason 5.4 needs no write-site change.** `AuctionClosed` is the
+ * only one that branches, and it branches on a fact the PAYLOAD already
+ * carries: the winner is named on it, so the Team that led the Auction at its
+ * close is the one whose id matches, and any other addressed Team is there
+ * because its Nomination Slot was released by that same close. Nothing is
+ * re-derived about who was affected — the write site decided that
+ * (`server/close.ts`); this only chooses which of two categories fits, which is
+ * also what decides whether a mute applies.
+ */
+function categoryFor(event: BroadcastEvent, teamId: string | null): NotificationCategory | null {
+	const payload = fields(event.payload);
+	switch (event.eventType) {
+		case 'BidPlaced':
+			return 'outbid';
+		case 'AuctionClosed':
+			return teamId !== null && teamId === text(payload, 'teamId')
+				? 'led_at_close'
+				: 'slot_release';
+		case 'ContentionDrawn':
+			return 'contender';
+		case 'ContractAssignmentOpened':
+			return 'contract_assignment';
+		default:
+			return null;
+	}
+}
+
 /**
  * The clause for one addressed Team on one event, or `null` when this event
  * type carries no mention copy.
  *
- * `AuctionClosed` is the only one that branches, and it branches on a fact the
- * PAYLOAD already carries: the winner is named on it, so the Team that led the
- * Auction at its close is the one whose id matches, and any other addressed
- * Team is there because its Nomination Slot was released by that same close.
- * Nothing is re-derived about who was affected — the write site decided that
- * (`server/close.ts`); this only chooses which of two sentences fits.
+ * `ContractAssignmentOpened` never reaches here in practice — `composed`
+ * returns its flat line before the grouping loop, because that trigger
+ * addresses the whole league and names no Team — but the mapping is total so
+ * that adding a category cannot leave a clause unassigned.
  */
 function clauseFor(event: BroadcastEvent, teamId: string | null): string | null {
-	const payload = fields(event.payload);
-	switch (event.eventType) {
-		case 'BidPlaced':
-			return OUTBID_CLAUSE;
-		case 'AuctionClosed':
-			return teamId !== null && teamId === text(payload, 'teamId')
-				? LED_AT_CLOSE_CLAUSE
-				: SLOT_RELEASED_CLAUSE;
-		case 'ContentionDrawn':
-			return CONTENDER_CLAUSE;
-		default:
-			return null;
+	const category = categoryFor(event, teamId);
+	return category === null ? null : CLAUSE_FOR_CATEGORY[category];
+}
+
+/**
+ * Whether this snowflake's Manager has muted the category THIS event would
+ * mention them under.
+ *
+ * Per CATEGORY and never per Manager: the same Manager who has muted
+ * `slot_release` is mentioned as normal when they are outbid, because the mute
+ * is a fact about one notice and not about the person. A snowflake the
+ * directory cannot resolve to a Manager is never muted — absence reads as not
+ * muted here for the same reason it does in the SQL.
+ */
+function isMuted(
+	event: BroadcastEvent,
+	discordUserId: string,
+	directory: LeagueDirectory
+): boolean {
+	// Total, and it answers "not muted" on a directory it cannot read — the
+	// module's stated priority, unchanged: "a mention that renders no `<@id>`
+	// is a silence and this module's whole job is not to produce one". A mute
+	// that could be turned into a silence by an unreadable registry snapshot
+	// would be a worse failure than a ping somebody had asked to stop.
+	try {
+		const managerId = directory.managerIdsByDiscordUserId.get(discordUserId);
+		if (managerId === undefined) return false;
+		if (!directory.mutedSlotReleaseManagerIds.has(managerId)) return false;
+		const teamId = directory.teamOfManager.get(managerId) ?? null;
+		return categoryFor(event, teamId) === MUTABLE_NOTIFICATION_CATEGORY;
+	} catch {
+		return false;
 	}
+}
+
+/**
+ * `discordUserIds` without anybody who muted this event's category for them.
+ *
+ * One definition, reached from both of this module's exits — the composition
+ * and the fallback line it degrades to. A mute that survived only the happy
+ * path would ping a Manager who asked not to be pinged at exactly the moment
+ * something unexpected happened, which is not a degradation anybody chose.
+ */
+function withoutMuted(
+	event: BroadcastEvent,
+	discordUserIds: readonly string[],
+	directory: LeagueDirectory
+): readonly string[] {
+	return discordUserIds.filter((discordUserId) => !isMuted(event, discordUserId, directory));
 }
 
 /** The Team one snowflake acts for, through the directory, or `null`. */
@@ -212,7 +308,11 @@ export function mentionSuffixFor(
 	// that may be what threw.
 	let discordUserIds: readonly string[] = [];
 	try {
-		discordUserIds = addressees(recipients);
+		// Normalised and then narrowed by the mutes, in ONE guard: what the
+		// fallback below may name is exactly what the composition may name, so
+		// a Manager who muted this category cannot be pinged by the
+		// degradation path either.
+		discordUserIds = withoutMuted(event, addressees(recipients), directory);
 	} catch {
 		// The recipient list itself is unreadable, so there is nobody this
 		// module can honestly name. `''` posts the notice alone, which is the
@@ -250,10 +350,27 @@ function composed(
 ): string {
 	if (discordUserIds.length === 0) return '';
 
+	// **Suppression, before the grouping loop and before every early return.**
+	// Filtering here rather than inside the loop is what makes a Team whose
+	// every addressee has muted emit NO line: the group never exists, so there
+	// is no empty subject to render around. `''` is then the honest answer for
+	// an event on which every recipient has muted — the broadcast notice posts
+	// alone, exactly as it does for an event that affected nobody.
+	//
+	// **Normally a no-op, and deliberately kept anyway.** The only caller,
+	// `mentionSuffixFor`, has already run `withoutMuted` in its own guard so
+	// that the fallback line honours the mute too — so on every real call this
+	// list arrives filtered and this pass removes nothing. It is the SAME
+	// filter and not a second one: `withoutMuted` is total and idempotent, and
+	// keeping the call here is what makes the suppression a property of
+	// composition rather than of one caller remembering to do it first.
+	const addressed = withoutMuted(event, discordUserIds, directory);
+	if (addressed.length === 0) return '';
+
 	// The phase trigger addresses the whole league, so it is flat by design —
 	// see `CONTRACT_ASSIGNMENT_CLAUSE`. No link: the phase is not an Auction.
 	if (event.eventType === 'ContractAssignmentOpened') {
-		return flatLine(discordUserIds, CONTRACT_ASSIGNMENT_CLAUSE, null);
+		return flatLine(addressed, CONTRACT_ASSIGNMENT_CLAUSE, null);
 	}
 
 	const link = auctionLink(event, origin);
@@ -262,7 +379,7 @@ function composed(
 	// re-sorted: the recipients arrive in the outbox's own total order.
 	const order: Array<string | null> = [];
 	const byTeam = new Map<string | null, string[]>();
-	for (const discordUserId of discordUserIds) {
+	for (const discordUserId of addressed) {
 		const teamId = teamOf(discordUserId, directory);
 		const bucket = byTeam.get(teamId);
 		if (bucket === undefined) {
