@@ -112,13 +112,40 @@ export type LeagueDirectory = {
 	 * one Manager to name — `formatTeamManagers` renders the pair.
 	 */
 	readonly managersOfTeam: ReadonlyMap<string, readonly string[]>;
+	/**
+	 * `managers.discord_user_id` -> `managers.id` (Story 5.3).
+	 *
+	 * The mention composer is handed SNOWFLAKES — the outbox addresses an
+	 * intent by the thing Discord can ping, not by the league's own surrogate
+	 * key — and it has to be able to say whose Team a snowflake acts for. This
+	 * is the only edge that goes that way; nothing here ever renders a
+	 * snowflake as a NAME, which is what `managerNames` is for.
+	 *
+	 * Nothing in this module reads it: the broadcast copy is addressed to the
+	 * channel and mentions nobody. It lives on the directory rather than beside
+	 * `mention.ts` because the directory is read once per pass, off one
+	 * snapshot, and a second read would let one message carry two spellings of
+	 * the league.
+	 */
+	readonly managerIdsByDiscordUserId: ReadonlyMap<string, string>;
+	/**
+	 * `managers.id` -> `managers.team_id`. Absent for a Manager with no Team,
+	 * which is a supported state (a nullable FK) rather than an error.
+	 *
+	 * The inverse of `managersOfTeam`, and both are needed: composition walks
+	 * team-to-Managers to NAME a Team, and Manager-to-Team to GROUP the
+	 * addressees of one event by the Team the notice is about.
+	 */
+	readonly teamOfManager: ReadonlyMap<string, string>;
 };
 
 /** An empty directory. Every notice it cannot name degrades rather than throws. */
 export const EMPTY_LEAGUE_DIRECTORY: LeagueDirectory = {
 	teamNames: new Map(),
 	managerNames: new Map(),
-	managersOfTeam: new Map()
+	managersOfTeam: new Map(),
+	managerIdsByDiscordUserId: new Map(),
+	teamOfManager: new Map()
 };
 
 // --- Rendering primitives -------------------------------------------------

@@ -5,10 +5,12 @@
  * **Two halves that never touch each other's failure modes**, which is the
  * whole of AD-17:
  *
- *  - `enqueueIntents` runs INSIDE the auction transaction, through the same
- *    `client` the events were appended with (`shell/write.ts`'s `EnqueueFn`).
- *    It writes rows and nothing else — no socket, no `fetch`, no retry. It can
- *    fail a write, and only by failing to record an obligation.
+ *  - The enqueues — `enqueueBroadcasts`, and `enqueueMentions` /
+ *    `enqueueBroadcastsAndMentions` — run INSIDE the auction transaction,
+ *    through the same `client` the events were appended with
+ *    (`shell/write.ts`'s `EnqueueFn`). They write rows and nothing else — no
+ *    socket, no `fetch`, no retry. They can fail a write, and only by failing
+ *    to record an obligation.
  *  - `drainOutbox` runs in the tick, after the sweep, in its own connection and
  *    its own transactions. It is the only thing here that talks to Discord, and
  *    a Discord outage costs a notification and never a bid — the closes it runs
@@ -34,10 +36,11 @@
  * **No feedback loop, and it is structural rather than conditional.** The
  * outcome events are appended through `runTransactionalWrite` with NO `enqueue`
  * argument, so a `NotificationDispatched` cannot spawn an intent for itself.
- * Belt as well as braces, it is also a system-originated event with a null
- * actor pair (`20260901000000_system_actor.sql`), and `enqueueIntents` skips
- * every event whose `team_id` is null — so even a future caller that wired
- * `enqueue` in here would still produce nothing.
+ * Belt as well as braces, it is also a system-originated event whose type is
+ * in neither trigger set: `NotificationDispatched` is not in
+ * `BROADCAST_EVENT_TYPES`, so `enqueueBroadcasts` skips it, and no write site
+ * names an affected Team for it, so `enqueueMentions` files nothing either. A
+ * future caller that wired `enqueue` in here would still produce nothing.
  *
  * **The backoff and the budget live HERE, not in `core/`.** They are policy
  * about an external service's rate limit, not a rule of the auction — nothing
@@ -64,10 +67,23 @@
  * entry in `channels`. What this file gained is a notion of what a notice
  * says, not a notion of how one is sent.
  *
- * Not this story: no mention text and no `@` of any Manager — `enqueueIntents`
- * stays exported and unwired for Story 5.3; no mute or settings logic (5.4);
- * no Commissioner-visible failure screen (deferred, 2026-09-03 — see
- * `deferred-work.md`); no backlog detector (8.2).
+ * **Story 5.3 wired the mentions, and the targeting moved to the write site.**
+ * 5.1's `enqueueIntents` keyed recipients on the event's own `team_id` — the
+ * ACTING Team — which is the wrong Team for every mention trigger there is, and
+ * it was left unwired rather than wired wrongly. `enqueueMentions` takes an
+ * `AffectedTeamsFn` from the caller instead: `server/bidding.ts` supplies the
+ * displaced leader, `server/close.ts` the leader, the Contenders and the
+ * nominating Team, `server/phase-end.ts` the whole league. The drain re-derives
+ * nothing about who was affected. Composition of the mention line itself lives
+ * in `adapters/discord/mention.ts`, beside the broadcast copy it rides on, for
+ * `enqueueBroadcasts`' reason: deciding who hears about an event and deciding
+ * what they are told is one decision.
+ *
+ * Not this story: no mute, no settings surface and no per-category suppression
+ * (5.4); no 24-hour unbid-Nomination warning, which was removed from scope by
+ * user decision on 2026-09-04 rather than deferred; no Commissioner-visible
+ * failure screen (deferred, 2026-09-03 — see `deferred-work.md`); no backlog
+ * detector (8.2).
  */
 
 import {
@@ -77,6 +93,7 @@ import {
 	noticeFor
 } from '../adapters/discord/broadcast.ts';
 import type { BroadcastEvent, LeagueDirectory } from '../adapters/discord/broadcast.ts';
+import { mentionSuffixFor, mentionsPresentIn } from '../adapters/discord/mention.ts';
 import type { AppendedEvent } from '../core/types.ts';
 import { requireDatabaseClock, runTransactionalWrite } from '../shell/write.ts';
 import type {
@@ -158,6 +175,15 @@ export const DELIVERY_FAILED = 'failed';
  * channel exists) and the number would have to be revisited before a second
  * transport is registered, not after.
  *
+ * **Story 5.3 made it a floor as well as a cap, for exactly one case.** The
+ * budget now slices on EVENT boundaries so an event's broadcast row and its
+ * mention rows are never split across two passes, and one event can owe more
+ * than five intents on its own — `ContractAssignmentOpened` mentions every
+ * Manager in the league. That single group is taken whole, over budget,
+ * because taking whole groups ONLY would take nothing forever and stall the
+ * outbox on the one notice the whole league is waiting for. See
+ * `withinBudget`.
+ *
  * Flagged for revisit at the Epic 8 rehearsal, which is when burst behaviour
  * first becomes observable (ARCHITECTURE-SPINE.md's own "Discord delivery
  * shape" open question).
@@ -234,6 +260,21 @@ const MANAGERS_OF_TEAM_SQL = `
 `;
 
 /**
+ * Every Manager who acts for ANY Team, in a total order — the `EVERY_TEAM`
+ * resolution.
+ *
+ * `team_id is not null` rather than the whole table: a Manager with no Team is
+ * a supported state (a nullable FK) and is not a party to a league-wide
+ * auction notice. `ContractAssignmentOpened` is the one trigger that uses it.
+ */
+const MANAGERS_OF_EVERY_TEAM_SQL = `
+	select discord_user_id
+	from managers
+	where team_id is not null
+	order by discord_user_id asc
+`;
+
+/**
  * One intent. `on conflict do nothing` names AD-17's idempotency key at the
  * write site as well as in the schema.
  *
@@ -253,61 +294,124 @@ const INSERT_INTENT_SQL = `
 `;
 
 /**
- * AD-17's intent insert, as `shell/write.ts`'s `EnqueueFn`: one row per
- * appended event carrying a non-null `team_id`, per Manager of that Team.
+ * Which Teams one appended event AFFECTS — supplied by the write site, which
+ * is the only code that knows (Story 5.3).
  *
- * **`team_id` is the whole of the targeting rule, and its null case is not a
- * defensive branch.** Since Story 3.7 the actor pair may be null together, and
- * that means the SYSTEM acted — the tick read a clock and the log says the
- * phase ended. Nobody's Team is affected by a system event in the sense a
- * mention needs, so a null `team_id` yields no intent. `ContractAssignmentOpened`
- * is the live example; the dispatcher's own `NotificationDispatched` is the
- * second, which is why the no-feedback-loop property holds even here.
+ * **Not the event's own `team_id`, and that is the whole change from 5.1.**
+ * The envelope's `team_id` is the ACTING Team, and every mention trigger names
+ * somebody else: the outbid Manager is not the bidder, the Manager whose Slot
+ * released is not the winner, and `ContractAssignmentOpened` carries no Team at
+ * all. 5.1's `enqueueIntents` keyed on the acting Team and was left unwired
+ * rather than wired wrongly; this is the replacement it named.
+ *
+ * The write site answers from the state it already folded before `decide()` —
+ * the displaced leader, the Contender list, the nominating Team — so the drain
+ * re-derives nothing about who was affected. An empty array is the honest
+ * answer for an event with nobody to notify, and it is the common one.
+ */
+export type AffectedTeamsFn = (event: AppendedEvent) => readonly string[];
+
+/**
+ * The whole league, as an entry in an `AffectedTeamsFn`'s answer.
+ *
+ * `ContractAssignmentOpened` affects every Team at once, and enumerating them
+ * at the write site would mean reading `teams` inside `evaluateLeagueClock`'s
+ * `load` — on EVERY tick, ten seconds apart, forever, to answer a question
+ * almost every pass has no events for. Resolved in the enqueue instead, which
+ * runs only when something was actually appended.
+ *
+ * `*` specifically, for `BROADCAST_RECIPIENT`'s reason: `teams.id` is a uuid,
+ * and this is not one, so it can never collide with a real Team.
+ */
+export const EVERY_TEAM = '*';
+
+/**
+ * Story 5.3's enqueue: one intent per Manager of every Team the event
+ * AFFECTS, addressed to that Manager's Discord snowflake.
+ *
+ * A factory rather than an `EnqueueFn`, because the affected Teams are a fact
+ * about the write and not about the event — see `AffectedTeamsFn`.
  *
  * **A co-managed Team yields TWO rows for ONE event, and that is the point of
  * the key.** FR-27 requires both Managers of a co-managed Team receive every
  * team-affecting notice (SM-3 targets 100%), and AD-17 keys on
  * `(event seq, channel, recipient)` precisely so the second Manager is not
- * deduplicated away by a key that stopped at the event.
+ * deduplicated away by a key that stopped at the event. The composer renders
+ * them as two distinct `<@id>` on one line; it does not collapse them either.
+ *
+ * **A Team with no Manager rows yields nothing, and nothing observes it.**
+ * After 5.2 the broadcast post already names the Team and states what happened,
+ * so the record exists and only the ping is absent — which is precisely what
+ * 5.4 will make a Manager able to choose. An unmanaged Team is a supported
+ * state and unreachable during a live auction.
  *
  * `created_at` is copied from the event's own `occurredAt` — the transaction's
  * single clock read (AD-3), never a second `now()`.
  *
- * **Registered by no domain write yet.** Story 5.1 builds the mechanism; the
- * story that decides WHICH events are worth a notice, and what one says, is the
- * story that passes this as `enqueue` (5.2/5.3). Wiring it here would post a
- * generic sentence for every appended event in the league.
+ * Nothing here composes anything, and nothing here throws for a copy reason: a
+ * throw would roll back the auction transaction, and "a Discord outage costs a
+ * notification and never a bid" has to hold for the outbox's own bookkeeping.
  */
-export const enqueueIntents: EnqueueFn = async (
-	client: TransactionalClient,
-	appended: readonly AppendedEvent[]
-): Promise<void> => {
-	// One lookup per distinct Team rather than one per event: a transaction
-	// appending three events for one Team asks once.
-	const recipientsByTeam = new Map<string, readonly string[]>();
-	for (const event of appended) {
-		if (event.teamId === null || recipientsByTeam.has(event.teamId)) continue;
-		const result = await client.query(MANAGERS_OF_TEAM_SQL, [event.teamId]);
-		recipientsByTeam.set(
-			event.teamId,
-			result.rows
+export function enqueueMentions(affectedTeams: AffectedTeamsFn): EnqueueFn {
+	return async (client: TransactionalClient, appended: readonly AppendedEvent[]) => {
+		// One lookup per distinct Team rather than one per event: a transaction
+		// appending a draw and the close it caused asks about each Contender
+		// once.
+		const recipientsByTeam = new Map<string, readonly string[]>();
+		const resolve = async (teamId: string): Promise<readonly string[]> => {
+			const known = recipientsByTeam.get(teamId);
+			if (known !== undefined) return known;
+			const result = await client.query(
+				teamId === EVERY_TEAM ? MANAGERS_OF_EVERY_TEAM_SQL : MANAGERS_OF_TEAM_SQL,
+				teamId === EVERY_TEAM ? [] : [teamId]
+			);
+			const recipients = result.rows
 				.map((row) => String(row['discord_user_id'] ?? '').trim())
-				.filter((id) => id !== '')
-		);
-	}
+				.filter((id) => id !== '');
+			recipientsByTeam.set(teamId, recipients);
+			return recipients;
+		};
 
-	for (const event of appended) {
-		if (event.teamId === null) continue;
-		for (const recipient of recipientsByTeam.get(event.teamId) ?? []) {
-			await client.query(INSERT_INTENT_SQL, [
-				event.seq,
-				DISCORD_CHANNEL,
-				recipient,
-				event.occurredAt
-			]);
+		for (const event of appended) {
+			// De-duplicated per event, so a Team that is both the leader and the
+			// nominator of one close is one intent rather than a unique
+			// violation the `on conflict` would have to absorb.
+			const teams = [...new Set(affectedTeams(event))].filter((teamId) => teamId !== '');
+			const seen = new Set<string>();
+			for (const teamId of teams) {
+				for (const recipient of await resolve(teamId)) {
+					if (seen.has(recipient)) continue;
+					seen.add(recipient);
+					await client.query(INSERT_INTENT_SQL, [
+						event.seq,
+						DISCORD_CHANNEL,
+						recipient,
+						event.occurredAt
+					]);
+				}
+			}
 		}
-	}
-};
+	};
+}
+
+/**
+ * The two enqueues one write owes, in one `EnqueueFn` — the broadcast row and
+ * the mention rows, for the same appended events.
+ *
+ * `runTransactionalWrite` takes ONE `enqueue`, and the three write sites that
+ * trigger a mention also broadcast. Composed here rather than at each of them
+ * so the ORDER is stated once: the broadcast row first, so it sorts ahead of
+ * the mention rows under `(event_seq, channel, recipient)` when the sentinel
+ * `#channel` happens to sort before a snowflake — and so a reader of a write
+ * site sees one argument rather than two that must agree.
+ */
+export function enqueueBroadcastsAndMentions(affectedTeams: AffectedTeamsFn): EnqueueFn {
+	const mentions = enqueueMentions(affectedTeams);
+	return async (client: TransactionalClient, appended: readonly AppendedEvent[]) => {
+		await enqueueBroadcasts(client, appended);
+		await mentions(client, appended);
+	};
+}
 
 /**
  * Story 5.2's enqueue: ONE intent per broadcast-worthy event, addressed to the
@@ -465,7 +569,54 @@ export function duePendingIntents(input: {
 	// `Math.max(0, ...)`: `slice(0, -2)` returns everything BUT the last two,
 	// so a negative budget would silently dispatch almost the whole backlog
 	// rather than nothing at all.
-	return due.slice(0, Math.max(0, input.budget ?? PER_PASS_BUDGET));
+	return withinBudget(due, Math.max(0, input.budget ?? PER_PASS_BUDGET));
+}
+
+/**
+ * The budget, applied on EVENT boundaries: whole events only, never a group
+ * split across two passes (Story 5.3).
+ *
+ * **Why the boundary matters now.** Before 5.3 every event owed exactly one
+ * intent — the broadcast row — so the cut could only ever fall between events.
+ * A co-managed outbid owes three: the broadcast and two mentions. Cutting
+ * inside that group would post the FACT this pass and the mention next pass, as
+ * a second Discord message repeating the same line with a ping bolted on.
+ *
+ * Costs nothing: an excluded group has no recorded outcome, so the next pass
+ * re-derives it as pending, whole. That is the same "re-derives, never
+ * remembers" property the ceiling already relies on.
+ *
+ * **The first group is always taken, even when it alone exceeds the budget.**
+ * `ContractAssignmentOpened` mentions every Manager in the league — thirty-odd
+ * intents on one event against a budget of five — and a rule that took whole
+ * groups only would take nothing, forever, and stall the outbox on the one
+ * notice the whole league is waiting for. `broadcastBodyFor` makes the identical
+ * exception at the message ceiling for the identical reason: it is the only
+ * exit that terminates (AD-17 — a notice is never dropped).
+ */
+function withinBudget(
+	due: readonly OutboxIntent[],
+	budget: number
+): readonly OutboxIntent[] {
+	const taken: OutboxIntent[] = [];
+	let index = 0;
+	while (index < due.length) {
+		// `due` is sorted by `eventSeq` first, so one event's intents are
+		// contiguous and the group is found by scanning forward.
+		const seq = due[index]?.eventSeq;
+		let end = index;
+		while (end < due.length && due[end]?.eventSeq === seq) end += 1;
+		const size = end - index;
+		// The first group goes whether it fits or not; every later one must.
+		if (taken.length > 0 && taken.length + size > budget) break;
+		taken.push(...due.slice(index, end));
+		if (taken.length >= budget) break;
+		index = end;
+	}
+	// A budget of zero attempts nothing at all — the caller asked for a pass
+	// that posts nothing, and taking "the first group anyway" would make the
+	// override unable to express it.
+	return budget <= 0 ? [] : taken;
 }
 
 // --- The transport port ---------------------------------------------------
@@ -515,15 +666,33 @@ export type OutboxPorts = {
 	 * re-offered next pass.
 	 */
 	readonly ceiling?: number;
+	/**
+	 * The app's absolute origin — `https://bbsl.example` — for the deep link a
+	 * mention carries (Story 5.3). `core/auction-link.ts` answers a PATH and
+	 * explicitly no origin, because a host is deployment configuration the core
+	 * may not read.
+	 *
+	 * **A thunk, not a string, and the laziness is the point.** The tick reads
+	 * `APP_ORIGIN` from the environment, and the overwhelmingly common outcome
+	 * of a pass is that nothing is pending. This is called once, after the due
+	 * set is known to be non-empty — the same discipline
+	 * `supabase/functions/tick/index.ts` applies to the webhook URL, and for the
+	 * same reason: an idle pass must not evaluate a notification setting at all.
+	 *
+	 * Absent, or answering nothing, is not a failure: the mention posts without
+	 * a link rather than not at all.
+	 */
+	readonly origin?: () => string | null | undefined;
 };
 
 /** What one drain pass did. Returned for tests and for the tick's log line. */
 export type DrainSummary = {
 	/**
-	 * Intents this pass actually POSTED — never more than the budget, and
-	 * fewer when the message ceiling excluded a notice (Story 5.2). An excluded
-	 * intent is never counted here and never given an outcome, so it is
-	 * re-derived as pending on the next pass.
+	 * Intents this pass actually POSTED — fewer than the budget when the
+	 * message ceiling excluded a notice (Story 5.2), and MORE than it when a
+	 * single event owed more intents than the budget allows (Story 5.3 — see
+	 * `PER_PASS_BUDGET`). An excluded intent is never counted here and never
+	 * given an outcome, so it is re-derived as pending on the next pass.
 	 */
 	readonly attempted: number;
 	readonly delivered: number;
@@ -568,12 +737,17 @@ const PENDING_INTENTS_SQL = `
  * against ONE snapshot of the registry and a rename landing mid-pass cannot
  * put two spellings of a Team in one message.
  *
- * `managers.display_name`, never `managers.discord_user_id`: the snowflake is
- * an address, not a name, and rendering it would put a bare integer where
- * `Lakers — Meakel` belongs.
+ * `display_name` is the only thing ever RENDERED as a name: the snowflake is an
+ * address, and printing one would put a bare integer where `Lakers — Meakel`
+ * belongs. Story 5.3 selects `discord_user_id` beside it all the same, because
+ * an intent is ADDRESSED by the snowflake and the composer has to be able to
+ * ask whose Team one acts for. The two uses stay separate on `LeagueDirectory`
+ * (`managerNames` versus `managerIdsByDiscordUserId`) so neither can be reached
+ * for the other's job.
  */
 const TEAM_NAMES_SQL = 'select id, name from teams';
-const MANAGER_NAMES_SQL = 'select id, display_name, team_id from managers order by id asc';
+const MANAGER_NAMES_SQL =
+	'select id, display_name, team_id, discord_user_id from managers order by id asc';
 
 /**
  * Every recorded dispatch attempt. Filtered by `event_type` in SQL rather than
@@ -626,6 +800,10 @@ export async function drainOutbox(
 		else batch.push(intent);
 	}
 
+	// Read ONCE, and only now that a notice is known to be owed — see
+	// `OutboxPorts.origin`. An idle pass returned above without touching it.
+	const origin = readOrigin(ports.origin);
+
 	const outcomes: OutcomeFor[] = [];
 	const failures: string[] = [];
 	let delivered = 0;
@@ -638,7 +816,7 @@ export async function drainOutbox(
 		// this pass is even attempting. The ones it excluded are never posted
 		// and never given an outcome, which leaves them pending for the next
 		// pass — see `broadcastBodyFor`.
-		const message = composeBatch(batch, directory, ports.ceiling);
+		const message = composeBatch(batch, directory, origin, ports.ceiling);
 		const result = await postBatch(ports.channels[channel], channel, message);
 		for (const intent of message.posted) outcomes.push({ intent, result });
 		attempted += message.posted.length;
@@ -792,21 +970,30 @@ function toLeagueDirectory(
 
 	const managerNames = new Map<string, string>();
 	const managersOfTeam = new Map<string, string[]>();
+	const managerIdsByDiscordUserId = new Map<string, string>();
+	const teamOfManager = new Map<string, string>();
 	for (const row of managerRows) {
 		const managerId = String(row['id']);
 		managerNames.set(managerId, String(row['display_name']));
+		// `discord_user_id` is `not null` and non-blank by check constraint, so
+		// a blank here means a driver handed back something unexpected — and a
+		// blank key would make every unnameable snowflake resolve to one
+		// arbitrary Manager. Skipped rather than trusted.
+		const discordUserId = String(row['discord_user_id'] ?? '').trim();
+		if (discordUserId !== '') managerIdsByDiscordUserId.set(discordUserId, managerId);
 		// A Manager with no Team yet is a real, supported state (a nullable
 		// `managers.team_id`), not an error — they simply appear in no Team's
-		// list.
+		// list and in no reverse entry.
 		const teamId = row['team_id'];
 		if (teamId === null || teamId === undefined) continue;
 		const key = String(teamId);
+		teamOfManager.set(managerId, key);
 		const bucket = managersOfTeam.get(key);
 		if (bucket === undefined) managersOfTeam.set(key, [managerId]);
 		else bucket.push(managerId);
 	}
 
-	return { teamNames, managerNames, managersOfTeam };
+	return { teamNames, managerNames, managersOfTeam, managerIdsByDiscordUserId, teamOfManager };
 }
 
 /** One `NotificationDispatched` row, read back as an attempt. */
@@ -902,15 +1089,29 @@ type ComposedBatch = {
  * (AD-17).
  *
  * **`BROADCAST_RECIPIENT` is filtered out of `recipients` here**, which is the
- * one place it could otherwise leak: `recipients` becomes both the `<@id>`
- * prefix and `allowed_mentions.users` in `adapters/discord/webhook.ts`, and a
- * sentinel in either would render a literal `<@#channel>` and hand Discord a
- * non-snowflake. Story 5.2 mentions nobody, so today this leaves the list
- * empty for a pure-broadcast batch.
+ * one place it could otherwise leak: `recipients` becomes
+ * `allowed_mentions.users` in `adapters/discord/webhook.ts`, and a sentinel in
+ * it would hand Discord a non-snowflake. Every other recipient IS a snowflake,
+ * and the mention rows are exactly the ones that carry one.
+ *
+ * **The mention rides the notice for its own event** (Story 5.3).
+ * `mentionSuffixFor` is asked once per group, for that group's non-sentinel
+ * recipients, and its lines are appended UNDER the notice — so the fact and the
+ * addressing travel together through the ceiling as one unit. A batch covering
+ * five events therefore says which line is whose, which is what prepending at
+ * the head of the message could never do.
+ *
+ * **`recipients` is then narrowed to the snowflakes the BODY actually spells.**
+ * `allowed_mentions.users` must be exactly the set of `<@id>` in the message, or
+ * the payload claims to ping somebody it does not — and the one case where they
+ * could differ is a single notice over the ceiling, which `broadcastBodyFor`
+ * truncates rather than drops. Filtering through the composed body closes it by
+ * construction.
  */
 function composeBatch(
 	batch: readonly OutboxIntent[],
 	directory: LeagueDirectory,
+	origin: string | null,
 	ceiling?: number
 ): ComposedBatch {
 	const groups: Array<{ readonly intents: OutboxIntent[] }> = [];
@@ -930,7 +1131,16 @@ function composeBatch(
 		// Every intent in a group describes the SAME event, so any of them
 		// carries the same joined columns. The first is as good as any.
 		const [first] = group.intents;
-		return first === undefined ? '' : noticeFor(broadcastEventOf(first), directory);
+		if (first === undefined) return '';
+		const event = broadcastEventOf(first);
+		const notice = noticeFor(event, directory);
+		// The mention rows of THIS event, sentinel excluded — the broadcast row
+		// addresses the channel and is never a `<@id>`.
+		const addressed = group.intents
+			.map((intent) => intent.recipient)
+			.filter((recipient) => recipient !== BROADCAST_RECIPIENT);
+		const suffix = mentionSuffixFor(event, addressed, directory, origin);
+		return suffix === '' ? notice : `${notice}\n${suffix}`;
 	});
 
 	const { body, included } = broadcastBodyFor(notices, ceiling);
@@ -938,11 +1148,50 @@ function composeBatch(
 
 	return {
 		body,
-		recipients: [...new Set(posted.map((intent) => intent.recipient))].filter(
-			(recipient) => recipient !== BROADCAST_RECIPIENT
+		recipients: mentionsPresentIn(
+			body,
+			[...new Set(posted.map((intent) => intent.recipient))].filter(
+				(recipient) => recipient !== BROADCAST_RECIPIENT
+			)
 		),
 		posted
 	};
+}
+
+/**
+ * An `APP_ORIGIN` as the composer takes it: absolute, no trailing slash, or
+ * `null`.
+ *
+ * The trailing slash is stripped because `auctionPathFor` answers a path with a
+ * LEADING one, and `https://bbsl.example//auction/x` is a different URL that
+ * some hosts 404. Blank or absent is `null` — the mention posts without a link
+ * rather than with a broken one.
+ */
+/**
+ * The configured origin, or `null` — and a THROWING port is `null` too.
+ *
+ * The thunk reaches an environment this module cannot see, and a deployment
+ * could hand over one that raises rather than one that answers nothing. An
+ * unguarded call would fail the whole drain pass, posting neither the mentions
+ * nor the broadcasts — and the matrix is explicit that an origin problem costs
+ * the LINK and never the pass. The failure is logged rather than swallowed
+ * silently, because a misconfigured origin is worth an operator seeing once per
+ * pass that had something to send.
+ */
+function readOrigin(origin: (() => string | null | undefined) | undefined): string | null {
+	if (origin === undefined) return null;
+	try {
+		return normaliseOrigin(origin());
+	} catch (error) {
+		console.error('drainOutbox: reading the app origin failed; posting without a link', error);
+		return null;
+	}
+}
+
+function normaliseOrigin(value: string | null | undefined): string | null {
+	if (typeof value !== 'string') return null;
+	const trimmed = value.trim().replace(/\/+$/, '');
+	return trimmed === '' ? null : trimmed;
 }
 
 /** One intent's joined event columns, as the pure composer takes them. */

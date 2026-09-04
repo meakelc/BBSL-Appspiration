@@ -46,6 +46,15 @@ const ROSTER: QueryResultRow[] = [
 	{ cap_hit: '20000000', roster_slot_kind: 'minor_league' }
 ];
 
+/**
+ * The Teams `EVERY_TEAM` resolves to in this fake's league (Story 5.3).
+ *
+ * A constant rather than an option, because the one trigger that reaches it
+ * is `ContractAssignmentOpened` and what matters about it is that the enqueue
+ * asked the whole-league question at all.
+ */
+const EVERY_LEAGUE_TEAM: readonly string[] = ['t-one', 't-two'];
+
 function fakeGateway(
 	options: {
 		events?: QueryResultRow[];
@@ -68,6 +77,13 @@ function fakeGateway(
 	let released = 0;
 	let committed = false;
 	let rolledBack = false;
+
+	/**
+	 * The delivery intents this transaction filed (Story 5.3): the event they
+	 * describe and who they address. Recorded rather than merely tolerated, so
+	 * “this write mentioned exactly these Teams” is observable.
+	 */
+	const outboxIntents: Array<{ eventSeq: string; recipient: string }> = [];
 
 	const client: TransactionalClient & { release(): void } = {
 		async query(text: string, queryParams: readonly unknown[] = []) {
@@ -147,7 +163,24 @@ function fakeGateway(
 			// on in `tests/server/outbox.test.ts`, which owns the outbox; here
 			// it only has to be a statement the fake recognises rather than one
 			// it rejects.
+			// Story 5.3 registered a Manager-shaped enqueue beside the
+			// broadcast one, so the transaction now also asks which Managers
+			// act for each AFFECTED Team — the Team the write site named, never
+			// the event's own. One synthetic snowflake per Team, so a test can
+			// read the affected set straight off the intents it filed.
+			if (/^select discord_user_id\s+from managers\s+where team_id = \$1/i.test(sql)) {
+				return { rows: [{ discord_user_id: `discord-${String(queryParams[0])}` }] };
+			}
+			if (/^select discord_user_id\s+from managers\s+where team_id is not null/i.test(sql)) {
+				return {
+					rows: EVERY_LEAGUE_TEAM.map((teamId) => ({ discord_user_id: `discord-${teamId}` }))
+				};
+			}
 			if (/^insert into notification_outbox/i.test(sql)) {
+				outboxIntents.push({
+					eventSeq: String(queryParams[0]),
+					recipient: String(queryParams[2])
+				});
 				return { rows: [] };
 			}
 			throw new Error(`unexpected statement: ${sql}`);
@@ -160,6 +193,7 @@ function fakeGateway(
 	const gateway: ConnectionGateway = { connect: async () => client };
 
 	return {
+		outboxIntents,
 		gateway,
 		order,
 		params,
@@ -255,6 +289,73 @@ function acceptedPayload(harness: ReturnType<typeof fakeGateway>): AuctionClosed
  * inside the transaction succeeds for the real reason.
  */
 const SEALED_SEED = '4d81f0b6a72c395e4d81f0b6a72c395e4d81f0b6a72c395e4d81f0b6a72c395e';
+
+describe('closeAuction — the mention intents it owes (Story 5.3, AC1)', () => {
+	it('mentions the leader and the NOMINATING Team on the close', async () => {
+		// Two matrix rows on one event: “An Auction the Team led closes” and
+		// “The Nomination Slot is released”. `t-m` led and won; `t-n` nominated
+		// and gets its Slot back. `AuctionClosedPayload` names the winner and
+		// could never answer the second, which is why the nominations fold does.
+		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 8_500_000)] });
+
+		await closeAuction(harness.gateway, 'p-1');
+
+		expect(harness.outboxIntents).toEqual([
+			{ eventSeq: expect.any(String), recipient: '#channel' },
+			{ eventSeq: expect.any(String), recipient: 'discord-t-m' },
+			{ eventSeq: expect.any(String), recipient: 'discord-t-n' }
+		]);
+	});
+
+	it('files ONE intent when the winner IS the nominating Team', async () => {
+		// A Team that nominated a Player and then won them holds BOTH roles on the
+		// one `AuctionClosed`, so `affectedTeamsForClose` names it twice. One
+		// Manager must still get one ping: two intents on the same
+		// `(event_seq, channel, recipient)` are the same intent, and the outbox key
+		// would absorb the second with `on conflict do nothing` — but the enqueue
+		// should not be leaning on the constraint to be correct, and the composer
+		// would otherwise be handed the same snowflake twice.
+		const harness = fakeGateway({
+			// `nominated()` nominates for `t-n`; this Bid wins it for `t-n` too.
+			events: [nominated(), bidLogged(2, 8_500_000, 'p-1', 't-n', 'm-n')]
+		});
+
+		await closeAuction(harness.gateway, 'p-1');
+
+		expect(harness.outboxIntents.map((intent) => intent.recipient)).toEqual([
+			'#channel',
+			'discord-t-n'
+		]);
+	});
+
+	it('mentions every Contender on the DRAW, and the nominator on the close', async () => {
+		// The matrix's “A contention closes” row. The draw is the event that can
+		// tell a Contender how the lottery went; the close beside it addresses
+		// the nominator alone, because a lottery has no Leading Bidder — the one
+		// `auctionsReducer` reports is a fold artifact (`evaluateSelfBid`'s note).
+		const harness = fakeGateway({
+			events: [
+				nominated(),
+				bidLogged(2, MINIMUM_BID, 'p-1', 't-e', 'm-e', hash(SEALED_SEED)),
+				bidLogged(3, MINIMUM_BID, 'p-1', 't-f', 'm-f')
+			],
+			sealedSeed: SEALED_SEED
+		});
+
+		await closeAuction(harness.gateway, 'p-1');
+
+		const drawSeq = harness.outboxIntents[0]?.eventSeq;
+		const onDraw = harness.outboxIntents
+			.filter((intent) => intent.eventSeq === drawSeq)
+			.map((intent) => intent.recipient);
+		const onClose = harness.outboxIntents
+			.filter((intent) => intent.eventSeq !== drawSeq)
+			.map((intent) => intent.recipient);
+
+		expect(onDraw).toEqual(['#channel', 'discord-t-e', 'discord-t-f']);
+		expect(onClose).toEqual(['#channel', 'discord-t-n']);
+	});
+});
 
 describe('closeAuction — one event, one transaction (AC3)', () => {
 	it('appends exactly one AuctionClosed, acted by the WINNER', async () => {

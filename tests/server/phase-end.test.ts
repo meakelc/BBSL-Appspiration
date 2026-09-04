@@ -72,6 +72,15 @@ function endedWith(terminated: readonly string[], evaluatedAt = NOW.toISOString(
 	return { ended: true, terminated, expiredAt: EXPIRES_AT, evaluatedAt };
 }
 
+/**
+ * The Teams `EVERY_TEAM` resolves to in this fake's league (Story 5.3).
+ *
+ * A constant rather than an option, because the one trigger that reaches it
+ * is `ContractAssignmentOpened` and what matters about it is that the enqueue
+ * asked the whole-league question at all.
+ */
+const EVERY_LEAGUE_TEAM: readonly string[] = ['t-one', 't-two'];
+
 function fakeGateway(options: { events?: QueryResultRow[]; now?: Date } = {}) {
 	const order: string[] = [];
 	const appendedEvents: QueryResultRow[] = [];
@@ -80,6 +89,13 @@ function fakeGateway(options: { events?: QueryResultRow[]; now?: Date } = {}) {
 	let released = 0;
 	let committed = false;
 	let rolledBack = false;
+
+	/**
+	 * The delivery intents this transaction filed (Story 5.3): the event they
+	 * describe and who they address. Recorded rather than merely tolerated, so
+	 * “this write mentioned exactly these Teams” is observable.
+	 */
+	const outboxIntents: Array<{ eventSeq: string; recipient: string }> = [];
 
 	const client: TransactionalClient & { release(): void } = {
 		async query(text: string, queryParams: readonly unknown[] = []) {
@@ -141,7 +157,24 @@ function fakeGateway(options: { events?: QueryResultRow[]; now?: Date } = {}) {
 			// on in `tests/server/outbox.test.ts`, which owns the outbox; here
 			// it only has to be a statement the fake recognises rather than one
 			// it rejects.
+			// Story 5.3 registered a Manager-shaped enqueue beside the
+			// broadcast one, so the transaction now also asks which Managers
+			// act for each AFFECTED Team — the Team the write site named, never
+			// the event's own. One synthetic snowflake per Team, so a test can
+			// read the affected set straight off the intents it filed.
+			if (/^select discord_user_id\s+from managers\s+where team_id = \$1/i.test(sql)) {
+				return { rows: [{ discord_user_id: `discord-${String(queryParams[0])}` }] };
+			}
+			if (/^select discord_user_id\s+from managers\s+where team_id is not null/i.test(sql)) {
+				return {
+					rows: EVERY_LEAGUE_TEAM.map((teamId) => ({ discord_user_id: `discord-${teamId}` }))
+				};
+			}
 			if (/^insert into notification_outbox/i.test(sql)) {
+				outboxIntents.push({
+					eventSeq: String(queryParams[0]),
+					recipient: String(queryParams[2])
+				});
 				return { rows: [] };
 			}
 			throw new Error(`unexpected statement: ${sql}`);
@@ -152,6 +185,7 @@ function fakeGateway(options: { events?: QueryResultRow[]; now?: Date } = {}) {
 	};
 
 	return {
+		outboxIntents,
 		gateway: { connect: async () => client } satisfies ConnectionGateway,
 		client,
 		order,
@@ -393,6 +427,48 @@ describe('evaluateLeagueClock — the clock has run out', () => {
 		expect(await evaluateLeagueClock(harness.gateway)).toEqual(NOTHING_DUE);
 		expect(harness.appendedEvents).toHaveLength(2);
 		expect(harness.releasedClaims).toEqual([['p-a']]);
+	});
+});
+
+describe('evaluateLeagueClock — the mention intents it owes (Story 5.3, AC1)', () => {
+	it('mentions every Manager of every Team when Contract Assignment opens', async () => {
+		// The matrix's “The phase opens” row, and the `deferred-work.md` item
+		// from spec 3.7 this closes: the phase ends for the whole league at once
+		// and, until now, was stated only to a Manager who happened to open the
+		// app. `ContractAssignmentOpened` carries a NULL `team_id`, so the
+		// affected set could never have come off the event.
+		const harness = fakeGateway({
+			events: [opened(), nominated(2, 'p-a', 'Ausar Bright', 't-1', 'Lakers', 'm-1')]
+		});
+
+		await evaluateLeagueClock(harness.gateway);
+
+		const opening = harness.outboxIntents.filter(
+			(intent) => intent.eventSeq === harness.outboxIntents.at(-1)?.eventSeq
+		);
+		expect(opening.map((intent) => intent.recipient)).toEqual([
+			'#channel',
+			'discord-t-one',
+			'discord-t-two'
+		]);
+	});
+
+	it('mentions nobody for an AuctionTerminated', async () => {
+		// It carries no Team, it is one row per unbid nomination, and the phase
+		// notice every Manager receives already states how many there were. It
+		// is also outside the broadcast set, so it owes no intent at all.
+		const harness = fakeGateway({
+			events: [opened(), nominated(2, 'p-a', 'Ausar Bright', 't-1', 'Lakers', 'm-1')]
+		});
+
+		await evaluateLeagueClock(harness.gateway);
+
+		const terminatedSeq = harness.appendedEvents.find(
+			(row) => row['event_type'] === AUCTION_TERMINATED_EVENT
+		)?.['seq'];
+		expect(
+			harness.outboxIntents.filter((intent) => intent.eventSeq === String(terminatedSeq))
+		).toEqual([]);
 	});
 });
 

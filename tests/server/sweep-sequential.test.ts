@@ -111,12 +111,28 @@ function startingLog(): QueryResultRow[] {
 	return rows;
 }
 
+/**
+ * The Teams `EVERY_TEAM` resolves to in this fake's league (Story 5.3).
+ *
+ * A constant rather than an option, because the one trigger that reaches it
+ * is `ContractAssignmentOpened` and what matters about it is that the enqueue
+ * asked the whole-league question at all.
+ */
+const EVERY_LEAGUE_TEAM: readonly string[] = ['t-one', 't-two'];
+
 function fakeGateway(seed: QueryResultRow[]) {
 	const order: string[] = [];
 	const appendedEvents: QueryResultRow[] = [];
 	const heartbeats: unknown[][] = [];
 	let committedThrough = 0;
 	let seq = 100;
+
+	/**
+	 * The delivery intents this transaction filed (Story 5.3): the event they
+	 * describe and who they address. Recorded rather than merely tolerated, so
+	 * “this write mentioned exactly these Teams” is observable.
+	 */
+	const outboxIntents: Array<{ eventSeq: string; recipient: string }> = [];
 
 	const client: TransactionalClient & { release(): void } = {
 		async query(text: string, params: readonly unknown[] = []) {
@@ -192,7 +208,24 @@ function fakeGateway(seed: QueryResultRow[]) {
 			// on in `tests/server/outbox.test.ts`, which owns the outbox; here
 			// it only has to be a statement the fake recognises rather than one
 			// it rejects.
+			// Story 5.3 registered a Manager-shaped enqueue beside the
+			// broadcast one, so the transaction now also asks which Managers
+			// act for each AFFECTED Team — the Team the write site named, never
+			// the event's own. One synthetic snowflake per Team, so a test can
+			// read the affected set straight off the intents it filed.
+			if (/^select discord_user_id\s+from managers\s+where team_id = \$1/i.test(sql)) {
+				return { rows: [{ discord_user_id: `discord-${String(params[0])}` }] };
+			}
+			if (/^select discord_user_id\s+from managers\s+where team_id is not null/i.test(sql)) {
+				return {
+					rows: EVERY_LEAGUE_TEAM.map((teamId) => ({ discord_user_id: `discord-${teamId}` }))
+				};
+			}
 			if (/^insert into notification_outbox/i.test(sql)) {
+				outboxIntents.push({
+					eventSeq: String(params[0]),
+					recipient: String(params[2])
+				});
 				return { rows: [] };
 			}
 			throw new Error(`unexpected statement: ${sql}`);
@@ -204,7 +237,7 @@ function fakeGateway(seed: QueryResultRow[]) {
 
 	const gateway: ConnectionGateway = { connect: async () => client };
 
-	return { gateway, client, order, appendedEvents, heartbeats };
+	return { gateway, client, order, appendedEvents, heartbeats, outboxIntents };
 }
 
 /** The `AuctionClosed` payloads appended, in the order they were appended. */

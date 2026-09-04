@@ -8,11 +8,28 @@
  * request and nothing about auctions, outbox rows, retries or budgets. What to
  * send and when is `server/outbox.ts`'s; how a Discord request looks is here.
  *
- * **No message composition lives here either.** `content` arrives already
- * built. Story 5.2/5.3 own what a notice SAYS; this story ships the transport
- * and a generic payload, and the one piece of copy in this file is the
- * `<@id>` mention syntax, which is a fact about Discord rather than a fact
- * about the league.
+ * **No message composition lives here.** `content` arrives already built:
+ * `adapters/discord/broadcast.ts` owns what a notice SAYS and
+ * `adapters/discord/mention.ts` owns what a mention says. The one piece of copy
+ * in this file is `mentionFor`'s `<@id>` syntax, which is a fact about Discord
+ * rather than a fact about the league — and it is spelled here so nothing in
+ * `server/` or `core/` has to know it, then IMPORTED by the composer.
+ *
+ * **Since Story 5.3, PLACEMENT is the composer's and ADDRESSING is still
+ * this file's, and the split is the point.** Until 5.3, `contentFor`
+ * PREPENDED every recipient's `<@id>` to the head of the message. It no longer
+ * does: the drain batches by channel, so one post can cover several events, and
+ * a Manager pinged at the top of a five-event post cannot tell which line is
+ * theirs. `mention.ts` now renders each `<@id>` inline on the notice for its
+ * own event, so a body reaching here already carries its mentions in the right
+ * places and `contentFor` passes it through untouched.
+ *
+ * What stayed is the ADDRESSING: `recipients` becomes
+ * `allowed_mentions.users`, and it takes BOTH that whitelist and an `<@id>` in
+ * the text to ping. `server/outbox.ts` sends exactly the snowflakes its
+ * composed body actually spells, so the two halves cannot disagree. Keeping
+ * `body` and `recipients` separate all the way to the wire is also AD-18's
+ * muting design (Story 5.4) made structural — see `DiscordWebhookMessage`.
  *
  * **`allowed_mentions` is set on EVERY payload, unconditionally** (AD-18 —
  * "every outbound payload sets `allowed_mentions` explicitly, so no message can
@@ -59,10 +76,15 @@ export type DiscordWebhookMessage = {
 	readonly body: string;
 	/**
 	 * Who the notice is directed at — for Discord, `managers.discord_user_id`
-	 * snowflakes. Each becomes an `<@id>` at the front of the message AND an
-	 * entry in `allowed_mentions.users`, and it takes BOTH to ping: the text
+	 * snowflakes. Each becomes an entry in `allowed_mentions.users`, and it
+	 * takes BOTH the whitelist and an `<@id>` in the text to ping: the text
 	 * alone renders as plain text unless the id is whitelisted, and the
 	 * whitelist alone pings nobody.
+	 *
+	 * Since Story 5.3 the `<@id>` half is written into `body` by
+	 * `adapters/discord/mention.ts`, inline on the notice for its own event,
+	 * and `server/outbox.ts` sends here exactly the snowflakes that body
+	 * actually spells. This list is therefore the whitelist and nothing else.
 	 */
 	readonly recipients: readonly string[];
 };
@@ -174,18 +196,28 @@ function addressees(message: DiscordWebhookMessage): readonly string[] {
 }
 
 /**
- * The rendered message text: every recipient's mention, then the body.
+ * The rendered message text: the body, exactly as composed.
  *
- * Mentions lead rather than trail, because Discord's mobile notification
- * preview truncates, and the ping is the part a Manager has to see first to
- * know the notice is about their Team.
+ * **Placement is the composer's; addressing is still this file's** (Story
+ * 5.3). Until 5.3 this function PREPENDED every recipient's `<@id>` to the
+ * head of the message. It no longer does, because the drain batches by channel
+ * and one post can cover several events: a Manager pinged at the top of a
+ * five-event post cannot tell which line is theirs.
+ * `adapters/discord/mention.ts` now renders each mention inline on the notice
+ * for its own event, so by the time a body reaches here the `<@id>`s are
+ * already in it, in the right places.
+ *
+ * What did NOT move is the addressing: `allowed_mentions.users` is still built
+ * here from `recipients`, and it still takes BOTH the text and the whitelist to
+ * ping. `recipients` staying separate from `body` is also still AD-18's muting
+ * design (Story 5.4) — dropping a recipient leaves the body byte-identical.
  */
 export function contentFor(message: DiscordWebhookMessage): string {
-	const mentions = addressees(message).map(mentionFor);
-	// Trimmed emptiness, not `!== ''`: a body of `'   '` is as absent as one of
-	// `''`, and the exact-match filter let it through and rendered a message
-	// ending in a stray separator.
-	return [...mentions, message.body.trim()].filter((part) => part !== '').join(' ');
+	// Trimmed, not passed through: a body of `'   '` is as absent as one of
+	// `''`, and Discord rejects an empty `content`. The trim is what the
+	// prepending form needed to avoid a stray separator, and it is still the
+	// honest normalisation of a body with nothing in it.
+	return message.body.trim();
 }
 
 /**
