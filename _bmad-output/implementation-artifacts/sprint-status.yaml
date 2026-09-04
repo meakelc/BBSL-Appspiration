@@ -83,7 +83,7 @@ development_status:
   5-1-the-transactional-outbox-and-its-dispatcher: done
   5-2-broadcast-auction-events-to-the-league-channel: done
   5-3-notify-managers-by-discord-mention: done
-  5-4-notification-settings-three-mutable-categories-and-only-thre: backlog
+  5-4-notification-settings-three-mutable-categories-and-only-thre: review
   epic-5-retrospective: optional
 
   epic-6: backlog

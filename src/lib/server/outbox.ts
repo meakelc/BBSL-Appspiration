@@ -746,8 +746,29 @@ const PENDING_INTENTS_SQL = `
  * for the other's job.
  */
 const TEAM_NAMES_SQL = 'select id, name from teams';
-const MANAGER_NAMES_SQL =
-	'select id, display_name, team_id, discord_user_id from managers order by id asc';
+
+/**
+ * Story 5.4 adds the mute as a LEFT JOIN, and the join is the whole design.
+ *
+ * `coalesce(..., false)` over a left join is what makes an ABSENT preference
+ * row read as not muted: a Manager who has never opened the settings page has
+ * no row, and "absence is the default, not an error" then holds without a
+ * backfill and without a trigger keeping a second table in step with
+ * `managers`. It also keeps the cost where the story argued it belongs — one
+ * join on a read that happens once per pass, and nothing at all on the auction
+ * write path.
+ */
+const MANAGER_NAMES_SQL = `
+	select
+		m.id,
+		m.display_name,
+		m.team_id,
+		m.discord_user_id,
+		coalesce(p.slot_release_muted, false) as slot_release_muted
+	from managers m
+	left join manager_notification_preferences p on p.manager_id = m.id
+	order by m.id asc
+`;
 
 /**
  * Every recorded dispatch attempt. Filtered by `event_type` in SQL rather than
@@ -972,9 +993,17 @@ function toLeagueDirectory(
 	const managersOfTeam = new Map<string, string[]>();
 	const managerIdsByDiscordUserId = new Map<string, string>();
 	const teamOfManager = new Map<string, string>();
+	const mutedSlotReleaseManagerIds = new Set<string>();
 	for (const row of managerRows) {
 		const managerId = String(row['id']);
 		managerNames.set(managerId, String(row['display_name']));
+		// Folded BEFORE the no-Team `continue` below, so the set is a fact about
+		// the Manager rather than about their Team binding. Only a Manager who
+		// is explicitly muted is added: the coalesce in the SQL already turned
+		// an absent preference row into `false`, and anything a driver hands
+		// back that is not recognisably true reads as not muted — the same
+		// direction absence reads in.
+		if (isTrueFlag(row['slot_release_muted'])) mutedSlotReleaseManagerIds.add(managerId);
 		// `discord_user_id` is `not null` and non-blank by check constraint, so
 		// a blank here means a driver handed back something unexpected — and a
 		// blank key would make every unnameable snowflake resolve to one
@@ -993,7 +1022,38 @@ function toLeagueDirectory(
 		else bucket.push(managerId);
 	}
 
-	return { teamNames, managerNames, managersOfTeam, managerIdsByDiscordUserId, teamOfManager };
+	return {
+		teamNames,
+		managerNames,
+		managersOfTeam,
+		managerIdsByDiscordUserId,
+		teamOfManager,
+		mutedSlotReleaseManagerIds
+	};
+}
+
+/**
+ * A `boolean` column, read the way AD-8's `int8` note reads a bigint.
+ *
+ * `pg` and deno-postgres both hand back a real `boolean` for `bool`, so the
+ * first comparison is the whole of it in practice. The two text spellings are
+ * there because this value decides whether somebody is PINGED, and a driver
+ * returning `'t'` would otherwise silently unmute every Manager in the league
+ * — a failure that looks like nothing at all until somebody says they are
+ * still being pinged.
+ *
+ * **Exported, and the ONE copy.** `server/notification-preferences.ts` reads the
+ * same column for the settings page and imports this rather than restating it:
+ * a driver fix has to have exactly one place to land, and two coercions that
+ * disagreed would let the page and the drain read one row two ways. It lives
+ * here rather than there because this module is the Deno-loadable one (AD-2) and
+ * the dependency may only point this way.
+ */
+export function isTrueFlag(value: unknown): boolean {
+	if (value === true) return true;
+	if (typeof value !== 'string') return false;
+	const normalised = value.trim().toLowerCase();
+	return normalised === 't' || normalised === 'true';
 }
 
 /** One `NotificationDispatched` row, read back as an attempt. */
