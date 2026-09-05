@@ -523,3 +523,84 @@ describe('mentionsPresentIn — allowed_mentions can only name what the body spe
 		expect(mentionsPresentIn('Lakers — Meakel bid $14.5M…', [ARI_ID])).toEqual([]);
 	});
 });
+
+// --- Story 6.2: the deadline reminder and the deadline notice --------------
+
+describe('mentionSuffixFor — the assignment deadline’s two markers', () => {
+	/** A marker payload, as `core/rules/assignment-deadline.ts` builds one. */
+	function markerEvent(eventType: string): BroadcastEvent {
+		return event(eventType, {
+			deadline: '2026-09-10T17:00:00.000Z',
+			outstandingTeamIds: [LAKERS, BULLS],
+			outstandingPlayerCount: 3,
+			evaluatedAt: '2026-09-10T17:00:00.000Z'
+		});
+	}
+
+	it('groups the reminder by Team and names each one, with no link', () => {
+		// It is not an Auction, so `auctionLink` finds no Player on the payload
+		// and the line carries no link — the same reason the phase notice
+		// carries none.
+		expect(
+			mentionSuffixFor(markerEvent('AssignmentRemindersSent'), [MEAKEL_ID, ARI_ID], DIRECTORY, ORIGIN)
+		).toBe(
+			`<@${MEAKEL_ID}> — Lakers — Meakel still have Players with no contract length.\n` +
+				`<@${ARI_ID}> — Bulls — Ari still have Players with no contract length.`
+		);
+	});
+
+	it('does not claim the deadline is "one reminder interval away"', () => {
+		// True of the instant the reminder fell due, not of the moment it is
+		// read — and false outright when the interval is longer than the window
+		// the deadline was set with, where the reminder is due immediately. The
+		// notice line above it states the deadline itself.
+		const suffix = mentionSuffixFor(
+			markerEvent('AssignmentRemindersSent'),
+			[MEAKEL_ID],
+			DIRECTORY,
+			ORIGIN
+		);
+		expect(suffix).not.toContain('interval away');
+	});
+
+	it('says the deadline passed, and says no length was assigned', () => {
+		expect(
+			mentionSuffixFor(markerEvent('AssignmentDeadlinePassed'), [MEAKEL_ID], DIRECTORY, ORIGIN)
+		).toBe(
+			`<@${MEAKEL_ID}> — Lakers — Meakel still have Players with no contract length, and ` +
+				'the assignment deadline has passed. No length was assigned.'
+		);
+	});
+
+	it('renders both Managers of a co-managed Team on ONE line', () => {
+		expect(
+			mentionSuffixFor(
+				markerEvent('AssignmentDeadlinePassed'),
+				[KAI_ID, NOOR_ID],
+				DIRECTORY,
+				ORIGIN
+			)
+		).toBe(
+			`<@${KAI_ID}> <@${NOOR_ID}> — Suns — Kai & Noor still have Players with no contract ` +
+				'length, and the assignment deadline has passed. No length was assigned.'
+		);
+	});
+
+	it('is not silenced by a slot_release mute — the category is contract_assignment', () => {
+		// `contract_assignment` is unmutable (`core/notification-categories.ts`),
+		// and both markers ride it. A Manager who muted `slot_release` still
+		// hears about the deadline.
+		expect(
+			mentionSuffixFor(markerEvent('AssignmentRemindersSent'), [MEAKEL_ID], muting(MEAKEL), ORIGIN)
+		).toContain(`<@${MEAKEL_ID}>`);
+	});
+
+	it('carries no exclamation mark and no suggested action', () => {
+		for (const type of ['AssignmentRemindersSent', 'AssignmentDeadlinePassed']) {
+			const line = mentionSuffixFor(markerEvent(type), [MEAKEL_ID], DIRECTORY, ORIGIN);
+			expect(line).not.toContain('!');
+			expect(line.toLowerCase()).not.toContain('please');
+			expect(line.toLowerCase()).not.toContain('hurry');
+		}
+	});
+});

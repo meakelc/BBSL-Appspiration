@@ -67,7 +67,7 @@ export type TeamsIndexState = TeamsIndex & {
 };
 
 /** One Team's name and every Manager acting for it. */
-type TeamIdentity = {
+export type TeamIdentity = {
 	readonly teamId: string;
 	readonly teamName: string;
 	readonly managerNames: readonly string[];
@@ -99,8 +99,15 @@ type TeamIdentity = {
  * The Team-name key is likewise stated rather than incidental. It is not the
  * PAGE's ordering: the surface sorts through `sortTeamsIndex`, and this only
  * guarantees the payload itself is never arbitrary.
+ *
+ * **Exported since Story 6.2.** `/assignment-monitoring` lists every Team as
+ * submitted or not, which is the same "who is in this league" question this
+ * statement already answers — so it reuses this rather than writing a second
+ * `teams left join managers`, and the roster of Teams the monitor lists and the
+ * one `/teams` lists come from one statement. It takes a client rather than a
+ * gateway, so the caller decides which read it belongs to.
  */
-async function loadTeamIdentities(client: TransactionalClient): Promise<readonly TeamIdentity[]> {
+export async function loadTeamIdentities(client: TransactionalClient): Promise<readonly TeamIdentity[]> {
 	const result = await client.query(
 		`select t.id::text as id, t.name as team_name, m.display_name
 		from ${TEAMS_TABLE} t

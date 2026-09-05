@@ -89,15 +89,18 @@ function event(
 
 // --- the broadcast set ----------------------------------------------------
 
-describe('BROADCAST_EVENT_TYPES — six types, and nothing else', () => {
-	it('names exactly the six the story enumerates', () => {
+describe('BROADCAST_EVENT_TYPES — seven types, and nothing else', () => {
+	it('names exactly the seven the stories enumerate', () => {
 		expect([...BROADCAST_EVENT_TYPES]).toEqual([
 			'NominationPlaced',
 			'BidPlaced',
 			'AuctionClosed',
 			'ContentionDrawn',
 			'AuctionOpened',
-			'ContractAssignmentOpened'
+			'ContractAssignmentOpened',
+			// Story 6.2. The deadline itself is a league-wide fact; the reminder
+			// that precedes it is not, which is why only one of the pair is here.
+			'AssignmentDeadlinePassed'
 		]);
 	});
 
@@ -107,7 +110,13 @@ describe('BROADCAST_EVENT_TYPES — six types, and nothing else', () => {
 			'ContentionDissolved',
 			'MinorLeagueEligibilityChanged',
 			'RosterImportPromoted',
-			'NotificationDispatched'
+			'NotificationDispatched',
+			// Story 6.2's reminder is addressed to the Teams that still owe a
+			// length and is nobody else's business — posting it to the channel
+			// would make a private nudge a public one.
+			'AssignmentRemindersSent',
+			'AssignmentDeadlineSet',
+			'AssignmentReminderIntervalSet'
 		]) {
 			expect(isBroadcastEventType(excluded)).toBe(false);
 		}
@@ -630,5 +639,100 @@ describe('the composed copy carries no urgency and no exclamation', () => {
 		// 5.2 is addressed to the channel. The mention is 5.3's, and it arrives
 		// as a recipient beside this body rather than as a word inside it.
 		for (const sample of samples) expect(sample).not.toContain('<@');
+	});
+});
+
+// --- Story 6.2: the deadline notice ---------------------------------------
+
+describe('noticeFor — AssignmentDeadlinePassed', () => {
+	function passed(overrides: Record<string, unknown> = {}) {
+		return event('AssignmentDeadlinePassed', {
+			deadline: '2026-09-10T17:00:00.000Z',
+			outstandingTeamIds: ['t-lakers', 't-bulls'],
+			outstandingPlayerCount: 3,
+			evaluatedAt: '2026-09-10T17:00:01.000Z',
+			...overrides
+		});
+	}
+
+	it('states the instant and how many Teams were outstanding at it', () => {
+		expect(noticeFor(passed(), DIRECTORY)).toBe(
+			'The contract assignment deadline of 2026-09-10T17:00:00.000Z has passed. 2 Teams ' +
+				'have Players with no contract length. No contract length was assigned by it.'
+		);
+	});
+
+	it('still posts the line when every Team had submitted', () => {
+		expect(noticeFor(passed({ outstandingTeamIds: [] }), DIRECTORY)).toBe(
+			'The contract assignment deadline of 2026-09-10T17:00:00.000Z has passed. Every Team ' +
+				'had submitted its contract assignments. No contract length was assigned by it.'
+		);
+	});
+
+	it('agrees the verb for a single outstanding Team', () => {
+		expect(noticeFor(passed({ outstandingTeamIds: ['t-lakers'] }), DIRECTORY)).toContain(
+			'1 Team has Players with no contract length.'
+		);
+	});
+
+	it('falls back rather than inventing a figure when the payload is unreadable', () => {
+		expect(noticeFor(event('AssignmentDeadlinePassed', {}), DIRECTORY)).toBe(
+			'A AssignmentDeadlinePassed was recorded (event #1).'
+		);
+	});
+
+	it('carries no exclamation mark and no urgency framing', () => {
+		const line = noticeFor(passed(), DIRECTORY);
+		expect(line).not.toContain('!');
+		expect(line.toLowerCase()).not.toContain('last chance');
+		expect(line.toLowerCase()).not.toContain('ending soon');
+	});
+});
+
+describe('noticeFor — AssignmentRemindersSent', () => {
+	/**
+	 * It files no channel-addressed intent, so it is NOT in
+	 * `BROADCAST_EVENT_TYPES`. It is worded anyway, because the drain composes
+	 * one notice per drained event and this one's mentions ride the same
+	 * channel post — without copy it would post the plain fallback line.
+	 */
+	function reminded(overrides: Record<string, unknown> = {}) {
+		return event('AssignmentRemindersSent', {
+			deadline: '2026-09-10T17:00:00.000Z',
+			outstandingTeamIds: ['t-lakers', 't-bulls'],
+			outstandingPlayerCount: 3,
+			evaluatedAt: '2026-09-09T17:00:00.000Z',
+			...overrides
+		});
+	}
+
+	it('is not broadcast, and still has a line of its own', () => {
+		expect(isBroadcastEventType('AssignmentRemindersSent')).toBe(false);
+		expect(noticeFor(reminded(), DIRECTORY)).toBe(
+			'The contract assignment deadline is 2026-09-10T17:00:00.000Z.'
+		);
+	});
+
+	it('names NOBODY: the count of who is late belongs to the deadline notice', () => {
+		// The reminder's mentions ride a channel post, so this line is public.
+		// Publishing a tally an interval BEFORE anything is owed would name the
+		// Teams still working, in front of the league. Whoever is addressed is
+		// addressed by mention and already knows; nobody else is owed a count.
+		const line = noticeFor(reminded(), DIRECTORY);
+		expect(line).not.toContain('2 Teams');
+		expect(line).not.toContain('no contract length');
+	});
+
+	it('states no urgency and suggests no action', () => {
+		const line = noticeFor(reminded(), DIRECTORY);
+		expect(line).not.toContain('!');
+		expect(line.toLowerCase()).not.toContain('soon');
+		expect(line.toLowerCase()).not.toContain('please');
+	});
+
+	it('falls back rather than inventing a figure when the payload is unreadable', () => {
+		expect(noticeFor(event('AssignmentRemindersSent', {}), DIRECTORY)).toBe(
+			'A AssignmentRemindersSent was recorded (event #1).'
+		);
 	});
 });

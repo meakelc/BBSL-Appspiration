@@ -94,6 +94,7 @@
  */
 
 import { createDiscordWebhookPort } from '../../../src/lib/adapters/discord/webhook.ts';
+import { evaluateAssignmentDeadline } from '../../../src/lib/server/assignment-deadline.ts';
 import { closeAuction } from '../../../src/lib/server/close.ts';
 import { DISCORD_CHANNEL, drainOutbox } from '../../../src/lib/server/outbox.ts';
 import { evaluateLeagueClock } from '../../../src/lib/server/phase-end.ts';
@@ -191,6 +192,13 @@ Deno.serve(async (request: Request): Promise<Response> => {
 			// already carries this pass's closes and a throw inside it rolls back
 			// nothing that has already committed.
 			endPhase: () => evaluateLeagueClock(gateway),
+			// The assignment deadline, after the phase end and before the drain
+			// (Story 6.2). Its own whole locked transaction, so it folds a log
+			// that already carries this pass's closes and any phase end, and a
+			// throw inside it rolls back nothing already committed. It is the
+			// EXISTING tick — no new schedule, no new transport, no new
+			// notification category.
+			assignmentDeadline: () => evaluateAssignmentDeadline(gateway),
 			// The outbox drain (AD-17), and the ORDER is the thing stated here:
 			// sweep, then the League Clock, then the drain, then the heartbeat.
 			// It runs last of the three because every close and every phase-end

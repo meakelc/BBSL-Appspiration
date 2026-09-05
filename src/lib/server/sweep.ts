@@ -116,6 +116,7 @@ import type { AppendedEvent } from '../core/types.ts';
 import { requireDatabaseClock } from '../shell/write.ts';
 import type { ConnectionGateway, TransactionalClient } from '../shell/write.ts';
 import { loadEventsViaClient } from './event-log.ts';
+import type { AssignmentDeadlineOutcome } from './assignment-deadline.ts';
 import type { PhaseEndOutcome } from './phase-end.ts';
 
 /**
@@ -192,6 +193,17 @@ export type TickSummary = {
 	readonly phaseEndEvaluatedAt: string | null;
 	/** The evaluation's failure, if it had one. Never undoes a close. */
 	readonly phaseEndFailure: string | null;
+	/**
+	 * What the assignment-deadline evaluation did on this pass (Story 6.2).
+	 *
+	 * `PhaseEndStatus`' four words for its reason: `not_evaluated` and
+	 * `nothing_owed` are genuinely different facts, and a heartbeat that
+	 * collapsed them would make a refused pass indistinguishable from a pass
+	 * that looked and found the deadline unset.
+	 */
+	readonly assignmentDeadline: AssignmentDeadlineStatus;
+	/** The deadline evaluation's failure, if it had one. Never undoes a close. */
+	readonly assignmentDeadlineFailure: string | null;
 	/** The drain seam's failure, if it had one. Never undoes a close. */
 	readonly drainFailure: string | null;
 	/** One human sentence naming what happened, for the heartbeat row. */
@@ -207,6 +219,28 @@ export type TickSummary = {
  * distinction `TickOutcome` draws between `refused_version_mismatch` and `ok`.
  */
 export type PhaseEndStatus = 'not_evaluated' | 'not_due' | 'ended' | 'failed';
+
+/**
+ * What one pass's assignment-deadline evaluation amounted to (Story 6.2).
+ *
+ *  - `not_evaluated` — the pass refused on a version mismatch, could not run
+ *    at all, or was given no step to run. The deadline was never looked at.
+ *  - `nothing_owed` — evaluated, and nothing was appended: no deadline is set,
+ *    nothing is due yet, or both markers already fired for the standing
+ *    deadline. By far the common answer, and a successful pass.
+ *  - `reminded` — THIS pass appended the one `AssignmentRemindersSent`.
+ *  - `passed` — THIS pass appended the `AssignmentDeadlinePassed`. It also
+ *    covers the pass that appended BOTH, which is what a tick that was down
+ *    across the reminder window comes back to: the later fact is the one the
+ *    word states, and `detail` names them individually.
+ *  - `failed` — the evaluation threw. Every close above still stands.
+ */
+export type AssignmentDeadlineStatus =
+	| 'not_evaluated'
+	| 'nothing_owed'
+	| 'reminded'
+	| 'passed'
+	| 'failed';
 
 /** Close exactly one Auction, in its own locked transaction. */
 export type CloseOneFn = (fantraxPlayerId: string) => Promise<unknown>;
@@ -227,6 +261,23 @@ export type CloseOneFn = (fantraxPlayerId: string) => Promise<unknown>;
  * records `not_evaluated`, which is honest rather than silent.
  */
 export type EndPhaseFn = () => Promise<PhaseEndOutcome>;
+
+/**
+ * Evaluate the assignment deadline and send the one reminder or the one notice
+ * it owes (Story 6.2) — `server/assignment-deadline.ts`'s
+ * `evaluateAssignmentDeadline`, injected here for `EndPhaseFn`'s reason.
+ *
+ * This module decides WHEN it runs — after the phase end, before the drain —
+ * and what a failure of it means for the pass; `evaluateAssignmentDeadline`
+ * decides what the deadline IS. It is deliberately NOT a new schedule: the
+ * deadline is evaluated on the existing ten-second tick, so nothing about the
+ * deployment changes and a marker's transaction commits beside the closes it
+ * followed.
+ *
+ * Optional, exactly as `endPhase` and `drain` are: a caller that omits it gets
+ * a pass that records `not_evaluated`, which is honest rather than silent.
+ */
+export type AssignmentDeadlineFn = () => Promise<AssignmentDeadlineOutcome>;
 
 /**
  * The outbox drain (AD-17) — `server/outbox.ts`'s `drainOutbox`, injected here
@@ -280,11 +331,18 @@ export async function runTick(input: {
 	readonly gateway: ConnectionGateway;
 	readonly closeOne: CloseOneFn;
 	readonly endPhase?: EndPhaseFn;
+	readonly assignmentDeadline?: AssignmentDeadlineFn;
 	readonly drain?: DrainFn;
 }): Promise<TickSummary> {
 	const client = await input.gateway.connect();
 	try {
-		const summary = await sweepThenDrain(client, input.closeOne, input.endPhase, input.drain);
+		const summary = await sweepThenDrain(
+			client,
+			input.closeOne,
+			input.endPhase,
+			input.assignmentDeadline,
+			input.drain
+		);
 		await writeHeartbeat(client, summary);
 		return summary;
 	} finally {
@@ -309,6 +367,7 @@ async function sweepThenDrain(
 	client: TransactionalClient,
 	closeOne: CloseOneFn,
 	endPhase: EndPhaseFn | undefined,
+	assignmentDeadline: AssignmentDeadlineFn | undefined,
 	drain: DrainFn | undefined
 ): Promise<TickSummary> {
 	let ranAt: string | null = null;
@@ -345,6 +404,13 @@ async function sweepThenDrain(
 				phaseEndExpiredAt: null,
 				phaseEndEvaluatedAt: null,
 				phaseEndFailure: null,
+				// **The assignment deadline is not evaluated either** (Story
+				// 6.2), and for the fail-stop's own reason: it is about the whole
+				// pass rather than only about closing. A reminder or a notice
+				// sent under different rules than the league assigned under is as
+				// undoable as a close under them, which is to say not at all.
+				assignmentDeadline: 'not_evaluated',
+				assignmentDeadlineFailure: null,
 				drainFailure: null,
 				// `logCoreVersion` is interpolated rather than only bound, so an
 				// unreadable version — which `integerOrNull` writes to the column as
@@ -354,7 +420,8 @@ async function sweepThenDrain(
 					`auction_events.core_version reads as ${JSON.stringify(logCoreVersion)}. Nothing was ` +
 					'closed — an Auction closed under different rules than its Bids were placed under ' +
 					'cannot be undone, because AD-4 forbids deleting the event (AD-20)' +
-					PHASE_END_NOT_EVALUATED_CLAUSE
+					PHASE_END_NOT_EVALUATED_CLAUSE +
+					ASSIGNMENT_DEADLINE_NOT_EVALUATED_CLAUSE
 			};
 		}
 
@@ -417,6 +484,39 @@ async function sweepThenDrain(
 			}
 		}
 
+		// **The assignment deadline, after the phase end and before the drain**
+		// (Story 6.2). Its own whole `runTransactionalWrite`, so it folds a log
+		// that already carries this pass's closes and any phase end — which is
+		// what lets the deadline's markers commit beside them — and a throw here
+		// rolls back nothing that is already committed. It runs BEFORE the drain
+		// so the intents it files are delivered on the same pass rather than
+		// waiting ten seconds for the next.
+		let assignmentDeadlineStatus: AssignmentDeadlineStatus = 'not_evaluated';
+		let assignmentDeadlineFailure: string | null = null;
+		let assignmentDeadlineInstant: string | null = null;
+		let assignmentDeadlineReminded = false;
+		let assignmentDeadlineOutstanding: readonly string[] = [];
+		if (assignmentDeadline !== undefined) {
+			try {
+				const outcome = await assignmentDeadline();
+				assignmentDeadlineStatus = outcome.passed
+					? 'passed'
+					: outcome.reminded
+						? 'reminded'
+						: 'nothing_owed';
+				assignmentDeadlineFailure = null;
+				assignmentDeadlineInstant = outcome.deadline;
+				assignmentDeadlineReminded = outcome.reminded;
+				assignmentDeadlineOutstanding = outcome.outstandingTeamIds;
+			} catch (error) {
+				// Recorded like a failed close and for the same reason: the closes
+				// above are committed and stand, the drain below still runs, and
+				// the next pass re-derives the whole question from the log.
+				assignmentDeadlineStatus = 'failed';
+				assignmentDeadlineFailure = messageOf(error);
+			}
+		}
+
 		// **After the sweep, always**, and its throwing cannot undo a close:
 		// every close above is already committed by its own transaction.
 		let drainFailure: string | null = null;
@@ -430,7 +530,11 @@ async function sweepThenDrain(
 
 		// A failed evaluation counts exactly as a failed close does: the pass
 		// ran to the end, something inside it threw, and what committed stands.
-		const clean = failures.length === 0 && phaseEndFailure === null && drainFailure === null;
+		const clean =
+			failures.length === 0 &&
+			phaseEndFailure === null &&
+			assignmentDeadlineFailure === null &&
+			drainFailure === null;
 		return {
 			outcome: clean ? 'ok' : 'completed_with_failures',
 			ranAt,
@@ -444,6 +548,8 @@ async function sweepThenDrain(
 			phaseEndExpiredAt,
 			phaseEndEvaluatedAt,
 			phaseEndFailure,
+			assignmentDeadline: assignmentDeadlineStatus,
+			assignmentDeadlineFailure,
 			drainFailure,
 			detail:
 				detailFor(closed, skipped, failures, drainFailure) +
@@ -453,6 +559,13 @@ async function sweepThenDrain(
 					expiredAt: phaseEndExpiredAt,
 					evaluatedAt: phaseEndEvaluatedAt,
 					failure: phaseEndFailure
+				}) +
+				assignmentDeadlineClause({
+					status: assignmentDeadlineStatus,
+					deadline: assignmentDeadlineInstant,
+					reminded: assignmentDeadlineReminded,
+					outstanding: assignmentDeadlineOutstanding,
+					failure: assignmentDeadlineFailure
 				})
 		};
 	} catch (error) {
@@ -477,10 +590,17 @@ async function sweepThenDrain(
 			phaseEndExpiredAt: null,
 			phaseEndEvaluatedAt: null,
 			phaseEndFailure: null,
+			// The clock read or the log read threw, so nothing downstream ran at
+			// all — the deadline evaluation included. Saying so is not noise: a
+			// heartbeat silent about it would read as "evaluated, nothing owed"
+			// on the one pass where that is least true.
+			assignmentDeadline: 'not_evaluated',
+			assignmentDeadlineFailure: null,
 			drainFailure: null,
 			detail:
 				`the pass could not run: ${messageOf(error)}` +
-				PHASE_END_NOT_EVALUATED_CLAUSE
+				PHASE_END_NOT_EVALUATED_CLAUSE +
+				ASSIGNMENT_DEADLINE_NOT_EVALUATED_CLAUSE
 		};
 	}
 }
@@ -642,6 +762,64 @@ function phaseEndClause(input: {
 		case 'failed':
 			return (
 				'; the League Clock evaluation threw, and every close above still stands: ' +
+				`${input.failure ?? 'no message'}`
+			);
+	}
+}
+
+/**
+ * The clause for a pass that never reached the deadline evaluation.
+ *
+ * `PHASE_END_NOT_EVALUATED_CLAUSE`'s twin, for its reason: two branches never
+ * call `assignmentDeadlineClause` at all — the version refusal and the pass
+ * that could not run — and a heartbeat silent about the deadline there would
+ * read as "evaluated, nothing owed", which is exactly the wrong thing to infer.
+ */
+const ASSIGNMENT_DEADLINE_NOT_EVALUATED_CLAUSE = '; the assignment deadline was not evaluated';
+
+/**
+ * What the assignment-deadline evaluation contributes to the heartbeat's
+ * sentence (Story 6.2).
+ *
+ * Leads with a semicolon and a space so it composes onto `detailFor`'s
+ * `join('; ')` output and onto the two bespoke sentences alike, exactly as
+ * `phaseEndClause` does.
+ *
+ * The addressed Teams are NAMED rather than counted, `closed`'s discipline:
+ * a reminder and a notice are each written once per deadline in the history of
+ * a league, and this line is the record of who they went to.
+ */
+function assignmentDeadlineClause(input: {
+	readonly status: AssignmentDeadlineStatus;
+	readonly deadline: string | null;
+	readonly reminded: boolean;
+	readonly outstanding: readonly string[];
+	readonly failure: string | null;
+}): string {
+	const who =
+		input.outstanding.length === 0
+			? 'no Team was outstanding'
+			: `${String(input.outstanding.length)} outstanding (${input.outstanding.join(', ')})`;
+	const when = input.deadline ?? 'an unreadable instant';
+
+	switch (input.status) {
+		case 'not_evaluated':
+			return ASSIGNMENT_DEADLINE_NOT_EVALUATED_CLAUSE;
+		case 'nothing_owed':
+			return '; the assignment deadline was evaluated and owed nothing';
+		case 'reminded':
+			return `; the assignment reminder for ${when} was sent, ${who}`;
+		case 'passed':
+			// A pass that appended BOTH markers says so: a tick down across the
+			// reminder window comes back owing them together, and reporting only
+			// the later one would hide that the reminder ever went out.
+			return (
+				`; the assignment deadline ${when} passed and its notice was sent, ${who}` +
+				(input.reminded ? ', and the reminder for it was sent on this same pass' : '')
+			);
+		case 'failed':
+			return (
+				'; the assignment deadline evaluation threw, and every close above still stands: ' +
 				`${input.failure ?? 'no message'}`
 			);
 	}

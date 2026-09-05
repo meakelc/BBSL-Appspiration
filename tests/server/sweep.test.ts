@@ -22,6 +22,7 @@ import { BID_PLACED_EVENT } from '../../src/lib/core/projection/auctions.ts';
 import { AUCTION_CLOSED_EVENT } from '../../src/lib/core/projection/nominations.ts';
 import { runTick } from '../../src/lib/server/sweep.ts';
 import type { TickSummary } from '../../src/lib/server/sweep.ts';
+import type { AssignmentDeadlineOutcome } from '../../src/lib/server/assignment-deadline.ts';
 import type { PhaseEndOutcome } from '../../src/lib/server/phase-end.ts';
 import type {
 	ConnectionGateway,
@@ -1003,6 +1004,218 @@ describe('runTick — the two passes that must NOT evaluate the League Clock', (
 		expect(String(soleHeartbeat(harness).detail)).toContain('the pass could not run');
 		expect(String(soleHeartbeat(harness).detail)).toContain(
 			'the League Clock was not evaluated'
+		);
+	});
+});
+
+// --- the assignment deadline in the pass (Story 6.2) -----------------------
+
+/**
+ * An `assignmentDeadline` step that records that it ran and answers whatever
+ * is asked of it.
+ *
+ * `evaluateAssignmentDeadline` is a whole locked transaction of its own,
+ * driven for real in `tests/server/assignment-deadline.test.ts`. This seam is
+ * what lets these tests make it throw, count, or observe the pass as it stood
+ * when it was called — exactly as `closeOne` and `endPhase` are fakes here for
+ * exactly that reason.
+ */
+const ASSIGNMENT_DEADLINE = '2026-09-10T17:00:00.000Z';
+
+/** The outcome of a pass that looked and found the deadline owed nothing. */
+const NOTHING_OWED: AssignmentDeadlineOutcome = {
+	reminded: false,
+	passed: false,
+	deadline: null,
+	outstandingTeamIds: []
+};
+
+function recordingDeadline(outcome: AssignmentDeadlineOutcome = NOTHING_OWED) {
+	const calls: number[] = [];
+	return {
+		calls,
+		assignmentDeadline: async () => {
+			calls.push(calls.length);
+			return outcome;
+		}
+	};
+}
+
+describe('runTick — the assignment deadline runs after the phase end and before the drain', () => {
+	it('runs it once, between the League Clock and the drain', async () => {
+		const harness = fakeGateway({ events: [bid('p-1', '2026-08-27T07:00:00.000Z')] });
+		const trace: string[] = [];
+
+		await runTick({
+			gateway: harness.gateway,
+			closeOne: async (id) => {
+				trace.push(`close ${id}`);
+			},
+			endPhase: async () => {
+				trace.push('evaluate-clock');
+				return NOT_DUE;
+			},
+			// The ORDER is the assertion. It folds a log that already carries
+			// this pass's closes and any phase end, and it runs before the drain
+			// so the intents it files are delivered on this same pass.
+			assignmentDeadline: async () => {
+				trace.push('evaluate-deadline');
+				return NOTHING_OWED;
+			},
+			drain: () => {
+				trace.push('drain');
+			}
+		});
+
+		expect(trace).toEqual(['close p-1', 'evaluate-clock', 'evaluate-deadline', 'drain']);
+	});
+
+	it('records not_evaluated when no step is injected at all', async () => {
+		const harness = fakeGateway();
+		const summary = await runTick({ gateway: harness.gateway, closeOne: async () => {} });
+
+		expect(summary.assignmentDeadline).toBe('not_evaluated');
+		expect(summary.assignmentDeadlineFailure).toBeNull();
+		expect(String(soleHeartbeat(harness).detail)).toContain(
+			'the assignment deadline was not evaluated'
+		);
+	});
+
+	it('reports nothing_owed on the summary and the heartbeat for a quiet pass', async () => {
+		const harness = fakeGateway();
+		const evaluator = recordingDeadline();
+
+		const summary = await runTick({
+			gateway: harness.gateway,
+			closeOne: async () => {},
+			assignmentDeadline: evaluator.assignmentDeadline
+		});
+
+		expect(evaluator.calls).toHaveLength(1);
+		expect(summary.assignmentDeadline).toBe('nothing_owed');
+		expect(summary.outcome).toBe('ok');
+		expect(String(soleHeartbeat(harness).detail)).toContain(
+			'the assignment deadline was evaluated and owed nothing'
+		);
+	});
+
+	it('names the reminder and its addressees on the heartbeat', async () => {
+		const harness = fakeGateway();
+		const summary = await runTick({
+			gateway: harness.gateway,
+			closeOne: async () => {},
+			assignmentDeadline: async () => ({
+				reminded: true,
+				passed: false,
+				deadline: ASSIGNMENT_DEADLINE,
+				outstandingTeamIds: ['t-a', 't-b']
+			})
+		});
+
+		expect(summary.assignmentDeadline).toBe('reminded');
+		const detail = String(soleHeartbeat(harness).detail);
+		expect(detail).toContain(`the assignment reminder for ${ASSIGNMENT_DEADLINE} was sent`);
+		expect(detail).toContain('2 outstanding (t-a, t-b)');
+	});
+
+	it('names the notice, and says when the reminder went out on the same pass', async () => {
+		const harness = fakeGateway();
+		const summary = await runTick({
+			gateway: harness.gateway,
+			closeOne: async () => {},
+			assignmentDeadline: async () => ({
+				reminded: true,
+				passed: true,
+				deadline: ASSIGNMENT_DEADLINE,
+				outstandingTeamIds: []
+			})
+		});
+
+		expect(summary.assignmentDeadline).toBe('passed');
+		const detail = String(soleHeartbeat(harness).detail);
+		expect(detail).toContain(`the assignment deadline ${ASSIGNMENT_DEADLINE} passed`);
+		expect(detail).toContain('no Team was outstanding');
+		expect(detail).toContain('the reminder for it was sent on this same pass');
+	});
+
+	it('records a throw as a failure without undoing a close, and still drains', async () => {
+		const harness = fakeGateway({ events: [bid('p-1', '2026-08-27T07:00:00.000Z')] });
+		let drained = 0;
+
+		const summary = await runTick({
+			gateway: harness.gateway,
+			closeOne: async () => {},
+			assignmentDeadline: async () => {
+				throw new Error('the deadline transaction failed');
+			},
+			drain: () => {
+				drained += 1;
+			}
+		});
+
+		expect(summary.assignmentDeadline).toBe('failed');
+		expect(summary.assignmentDeadlineFailure).toContain('the deadline transaction failed');
+		expect(summary.closed).toEqual(['p-1']);
+		expect(drained).toBe(1);
+		// A failed evaluation counts exactly as a failed close does.
+		expect(summary.outcome).toBe('completed_with_failures');
+		expect(String(soleHeartbeat(harness).detail)).toContain(
+			'the assignment deadline evaluation threw, and every close above still stands'
+		);
+	});
+
+	it('is NOT evaluated on a version-mismatch refusal, and the heartbeat says so', async () => {
+		const harness = fakeGateway({
+			events: [
+				logEvent(
+					BID_PLACED_EVENT,
+					{
+						fantraxPlayerId: 'p-1',
+						teamId: 't-1',
+						teamName: 'Team One',
+						managerId: 'm-1',
+						amount: 2_000_000,
+						closesAt: '2026-08-27T08:00:00.000Z'
+					},
+					CORE_VERSION + 1
+				)
+			]
+		});
+		const evaluator = recordingDeadline();
+
+		const summary = await runTick({
+			gateway: harness.gateway,
+			closeOne: async () => {
+				throw new Error('closeOne must not be reached');
+			},
+			assignmentDeadline: evaluator.assignmentDeadline
+		});
+
+		expect(summary.outcome).toBe('refused_version_mismatch');
+		expect(evaluator.calls).toEqual([]);
+		expect(summary.assignmentDeadline).toBe('not_evaluated');
+		expect(String(soleHeartbeat(harness).detail)).toContain(
+			'the assignment deadline was not evaluated'
+		);
+	});
+
+	it('says the same on a pass that could not run at all', async () => {
+		const harness = fakeGateway({ logThrows: true });
+		const evaluator = recordingDeadline();
+
+		const summary = await runTick({
+			gateway: harness.gateway,
+			closeOne: async () => {
+				throw new Error('closeOne must not be reached');
+			},
+			assignmentDeadline: evaluator.assignmentDeadline
+		});
+
+		expect(summary.outcome).toBe('failed');
+		expect(evaluator.calls).toEqual([]);
+		expect(summary.assignmentDeadline).toBe('not_evaluated');
+		expect(String(soleHeartbeat(harness).detail)).toContain(
+			'the assignment deadline was not evaluated'
 		);
 	});
 });

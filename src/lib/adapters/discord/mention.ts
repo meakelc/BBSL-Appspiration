@@ -96,6 +96,41 @@ const CONTENDER_CLAUSE = 'were a Contender in this draw.';
  */
 const CONTRACT_ASSIGNMENT_CLAUSE = 'Contract Assignment is open.';
 
+/**
+ * The two Story 6.2 clauses, keyed on the EVENT TYPE rather than on the
+ * category.
+ *
+ * Both belong to `contract_assignment` — no new category exists and none is
+ * wanted — but a category maps to exactly one clause, and these three events
+ * say three different things. So the category still decides muting and
+ * classification (`categoryFor` below names all three), and the clause is
+ * chosen by type where a type needs its own.
+ *
+ * The subject of each is the addressed TEAM, so a line reads
+ * `Bulls — Ari still have 3 Players with no contract length.` — the plural verb
+ * is deliberate, as it is for every other clause here: a Team is the subject,
+ * and a co-managed one legitimately has two Managers on the line.
+ *
+ * No exclamation mark, no urgency framing and no suggested action. The
+ * reminder states that a deadline is approaching and the notice states that it
+ * passed; neither tells a Manager what to do, and neither claims anything was
+ * written.
+ */
+// It does NOT say "one reminder interval away". That is true of the instant the
+// reminder became due, not of the moment it is read, and it is not true at all
+// when the interval is longer than the window the deadline was set with — the
+// reminder is then due the moment it is configured. The notice line this rides
+// under already states the deadline itself, so the clause states only the fact
+// about the addressee that the deadline does not.
+const ASSIGNMENT_REMINDER_CLAUSE = 'still have Players with no contract length.';
+const ASSIGNMENT_DEADLINE_PASSED_CLAUSE =
+	'still have Players with no contract length, and the assignment deadline has passed. No length was assigned.';
+
+const CLAUSE_FOR_EVENT_TYPE: Readonly<Record<string, string>> = Object.freeze({
+	AssignmentRemindersSent: ASSIGNMENT_REMINDER_CLAUSE,
+	AssignmentDeadlinePassed: ASSIGNMENT_DEADLINE_PASSED_CLAUSE
+});
+
 /** A payload as an object, or an empty one. `broadcast.ts`'s `fields`. */
 function fields(payload: unknown): Record<string, unknown> {
 	return typeof payload === 'object' && payload !== null
@@ -184,6 +219,13 @@ function categoryFor(event: BroadcastEvent, teamId: string | null): Notification
 		case 'ContentionDrawn':
 			return 'contender';
 		case 'ContractAssignmentOpened':
+		// Story 6.2's two markers ride the SAME category — the phase's own —
+		// because they are the same conversation: a Manager who wants to hear
+		// about Contract Assignment wants to hear all three, and a category
+		// exists to be muted rather than to label an event. `contract_assignment`
+		// is unmutable, so nothing about mute handling changes either.
+		case 'AssignmentRemindersSent':
+		case 'AssignmentDeadlinePassed':
 			return 'contract_assignment';
 		default:
 			return null;
@@ -200,6 +242,12 @@ function categoryFor(event: BroadcastEvent, teamId: string | null): Notification
  * that adding a category cannot leave a clause unassigned.
  */
 function clauseFor(event: BroadcastEvent, teamId: string | null): string | null {
+	// The per-type override first — see `CLAUSE_FOR_EVENT_TYPE`. Three event
+	// types share one category and two of them need their own sentence, so the
+	// type is consulted before the category rather than the category being
+	// split to carry them.
+	const override = CLAUSE_FOR_EVENT_TYPE[event.eventType];
+	if (override !== undefined) return override;
 	const category = categoryFor(event, teamId);
 	return category === null ? null : CLAUSE_FOR_CATEGORY[category];
 }
