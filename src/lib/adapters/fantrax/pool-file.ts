@@ -4,13 +4,24 @@
  * server layer, the core — sees only `ParsedPoolRow`, a domain type with no
  * notion of a CSV cell.
  *
- * **Column shape is a placeholder, TODO-confirm (addendum.md B).** No real
- * Fantrax export has been obtained yet; the four header names below are this
- * story's best-effort mapping from addendum.md B's documented pool row shape
- * ("Fantrax player ID, name, position(s), NBA team"). Real confirmation
- * against a BBSL export is deferred to 1.9/AR-33, per this story's
- * Boundaries & Constraints. Keeping the map in this one module —
- * `POOL_COLUMNS` below — is what makes that confirmation a one-file edit.
+ * **Column shape CONFIRMED 2026-09-05 against a real BBSL export** (AR-33,
+ * Story 9.5), replacing the four `TODO-confirm` placeholders that had stood
+ * since Story 1.8. All four were wrong — the real export names them `ID`,
+ * `Player`, `Position` and `Team`, not `Fantrax Player ID`, `Player Name`,
+ * `Positions` and `NBA Team`. Every one of the thirty-one files would have
+ * refused at row 0 on setup day. Keeping the map in this one module —
+ * `POOL_COLUMNS` below — is what made that confirmation a one-file edit.
+ *
+ * **The export carries far more than these four columns** — `Rookie`, `RkOv`,
+ * `Status`, `Age`, `Opponent`, `Salary`, `Contract` and a dozen stat columns.
+ * The header check below tests only for *missing* required names, so the
+ * extras are ignored rather than refused. That is deliberate: Fantrax will add
+ * a stat column one day and it must not break setup day.
+ *
+ * **`Salary` and `Contract` are present but deliberately unread.** A Free
+ * Agent's Fantrax salary is not his BBSL price — the auction sets that — and
+ * `free_agent_players` carries no column for either. Reading them here would
+ * invent a figure the domain has no place for.
  *
  * **This module deliberately shares no base with `roster-file.ts`**, whose
  * structure it otherwise mirrors line for line. The two column maps must
@@ -37,15 +48,23 @@ import { parse } from 'csv-parse/sync';
 import type { ParsedPoolRow } from '../../core/types.ts';
 
 /**
- * The placeholder column headers, exactly as they must appear in row 1 of
- * the pool CSV. See the module header above — TODO-confirm against a real
- * export.
+ * The column headers, exactly as they appear in row 1 of a real Fantrax
+ * player export. Confirmed 2026-09-05; see the module header above.
+ *
+ * `positions` holds the export's `Position` cell verbatim — a comma-joined
+ * run like `PG,SG,G` — because `ParsedPoolRow.positions` is a string and no
+ * consumer splits it. It survives the CSV's own comma because the cell is
+ * quoted.
+ *
+ * `nbaTeam` is the export's `Team`, which is the player's real-life NBA club
+ * (`BOS`, `LAL`), never a fantasy Team. That is the glossary rule holding:
+ * a three-letter capitalised abbreviation always and only means an NBA team.
  */
 export const POOL_COLUMNS = Object.freeze({
-	fantraxPlayerId: 'Fantrax Player ID',
-	playerName: 'Player Name',
-	positions: 'Positions',
-	nbaTeam: 'NBA Team'
+	fantraxPlayerId: 'ID',
+	playerName: 'Player',
+	positions: 'Position',
+	nbaTeam: 'Team'
 } as const);
 
 const REQUIRED_COLUMNS: readonly string[] = Object.values(POOL_COLUMNS);
