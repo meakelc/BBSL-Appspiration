@@ -27,6 +27,19 @@
 	// Types are declared structurally rather than imported from a server-only
 	// module: nothing in the server-only library may ever be reachable from a
 	// `.svelte` file.
+	// The core's own spelling of a length, imported rather than restated: its
+	// docstring says it exists "so the radio, the refusal sentence and the
+	// remaining-allotment sentence cannot spell the same length three ways", and
+	// a local copy here would be the third way. `$lib/core` is the pure core,
+	// which AD-2 says both runtimes load, so nothing server-only is reachable
+	// from this file.
+	import { contractLengthLabel } from '$lib/core/rules/contract-assignment.ts';
+	// The four legal lengths as a TYPE, from the same pure module. The rows
+	// below stay structurally declared — the board's shape is the server's — but
+	// a length is a closed union the core owns, and typing it `number` here
+	// would make `contractLengthLabel(years)` a cast rather than a call.
+	import type { ContractYears } from '$lib/core/projection/contracts.ts';
+
 	import type { ActionData, PageData } from './$types';
 
 	type AssignmentRow = {
@@ -34,9 +47,10 @@
 		readonly playerName: string;
 		readonly winningAmountLabel: string;
 		readonly placement: string;
-		readonly contractYears: number | null;
+		readonly placementLabel: string;
+		readonly contractYears: ContractYears | null;
 		readonly lengthLabel: string;
-		readonly offerable: readonly number[];
+		readonly offerable: readonly ContractYears[];
 	};
 
 	type AssignmentBoard = {
@@ -75,10 +89,6 @@
 
 	/** The separate confirmation for the one-way act of going final. */
 	let submitConfirmed = $state(false);
-
-	function lengthLabel(years: number): string {
-		return years === 1 ? '1 year' : `${String(years)} years`;
-	}
 
 	function rowBlocked(row: AssignmentRow): boolean {
 		const chosen = chosenLength[row.fantraxPlayerId] ?? '';
@@ -153,10 +163,11 @@
 					{#each board.rows as row (row.fantraxPlayerId)}
 						<li class="won-row">
 							<p class="row-player">{row.playerName}</p>
+							<!-- The placement in the CORE's words. A ternary here would be
+							     a sentence written on the surface, and it would silently
+							     label any future third `SlotPlacement` as Active/Bench. -->
 							<p class="row-detail">
-								Won for {row.winningAmountLabel} · {row.placement === 'minor_league'
-									? 'Minor League'
-									: 'Active/Bench'}
+								Won for {row.winningAmountLabel} · {row.placementLabel}
 							</p>
 							<p class="row-detail" id={`length-${row.fantraxPlayerId}`}>
 								Contract length: {row.lengthLabel}
@@ -184,7 +195,7 @@
 													value={String(years)}
 													bind:group={chosenLength[row.fantraxPlayerId]}
 												/>
-												<span class="prose">{lengthLabel(years)}</span>
+												<span class="prose">{contractLengthLabel(years)}</span>
 											</label>
 										{/each}
 									</fieldset>
@@ -200,8 +211,10 @@
 											bind:checked={rowConfirmed[row.fantraxPlayerId]}
 										/>
 										<span class="prose">
-											I confirm this length for {row.playerName}. It spends that deal from
-											your Year Allotment, and is changeable until your Team is final.
+											I confirm this length for {row.playerName}. Your Year Allotment is
+											counted from the lengths your Team currently holds, so any deal
+											{row.playerName} holds now returns to it as this one is taken. It is
+											changeable until your Team is final.
 										</span>
 									</label>
 

@@ -361,10 +361,15 @@ function withoutDelta(facts: ReEntryFacts): Omit<ReEntry, 'sentence'> {
  * What a won Auction says.
  *
  * **No contract years and no salary**: `free_agent_players` carries
- * `player_name`, `positions` and `nba_team` and nothing else, and
- * `AuctionContract.contractYears` is typed `null` because FR-21 records
- * contract length UNSET at a close. The metadata line is `NBA · POS`, as 4.3
- * already narrowed it.
+ * `player_name`, `positions` and `nba_team` and nothing else, so there is no
+ * salary to show. Contract years are absent for a different reason since Story
+ * 6.1 widened `AuctionContract.contractYears` to `ContractYears | null`: a
+ * length now EXISTS on the contract, but it is the Contract Assignment Phase's
+ * business and `/contract-assignment` is the surface that states and changes
+ * it. Your Positions is an AUCTION-phase card about what a Team won and what it
+ * cost, and a length rendered here would be a fact from the next phase shown
+ * beside one from this one. The metadata line is `NBA · POS`, as 4.3 already
+ * narrowed it.
  */
 export type WonCard = {
 	readonly fantraxPlayerId: string;

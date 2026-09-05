@@ -43,6 +43,11 @@ import type { SubmittedTeams } from '../projection/assignments.ts';
 import { hasSubmittedAssignments } from '../projection/assignments.ts';
 import type { SlotPlacement } from '../types.ts';
 import { describeAmount } from './bidding.ts';
+// `SLOT_LABELS`, never `positions.ts`'s `PLACEMENT_LABELS`: that record is the
+// ARTICLE form ("an Active/Bench Slot") a sentence needs, and a row's metadata
+// line is a readout rather than a sentence. Two spellings for two registers
+// already existed; this surface takes the one that fits it.
+import { SLOT_LABELS } from './roster-import.ts';
 
 /**
  * Every length a Manager may choose, in the order the surface offers them.
@@ -197,9 +202,13 @@ export function unassignedContracts(
  * NULL (AD-4) so an unbound actor has no event to append. Their sentences still
  * come from here.
  *
- * `not_won` covers both "no such contract" and "that contract belongs to
- * somebody else" with one sentence, because from the acting Manager's side they
- * are the same fact: it is not a Player their Team won.
+ * `not_won` covers THREE cases with one sentence — "no such contract", "that
+ * contract belongs to somebody else", and the route's own "this request named
+ * no Player at all" — because from the acting Manager's side they are the same
+ * fact: it is not a Player their Team won. The third is raised by
+ * `+page.server.ts` before any transaction opens, for the reason its header
+ * gives: a submit that names nobody has nothing for the gate to decide about,
+ * and an unnamed Player is not among the ones this Team won either.
  */
 export type ContractAssignmentRefusal =
 	| { readonly kind: 'unbound_actor' }
@@ -211,6 +220,25 @@ export type ContractAssignmentRefusal =
 			readonly kind: 'exhausted';
 			readonly playerName: string;
 			readonly years: ContractYears;
+			/**
+			 * The Team's remainder counting EVERY contract it holds — the
+			 * inclusive count, deliberately NOT the exclusive one the gate
+			 * decided against.
+			 *
+			 * The two differ on a re-assignment, and only one of them is a true
+			 * sentence about the Team. `remainingAllotmentSentence` says "Your
+			 * Year Allotment has … left", which is a claim about the TEAM, and
+			 * the page header states the same figure from
+			 * `assignmentBoardFor`'s inclusive count. Carrying the exclusive
+			 * count here would print two different four-year counts on one
+			 * screen: refuse a move of a Player off their 4-year and the
+			 * refusal would claim a four-year deal is available while the
+			 * header, correctly, says none is.
+			 *
+			 * The exclusion belongs to the DECISION and stays there — see
+			 * `refuseAssignment`. What the Manager is TOLD about their allotment
+			 * is the allotment they actually have.
+			 */
 			readonly remaining: RemainingAllotment;
 	  }
 	| { readonly kind: 'unset_on_submit'; readonly unsetCount: number }
@@ -305,13 +333,18 @@ export function refuseAssignment(
 	if (contract === undefined) return { kind: 'not_won' };
 
 	// The remainder this Player's own current length is NOT counted against.
-	const remaining = remainingAllotment(state.contracts, actor.teamId, command.fantraxPlayerId);
-	if (!isLengthOfferable(remaining, command.contractYears)) {
+	// This is the count the DECISION is made on, and it is the only thing it is
+	// used for.
+	const offerable = remainingAllotment(state.contracts, actor.teamId, command.fantraxPlayerId);
+	if (!isLengthOfferable(offerable, command.contractYears)) {
 		return {
 			kind: 'exhausted',
 			playerName: contract.playerName,
 			years: command.contractYears,
-			remaining
+			// The INCLUSIVE count for the SENTENCE — see the field's own note.
+			// The refusal states what the Team has, which is what the page
+			// header states too; the exclusion never leaves this function.
+			remaining: remainingAllotment(state.contracts, actor.teamId, null)
 		};
 	}
 
@@ -349,6 +382,8 @@ export type AssignmentRow = {
 	/** What the Auction was won for, in the abbreviated form (AD-8). */
 	readonly winningAmountLabel: string;
 	readonly placement: SlotPlacement;
+	/** That placement in words — `Active/Bench` or `Minor League`. */
+	readonly placementLabel: string;
 	/** The length currently assigned, or `null` while it is unset. */
 	readonly contractYears: ContractYears | null;
 	/** `Not assigned`, or `4 years`. */
@@ -401,7 +436,10 @@ export function assignmentBoardFor(
 ): AssignmentBoard {
 	const won = contractsWonBy(state.contracts, actor.teamId);
 	const submitted = hasSubmittedAssignments(state.submitted, actor.teamId);
-	const unsetCount = won.filter((contract) => contract.contractYears === null).length;
+	// `unassignedContracts`, not a second filter of its own: `refuseSubmission`
+	// counts the same Players to decide whether this Team may go final, and a
+	// board that counted them differently would offer a submit the gate refuses.
+	const unsetCount = unassignedContracts(state.contracts, actor.teamId).length;
 
 	const rows: AssignmentRow[] = won.map((contract) => ({
 		fantraxPlayerId: contract.fantraxPlayerId,
@@ -411,6 +449,10 @@ export function assignmentBoardFor(
 		// would take the whole page down over one bad row.
 		winningAmountLabel: describeAmount(contract.winningAmount),
 		placement: contract.placement,
+		// Worded HERE and never on the surface. A ternary on the page would also
+		// silently label a future third `SlotPlacement` as Active/Bench; this
+		// record is keyed on the type, so a new kind is a compile error instead.
+		placementLabel: SLOT_LABELS[contract.placement],
 		contractYears: contract.contractYears,
 		lengthLabel:
 			contract.contractYears === null ? 'Not assigned' : contractLengthLabel(contract.contractYears),

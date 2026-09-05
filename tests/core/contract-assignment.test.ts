@@ -289,8 +289,32 @@ describe('refuseAssignment — the gates, in order', () => {
 			kind: 'exhausted',
 			playerName: 'Player One',
 			years: 2,
-			remaining: { fourYear: 1, threeYear: 1, twoYear: 0 }
+			// The INCLUSIVE remainder — what Team K actually has — and NOT the
+			// exclusive count the gate decided on, which would read `fourYear: 1`
+			// here because P1's own 4-year is discounted. The sentence says "Your
+			// Year Allotment has … left", which is a claim about the TEAM, and
+			// P1 still holds that four-year deal while this refusal is written.
+			remaining: { fourYear: 0, threeYear: 1, twoYear: 0 }
 		});
+	});
+
+	it('states the SAME allotment figure the page header does, on one screen', () => {
+		// The bug this pins: the gate counts exclusively so a re-assignment is
+		// not refused against the Player's own deal, but the refusal SENTENCE and
+		// the header are both claims about the Team and must agree. A Manager
+		// reading "1 four-year deal left" above a header saying 0 is being told
+		// two different things about one allotment.
+		const state = stateOf(...FIVE_WINS, assigned('p-1', 4), assigned('p-2', 2), assigned('p-3', 2));
+
+		const refusal = refuseAssignment(state, ACTOR, { fantraxPlayerId: 'p-1', contractYears: 2 });
+		const board = assignmentBoardFor(state, ACTOR);
+
+		expect(refusal?.kind).toBe('exhausted');
+		// The figures, and then the whole sentence they render into.
+		expect(refusal !== null && refusal.kind === 'exhausted' ? refusal.remaining : null).toEqual(
+			board.remaining
+		);
+		expect(contractAssignmentRefusalDetail(refusal!)).toContain(board.remainingSentence);
 	});
 
 	it('refuses every assignment once the Team is final, before anything else', () => {
@@ -421,11 +445,34 @@ describe('assignmentBoardFor — the surface, derived from the fold and nothing 
 		// P1 keeps the 4-year on offer: their own deal is excluded from the count.
 		expect(p1?.offerable).toEqual([1, 2, 3, 4]);
 
+		// The placement in words, so no surface writes a ternary of its own.
+		expect(p1?.placement).toBe('active_bench');
+		expect(p1?.placementLabel).toBe('Active/Bench');
+
 		const p2 = board.rows.find((row) => row.fantraxPlayerId === 'p-2');
 		expect(p2?.contractYears).toBeNull();
 		expect(p2?.lengthLabel).toBe('Not assigned');
 		// P2 cannot have the 4-year: P1 holds it.
 		expect(p2?.offerable).toEqual([1, 2, 3]);
+	});
+
+	it('words a Minor League placement from the core’s own record', () => {
+		const state = stateOf(
+			event(
+				AUCTION_CLOSED_EVENT,
+				closedPayload({
+					fantraxPlayerId: 'p-m',
+					playerName: 'Stashed Player',
+					teamId: TEAM,
+					teamName: 'Team K',
+					placement: 'minor_league',
+					capHit: 0
+				})
+			)
+		);
+		const row = assignmentBoardFor(state, ACTOR).rows[0];
+		expect(row?.placement).toBe('minor_league');
+		expect(row?.placementLabel).toBe('Minor League');
 	});
 
 	it('renders money in the abbreviated form and nothing else (AD-8)', () => {

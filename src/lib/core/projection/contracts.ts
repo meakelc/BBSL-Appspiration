@@ -353,21 +353,6 @@ function readPayload(
 }
 
 /**
- * Fold one event onto the Auction Contracts.
- *
- * The `default: return state` discipline is `phase.ts`'s, for the same
- * reason: an event type this reducer has not been taught is not an error, it
- * is simply not about contracts.
- *
- * **The FIRST close for a Player wins.** A second `AuctionClosed` naming a
- * Player who already holds a contract changes nothing, which is what makes
- * folding the same log twice converge on the identical state (AD-5) — and it
- * is the same answer the other two reducers give a double close, so all three
- * agree about what a repeated event means. In practice one cannot arrive: an
- * Auction leaves `auctionsReducer` and `nominationsReducer` on its close, so
- * nothing can produce a second one for the same Player.
- */
-/**
  * The `ContractLengthAssigned` payload as this reducer needs it, read
  * defensively — `readPayload`'s discipline, for `readPayload`'s reason.
  *
@@ -393,6 +378,21 @@ function readAssignmentPayload(
 	return { fantraxPlayerId, teamId, contractYears };
 }
 
+/**
+ * Fold one event onto the Auction Contracts.
+ *
+ * The `default: return state` discipline is `phase.ts`'s, for the same
+ * reason: an event type this reducer has not been taught is not an error, it
+ * is simply not about contracts.
+ *
+ * **The FIRST close for a Player wins.** A second `AuctionClosed` naming a
+ * Player who already holds a contract changes nothing, which is what makes
+ * folding the same log twice converge on the identical state (AD-5) — and it
+ * is the same answer the other two reducers give a double close, so all three
+ * agree about what a repeated event means. In practice one cannot arrive: an
+ * Auction leaves `auctionsReducer` and `nominationsReducer` on its close, so
+ * nothing can produce a second one for the same Player.
+ */
 export const contractsReducer: Reducer<AuctionContracts> = (state, event) => {
 	switch (event.type) {
 		case AUCTION_CLOSED_EVENT: {

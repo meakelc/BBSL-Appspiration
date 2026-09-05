@@ -2,7 +2,7 @@
 title: 'Assign contract lengths against the Year Allotment'
 type: 'feature'
 created: '2026-09-04'
-status: 'in-progress'
+status: 'in-review'
 baseline_commit: '8494e0eec29ca5a6982ff22769a14a7fe40c94bd'
 review_loop_iteration: 0
 context: []

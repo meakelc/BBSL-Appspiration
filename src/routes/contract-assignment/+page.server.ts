@@ -11,13 +11,22 @@
  * and the catalog entry's `commissionerOnly: false` is the statement of that.
  * Hiding a form is never the check.
  *
- * **Nothing this file decides is a rules gate.** Four refusals are raised here
- * because none has anything to decide about inside a transaction: the unnamed
- * or unparsable length, because a submit that states no legal length cannot be
- * gated against an allotment; the missing confirmation, because an unconfirmed
- * submit means only that this request did not mean to act; and the unbound
- * actor, because `auction_events.manager_id`/`team_id` are NOT NULL (AD-4) so
- * there is no event to append. All four sentences still come from the pure core
+ * **Nothing this file decides is a rules gate.** Four refusals are raised here,
+ * each a DIFFERENT kind of the core's union, because none has anything to
+ * decide about inside a transaction:
+ *
+ *   - `not_won`, for a submit naming no Player at all — a request that cannot
+ *     say who it is about cannot be gated against the contracts this Team won,
+ *     and an unnamed Player is not among them either.
+ *   - `invalid_length`, for a `contractYears` field that is not one of the four
+ *     legal lengths — there is no allotment to count an unparsable length
+ *     against.
+ *   - `unconfirmed`, for a missing confirmation, because an unconfirmed submit
+ *     means only that this request did not mean to act.
+ *   - `unbound_actor`, because `auction_events.manager_id`/`team_id` are NOT
+ *     NULL (AD-4), so there is no event to append.
+ *
+ * All four sentences still come from the pure core
  * — this file words no refusal of its own. Every real gate — the Team's
  * finality, the contract's existence and ownership, and the Year Allotment — is
  * re-derived inside the command's transaction under the global lock, so a page
