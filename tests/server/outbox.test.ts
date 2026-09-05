@@ -932,6 +932,57 @@ describe('drainOutbox — one pass', () => {
 		).toEqual([ALICE, BOB]);
 	});
 
+	it('composes and posts a MENTION-ONLY group, with no channel-addressed intent', async () => {
+		// `AssignmentRemindersSent` (Story 6.2) is the first event type ever
+		// enqueued for mentions that is NOT also in `BROADCAST_EVENT_TYPES`, so
+		// this is the first group `composeBatch` has ever built with no
+		// `BROADCAST_RECIPIENT` row in it. Every earlier drain test used an event
+		// that was broadcast and mentioned at once, which means the notice was
+		// always owed for a reason independent of the mentions. Here the notice
+		// is composed ONLY because a mention rides it — remove that and the
+		// reminder silently stops reaching Discord while its intents still look
+		// correctly filed in `notification_outbox`.
+		const harness = fakeGateway({
+			managers: [{ teamId: TEAM, discordUserId: ALICE }],
+			// The directory needs the Team's name: `mentionSuffixFor` addresses
+			// `<@id> — Lakers — Meakel` and falls back to the bare "was recorded"
+			// line without it.
+			teams: [{ id: TEAM, name: 'Lakers' }]
+		});
+		const reminder: EventEnvelope = {
+			type: 'AssignmentRemindersSent',
+			payload: {
+				deadline: '2026-09-10T17:00:00.000Z',
+				outstandingTeamIds: [TEAM],
+				outstandingPlayerCount: 2,
+				evaluatedAt: '2026-09-09T17:00:00.000Z'
+			},
+			// The tick compared a clock; nobody acted.
+			managerId: null,
+			teamId: null
+		};
+
+		await write(harness.gateway, [reminder], 'accepted', enqueueMentions(() => [TEAM]));
+
+		// No sentinel row was filed — the event is deliberately not broadcast.
+		expect(harness.outbox.map((intent) => intent['recipient'])).toEqual([ALICE]);
+
+		const channel = fakeChannel();
+		await drainOutbox(harness.gateway, { channels: { [DISCORD_CHANNEL]: channel.port } });
+
+		// It still reaches the channel, because a mention IS a channel post.
+		expect(channel.posts).toHaveLength(1);
+		expect(channel.posts[0]?.recipients).toEqual([ALICE]);
+		const body = channel.posts[0]?.body ?? '';
+		expect(body).toContain('The contract assignment deadline is 2026-09-10T17:00:00.000Z.');
+		expect(body).toContain(`<@${ALICE}>`);
+		expect(body).toContain('still have Players with no contract length.');
+		// The fallback line would mean `noticeFor` never learned this type.
+		expect(body).not.toContain('was recorded (event #');
+		// And the tally of who is late stays with the deadline notice.
+		expect(body).not.toContain('2 Teams');
+	});
+
 	it('dispatches nothing on a re-run of the same tick', async () => {
 		// The matrix's "Retry of the same tick" row. The successful outcome
 		// events remove both intents from the derived pending set, so this is

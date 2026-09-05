@@ -42,7 +42,7 @@ import { formatTeamManager, formatTeamManagers } from '../../core/team-identity.
 // --- What is broadcast ----------------------------------------------------
 
 /**
- * The six event types the league channel hears about, and nothing else.
+ * The seven event types the league channel hears about, and nothing else.
  *
  * Deliberately NOT every appended event. `AuctionTerminated` and
  * `ContentionDissolved` are quiet outcomes nobody is waiting on; eligibility
@@ -57,7 +57,16 @@ export const BROADCAST_EVENT_TYPES: readonly string[] = [
 	'AuctionClosed',
 	'ContentionDrawn',
 	'AuctionOpened',
-	'ContractAssignmentOpened'
+	'ContractAssignmentOpened',
+	// Story 6.2. The DEADLINE only — `AssignmentRemindersSent` is deliberately
+	// absent. Membership here is what files a CHANNEL-ADDRESSED intent, and the
+	// deadline passing is a league-wide fact that earns one even in the league
+	// where every Team had already submitted. A reminder is addressed to the
+	// Teams that still owe a length, so it files mention intents alone and no
+	// line of its own is owed to the channel. It still gets copy below, because
+	// `composeNotice` words every group it drains and the fallback line is not
+	// a sentence anybody should have to read.
+	'AssignmentDeadlinePassed'
 ];
 
 /** Whether an appended event's type earns a line in the league channel. */
@@ -432,6 +441,47 @@ function composed(event: BroadcastEvent, directory: LeagueDirectory): string | n
 					? 'Every nominated Player drew a Bid.'
 					: `${String(terminated.length)} nominated ${plural(terminated.length, 'Player')} ended with no Bid.`;
 			return `The Auction Phase has ended and Contract Assignment is open. ${unbid}`;
+		}
+
+		case 'AssignmentRemindersSent': {
+			const deadline = text(payload, 'deadline');
+			if (deadline === null) return null;
+			// **This event files no channel-addressed intent** — see
+			// `BROADCAST_EVENT_TYPES`. It is worded here because its MENTIONS
+			// ride the same channel post, and the drain composes one notice per
+			// event whether or not the channel itself was addressed. Without
+			// this case the reminder would sit under
+			// `A AssignmentRemindersSent was recorded (event #N).`
+			//
+			// **It states the deadline and NOTHING about who is late.** The
+			// count belongs to `AssignmentDeadlinePassed`, which is a league-wide
+			// fact once the deadline has actually elapsed. Publishing it an
+			// interval EARLIER would name the Teams still working, in the
+			// channel, before anything is owed — the reminder is addressed to
+			// them by mention for that reason. Whoever is addressed already
+			// knows it is them; nobody else needs a tally.
+			return `The contract assignment deadline is ${deadline}.`;
+		}
+
+		case 'AssignmentDeadlinePassed': {
+			const deadline = text(payload, 'deadline');
+			if (deadline === null) return null;
+			const outstanding = ids(payload, 'outstandingTeamIds');
+			// An absent list is not a rendering this notice can vouch for: the
+			// sentence below counts it, and a count nobody supplied would be an
+			// invented figure. The fallback line is the honest answer.
+			if (outstanding === null) return null;
+			// **No urgency framing and no suggested action.** The deadline
+			// passing changes no phase, blocks nothing and unlocks nothing, so
+			// the line states the instant, states who was outstanding at it, and
+			// stops. Zero outstanding Teams is an ordinary outcome and still
+			// earns the line — it is the record that the deadline arrived.
+			const who =
+				outstanding.length === 0
+					? 'Every Team had submitted its contract assignments.'
+					: `${String(outstanding.length)} ${plural(outstanding.length, 'Team')} ` +
+						`${outstanding.length === 1 ? 'has' : 'have'} Players with no contract length.`;
+			return `The contract assignment deadline of ${deadline} has passed. ${who} No contract length was assigned by it.`;
 		}
 
 		default:
