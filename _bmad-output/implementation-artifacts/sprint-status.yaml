@@ -109,12 +109,12 @@ development_status:
   8-4-the-outage-recovery-procedure-and-the-go-live-gate: backlog
   epic-8-retrospective: optional
 
-  epic-9: backlog
+  epic-9: in-progress
   9-1-provision-supabase-dev-and-apply-the-schema: backlog
   9-2-provision-the-discord-application-channel-and-webhook: backlog
   9-3-admit-realtime-to-the-csp: backlog
   9-4-seed-thirty-teams-and-the-moderator-managers: backlog
-  9-5-confirm-the-fantrax-column-maps-against-a-real-export: backlog
+  9-5-confirm-the-fantrax-column-maps-against-a-real-export: done
   9-6-the-setup-runbook: backlog
   9-7-run-the-moderator-pilot: backlog
   9-8-provision-prod-and-run-setup-day-for-real: backlog
