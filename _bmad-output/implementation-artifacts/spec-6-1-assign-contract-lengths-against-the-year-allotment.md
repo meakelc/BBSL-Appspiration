@@ -2,7 +2,7 @@
 title: 'Assign contract lengths against the Year Allotment'
 type: 'feature'
 created: '2026-09-04'
-status: 'in-review'
+status: 'done'
 baseline_commit: '8494e0eec29ca5a6982ff22769a14a7fe40c94bd'
 review_loop_iteration: 0
 context: []
@@ -111,3 +111,66 @@ context: []
 - `npm test` -- expected: all suites green, including the new `example-14` file and `tests/structure.test.ts`'s manifest check.
 - `npm run check` -- expected: clean. Widening `contractYears` is the type change most likely to surface consumers; `src/lib/core/rules/close.ts` must NOT be among them.
 - `git diff --stat` -- expected: nothing under `supabase/migrations/`, nothing in `src/lib/core/rules/close.ts`, nothing in `src/lib/server/destinations.ts`.
+
+## Suggested Review Order
+
+**The allotment rule — start here**
+
+- The whole story in one function: a count over folded lengths, with the assigned Player excluded.
+  [`contract-assignment.ts:127`](../../src/lib/core/rules/contract-assignment.ts#L127)
+
+- The gate. `offerable` counts exclusively; the refusal carries the inclusive count for its sentence.
+  [`contract-assignment.ts:321`](../../src/lib/core/rules/contract-assignment.ts#L321)
+
+- Why those two counts differ, and why only one is a true sentence about the Team.
+  [`contract-assignment.ts:220`](../../src/lib/core/rules/contract-assignment.ts#L220)
+
+- Going final needs every won Player carrying a length, and happens once.
+  [`contract-assignment.ts:362`](../../src/lib/core/rules/contract-assignment.ts#L362)
+
+**The fold — where a length comes to live on a contract**
+
+- Latest assignment per Player wins, so a correction needs no compensating event.
+  [`contracts.ts:409`](../../src/lib/core/projection/contracts.ts#L409)
+
+- The widening that made Epic 6 possible: `null` becomes `ContractYears | null`.
+  [`contracts.ts:77`](../../src/lib/core/projection/contracts.ts#L77)
+
+- Per-Team submission, folded separately because it is not per-contract state.
+  [`assignments.ts:92`](../../src/lib/core/projection/assignments.ts#L92)
+
+**The write path — one read, two folds, every gate re-derived under the lock**
+
+- One event read, then decide; no projection updater and no outbox enqueue.
+  [`contract-assignment.ts:136`](../../src/lib/server/contract-assignment.ts#L136)
+
+- The one-way act, gated on completeness inside the transaction.
+  [`contract-assignment.ts:191`](../../src/lib/server/contract-assignment.ts#L191)
+
+**The surface — worded entirely by the core**
+
+- The board: rows, the inclusive remainder, and what each row may still be given.
+  [`contract-assignment.ts:433`](../../src/lib/core/rules/contract-assignment.ts#L433)
+
+- Both actions re-call the destination guard, then refuse shape before opening a transaction.
+  [`+page.server.ts:110`](../../src/routes/contract-assignment/+page.server.ts#L110)
+
+- The page writes no sentences of its own — it imports the core's labels.
+  [`+page.svelte:36`](../../src/routes/contract-assignment/+page.svelte#L36)
+
+- Two-part act: the radios select, a separate per-row confirmation assigns.
+  [`+page.svelte:205`](../../src/routes/contract-assignment/+page.svelte#L205)
+
+**Tests**
+
+- §10 example 14, named and registered — Team K can finish only on 1-year deals.
+  [`example-14-allotment-exhaustion.test.ts:1`](../../tests/examples/example-14-allotment-exhaustion.test.ts#L1)
+
+- The regression the review caught: refusal and header must state one figure.
+  [`contract-assignment.test.ts:301`](../../tests/core/contract-assignment.test.ts#L301)
+
+- The gates under a fake gateway that throws on unrecognized SQL, proving nothing is written.
+  [`contract-assignment.test.ts:1`](../../tests/server/contract-assignment.test.ts#L1)
+
+- The guard runs for real across all four phases, on `load` and on both actions.
+  [`contract-assignment.test.ts:1`](../../tests/routes/contract-assignment.test.ts#L1)
