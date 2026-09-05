@@ -104,6 +104,10 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 		'11 — Single-contender lottery'
 	],
 	['example-13-league-clock.test.ts', '13 — A close is not a League Clock reset'],
+	[
+		'example-14-allotment-exhaustion.test.ts',
+		'14 — Allotment exhaustion'
+	],
 	['example-15-co-manager-race.test.ts', '15 — Co-manager race'],
 	['example-16-minors-placement.test.ts', '16 — Minors placement'],
 	['example-17-minors-overflow.test.ts', '17 — Minors overflow'],

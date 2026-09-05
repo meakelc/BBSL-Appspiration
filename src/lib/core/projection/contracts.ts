@@ -40,6 +40,15 @@
  * malformed historical row is SKIPPED rather than thrown over, exactly as the
  * other two reducers skip it.
  *
+ * **First close wins, LATEST assignment wins**, and the two rules sit in one
+ * reducer without contradicting each other because they are about different
+ * events. Story 6.1 adds `ContractLengthAssigned`, which sets `contractYears`
+ * on a contract this fold already holds; a Manager may correct a length until
+ * their Team is submitted as final, so a later event for the same Player
+ * overwrites the earlier one and the Year Allotment is a COUNT over the current
+ * folded lengths rather than a ledger of what was spent. Replay still converges:
+ * both rules are functions of the log's order alone.
+ *
  * This module is part of the PURE core: no I/O, no clock, no randomness,
  * stdlib only, relative .ts imports only so Deno can load it (AD-2).
  */
@@ -51,6 +60,76 @@ import type { Reducer } from './fold.ts';
 import { AUCTION_CLOSED_EVENT, readClosedFacts } from './nominations.ts';
 
 export type { SlotPlacement };
+
+/**
+ * The four contract lengths the Year Allotment can spend, and the only values
+ * `AuctionContract.contractYears` may ever hold.
+ *
+ * A union of four literals rather than `number`, for `SlotPlacement`'s reason:
+ * the set is closed by the PRD (§3 "Year Allotment") and a length outside it
+ * is not a shorter or longer deal, it is a bug. Making `5` unwritable in the
+ * type is what stops a route, a payload reader or a test fixture inventing one.
+ *
+ * `1` is in the union like any other length even though the allotment does not
+ * count it: PRD §3 makes one-year deals unlimited, which is a statement about
+ * how many may be spent, never about whether a one-year deal is a real length.
+ */
+export type ContractYears = 1 | 2 | 3 | 4;
+
+/**
+ * The event type that assigns a contract length to one Auction Contract
+ * (Story 6.1, FR-21, PRD §10 example 14).
+ *
+ * Declared here, beside the reducer that gives it meaning, for
+ * `nominations.ts`'s `AUCTION_CLOSED_EVENT` reason — the fold IS what a
+ * contract length is. There is no `contract_length` column and no contracts
+ * table: a length is `contractYears` on the contract this reducer already
+ * folds, which is why every read surface and the export reach it without
+ * learning a second source.
+ *
+ * **The LATEST assignment per Player wins**, which is the exact opposite of
+ * `AUCTION_CLOSED_EVENT`'s first-wins rule, and both are right. A close is a
+ * fact about an Auction that happened once; an assignment is the Manager's
+ * current answer to a question they may change until they submit their Team as
+ * final. A correction is therefore an APPENDED event and never an update, and
+ * the length it previously held returns to the Year Allotment by arithmetic
+ * rather than by a compensating event.
+ */
+export const CONTRACT_LENGTH_ASSIGNED_EVENT = 'ContractLengthAssigned';
+
+/**
+ * The payload a `ContractLengthAssigned` carries.
+ *
+ * `teamId` is on the payload as well as on the envelope, and that is not a
+ * duplication this fold can do without: `readAssignmentPayload` refuses to move
+ * a length onto a contract another Team holds, and it can only make that check
+ * against a Team the payload itself names. The envelope's `team_id` is the
+ * ACTOR; this is the contract's owner, and the rules gate has already
+ * established they are the same Team.
+ *
+ * `playerName` and `teamName` are audit detail — what the Audit Log says out
+ * loud — and nothing folds on either.
+ */
+export type ContractLengthAssignedPayload = {
+	readonly fantraxPlayerId: string;
+	readonly playerName: string;
+	readonly teamId: string;
+	readonly teamName: string;
+	readonly managerId: string;
+	readonly contractYears: ContractYears;
+};
+
+/**
+ * Whether a value is one of the four legal lengths.
+ *
+ * Exported so no call site writes the four literals out again: a route parsing
+ * a form field, a payload reader defending the fold and a test fixture all ask
+ * this one question, and a fifth length could never be admitted by only one of
+ * them.
+ */
+export function isContractYears(value: unknown): value is ContractYears {
+	return value === 1 || value === 2 || value === 3 || value === 4;
+}
 
 /**
  * One Auction Contract, as the close recorded it.
@@ -69,12 +148,18 @@ export type { SlotPlacement };
  * 4's Your Positions, an audit view) should widen this type then, against a
  * real caller, rather than carrying a field no reader has.
  *
- * `contractYears` is `null` and typed as `null` rather than
- * `number | null`. FR-21 says contract length is recorded UNSET at a close and
- * Epic 6 is what assigns it — so this field states the absence rather than
- * carrying a placeholder, and a story that starts assigning lengths widens the
- * type and becomes a compile error at every reader. A `0` here would be a
- * length, and a wrong one.
+ * `contractYears` is `ContractYears | null`, and the `null` half is still the
+ * absence rather than a placeholder. FR-21 says contract length is recorded
+ * UNSET at a close, so a contract arrives here `null` and STAYS `null` until a
+ * `ContractLengthAssigned` names a length for it (Story 6.1). A `0` would be a
+ * length, and a wrong one; the union is deliberately the four legal lengths and
+ * nothing else, so `contractYears: 5` cannot be written down anywhere.
+ *
+ * The widening was Story 3.4's own forecast — "a story that starts assigning
+ * lengths widens the type and becomes a compile error at every reader" — and
+ * `rules/close.ts` deliberately did NOT move with it: a close records UNSET and
+ * its outcome type still says `null`, which is a narrower type and assigns
+ * cleanly into this one.
  *
  * `closedAt` is the Auction's own persisted NOMINAL expiry, never the
  * transaction clock. The event's `occurredAt` states when the system got round
@@ -96,8 +181,8 @@ export type AuctionContract = {
 	readonly capHit: Money;
 	/** Where the Player landed — the one thing Roster Count moves on. */
 	readonly placement: SlotPlacement;
-	/** Recorded UNSET at a close. Epic 6 assigns it. */
-	readonly contractYears: null;
+	/** Recorded UNSET at a close; set by a `ContractLengthAssigned` (Story 6.1). */
+	readonly contractYears: ContractYears | null;
 	/** The Auction's own persisted expiry — never the transaction clock. */
 	readonly closedAt: string;
 };
@@ -268,6 +353,32 @@ function readPayload(
 }
 
 /**
+ * The `ContractLengthAssigned` payload as this reducer needs it, read
+ * defensively — `readPayload`'s discipline, for `readPayload`'s reason.
+ *
+ * Three fields, all REJECTED rather than repaired when absent or wrong, which
+ * is the opposite balance from a close's two names. Every one of them decides
+ * what the fold does: a missing `fantraxPlayerId` names no contract, a
+ * `contractYears` outside the four legal lengths is not a shorter deal but a
+ * bug, and a missing `teamId` leaves nothing to check the contract's owner
+ * against. There is no cosmetic half to repair, so there is nothing here to
+ * fall back to.
+ */
+function readAssignmentPayload(
+	payload: unknown
+): { readonly fantraxPlayerId: string; readonly teamId: string; readonly contractYears: ContractYears } | null {
+	if (typeof payload !== 'object' || payload === null) return null;
+	const record = payload as Record<string, unknown>;
+	const fantraxPlayerId = record['fantraxPlayerId'];
+	const teamId = record['teamId'];
+	const contractYears = record['contractYears'];
+	if (typeof fantraxPlayerId !== 'string' || fantraxPlayerId === '') return null;
+	if (typeof teamId !== 'string' || teamId === '') return null;
+	if (!isContractYears(contractYears)) return null;
+	return { fantraxPlayerId, teamId, contractYears };
+}
+
+/**
  * Fold one event onto the Auction Contracts.
  *
  * The `default: return state` discipline is `phase.ts`'s, for the same
@@ -289,6 +400,33 @@ export const contractsReducer: Reducer<AuctionContracts> = (state, event) => {
 			if (contract === null) return state;
 			if (hasOwn(state.byPlayer, contract.fantraxPlayerId)) return state;
 			return { byPlayer: { ...state.byPlayer, [contract.fantraxPlayerId]: contract } };
+		}
+		// **The LATEST assignment for a Player wins** (Story 6.1). A Manager may
+		// change a length until their Team is submitted as final, and a change
+		// is an APPENDED event — nothing is updated and nothing is deleted — so
+		// the last one this fold sees is the Team's current answer and the
+		// earlier length is simply no longer counted against the Year Allotment.
+		case CONTRACT_LENGTH_ASSIGNED_EVENT: {
+			const assignment = readAssignmentPayload(event.payload);
+			if (assignment === null) return state;
+			const contract = contractForPlayer(state, assignment.fantraxPlayerId);
+			// An assignment for a Player who holds no Auction Contract sets
+			// nothing: there is no contract to carry the length, and inventing
+			// one out of an assignment payload would manufacture a Player a Team
+			// never won. The rules gate refuses this before it is ever appended.
+			if (contract === null) return state;
+			// A length may only be set on a contract the NAMED Team holds. The
+			// gate has already established the actor owns it; this is the second
+			// statement of the same rule, in the fold, where a historical row
+			// that disagreed would otherwise move a length onto somebody else's
+			// Player.
+			if (contract.teamId !== assignment.teamId) return state;
+			return {
+				byPlayer: {
+					...state.byPlayer,
+					[assignment.fantraxPlayerId]: { ...contract, contractYears: assignment.contractYears }
+				}
+			};
 		}
 		default:
 			return state;
