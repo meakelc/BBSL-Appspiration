@@ -349,6 +349,16 @@ The Commissioner can open the auction knowing an outage is survivable rather tha
 
 **Standalone:** this epic is the gate on opening the auction for real.
 
+### Epic 9: Stand it up and let the league in
+
+The app stops being code and becomes a thing people use: both vendors provisioned, the schema applied dev-first, the league's real data seeded, the Fantrax column maps confirmed against a real export, and a group of league moderators signed in with their own Discord accounts driving a real import and a real auction on the dev project — before thirty people depend on it. Added 2026-09-05 by `sprint-change-proposal-2026-09-05.md`.
+
+**FRs covered:** none new — this epic *executes* FR-1 through FR-27 for the first time against real infrastructure.
+
+**Also carries:** the two-vendor account setup no story owns, the hand-seeded `teams` and `managers` rows that exist because AD-15 ships no admin UI by design, the CSP widening Story 4.1 left blocking, AR-33's real-export confirmation, the setup runbook the repository has never had, and the pilot's findings triaged back into the backlog.
+
+**Standalone:** the difference between an app that passes its tests and an app that works.
+
 ---
 
 ## Epic 1: Setup day — the league's data in, the auction open
@@ -2300,10 +2310,268 @@ So that the fifteen minutes I spend deciding what to do are not the fifteen minu
 **Given** the go-live gate
 **When** the Commissioner runs it before opening
 **Then** the **§10 suite is green** across all 28 examples
-**And** the **restore has been rehearsed** and its outcome recorded
-**And** the **liveness detector has been proven** to wake a sleeping operator
+**And** the **restore has been rehearsed** and its outcome recorded (Story 8.3)
+**And** the **liveness detector has been proven** to wake a sleeping operator (Story 8.2)
 **And** **`coreVersion` parity** holds between the Node and Deno deployments
-**And** a **real Fantrax export** has been obtained and the salary and roster-slot columns confirmed against the adapter
-**And** **all 31 Managers are confirmed to hold Discord accounts**, since FR-4 makes Discord load-bearing for access rather than convenience
+**And** a **real Fantrax export** has been obtained and the salary and roster-slot columns confirmed against the adapter (Story 9.5)
+**And** **all 31 Managers are confirmed to hold Discord accounts**, since FR-4 makes Discord load-bearing for access rather than convenience (Story 9.8)
+**And** the **moderator pilot has been run** against the dev project and every finding it produced is triaged — fixed, or logged in `deferred-work.md` with the risk of opening without it stated (Story 9.7)
+**And** the **pause control has been exercised** against a running auction, including the break-glass path independent of Netlify, because pause is the one control whose first use must not be during the outage it exists for (Story 7.4)
+**And** where the gate is opened with a condition unmet, the **unmet condition is named in writing** alongside the decision to proceed — the gate may be knowingly overridden, but never silently
+
+**Given** Story 8.1's time-compressed synthetic rehearsal has **not** been run
+**When** the gate is evaluated
+**Then** this is recorded as an **accepted deviation**, not an oversight
+**And** the substitution is stated plainly: the moderator pilot exercised the real code paths with real people and real data, but **not** against a compressed clock — so the 24-hour and 48-hour clock paths remain first exercised in production
+**And** the §10 suite's clock examples are the only standing evidence for those paths
+
+---
+
+## Epic 9: Stand it up and let the league in
+
+The app stops being code and becomes a thing people use: both vendors provisioned, the schema applied dev-first, the league's real data seeded, the Fantrax column maps confirmed against a real export, and a group of league moderators signed in with their own Discord accounts driving a real import and a real auction on the dev project — before thirty people depend on it.
+
+Added 2026-09-05 by `sprint-change-proposal-2026-09-05.md`. The work in this epic was always required; it existed only as `source_spec: none` entries in `deferred-work.md`, which `AGENTS.md` marks as not-a-backlog, making it simultaneously mandatory and unbuildable. This epic is where it becomes buildable.
+
+**Execution order within the epic:** 9.5 and 9.1 in parallel first — 9.5 because it is the only story whose shape is unknown until a real file is in hand, 9.1 because provisioning has latency that cannot be compressed. Then 9.2, 9.3, 9.4, 9.6. Then 9.7. Story 9.8 runs last, after Stories 7.4, 8.2, 8.3 and 8.4.
+
+### Story 9.1: Provision Supabase dev and apply the schema
+
+As the Commissioner-builder,
+I want a real database with the real schema on it,
+So that thirty-eight stories of code stop being a hypothesis.
+
+**Acceptance Criteria:**
+
+**Given** no Supabase project exists
+**When** the dev project is created
+**Then** it is the **wipeable** project of AD-26's two-project topology, and prod is **not** created by this story
+**And** its Postgres major version satisfies the stack pin (`>=15.1.1.61`, required for sub-minute Supabase Cron), matching `supabase/config.toml`
+**And** `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, `SUPABASE_DB_URL`, `PUBLIC_SUPABASE_URL` and `PUBLIC_SUPABASE_ANON_KEY` are set in the Netlify **deploy-preview and branch-deploy contexts only**, never in production
+
+**Given** the thirteen migrations in `supabase/migrations/`
+**When** they are applied
+**Then** they are applied **dev-first** by migration file (AD-26)
+**And** **nothing is typed into the Supabase dashboard** — not schema, not a policy, not a grant
+**And** the applied state is verified against the repository, not assumed from a successful command
+
+**Given** the migrations have been applied
+**When** the `bbsl-tick` cron job is inspected
+**Then** it exists and is **inactive**, exactly as `20260831000000_tick.sql` creates it
+**And** it stays inactive until Story 9.7 enables it for the pilot
+
+**Given** the branch-to-environment mapping committed in `netlify.toml`
+**When** it is checked account-side
+**Then** it is confirmed to be **actually configured**, closing the half of `deferred-work.md:12` that has been outstanding since 2026-08-20
+**And** the Netlify credit cost of the configuration is recorded
+
+**Given** the deployed branch
+**When** `curl -I` is run against it
+**Then** every header `netlify.toml` declares is **actually served**, discharging the manual check `tests/headers.test.ts` cannot perform
+**And** the result is recorded, because the repository can prove the file declares them and nothing more
+
+### Story 9.2: Provision the Discord application, channel and webhook
+
+As a Manager,
+I want to sign in with the Discord account I already have,
+So that there is no password, no email, and no new account to create.
+
+**Acceptance Criteria:**
+
+**Given** Discord is the only identity provider (AD-15, FR-4)
+**When** the OAuth2 application is created
+**Then** `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET` and `DISCORD_REDIRECT_URI` are set server-side
+**And** the redirect URI matches the branch-deploy origin the pilot runs against, exactly
+**And** **no Discord value takes a `PUBLIC_` prefix**, because SvelteKit inlines every such variable into the client bundle permanently
+
+**Given** the league channel does not exist yet
+**When** it is created
+**Then** an **incoming webhook** is created on it and `DISCORD_WEBHOOK_URL` and `DISCORD_GUILD_ID` are set
+**And** the webhook is understood as **write-only** — it is a corroborating record and a reconciliation aid, and explicitly **not** a restore path (AD-21, Story 8.3)
+**And** the pilot uses a channel **separate from the one the real auction will use**, so pilot noise never contaminates the real league's record
+
+**Given** the outbox has never dispatched to a real webhook
+**When** the first message is posted
+**Then** `allowed_mentions` is confirmed present and explicit on the payload, as AD-18 requires
+**And** the **30 requests/minute** ceiling is confirmed as the real limit against real responses
+**And** whether the Story 5.1 delivery shape — one message per event versus batched — survives contact with that ceiling is **observed and recorded**, discharging for real the question Story 8.1 was to answer synthetically
+
+**Given** `APP_ORIGIN` is unset
+**When** a Discord mention is posted
+**Then** the notification still sends and only the deep link is lost, as `.env.example` states
+**And** `APP_ORIGIN` is set anyway, to the branch-deploy origin
+
+### Story 9.3: Admit Realtime to the CSP
+
+As a Manager watching the board,
+I want live updates rather than a poll,
+So that the freshness indicator reads Live and means it.
+
+**Acceptance Criteria:**
+
+**Given** `connect-src 'self'` in `netlify.toml`
+**When** it is widened
+**Then** it names the dev project's **literal hosts** — `https://<ref>.supabase.co` and `wss://<ref>.supabase.co`
+**And** it names **no wildcard host**, because `https://*.supabase.co` would admit every other tenant on the platform
+**And** the prod project's literal hosts are added by Story 9.8, not guessed here
+
+**Given** `tests/headers.test.ts` pins `connect-src` to exactly `["'self'"]`
+**When** the directive is widened
+**Then** the test is updated **in the same commit**, because `deferred-work.md:91` requires that the widening cannot happen silently
+**And** the test continues to assert that the CSP names no wildcard host and no third-party host beyond `https://discord.com` and the two Supabase literals
+
+**Given** the widened policy
+**When** a browser loads the deployed app
+**Then** the `auction_watermark` socket **connects**, and the freshness indicator reaches **Live** rather than sitting in Reconnecting
+**And** this is verified against a real deploy, not inferred from the committed file
+
+### Story 9.4: Seed thirty Teams and the moderator Managers
+
+As the Commissioner,
+I want the league's roster of people and teams to exist before anyone tries to sign in,
+So that a moderator's first experience of the app is not a refusal.
+
+**Acceptance Criteria:**
+
+**Given** no admin UI exists for `managers` or `teams`, by design (`teams.sql:14`, `spec-1-4` Never list)
+**When** the league is seeded
+**Then** it is done by a **checked-in, re-runnable script**, not by SQL typed at a prompt
+**And** the script is idempotent, so re-running it does not duplicate a Team or a Manager
+**And** it can **wipe and reseed** the dev project in one command, because the pilot's data must not survive into the real auction
+
+**Given** thirty Teams
+**When** they are seeded
+**Then** each carries its spelled-out fantasy Team name, never a three-letter abbreviation — which always and only means a player's real-life NBA team
+**And** names are unique, as `teams_name_not_blank` and the unique constraint require
+
+**Given** the moderators taking part in the pilot
+**When** their `managers` rows are seeded
+**Then** each carries the moderator's **real Discord snowflake**, their display name, and a `team_id` binding
+**And** exactly the intended moderators carry `is_commissioner = true`
+**And** an unregistered account attempting to sign in is refused **without enumerating the league** (AD-15) — verified, not assumed
+
+**Given** a Team with two Managers
+**When** both are seeded against one `team_id`
+**Then** co-management is exercised for the first time against real accounts, and both resolve to identical Cap Space, Maximum Bid and Nomination Slot status
+
+### Story 9.5: Confirm the Fantrax column maps against a real export
+
+As the Commissioner on setup day,
+I want the importer to accept the files Fantrax actually produces,
+So that thirty-one files do not refuse at content altitude with the league watching.
+
+**Acceptance Criteria:**
+
+**Given** `ROSTER_COLUMNS` (`src/lib/adapters/fantrax/roster-file.ts`) and `POOL_COLUMNS` (`pool-file.ts`), both marked `TODO-confirm`
+**When** a **real Fantrax export** is obtained
+**Then** every header name is confirmed against the real file, or corrected to match it
+**And** the `TODO-confirm` markers are removed, because they no longer describe the state of knowledge
+**And** the change is confined to those two objects, as AR-33 and AD-24 intend — nothing else in the codebase names a Fantrax CSV column
+
+**Given** `ROSTER_SLOT_ALIASES`
+**When** the real export's slot wording is known
+**Then** the alias set is **narrowed to the confirmed strings**, per the module's own instruction, rather than left permissive against wording that turned out not to exist
+**And** an unrecognised slot value still refuses at content altitude and names the offending row
+
+**Given** the import is **thirty-one files** — one Free Agent pool export plus one roster export per Team
+**When** the shape of the real export is examined
+**Then** it is confirmed that Fantrax produces them as thirty-one separate files and not as one combined file
+**And** if it does not, the discrepancy is escalated immediately rather than absorbed, because the file count is load-bearing on the import UI
+
+**Given** the Minor League Eligible flag
+**When** the export is examined
+**Then** it is confirmed **absent**, as already settled — it is Commissioner-set application data defaulting to not-eligible so omission fails safe
+
+### Story 9.6: The setup runbook
+
+As whoever stands this up next — including the Commissioner in eleven months,
+I want the setup written down,
+So that the knowledge does not live only in `.gitkeep` comments and one person's memory.
+
+**Acceptance Criteria:**
+
+**Given** the repository has no README and no `docs/`
+**When** the runbook is written
+**Then** it covers the **two-project Supabase topology**, the full environment-variable contract, the Discord OAuth application and webhook setup, the `COMMISSIONER_RECOVERY_SECRET`, the migration workflow, the Edge Function deploy, and how to run the tests
+**And** it states the **`PUBLIC_` prefix rule** prominently, because a secret behind that prefix is a breach and not a typo
+
+**Given** the cron schedule ships inactive
+**When** the runbook covers the tick
+**Then** it documents **enabling it and disabling it again**, and states that an enabled dev schedule burns the same org-wide Supabase invocation ceiling production shares
+
+**Given** the seed script from Story 9.4
+**When** the runbook covers league setup
+**Then** it documents seeding, wiping and reseeding, and states plainly that there is **no admin UI by design**
+
+**Given** the runbook
+**When** it is checked against reality
+**Then** it has been **followed end to end by someone other than its author**, or its author has followed it from a clean checkout — an unfollowed runbook is not a runbook
+**And** it is distinct from Story 8.4's outage recovery procedure, which is a different document for a different moment
+
+### Story 9.7: Run the moderator pilot
+
+As a league moderator,
+I want to use the app the way a Manager will,
+So that the first person to find a problem is not someone with a real player at stake.
+
+**Acceptance Criteria:**
+
+**Given** the pilot
+**When** it is run
+**Then** it runs against the **dev project via a branch deploy**, never against prod
+**And** the `bbsl-tick` schedule is **enabled only for the pilot and disabled again afterward**
+**And** its Edge invocation and Netlify credit burn are counted against the org-wide free-tier ceilings production shares
+
+**Given** the moderators
+**When** they sign in
+**Then** each signs in with their **own Discord account**, through the real OAuth handshake
+**And** at least one signs in as a **non-Commissioner** and confirms a Commissioner-only route refuses by direct URL, not merely by a hidden control
+
+**Given** the thirty-one real Fantrax files
+**When** a moderator drives the import
+**Then** the full **stage-then-promote** path runs — per-Team preview, atomic promotion, and a deliberate refusal of a bad file to confirm the refusal names the row
+**And** Minor League Eligibility is set by hand on a real pool, exercising the surface `deferred-work.md:166` flags as the epic's highest design-drift risk
+**And** any friction found there is captured against that entry
+
+**Given** the auction
+**When** moderators drive it
+**Then** they nominate, bid, hit both gates, trigger a refusal panel, enter a Minimum-Bid Contention, and watch an Auction **close on the tick** rather than by hand
+**And** the Discord broadcast and the `@mention` are confirmed to arrive on a phone
+**And** the freshness indicator is confirmed to read **Live**, which is only true if Story 9.3 has landed
+
+**Given** the pilot has ended
+**When** its findings are handled
+**Then** every finding is **triaged before the real auction opens** — fixed, or logged in `deferred-work.md` with the risk of opening without it stated
+**And** the pilot's date, participants and outcome are recorded
+**And** the dev project is **wiped and reseeded**, so no pilot data is mistaken for real data
+
+### Story 9.8: Provision prod and run setup day for real
+
+As the Commissioner,
+I want the real auction to open on a project that has never been improvised on,
+So that setup day is a rehearsal I have already done rather than one I am doing live.
+
+**Acceptance Criteria:**
+
+**Given** the pilot is complete and its findings triaged
+**When** the prod project is created
+**Then** the same thirteen migrations are applied **dev-first** (AD-26) — dev first even though dev already has them, because the order is the rule
+**And** **nothing is typed into the prod dashboard**, ever
+**And** prod's literal Supabase hosts are added to the CSP alongside dev's, still with no wildcard
+**And** prod credentials are set in the Netlify **production context only**
+
+**Given** the league
+**When** it is seeded on prod
+**Then** all thirty Teams and **all 31 Managers** are seeded — not just moderators — using the Story 9.4 script
+**And** **every one of the 31 Managers is confirmed to hold a Discord account**, because FR-4 makes Discord load-bearing for access rather than convenience and an unregistered Manager cannot be let in later by any self-service path
+
+**Given** setup day
+**When** it is run for real
+**Then** all thirty-one real Fantrax files are imported and promoted, and Minor League Eligibility is set
+**And** the runbook from Story 9.6 is the thing being followed, and any place it fails is corrected in the runbook as it is found
+
+**Given** the auction is about to open
+**When** the go-live gate from Story 8.4 is run
+**Then** it passes, or every unmet condition is **named in writing** alongside the decision to open anyway
 
 ---

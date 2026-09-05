@@ -70,7 +70,7 @@ development_status:
   3-7-the-league-clock-and-the-end-of-the-auction-phase: done
   epic-3-retrospective: optional
 
-  epic-4: in-progress
+  epic-4: done
   4-1-live-updates-and-the-freshness-contract: done
   4-2-the-persistent-strip: done
   4-3-view-the-bid-board: done
@@ -79,7 +79,7 @@ development_status:
   4-6-the-teams-index-and-the-league-median: done
   epic-4-retrospective: optional
 
-  epic-5: in-progress
+  epic-5: done
   5-1-the-transactional-outbox-and-its-dispatcher: done
   5-2-broadcast-auction-events-to-the-league-channel: done
   5-3-notify-managers-by-discord-mention: done
@@ -108,3 +108,14 @@ development_status:
   8-3-reconstruct-the-auction-from-outside-supabase: backlog
   8-4-the-outage-recovery-procedure-and-the-go-live-gate: backlog
   epic-8-retrospective: optional
+
+  epic-9: backlog
+  9-1-provision-supabase-dev-and-apply-the-schema: backlog
+  9-2-provision-the-discord-application-channel-and-webhook: backlog
+  9-3-admit-realtime-to-the-csp: backlog
+  9-4-seed-thirty-teams-and-the-moderator-managers: backlog
+  9-5-confirm-the-fantrax-column-maps-against-a-real-export: backlog
+  9-6-the-setup-runbook: backlog
+  9-7-run-the-moderator-pilot: backlog
+  9-8-provision-prod-and-run-setup-day-for-real: backlog
+  epic-9-retrospective: optional
