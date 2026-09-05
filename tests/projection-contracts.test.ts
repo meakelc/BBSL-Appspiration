@@ -16,10 +16,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+	CONTRACT_LENGTH_ASSIGNED_EVENT,
 	INITIAL_CONTRACTS,
 	contractForPlayer,
 	contractRowsFor,
-	contractsReducer
+	contractsReducer,
+	isContractYears
 } from '../src/lib/core/projection/contracts.ts';
 import { fold } from '../src/lib/core/projection/fold.ts';
 import {
@@ -346,5 +348,119 @@ describe('one close, three folds — a payload any of them skips, all of them sk
 			nominationForPlayer(fold(INITIAL_NOMINATIONS, log, nominationsReducer), 'p-1')
 		).not.toBeNull();
 		expect(auctionForPlayer(fold(INITIAL_AUCTIONS, log, auctionsReducer), 'p-1')).not.toBeNull();
+	});
+});
+
+describe('contractsReducer — the LATEST assignment for a Player wins (Story 6.1)', () => {
+	/** An assignment, as `assignContractLength` builds one. */
+	function assign(seq: number, overrides: Record<string, unknown> = {}): AppendedEvent {
+		return event(seq, CONTRACT_LENGTH_ASSIGNED_EVENT, {
+			fantraxPlayerId: 'p-1',
+			playerName: 'Ausar Bright',
+			teamId: 't-1',
+			teamName: 'Team M',
+			managerId: 'm-1',
+			contractYears: 4,
+			...overrides
+		});
+	}
+
+	it('sets the length on the contract the close already recorded', () => {
+		const contracts = foldClosures(close(1), assign(2));
+		const contract = contractForPlayer(contracts, 'p-1');
+
+		expect(contract?.contractYears).toBe(4);
+		// Everything else on the contract is untouched: the assignment carries a
+		// length and nothing the close already settled.
+		expect(contract?.winningAmount).toBe(8_000_000);
+		expect(contract?.capHit).toBe(8_000_000);
+		expect(contract?.placement).toBe('active_bench');
+		expect(contract?.closedAt).toBe('2026-08-27T09:00:00.000Z');
+	});
+
+	it('lets a LATER assignment overwrite an earlier one — the opposite of a close', () => {
+		// First close wins; latest assignment wins. Both rules in one reducer,
+		// and this is the assertion that they are actually different.
+		const contracts = foldClosures(close(1), assign(2, { contractYears: 4 }), assign(3, { contractYears: 2 }));
+		expect(contractForPlayer(contracts, 'p-1')?.contractYears).toBe(2);
+	});
+
+	it('converges under replay — folding the same log twice is the same state', () => {
+		const log = [close(1), assign(2, { contractYears: 3 })];
+		expect(foldClosures(...log, ...log)).toEqual(foldClosures(...log));
+	});
+
+	it('records nothing for a Player who holds no contract', () => {
+		// There is no contract to carry the length, and an assignment must never
+		// manufacture one out of its own payload.
+		expect(foldClosures(assign(1))).toEqual(INITIAL_CONTRACTS);
+	});
+
+	it('refuses to move a length onto a contract another Team holds', () => {
+		const contracts = foldClosures(close(1, { teamId: 't-1' }), assign(2, { teamId: 't-2' }));
+		expect(contractForPlayer(contracts, 'p-1')?.contractYears).toBeNull();
+	});
+
+	it('SKIPS a malformed assignment rather than throwing over it', () => {
+		for (const overrides of [
+			{ fantraxPlayerId: undefined },
+			{ fantraxPlayerId: '' },
+			{ teamId: undefined },
+			{ contractYears: undefined },
+			{ contractYears: 0 },
+			{ contractYears: 5 },
+			{ contractYears: '4' },
+			{ contractYears: null }
+		]) {
+			const contracts = foldClosures(close(1), assign(2, overrides));
+			expect(
+				contractForPlayer(contracts, 'p-1')?.contractYears,
+				JSON.stringify(overrides)
+			).toBeNull();
+		}
+
+		// A payload that is not an object at all, and one that is null.
+		expect(
+			contractForPlayer(
+				foldClosures(close(1), event(2, CONTRACT_LENGTH_ASSIGNED_EVENT, 'nonsense')),
+				'p-1'
+			)?.contractYears
+		).toBeNull();
+		expect(
+			contractForPlayer(
+				foldClosures(close(1), event(2, CONTRACT_LENGTH_ASSIGNED_EVENT, null)),
+				'p-1'
+			)?.contractYears
+		).toBeNull();
+	});
+
+	it('leaves a malformed assignment’s PREDECESSOR standing', () => {
+		// A skipped correction must not silently unset a length that was validly
+		// assigned before it — the fold returns the state it was handed.
+		const contracts = foldClosures(close(1), assign(2, { contractYears: 3 }), assign(3, { contractYears: 9 }));
+		expect(contractForPlayer(contracts, 'p-1')?.contractYears).toBe(3);
+	});
+
+	it('leaves every OTHER Player’s contract alone', () => {
+		const contracts = foldClosures(
+			close(1),
+			close(2, { fantraxPlayerId: 'p-2', playerName: 'Somebody Else' }),
+			assign(3, { contractYears: 4 })
+		);
+		expect(contractForPlayer(contracts, 'p-1')?.contractYears).toBe(4);
+		expect(contractForPlayer(contracts, 'p-2')?.contractYears).toBeNull();
+	});
+
+	it('does not change what a CLOSE records — still UNSET', () => {
+		expect(contractForPlayer(foldClosures(close(1)), 'p-1')?.contractYears).toBeNull();
+	});
+});
+
+describe('isContractYears — the four legal lengths, stated once', () => {
+	it('admits exactly 1, 2, 3 and 4', () => {
+		for (const value of [1, 2, 3, 4]) expect(isContractYears(value)).toBe(true);
+		for (const value of [0, 5, -1, 1.5, '4', null, undefined, NaN, true, {}]) {
+			expect(isContractYears(value), JSON.stringify(value ?? null)).toBe(false);
+		}
 	});
 });
