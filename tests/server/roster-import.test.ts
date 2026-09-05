@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import { SALARY_CAP } from '../../src/lib/core/constants.ts';
-import { ROSTER_COLUMNS } from '../../src/lib/adapters/fantrax/roster-file.ts';
+import {
+	CURRENT_CONTRACT_YEAR,
+	ROSTER_COLUMNS
+} from '../../src/lib/adapters/fantrax/roster-file.ts';
 import { poolConflictRefusalDetail } from '../../src/lib/core/rules/pool-import.ts';
 import {
 	fileAlreadySuppliedDetail,
@@ -16,8 +19,16 @@ import type {
 } from '../../src/lib/shell/write.ts';
 
 /** Built from `ROSTER_COLUMNS`, the same way `tests/adapters/fantrax-roster.test.ts` does,
- *  so a future column-name change (1.9/AR-33) stays a one-file edit. */
+ *  so a column-name change stays a one-file edit. Confirmed against a real
+ *  export on 2026-09-05 (AR-33). */
 const HEADER = Object.values(ROSTER_COLUMNS).join(',');
+
+/** `Contract` holds an end year, not a count — so an end year `n` seasons out
+ *  is what a fixture writes when it means "n years remaining". Derived rather
+ *  than hardcoded so these rows do not expire when the constant moves on. */
+function endYearIn(years: number): string {
+	return String(CURRENT_CONTRACT_YEAR + years);
+}
 
 /**
  * A fake `ConnectionGateway` for `stageRosterFile`, in the style of
@@ -143,7 +154,11 @@ function fakeGateway(
 const LAKERS = { id: 't-lakers', name: 'Lakers' };
 const CELTICS = { id: 't-celtics', name: 'Celtics' };
 
-const HAPPY_CSV = [HEADER, 'FT1,P1,Alice,10000000,Active/Bench,2', 'FT1,P2,Bob,0,IR,1'].join('\n');
+const HAPPY_CSV = [
+	HEADER,
+	`P1,Alice,10000000,Act,${endYearIn(2)}`,
+	`P2,Bob,0,IR,${endYearIn(1)}`
+].join('\n');
 
 describe('stageRosterFile — the happy path', () => {
 	it('stages: resolves the Team, parses, validates, deletes+inserts+upserts, then commits', async () => {
@@ -258,7 +273,7 @@ describe('stageRosterFile — file-altitude refusals: nothing is written, nothin
 
 describe('stageRosterFile — content-altitude refusals over a Team with nothing currently staged', () => {
 	it('refuses a bad-column file at content altitude, upserting refused_content (nothing was staged to protect)', async () => {
-		const badCsv = `${ROSTER_COLUMNS.fantraxTeamId},${ROSTER_COLUMNS.fantraxPlayerId}\nFT1,P1`;
+		const badCsv = `${ROSTER_COLUMNS.fantraxPlayerId},${ROSTER_COLUMNS.playerName}\nP1,Alice`;
 		const { gateway, order, deletedTeamIds, insertedRows, upsertedSources } = fakeGateway([LAKERS]);
 
 		const outcome = await stageRosterFile(gateway, 'Lakers.csv', badCsv);
@@ -268,7 +283,7 @@ describe('stageRosterFile — content-altitude refusals over a Team with nothing
 		expect(outcome).toMatchObject({ source: 'team' });
 		if (outcome.kind !== 'refused_content' || outcome.source !== 'team') return;
 		expect(outcome.teamId).toBe(LAKERS.id);
-		expect(outcome.detail).toContain('Cap Hit');
+		expect(outcome.detail).toContain(ROSTER_COLUMNS.capHit);
 		// The refusal path always reads current status first now — here it
 		// finds no row (the Team has never been staged), so it falls through to
 		// the existing delete(no-op)+upsert(refused_content) behaviour.
@@ -293,7 +308,10 @@ describe('stageRosterFile — content-altitude refusals over a Team with nothing
 	});
 
 	it('refuses negative Cap Space, stating the arithmetic with a true minus sign', async () => {
-		const bigCsv = [HEADER, `FT1,P1,Alice,${String(SALARY_CAP + 1_000_000)},Active/Bench,1`].join('\n');
+		const bigCsv = [
+			HEADER,
+			`P1,Alice,${String(SALARY_CAP + 1_000_000)},Act,${endYearIn(1)}`
+		].join('\n');
 		const { gateway } = fakeGateway([LAKERS]);
 
 		const outcome = await stageRosterFile(gateway, 'Lakers.csv', bigCsv);
@@ -311,7 +329,7 @@ describe('stageRosterFile — content-altitude refusals over a Team with nothing
 	it('refuses a breached slot ceiling, stating the arithmetic', async () => {
 		const rows = Array.from(
 			{ length: 13 },
-			(_, i) => `FT1,P${String(i)},Player ${String(i)},0,Active/Bench,0`
+			(_, i) => `P${String(i)},Player ${String(i)},0,Act,${endYearIn(0)}`
 		);
 		const overCsv = [HEADER, ...rows].join('\n');
 		const { gateway } = fakeGateway([LAKERS]);
@@ -328,7 +346,7 @@ describe('stageRosterFile — content-altitude refusals over a Team with nothing
 	});
 
 	it('re-supply after fix: a second, valid call for the same Team stages and replaces its rows', async () => {
-		const badCsv = `${ROSTER_COLUMNS.fantraxTeamId},${ROSTER_COLUMNS.fantraxPlayerId}\nFT1,P1`;
+		const badCsv = `${ROSTER_COLUMNS.fantraxPlayerId},${ROSTER_COLUMNS.playerName}\nP1,Alice`;
 		const { gateway: firstGateway } = fakeGateway([LAKERS]);
 		const first = await stageRosterFile(firstGateway, 'Lakers.csv', badCsv);
 		expect(first.kind).toBe('refused_content');
@@ -353,7 +371,7 @@ describe('stageRosterFile — a refused re-supply over an already-staged Team le
 
 		// Same Team, seeded as already `staged`, in a fresh gateway/transaction —
 		// this is what a second, later upload attempt looks like.
-		const badCsv = `${ROSTER_COLUMNS.fantraxTeamId},${ROSTER_COLUMNS.fantraxPlayerId}\nFT1,P1`;
+		const badCsv = `${ROSTER_COLUMNS.fantraxPlayerId},${ROSTER_COLUMNS.playerName}\nP1,Alice`;
 		const { gateway, order, deletedTeamIds, insertedRows, upsertedSources } = fakeGateway([LAKERS], {
 			[LAKERS.id]: { status: 'staged' }
 		});
@@ -366,7 +384,7 @@ describe('stageRosterFile — a refused re-supply over an already-staged Team le
 		expect(outcome).toMatchObject({ source: 'team' });
 		if (outcome.kind !== 'refused_content' || outcome.source !== 'team') return;
 		expect(outcome.teamId).toBe(LAKERS.id);
-		expect(outcome.detail).toContain('Cap Hit');
+		expect(outcome.detail).toContain(ROSTER_COLUMNS.capHit);
 
 		// ...but nothing at all is written: the status read finds `staged` and
 		// the function returns before any delete, insert, or upsert.
@@ -377,7 +395,7 @@ describe('stageRosterFile — a refused re-supply over an already-staged Team le
 	});
 
 	it('a Team with a prior non-staged status (e.g. refused_content) still has the refusal recorded', async () => {
-		const badCsv = `${ROSTER_COLUMNS.fantraxTeamId},${ROSTER_COLUMNS.fantraxPlayerId}\nFT1,P1`;
+		const badCsv = `${ROSTER_COLUMNS.fantraxPlayerId},${ROSTER_COLUMNS.playerName}\nP1,Alice`;
 		const { gateway, order, upsertedSources } = fakeGateway([LAKERS], {
 			[LAKERS.id]: { status: 'refused_content' }
 		});

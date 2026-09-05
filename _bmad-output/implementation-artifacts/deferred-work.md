@@ -7,11 +7,13 @@
 - source_spec: none
   summary: Provision the two Supabase projects (wipeable dev, never-hand-touched prod) and wire their connection details as server-only environment variables.
   evidence: Story 1.1 AC 3 requires both projects to exist before a migration can be applied dev-first. Creating Supabase projects requires the Commissioner's own account and credentials, which the build agent cannot hold. Story 1.1 delivers the migrations directory, the env-var contract and the dev-first workflow; the projects themselves are provisioned by hand.
+  assigned: 2026-09-05 to Story 9.1 (dev) and Story 9.8 (prod), Epic 9.
 
 - source_spec: none
   summary: Create the Netlify site, run a production deploy reachable over HTTPS, configure deploy previews and branch deploys against dev Supabase with the production branch against prod, and record the credit cost of the configuration.
   evidence: Story 1.1 AC 5 requires a live deploy. Netlify site creation, branch-deploy configuration and deploy authorization all require the Commissioner's own account. Story 1.1 delivers netlify.toml, the pinned adapter configuration and the branch-to-environment mapping in committed form; the account-side setup and the first real deploy are done by hand.
   partial: 2026-08-20 — the site exists and is deployed. `https://bbslapp.netlify.app` answers HTTP 200 serving the built app, and deploy-preview, header-rule and redirect-rule checks run on pull requests. Still outstanding: confirming the branch-to-environment mapping is actually configured account-side against two Supabase projects that do not yet demonstrably exist, and recording the credit cost. Also note the site is now publicly reachable with no authentication in front of it.
+  assigned: 2026-09-05 to Story 9.1 (Epic 9) — the outstanding half only; the site itself has been live since 2026-08-20.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-deployable-skeleton-on-the-pinned-stack.md`
   summary: Add a CI workflow that runs the test suite and svelte-check on every push and pull request.
@@ -25,6 +27,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-deployable-skeleton-on-the-pinned-stack.md`
   summary: Write a README covering setup, environment configuration, the two-project Supabase topology, and how to run the tests.
   evidence: The repository ships a Discord OAuth app, a webhook, an out-of-band Commissioner recovery secret and a cron-invoked Edge Function with no setup path documented. Much of the current reasoning lives in .gitkeep comments that will be deleted the moment those directories receive real files.
+  assigned: 2026-09-05 to Story 9.6 (Epic 9).
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-deployable-skeleton-on-the-pinned-stack.md`
   summary: Establish CSP, frame-ancestors, Referrer-Policy and a noindex posture for the private league.
@@ -90,6 +93,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-3-sign-in-with-discord.md`
   summary: Admit the Supabase Realtime origin to the CSP's connect-src once the two Supabase projects exist to name.
   evidence: `netlify.toml` ships `connect-src 'self'` and `tests/headers.test.ts` pins it with `expect(CSP_DIRECTIVES.get('connect-src')).toEqual(["'self'"])`. That was correct while Story 1.3 shipped no Realtime client. **Story 4.1 (2026-09-01) has now landed one, so this entry is BLOCKING rather than anticipatory**: a deployed browser's `auction_watermark` socket is refused by this directive today. 4.1 kept the policy and the assertion unchanged on purpose — neither project is provisioned, so there is still no ref to name, and the freshness contract degrades honestly to Reconnecting while its same-origin liveness poll (which needs no widening) keeps the board refreshing. It is closed by adding the two projects' literal hosts: `https://<ref>.supabase.co` and `wss://<ref>.supabase.co`, never `*.supabase.co`. The pinning test must be updated in the same change, which is deliberate — the widening cannot happen silently. Until then, production meets the epic's 5-second board floor on the poll interval rather than on the push.
+  assigned: 2026-09-05 to Story 9.3 (Epic 9), unblocked by Story 9.1 giving it a ref to name.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-3-sign-in-with-discord.md`
   summary: Add a CSP violation reporting endpoint so policy failures are observable rather than discovered by a broken page.
@@ -142,6 +146,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-9-per-team-preview-and-atomic-promotion.md`
   summary: AR-33 — obtain a real Fantrax export and confirm the roster and Free Agent pool column mappings against it. Outstanding HUMAN action, before setup day.
   evidence: `ROSTER_COLUMNS` (`src/lib/adapters/fantrax/roster-file.ts`) and `POOL_COLUMNS` (`src/lib/adapters/fantrax/pool-file.ts`) are documented placeholders carrying `TODO-confirm`, taken from `addendum.md`'s described shape rather than from a real export. Stories 1.7 and 1.8 each deferred the confirmation to 1.9; 1.9 does not confirm it either, because doing so requires a real Fantrax export that only the Commissioner's own Fantrax account can produce — the build agent cannot hold those credentials. The two column maps are deliberately independent (no shared base was extracted) so each is a one-file edit when the export lands. Nothing else in the codebase names a Fantrax CSV column (AD-24), so the blast radius of getting this wrong is exactly those two objects — but until it is done, every one of the thirty-one files will refuse at content altitude on setup day if the real headers differ. The eligibility flag is settled as absent from the export and needs no confirmation.
+  assigned: 2026-09-05 to Story 9.5 (Epic 9), scheduled first in the epic as the only unbounded-risk item.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-9-per-team-preview-and-atomic-promotion.md`
   summary: `loadEventsViaClient` reads the whole `auction_events` log into memory on every promotion, unbounded.
@@ -164,6 +169,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-10-set-minor-league-eligibility-by-hand.md`
   summary: `/minor-league-eligibility` renders the entire Free Agent pool as one list with no pagination, search or filter, and its select-all checkbox has no indeterminate state.
   evidence: bmad-build review (2026-08-25), Blind Hunter layer. A real Fantrax pool is hundreds of Players, and the Commissioner typically wants to flag a handful — scanning one unbroken list to find them is the wrong shape, and a partially-ticked select-all currently renders as plain unchecked rather than the conventional mixed state. Neither is a correctness or accessibility-floor failure (every row states its own state in words and the touch targets hold), and neither has a design mock to build against — `EXPERIENCE.md` specifies this surface in prose only, which epic-1-context.md names as the epic's highest design-drift risk. Worth revisiting with a real export in hand (AR-33) so the list's true size is known rather than guessed.
+  assigned: 2026-09-05 to Story 9.7 (Epic 9) — revisit with the real pool in hand, as this entry itself recommends.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-11-open-the-auction.md`
   summary: AD-22 must be amended to name `AuctionOpened` as the League Clock's origin event, distinct from the two reset events.
@@ -209,10 +215,12 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-2-nomination-refusals-and-concurrency.md`
   summary: `hermes.md` §7 and §3 carry two stale claims about local Supabase — `supabase/config.toml` is recorded as absent, and Supabase as "unverified — assume not provisioned".
   evidence: bmad-build step-03 verification (2026-08-25). `supabase/config.toml` exists on disk and `npx supabase start` applied all seven migrations cleanly against local Postgres 15.8.1.085, including this story's `20260825000000_open_nominations.sql`. `hermes.md` §7 lists "No `supabase/config.toml`, so `supabase start`, `db push` and `functions serve` cannot run locally. Belongs with Story 1.5" and §3 states the blocker on Story 1.5. Both are now false for the local dev loop. `hermes.md` is unmanaged and hand-editable, so this is a documentation correction rather than a skill-owned artifact change; the hosted dev/prod projects remain genuinely unverified and that half of the note still stands.
+  resolved: 2026-09-05 by the §3 rewrite in sprint-change-proposal-2026-09-05.md, which restates the infrastructure section against confirmed fact.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-2-nomination-refusals-and-concurrency.md`
   summary: The integration suite silently self-skips its entire contents when no local Postgres is reachable, so a story whose central AC lives there can pass CI having never executed it.
   evidence: bmad-build step-03 verification (2026-08-25). `tests/integration/auction-events.test.ts` is guarded by `describe.skipIf(!reachable)`; with Docker absent, `npm test` reported 1168 passed / 13 skipped and exit 0 while AC4's concurrency proof, the real-23505 classification and the migration itself had never run. Once local Postgres was provisioned the same file surfaced a genuine order-dependence defect (the PK race test's committed claim row broke the Slot test's setup), fixed here by an `afterEach`. CI (`.github/workflows/ci.yml`) runs `npm ci`/`npm test`/`npm run check` with no Postgres service, so every integration assertion in the repo is currently unexecuted in CI. Options are a Postgres service container in the workflow or a non-zero-exit guard that fails when the suite skips; assigned to whichever story first depends on an integration-only guarantee.
+  unblocked: 2026-09-05 — Story 9.1 creates the first real database this suite can reach. Not a pilot blocker; recommended immediately after, per sprint-change-proposal-2026-09-05.md.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-2-nomination-refusals-and-concurrency.md`
   summary: `open_nominations` has no deletion path in any shipped code, so once a claim row is written it is permanent until Story 2.3 lands — a Team gets one nomination ever, and a Player is nominatable once ever.

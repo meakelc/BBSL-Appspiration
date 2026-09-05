@@ -55,45 +55,62 @@ Read down this list. Anything higher wins.
    spine wins.**
 5. `mockups/*.dc.html` — reference only. Lowest authority. `.working/` is scratch, ignore it.
 
-`_bmad-output/planning-artifacts/epics.md` is the implementation map: the FR coverage map, all 8
+`_bmad-output/planning-artifacts/epics.md` is the implementation map: the FR coverage map, all 9
 epics, and every story with its acceptance criteria. `traceability.md` maps FR → CAP → epic.
+Epic 9 was added 2026-09-05 and carries no new FRs — it executes the existing ones against real
+infrastructure for the first time.
 
 ---
 
 ## 3. Current state
 
-**Epic 1, Story 1.1 — `feat(1.1): deployable skeleton on the pinned stack` (`f6f7be4`) — is
-implemented and the story file reads `status: done`, but `sprint-status.yaml` still has it at
-`review`. Treat the review pass as outstanding; that is the next thing to finish.** The two files
-disagree, and `sprint-status.yaml` is the authority — do not read the story's own `status: done`
-as evidence the review happened.
+**Epics 1–5 are complete — 36 stories, all `done`.** Epic 6 is 2 of 5 (6.3–6.5 remain). Epics 7
+and 8 are untouched. **Epic 9 — added 2026-09-05 by
+`_bmad-output/planning-artifacts/sprint-change-proposal-2026-09-05.md` — is the active epic** and
+the current priority: provisioning, seeding, and a moderator pilot.
 
-Everything else — Epics 1.2 through 8.4, 52 stories — is `backlog`. Nothing but the skeleton
-exists yet: `src/lib/core/{money,constants,types}.ts` are typed stubs, `rules/` and `projection/`
-are `.gitkeep` only, there is no schema, no auth, no route beyond a placeholder page.
+**The load-bearing fact: none of the 38 completed stories has ever run against real
+infrastructure.** Everything to date is code-verified only — a test suite against `node`, an
+ephemeral local Postgres, or nothing at all. No Supabase project has ever existed, no Discord
+account has ever signed in, no real Fantrax file has ever been parsed. Epic 9 is where that
+changes, and until it does, treat every "done" in this project as *"the code is right"* rather
+than *"this works"*.
 
 Story status lives in `_bmad-output/implementation-artifacts/sprint-status.yaml` — that file is
 the authority on what is done, not this one.
 
 ### Branches in flight
 
-**None.** `main` (`38373fc`) is the single branch; the three branches that were open on 2026-08-19
-— `ci/test-and-typecheck`, `chore/gitattributes`, `docs/agent-instructions` — are all merged and
-deleted. CI is green on main.
+`chore/sprint-change-2026-09-05-epic-9`, carrying the sprint change proposal and its artifact
+edits. `main` is at `32d1fd2` (6.2 merged as PR #50). CI green.
 
 ### Infrastructure
 
 - **Netlify: provisioned and live.** The site is `bbslapp`, serving at
-  `https://bbslapp.netlify.app` (HTTP 200, serving the built SvelteKit app). Deploy previews,
-  header-rule and redirect-rule checks run on every pull request. The branch-to-environment
-  mapping is committed in `netlify.toml`; whether it is *also* configured correctly account-side,
-  and the credit cost of that configuration, are unverified.
+  `https://bbslapp.netlify.app`. Deploy previews, header-rule and redirect-rule checks run on
+  every pull request. The branch-to-environment mapping is committed in `netlify.toml`; whether it
+  is *also* configured correctly account-side, and the credit cost of that configuration, are
+  **still unverified** — Story 9.1 closes this.
 - **CI: live.** `.github/workflows/ci.yml` runs `npm ci`, `npm test` and `npm run check` on every
-  push to `main` and every pull request. Actions are pinned to commit SHAs, not tags.
-- **Supabase: unverified — assume not provisioned.** Both projects (wipeable dev, never-hand-touched
-  prod) need the Commissioner's own account. There is no `supabase/config.toml`, no migration, and
-  no local `.env`, so nothing in the repository proves either project exists. This blocks Story 1.5,
-  which is the first to apply a migration. Check before planning that story.
+  push to `main` and every pull request. Actions are pinned to commit SHAs, not tags. **CI runs no
+  Postgres**, so every integration test in the repository silently self-skips — see
+  `deferred-work.md`'s entry on the integration suite. A green CI run is not evidence that any
+  integration assertion executed.
+- **Supabase: NOT provisioned — confirmed 2026-09-05.** Neither the wipeable dev project nor the
+  never-hand-touched prod project exists. No migration has ever been applied anywhere, on any
+  project. `supabase/config.toml` exists and local workflows work; the hosted projects do not.
+  Story 9.1 creates dev, Story 9.8 creates prod.
+- **Discord: NOT provisioned — confirmed 2026-09-05.** The BBSL server exists. There is **no**
+  OAuth2 application, **no** dedicated league channel and **no** incoming webhook. Since AD-15
+  makes Discord the only identity provider, nobody can sign in until Story 9.2 lands.
+- **The tick: never scheduled anywhere.** `20260831000000_tick.sql` creates the `bbsl-tick` cron
+  job with `active = false`, deliberately. Nothing closes until an operator enables it, and it is
+  disabled again after the pilot — an enabled dev schedule burns the same org-wide Supabase
+  invocation ceiling production shares.
+- **CSP blocks Realtime.** `connect-src` is `'self'` and `tests/headers.test.ts` pins it there.
+  Story 4.1's Realtime client is refused by this directive on any real deploy, so the freshness
+  contract degrades honestly to Reconnecting. Story 9.3 widens it — with literal hosts, never a
+  wildcard, and the pinning test updated in the same commit.
 
 ---
 
@@ -406,6 +423,10 @@ The `npm ci` entry is **not** resolved: it concerns the *Netlify* build command,
 ---
 
 ## 9. Open action before setup day
+
+**Now owned by Story 9.5 (Epic 9), and scheduled first in that epic** — it is the only story whose
+shape is unknown until a real file is in hand, so a surprise must surface early. Everything below
+stands as written.
 
 Obtain a real Fantrax export and confirm the salary and roster-slot columns against the adapter's
 mapping. The import is **thirty-one files** — one Free Agent pool export plus one roster export per
