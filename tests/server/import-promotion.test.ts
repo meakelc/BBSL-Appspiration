@@ -154,29 +154,40 @@ function fakeGateway(options: {
 				return { rows: [] };
 			}
 			if (/^insert into team_rosters/i.test(sql)) {
+				// Batched: one statement per 500 rows, six bind parameters each
+				// (Story 9.7). It was one statement per row until a real promotion
+				// — ~300 rostered Players plus ~1,470 Free Agents — exceeded
+				// Netlify's 10-second function budget. Unflattened here so every
+				// assertion below still reads one row at a time.
 				order.push('insert-live-roster');
-				live.rosters.push({
-					team_id: params[0],
-					fantrax_player_id: params[1],
-					player_name: params[2],
-					cap_hit: params[3],
-					roster_slot_kind: params[4],
-					contract_years_remaining: params[5]
-				});
+				expect(params.length % 6, 'roster params do not divide into six-column rows').toBe(0);
+				for (let at = 0; at < params.length; at += 6) {
+					live.rosters.push({
+						team_id: params[at],
+						fantrax_player_id: params[at + 1],
+						player_name: params[at + 2],
+						cap_hit: params[at + 3],
+						roster_slot_kind: params[at + 4],
+						contract_years_remaining: params[at + 5]
+					});
+				}
 				return { rows: [] };
 			}
 			if (/^insert into free_agent_players/i.test(sql)) {
 				order.push('insert-live-free-agent');
+				expect(params.length % 4, 'pool params do not divide into four-column rows').toBe(0);
+				for (let at = 0; at < params.length; at += 4) {
 				live.freeAgents.push({
-					fantrax_player_id: params[0],
-					player_name: params[1],
-					positions: params[2],
-					nba_team: params[3],
+					fantrax_player_id: params[at],
+					player_name: params[at + 1],
+					positions: params[at + 2],
+					nba_team: params[at + 3],
 					// The column's own `false` default: promotion does not set this
 					// at insert. `applyEligibilityProjection` below is the one
 					// writer, and it runs inside this same transaction (Story 1.10).
 					minor_league_eligible: false
 				});
+				}
 				return { rows: [] };
 			}
 			if (/^update free_agent_players/i.test(sql)) {
