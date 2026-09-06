@@ -318,6 +318,23 @@ export async function promoteImport(
 }
 
 /**
+ * Rows per multi-row INSERT when promoting to the live tables.
+ *
+ * Bounded rather than "everything in one statement" because a parameterised
+ * query carries at most 65,535 bind parameters; at six columns per roster row a
+ * single statement would cap out near 10,900 Players. 500 keeps a real
+ * promotion to a handful of statements while leaving that ceiling far away.
+ */
+const LIVE_INSERT_BATCH = 500;
+
+/** Split `items` into consecutive runs of at most `size`. */
+function chunk<T>(items: readonly T[], size: number): T[][] {
+	const out: T[][] = [];
+	for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+	return out;
+}
+
+/**
  * Replace the live reference tables wholesale, on the appending
  * transaction's own client.
  *
@@ -333,33 +350,59 @@ async function writeLiveTables(client: TransactionalClient, state: PromotionStat
 	await client.query('delete from team_rosters');
 	await client.query('delete from free_agent_players');
 
-	for (const team of state.teams) {
-		for (const row of team.rows) {
-			await client.query(
-				`insert into team_rosters
-					(team_id, fantrax_player_id, player_name, cap_hit, roster_slot_kind,
-					 contract_years_remaining)
-				values ($1, $2, $3, $4, $5, $6)`,
-				[
-					team.teamId,
-					row.fantraxPlayerId,
-					row.playerName,
-					// Integer dollars, as an exact string: a `bigint` must never make
-					// the round trip as a float.
-					String(row.capHit),
-					row.rosterSlotKind,
-					row.contractYearsRemaining
-				]
+	// Written in BATCHES, not one statement per row (Story 9.7).
+	//
+	// This was a nested row-at-a-time loop, and it is the same defect the
+	// staging paths carried: a real league is ~300 rostered Players and ~1,470
+	// Free Agents, so promotion was ~1,770 sequential round trips inside one
+	// transaction. Against Netlify's 10-second synchronous function budget that
+	// is not a slow promotion, it is a killed one — reported as "This function
+	// has crashed. An unknown error has occurred", which names nothing.
+	//
+	// Batching does not weaken the atomicity this function exists for. Every
+	// statement here still runs inside the single transaction `promoteImport`
+	// opened, so a failure anywhere still rolls the event and both tables back
+	// together; only the number of round trips changes.
+	const rosterRows = state.teams.flatMap((team) =>
+		team.rows.map((row) => ({ teamId: team.teamId, row }))
+	);
+	for (const batch of chunk(rosterRows, LIVE_INSERT_BATCH)) {
+		const values: unknown[] = [];
+		const tuples = batch.map(({ teamId, row }, i) => {
+			values.push(
+				teamId,
+				row.fantraxPlayerId,
+				row.playerName,
+				// Integer dollars, as an exact string: a `bigint` must never make
+				// the round trip as a float.
+				String(row.capHit),
+				row.rosterSlotKind,
+				row.contractYearsRemaining
 			);
-		}
+			const at = i * 6;
+			return `($${String(at + 1)}, $${String(at + 2)}, $${String(at + 3)}, $${String(at + 4)}, $${String(at + 5)}, $${String(at + 6)})`;
+		});
+		await client.query(
+			`insert into team_rosters
+				(team_id, fantrax_player_id, player_name, cap_hit, roster_slot_kind,
+				 contract_years_remaining)
+			values ${tuples.join(', ')}`,
+			values
+		);
 	}
 
-	for (const player of state.poolPlayers) {
+	for (const batch of chunk(state.poolPlayers, LIVE_INSERT_BATCH)) {
+		const values: unknown[] = [];
+		const tuples = batch.map((player, i) => {
+			values.push(player.fantraxPlayerId, player.playerName, player.positions, player.nbaTeam);
+			const at = i * 4;
+			return `($${String(at + 1)}, $${String(at + 2)}, $${String(at + 3)}, $${String(at + 4)})`;
+		});
 		await client.query(
 			`insert into free_agent_players
 				(fantrax_player_id, player_name, positions, nba_team)
-			values ($1, $2, $3, $4)`,
-			[player.fantraxPlayerId, player.playerName, player.positions, player.nbaTeam]
+			values ${tuples.join(', ')}`,
+			values
 		);
 	}
 

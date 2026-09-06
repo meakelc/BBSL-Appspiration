@@ -97,16 +97,24 @@ function fakeGateway(options: {
 				return { rows: [] };
 			}
 			if (/^insert into import_staged_pool_players/i.test(sql)) {
-				order.push('insert-row');
-				insertedRows.push({
-					fantrax_player_id: params[0],
-					player_name: params[1],
-					positions: params[2],
-					nba_team: params[3]
-				});
+				// Batched: one statement per 500 Players, four bind parameters
+				// each (Story 9.7). It was one statement per row until a real
+				// ~1,470-Player pool took 65 seconds to stage against the hosted
+				// database — on its own, against a 10-second function budget. The
+				// params are unflattened here so the assertions below still read
+				// one Player at a time.
+				order.push('insert-rows');
+				expect(params.length % 4, 'params do not divide into four-column rows').toBe(0);
+				for (let at = 0; at < params.length; at += 4) {
+					insertedRows.push({
+						fantrax_player_id: params[at],
+						player_name: params[at + 1],
+						positions: params[at + 2],
+						nba_team: params[at + 3]
+					});
+				}
 				// Eligibility is never in the INSERT — it takes the column default.
 				expect(sql).not.toMatch(/minor_league_eligible/i);
-				expect(params).toHaveLength(4);
 				return { rows: [] };
 			}
 			if (/^insert into import_pool_source/i.test(sql)) {
@@ -158,8 +166,7 @@ describe('stagePoolFile — the happy path', () => {
 			'select-teams',
 			'select-roster-conflicts',
 			'delete-rows',
-			'insert-row',
-			'insert-row',
+			'insert-rows',
 			'upsert-status',
 			'commit'
 		]);

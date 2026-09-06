@@ -60,6 +60,24 @@ import type { StageOutcome } from './roster-import.ts';
  */
 export const POOL_SOURCE_ID = 'pool';
 
+/**
+ * Rows per multi-row INSERT when staging the pool.
+ *
+ * Bounded rather than "all of them in one statement" because a parameterised
+ * query carries at most 65,535 bind parameters, and at four columns per row a
+ * single statement would cap out around 16,000 Players. 500 keeps the whole
+ * pool to three statements while leaving that ceiling far away, so a pool that
+ * grows does not silently approach a wall.
+ */
+const POOL_INSERT_BATCH = 500;
+
+/** Split `items` into consecutive runs of at most `size`. */
+function chunk<T>(items: readonly T[], size: number): T[][] {
+	const out: T[][] = [];
+	for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+	return out;
+}
+
 export { POOL_SOURCE_LABEL };
 
 /** The file-altitude refusal sentence for a second pool file in one drop. */
@@ -227,16 +245,36 @@ async function writeOutcome(
 
 	await client.query('delete from import_staged_pool_players');
 
-	for (const row of rows) {
+	// Inserted in BATCHES, not one statement per row (Story 9.7).
+	//
+	// This was a row-at-a-time loop until the first import of a real pool. A
+	// BBSL Free Agent pool is ~1,470 Players, so that loop was ~1,470 sequential
+	// round trips inside one transaction: 65 seconds measured against the hosted
+	// database, on its own, for this one file. Netlify's synchronous function
+	// budget is 10 seconds, so the import did not fail — it was killed, and
+	// reported as "This function has crashed. An unknown error has occurred",
+	// which names neither the file nor the cause.
+	//
+	// No test could have caught it. Every fixture in the suite is two or three
+	// rows, where a loop and a batch are indistinguishable; only a real pool
+	// makes the difference visible, and only a real deploy makes it fatal.
+	//
+	// `minor_league_eligible` is deliberately absent from the column list: it
+	// takes the column's `false` default. Eligibility is app-owned, never
+	// imported (1.10 owns changing it).
+	for (const batch of chunk(rows, POOL_INSERT_BATCH)) {
+		const values: unknown[] = [];
+		const tuples = batch.map((row, i) => {
+			values.push(row.fantraxPlayerId, row.playerName, row.positions, row.nbaTeam);
+			const at = i * 4;
+			return `($${String(at + 1)}, $${String(at + 2)}, $${String(at + 3)}, $${String(at + 4)})`;
+		});
 		await client.query(
 			`insert into import_staged_pool_players
 				(fantrax_player_id, player_name, positions, nba_team)
-			values ($1, $2, $3, $4)`,
-			[row.fantraxPlayerId, row.playerName, row.positions, row.nbaTeam]
+			values ${tuples.join(', ')}`,
+			values
 		);
-		// `minor_league_eligible` is deliberately absent from this INSERT: it
-		// takes the column's `false` default. Eligibility is app-owned, never
-		// imported (1.10 owns changing it).
 	}
 
 	await client.query(
