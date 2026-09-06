@@ -119,9 +119,31 @@ additional_redirect_urls = [
   "http://127.0.0.1:3000/auth/callback**"
 ]
 
-# No self-service registration exists in this product (AD-15) — pre-registered
-# Discord accounts only, added by the Commissioner directly in `managers`.
-enable_signup = false
+# Supabase-level signup must be ON, and the reason is worth stating because the
+# opposite reads as the safer choice (Story 9.2 fix, 2026-09-06).
+#
+# This read `false` until sign-in was first attempted against a real deploy, on
+# the reasoning that "no self-service registration exists in this product
+# (AD-15) — pre-registered Discord accounts only". That conflates two different
+# mechanisms. `enable_signup` gates whether an `auth.users` ROW MAY BE CREATED,
+# and an OAuth sign-in creates one the first time any account completes the
+# handshake. With it off, Discord returns the user to
+# `/auth/callback?error=access_denied&error_code=signup_disabled` and NOBODY can
+# ever sign in — including the pre-registered Commissioner.
+#
+# The gate AD-15 actually describes is the `managers` registry, and it lives in
+# `src/routes/auth/callback/+server.ts`: the code is exchanged, the registry is
+# consulted, and an unregistered account has the session the exchange just
+# established DESTROYED before anything is written back. That design only works
+# if the exchange is permitted to succeed. Turning it off did not add a second
+# layer of defence — it removed the floor the only layer stands on.
+#
+# What this admits: an unregistered Discord account that completes the handshake
+# leaves an `auth.users` row behind. It gets no session, no cookie and no access
+# — `managers` is the authority, every table is RLS-forced with no policy, and
+# the refusal is byte-identical for every unregistered caller so the league
+# cannot be enumerated. The cost is orphan rows, not access.
+enable_signup = true
 
 [auth.email]
 enable_signup = false
