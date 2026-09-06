@@ -9,9 +9,18 @@
 # Everything omitted falls back to the CLI's own built-in default, which is
 # safe to do — this file only needs to say where it differs.
 #
-#   - `db.major_version = 15` matches ARCHITECTURE-SPINE.md's stack pin
-#     ("Postgres | Supabase-managed, >=15.1.1.61 — required for sub-minute
-#     Supabase Cron"), not the CLI's newer default of 17.
+#   - `db.major_version = 17` matches THE HOSTED PROJECT, which is what this
+#     value is for. It read 15 until 2026-09-05, on the reasoning that 15
+#     "matches ARCHITECTURE-SPINE.md's stack pin". That read a minimum as a
+#     target: the spine pins "Postgres | Supabase-managed, >=15.1.1.61 —
+#     required for sub-minute Supabase Cron", and the dev project provisioned
+#     in Story 9.1 came up on 17.6.1.166, which satisfies it.
+#
+#     Local must track hosted, not the floor. A local stack on 15 would have
+#     run every integration test — including AD-6's concurrency proof, which
+#     had never executed anywhere before Story 9.1 — against a major version
+#     nothing deploys on. Change this when the hosted projects move, and keep
+#     dev and prod on the same major version as each other (Story 9.8).
 #   - Storage, Realtime, Analytics and the local SMTP test server are
 #     switched off. None is exercised by any story yet — this product sends no
 #     email for any purpose, ever (PRD "no email field exists anywhere"). Every
@@ -36,7 +45,7 @@ max_rows = 1000
 [db]
 port = 54322
 shadow_port = 54320
-major_version = 15
+major_version = 17
 
 [db.pooler]
 enabled = false
