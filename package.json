@@ -16,6 +16,7 @@
     "check:pins": "node scripts/check-pins.js",
     "check:purity": "node scripts/check-core-purity.js",
     "verify:supabase": "node scripts/verify-supabase.js",
+    "seed:league": "node scripts/seed-league.js",
     "test": "vitest run"
   },
   "dependencies": {
