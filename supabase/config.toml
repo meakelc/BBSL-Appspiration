@@ -106,8 +106,16 @@ site_url = "https://pilot--bbslapp.netlify.app"
 # Deploy previews are deliberately ABSENT. Admitting `deploy-preview-*` would
 # make every pull request a valid destination for a real OAuth code, which is a
 # wider opening than the pilot needs.
+# Each origin is listed TWICE on purpose: the exact URL, and the `**` form for
+# the optional `?next=` deep link. Supabase's matcher is a glob, and whether
+# `/auth/callback**` also matches a bare `/auth/callback` with no suffix is not
+# documented — listing both removes the question rather than relying on the
+# answer. A redirect_to that fails the match is not refused; Supabase silently
+# falls back to `site_url`, which is the kind of failure that costs an evening.
 additional_redirect_urls = [
+  "https://pilot--bbslapp.netlify.app/auth/callback",
   "https://pilot--bbslapp.netlify.app/auth/callback**",
+  "http://127.0.0.1:3000/auth/callback",
   "http://127.0.0.1:3000/auth/callback**"
 ]
 
