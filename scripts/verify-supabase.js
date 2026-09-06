@@ -81,20 +81,54 @@ const EXPECTED_POLICIES = [
 ];
 
 /**
- * Tables the service role is explicitly revoked from, so that the only
- * identity that reaches them is the direct `SUPABASE_DB_URL` connection.
- * `auction_contention_seeds` is the sharpest case (AD-14): a lottery seed
- * readable before the draw defeats the commit-reveal entirely.
+ * `auction_watermark` is the one table with RLS **enabled but not forced**, and
+ * that is deliberate rather than an oversight — `20260902000000_watermark.sql`
+ * argues it at length. Forcing subjects the table OWNER to its policies, and
+ * the owner is exactly who `raise_auction_watermark()` runs as, so the trigger's
+ * UPDATE would then need an update policy — "and an update policy is a thing
+ * that can be granted to a role by mistake". Leaving the owner unforced keeps
+ * the write path a `security definer` function and nothing else. Client roles
+ * are subject to RLS either way, since neither is the owner.
+ *
+ * Asserted by name so that a *second* unforced table is a failure rather than
+ * something this check quietly tolerates.
  */
-const SERVICE_ROLE_REVOKED = [
-	'auction_contention_seeds',
-	'auction_events',
-	'auction_watermark',
-	'manager_notification_preferences',
-	'notification_outbox',
-	'open_nominations',
-	'tick_heartbeats'
-];
+const RLS_ENABLED_NOT_FORCED = 'auction_watermark';
+
+/**
+ * The exact privileges each deliberately-narrowed table grants, by role.
+ *
+ * Several migrations follow a revoke-then-grant-back pattern, because Supabase's
+ * default privileges hand `service_role` ALL on a newly created table: every
+ * privilege is revoked outright and precisely what the server needs is granted
+ * back. Checking only for the revoke — as an earlier version of this script did
+ * — would have called that pattern a failure. What matters is the *resulting*
+ * set, and the omissions in it are load-bearing:
+ *
+ *   - `auction_events` grants SELECT and INSERT and **deliberately not UPDATE
+ *     or DELETE**. That is the append-only log enforced at the grant, not only
+ *     by convention — the single most valuable assertion in this file.
+ *   - `auction_contention_seeds` grants **nothing to anybody** (AD-14). A
+ *     lottery seed readable before the draw defeats the commit-reveal entirely,
+ *     so the only identity that reaches it is the direct connection.
+ *   - `auction_watermark` grants `authenticated` SELECT and `service_role`
+ *     nothing at all — not even SELECT, because the server answers liveness
+ *     from `auction_events`' own `max(seq)` (AD-29) and never reads this cache.
+ *
+ * Tables absent from this map keep Supabase's platform defaults for
+ * `service_role`, which the migrations knowingly rely on. Their exact default
+ * set is the platform's to change, so it is not pinned here — but the
+ * anon/authenticated check below still applies to every table in the schema.
+ */
+const EXPECTED_GRANTS = {
+	auction_events: { service_role: 'INSERT,SELECT' },
+	auction_contention_seeds: {},
+	auction_watermark: { authenticated: 'SELECT' },
+	open_nominations: { service_role: 'DELETE,INSERT,SELECT' },
+	tick_heartbeats: { service_role: 'INSERT,SELECT' },
+	notification_outbox: { service_role: 'INSERT,SELECT' },
+	manager_notification_preferences: { service_role: 'INSERT,SELECT,UPDATE' }
+};
 
 const checks = [];
 function record(ok, label, detail) {
@@ -129,6 +163,7 @@ async function main() {
 		await checkTables(client);
 		await checkPolicies(client);
 		await checkGrants(client);
+		await checkPoolStatusView(client);
 		await checkExtensions(client);
 		await checkTick(client);
 	} finally {
@@ -194,14 +229,30 @@ async function checkTables(client) {
 		missing.length === 0 ? '' : `missing: ${missing.join(', ')}`
 	);
 
-	const unprotected = EXPECTED_TABLES.filter((name) => {
-		const row = found.get(name);
-		return row !== undefined && !(row['enabled'] === true && row['forced'] === true);
-	});
+	// RLS enabled everywhere, no exceptions.
+	const rlsOff = EXPECTED_TABLES.filter((name) => found.get(name)?.['enabled'] !== true);
 	record(
-		unprotected.length === 0,
-		'RLS enabled AND forced on every table (AD-16)',
-		unprotected.length === 0 ? '' : `not forced: ${unprotected.join(', ')}`
+		rlsOff.length === 0,
+		'RLS enabled on every table (AD-16)',
+		rlsOff.length === 0 ? '' : `not enabled: ${rlsOff.join(', ')}`
+	);
+
+	// Forced everywhere except the one table that documents why it must not be.
+	const shouldForce = EXPECTED_TABLES.filter((name) => name !== RLS_ENABLED_NOT_FORCED);
+	const notForced = shouldForce.filter((name) => found.get(name)?.['forced'] !== true);
+	record(
+		notForced.length === 0,
+		`RLS forced on all ${String(shouldForce.length)} tables that take it (AD-16)`,
+		notForced.length === 0 ? '' : `not forced: ${notForced.join(', ')}`
+	);
+
+	// And the exception is still the exception. If this ever starts passing by
+	// being forced, the security-definer trigger argument needs revisiting; if
+	// another table joins it, that is a silent widening.
+	record(
+		found.get(RLS_ENABLED_NOT_FORCED)?.['forced'] === false,
+		`${RLS_ENABLED_NOT_FORCED} is enabled but NOT forced, as its migration argues`,
+		'the security-definer trigger owns the write path'
 	);
 
 	const strays = [...found.keys()].filter((name) => !EXPECTED_TABLES.includes(name));
@@ -241,41 +292,77 @@ async function checkPolicies(client) {
 }
 
 async function checkGrants(client) {
-	// `anon` and `authenticated` must hold no privilege on any table. The one
-	// read the browser performs goes through the policy checked above, which
-	// still requires the grant to be absent everywhere else.
-	const { rows: clientGrants } = await client.query(
-		`select table_name, grantee, privilege_type
+	const { rows } = await client.query(
+		`select table_name, grantee, string_agg(privilege_type, ',' order by privilege_type) as privs
 		   from information_schema.role_table_grants
-		  where table_schema = 'public' and grantee in ('anon', 'authenticated')`
-	);
-	// The watermark SELECT grant is the single legitimate exception.
-	const offending = clientGrants.filter(
-		(row) =>
-			!(String(row['table_name']) === 'auction_watermark' && String(row['privilege_type']) === 'SELECT')
-	);
-	record(
-		offending.length === 0,
-		'anon/authenticated hold no table privilege beyond the watermark read',
-		offending.length === 0
-			? ''
-			: offending
-					.map((r) => `${String(r['table_name'])}:${String(r['grantee'])}:${String(r['privilege_type'])}`)
-					.join(', ')
+		  where table_schema = 'public' and grantee in ('anon', 'authenticated', 'service_role')
+		  group by table_name, grantee`
 	);
 
-	const { rows: serviceGrants } = await client.query(
-		`select distinct table_name
-		   from information_schema.role_table_grants
-		  where table_schema = 'public' and grantee = 'service_role'`
-	);
-	const stillGranted = serviceGrants
-		.map((row) => String(row['table_name']))
-		.filter((name) => SERVICE_ROLE_REVOKED.includes(name));
+	/** table -> role -> comma-joined privileges, as they actually are. */
+	const actual = new Map();
+	for (const row of rows) {
+		const table = String(row['table_name']);
+		if (!actual.has(table)) actual.set(table, {});
+		actual.get(table)[String(row['grantee'])] = String(row['privs']);
+	}
+
+	// `anon` is the browser before sign-in. It holds nothing, anywhere, full
+	// stop — there is no table in this schema it is meant to read.
+	const anonGrants = rows.filter((row) => String(row['grantee']) === 'anon');
 	record(
-		stillGranted.length === 0,
-		'service_role revoked from the tables reached only by the direct connection',
-		stillGranted.length === 0 ? '' : `still granted: ${stillGranted.join(', ')}`
+		anonGrants.length === 0,
+		'anon holds no privilege on any table, anywhere',
+		anonGrants.length === 0
+			? ''
+			: anonGrants.map((r) => `${String(r['table_name'])}:${String(r['privs'])}`).join(', ')
+	);
+
+	// Each deliberately-narrowed table matches its intended set exactly. An
+	// extra privilege is a widening; a missing one breaks a write path.
+	for (const [table, expected] of Object.entries(EXPECTED_GRANTS)) {
+		const got = actual.get(table) ?? {};
+		const roles = [...new Set([...Object.keys(expected), ...Object.keys(got)])].sort();
+		const differences = roles
+			.filter((role) => (expected[role] ?? '') !== (got[role] ?? ''))
+			.map((role) => `${role}: expected '${expected[role] ?? 'none'}', got '${got[role] ?? 'none'}'`);
+		record(
+			differences.length === 0,
+			`${table} grants exactly what its migration intends`,
+			differences.length === 0
+				? Object.entries(expected)
+						.map(([role, privs]) => `${role}=${privs}`)
+						.join(' ') || 'nothing to any client-facing role'
+				: differences.join('; ')
+		);
+	}
+}
+
+/**
+ * `import_pool_status` is a view, not a table, so the table checks skip it.
+ * It carries `security_invoker = on`, which makes it run with the querying
+ * role's privileges rather than its definer's — without that, a view over
+ * RLS-protected staging tables would hand its reader the definer's access.
+ */
+async function checkPoolStatusView(client) {
+	const { rows } = await client.query(
+		`select c.reloptions
+		   from pg_class c
+		   join pg_namespace n on n.oid = c.relnamespace
+		  where n.nspname = 'public' and c.relname = 'import_pool_status' and c.relkind = 'v'`
+	);
+	if (rows.length === 0) {
+		record(false, 'View import_pool_status exists', 'absent');
+		return;
+	}
+	const options = rows[0]?.['reloptions'] ?? [];
+	record(
+		// Postgres records the option as written, so both `on` and `true` are
+		// the same setting and either must satisfy this check.
+		Array.isArray(options) &&
+			options.some((o) => /^security_invoker=(on|true)$/i.test(String(o).replace(/\s/g, ''))),
+		'View import_pool_status has security_invoker = on',
+		Array.isArray(options) && options.length > 0 ? options.join(', ') : 'no reloptions set'
 	);
 }
 
