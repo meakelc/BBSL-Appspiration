@@ -28,6 +28,7 @@
 
 import type { Handle } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
+import { env as publicEnv } from '$env/dynamic/public';
 
 import { resolveSessionState } from '$lib/server/auth.ts';
 import {
@@ -36,6 +37,7 @@ import {
 	verifyBreakGlassCookie
 } from '$lib/server/commissioner-recovery.ts';
 import { resolveLeagueReadOrDefault } from '$lib/server/phase.ts';
+import { securityHeaders } from '$lib/server/security-headers.ts';
 import { gatherSessionFacts, type SessionGateway } from '$lib/server/session.ts';
 import { managerRegistry, requestClient } from '$lib/server/supabase.ts';
 
@@ -73,5 +75,26 @@ export const handle: Handle = async ({ event, resolve }) => {
 
 	event.locals.session = resolveSessionState(await gatherSessionFacts(event, gateway));
 
-	return await resolve(event);
+	const response = await resolve(event);
+
+	// The security headers, on every response this app generates (Story 9.3).
+	//
+	// `netlify.toml`'s `[[headers]]` block reaches CDN-served static files and
+	// NOT Function responses — Story 9.1's `curl -I` proved it: a static asset
+	// returned all seven, the page a human loads returned none. With
+	// `adapter-netlify` every page here is a Function response, so without this
+	// the app is framable, indexable and has no Content-Security-Policy.
+	//
+	// Set unconditionally rather than only when absent. These are floors, and a
+	// route that wanted to WEAKEN one would be doing something this hook exists
+	// to prevent; a route wanting to ADD a header is unaffected. It also lets
+	// `auth/callback` stop restating two of them to avoid a collision that, as
+	// it turns out, never happens.
+	for (const [name, value] of Object.entries(
+		securityHeaders(publicEnv['PUBLIC_SUPABASE_URL'])
+	)) {
+		response.headers.set(name, value);
+	}
+
+	return response;
 };

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+
+import {
+	CONSTANT_SECURITY_HEADERS,
+	connectSrc,
+	contentSecurityPolicy
+} from '../src/lib/server/security-headers.ts';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -157,21 +163,19 @@ describe('the Content-Security-Policy', () => {
 		}
 	});
 
-	it('keeps connect-src same-origin, blocking the shipped socket, until a project exists to name', () => {
-		// The Realtime socket is admitted by adding that project's literal host,
-		// never `*.supabase.co`. Both projects are still unprovisioned (see
-		// deferred-work.md), so there is no ref to name.
+	it('keeps connect-src same-origin in the STATIC policy, which needs no socket', () => {
+		// Unchanged from Story 1.3, and now for a sharper reason than "no
+		// project exists to name" (Story 9.3).
 		//
-		// **Since Story 4.1 this is blocking, not anticipatory.** The Realtime
-		// client now ships, so a deployed browser's watermark socket is refused
-		// by this exact directive. The story keeps the assertion and the policy
-		// UNCHANGED anyway, deliberately: the freshness contract degrades to
-		// Reconnecting and keeps refreshing on its same-origin poll, which needs
-		// no widening — and a wildcard host written to unblock the socket sooner
-		// would admit every other tenant on the platform, which is far wider
-		// than anything this app requires. The widening cannot be written
-		// without a host to name, and this assertion is what stops it happening
-		// silently once there is one.
+		// This block reaches CDN-served static files only — Story 9.1's `curl -I`
+		// established that Netlify does not apply it to Function responses. No
+		// static asset opens a WebSocket, so widening THIS connect-src would
+		// grant nothing to anybody. The Realtime socket is governed by the
+		// policy on the DOCUMENT response, which `hooks.server.ts` sets from
+		// `lib/server/security-headers.ts` — see the block below.
+		//
+		// Leaving it at `'self'` is therefore the tighter choice, not a
+		// leftover: the static policy admits exactly what static assets need.
 		expect(CSP_DIRECTIVES.get('connect-src')).toEqual(["'self'"]);
 	});
 
@@ -203,15 +207,119 @@ describe('the supporting headers', () => {
 	});
 });
 
+// --- The SSR half: what netlify.toml cannot reach ---------------------------
+
+describe('the SSR security headers', () => {
+	// Story 9.1's AC 5 ran `curl -I` against a real deploy and found that
+	// netlify.toml's block reaches static assets and NOT Function responses: a
+	// static asset returned all seven headers, the page a human loads returned
+	// none. Every page here is a Function response, so the app was framable,
+	// indexable and had no CSP. `hooks.server.ts` now applies this module's
+	// output to every response it generates.
+	//
+	// Two sources for one set of values is a drift risk, which is what the
+	// first assertion here exists to remove.
+
+	it('agrees with netlify.toml byte-for-byte on every constant header', () => {
+		for (const [name, value] of Object.entries(CONSTANT_SECURITY_HEADERS)) {
+			const fromBlock = [...HEADERS].find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1];
+			expect(fromBlock, `${name} is not declared in netlify.toml`).toBeDefined();
+			expect(value, `${name} differs between the two sources`).toBe(fromBlock);
+		}
+	});
+
+	it('covers every header netlify.toml declares, so SSR is not the weaker half', () => {
+		for (const name of HEADERS.keys()) {
+			const covered =
+				name === 'Content-Security-Policy' ||
+				Object.keys(CONSTANT_SECURITY_HEADERS).some(
+					(key) => key.toLowerCase() === name.toLowerCase()
+				);
+			expect(covered, `${name} is served to static assets but not to pages`).toBe(true);
+		}
+	});
+
+	it('admits the deployment’s own Supabase host to connect-src, and only it', () => {
+		const policy = contentSecurityPolicy('https://ymtermqgujdemgxnbgku.supabase.co');
+		const parsed = directives(policy);
+		expect(parsed.get('connect-src')).toEqual([
+			"'self'",
+			'https://ymtermqgujdemgxnbgku.supabase.co',
+			'wss://ymtermqgujdemgxnbgku.supabase.co'
+		]);
+	});
+
+	it('never interpolates a wildcard, whatever it is handed', () => {
+		// The specific mistake deferred-work.md names twice: `*.supabase.co`
+		// would admit every other tenant on the platform. A URL whose host is
+		// not a plain hostname degrades to 'self' rather than being
+		// interpolated, and an unparseable or empty one does the same.
+		for (const hostile of ['https://*.supabase.co', 'https://sub.*.supabase.co', 'not-a-url', '']) {
+			expect(connectSrc(hostile), `connect-src widened for ${hostile}`).toBe("connect-src 'self'");
+		}
+	});
+
+	it('holds the no-wildcard property across arbitrary input', () => {
+		for (const url of [
+			'https://*.supabase.co',
+			'https://ymtermqgujdemgxnbgku.supabase.co',
+			'https://example.com',
+			'not-a-url',
+			undefined
+		]) {
+			expect(contentSecurityPolicy(url), `wildcard reached the policy for ${String(url)}`).not.toMatch(
+				/\*/
+			);
+		}
+	});
+
+	it('follows PUBLIC_SUPABASE_URL wherever it legitimately points', () => {
+		// Deliberately NOT constrained to `*.supabase.co`. The directive exists
+		// to admit the Realtime socket, whose host supabase-js derives from this
+		// same variable — so constraining it here could only ever disagree with
+		// the client. And anyone able to set PUBLIC_SUPABASE_URL already governs
+		// where the app reads its data from; the CSP is not the control that
+		// would save it. Pinning the vendor's domain would buy no security and
+		// would break the day a custom domain is used.
+		expect(connectSrc('https://db.example.org')).toBe(
+			"connect-src 'self' https://db.example.org wss://db.example.org"
+		);
+	});
+
+	it('degrades to same-origin when no project is configured', () => {
+		// Story 4.1's honest failure: the freshness contract sits in
+		// Reconnecting and the same-origin poll keeps the board refreshing,
+		// rather than anything being shown as live that is not.
+		expect(connectSrc(undefined)).toBe("connect-src 'self'");
+	});
+
+	it('carries every directive the static policy does', () => {
+		const ssr = directives(contentSecurityPolicy('https://example.supabase.co'));
+		for (const name of CSP_DIRECTIVES.keys()) {
+			expect(ssr.has(name), `${name} is missing from the SSR policy`).toBe(true);
+		}
+	});
+
+	it('confines the inline allowance to the two directives that need it', () => {
+		const ssr = directives(contentSecurityPolicy('https://example.supabase.co'));
+		for (const [directive, sources] of ssr) {
+			if (directive === 'script-src' || directive === 'style-src') continue;
+			expect(sources, `${directive} permits inline`).not.toContain("'unsafe-inline'");
+		}
+	});
+});
+
 // --- Two sources, one value -------------------------------------------------
 
 describe('the routes that set their own headers agree with the block', () => {
 	// `/auth/callback` writes its refusals as a raw Response with its own
-	// headers, and `for = "/*"` matches that path too. Netlify does not document
-	// which wins on a collision, so two different values for one header name
-	// would make the served response depend on undocumented behaviour — and
-	// nothing in the repository would say which value a browser actually got.
-	// Identical values make the question moot.
+	// headers. It used to restate two security headers so that a collision with
+	// netlify.toml's block would be moot whichever precedence applied; Story 9.3
+	// established there is no collision, because that block never reaches this
+	// path, and that those two were consequently the ONLY security headers this
+	// route had. `hooks.server.ts` now sets the full set on every response, so
+	// the route restates none of them — a second writer on a value that must
+	// have one is exactly what this file exists to prevent.
 	const callback = readFileSync(
 		join(ROOT, 'src', 'routes', 'auth', 'callback', '+server.ts'),
 		'utf8'
@@ -223,18 +331,9 @@ describe('the routes that set their own headers agree with the block', () => {
 	}
 
 	it.each(['x-robots-tag', 'referrer-policy'])(
-		'sets the same %s the header block does',
+		'no longer restates %s, leaving the hook as its single writer',
 		(name: string) => {
-			const fromRoute = routeHeader(name);
-			expect(fromRoute, `${name} is not set by the callback route`).toBeDefined();
-
-			// Header names are case-insensitive; the two files spell them
-			// differently by local convention.
-			const fromBlock = [...HEADERS].find(
-				([key]) => key.toLowerCase() === name
-			)?.[1];
-			expect(fromBlock, `${name} is not served by the header block`).toBeDefined();
-			expect(fromRoute).toBe(fromBlock);
+			expect(routeHeader(name), `${name} is still set by the callback route`).toBeUndefined();
 		}
 	);
 

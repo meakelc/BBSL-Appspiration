@@ -112,7 +112,7 @@ development_status:
   epic-9: in-progress
   9-1-provision-supabase-dev-and-apply-the-schema: done
   9-2-provision-the-discord-application-channel-and-webhook: done
-  9-3-admit-realtime-to-the-csp: backlog
+  9-3-admit-realtime-to-the-csp: done
   9-4-seed-thirty-teams-and-the-moderator-managers: done
   9-5-confirm-the-fantrax-column-maps-against-a-real-export: done
   9-6-the-setup-runbook: backlog

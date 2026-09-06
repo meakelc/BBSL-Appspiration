@@ -188,12 +188,30 @@ describe('GET /auth/callback', () => {
 		expect(await response.text()).toBe(EXCHANGE_REFUSAL);
 	});
 
-	it('carries the same security headers the header block serves for this path', async () => {
+	it('carries the two headers that are its own, and no longer restates the security ones', async () => {
 		const response = await GET(callbackEvent(''));
+
+		// These two are the route's, and route-only on purpose: a `no-store`
+		// default across the app would defeat the immutable asset caching the
+		// built client depends on.
 		expect(response.headers.get('content-type')).toBe('text/plain; charset=utf-8');
 		expect(response.headers.get('cache-control')).toBe('no-store');
-		expect(response.headers.get('x-robots-tag')).toBe('noindex, nofollow, noarchive, nosnippet');
-		expect(response.headers.get('referrer-policy')).toBe('strict-origin-when-cross-origin');
+
+		// The security headers moved to `hooks.server.ts` in Story 9.3, which
+		// applies them to every response this app generates. They are absent
+		// HERE because this test calls the route handler directly, below the
+		// hook — their presence on a real response is asserted by
+		// `tests/headers.test.ts` against the single source both halves share,
+		// and proven end to end by `curl -I` against a deploy.
+		//
+		// This assertion is deliberately the negative one. The route used to set
+		// these to avoid a collision with netlify.toml that Story 9.1 proved
+		// never happens — that block does not reach a Function response — which
+		// meant these two were the ONLY security headers this path had, and the
+		// other five were simply missing. Restating them now would put a second
+		// writer on a value that must have one.
+		expect(response.headers.get('x-robots-tag')).toBeNull();
+		expect(response.headers.get('referrer-policy')).toBeNull();
 	});
 
 	it('refuses an unregistered account with the registry refusal, and destroys the session', async () => {
