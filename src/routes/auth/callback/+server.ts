@@ -30,21 +30,20 @@ import { discordOAuthPort, managerRegistry, requestClient } from '$lib/server/su
  * response an unregistered caller sees differs in no byte from the one any
  * other unregistered caller sees.
  *
- * The two security headers deliberately carry the SAME values as the
- * `[[headers]]` block in `netlify.toml`, which matches `for = "/*"` and so also
- * applies to this path. Netlify merges its rules with a function's own headers
- * and does not document which wins on a collision, so two different values for
- * one header name would make the served response depend on undocumented
- * behaviour — and nothing in the repository would say which value a browser
- * actually got. Identical values make the question moot: whichever precedence
- * applies, the result is the same. `tests/headers.test.ts` asserts the two
- * sources agree, so changing one and not the other fails the suite.
+ * **The two security headers that used to be restated here are gone** (Story
+ * 9.3). They were duplicated on the reasoning that `netlify.toml`'s
+ * `[[headers]]` block "matches `for = \"/*\"` and so also applies to this
+ * path", and that identical values would make Netlify's undocumented
+ * precedence moot. Story 9.1's `curl -I` established the premise was wrong:
+ * that block never reaches a Function response, and this route is one — so
+ * these were the only security headers this path had. `hooks.server.ts` now
+ * sets the full set on every response, this one included, from the single
+ * source in `lib/server/security-headers.ts`. Restating them here would put a
+ * second writer on a value that must have one.
  */
 const REFUSAL_HEADERS: Readonly<Record<string, string>> = Object.freeze({
 	'content-type': 'text/plain; charset=utf-8',
-	'cache-control': 'no-store',
-	'x-robots-tag': 'noindex, nofollow, noarchive, nosnippet',
-	'referrer-policy': 'strict-origin-when-cross-origin'
+	'cache-control': 'no-store'
 });
 
 function refuse(status: number, message: string): Response {
