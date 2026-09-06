@@ -306,12 +306,33 @@ async function writeOutcome(
 
 	await client.query('delete from import_staged_rosters where team_id = $1', [teamId]);
 
-	for (const row of rows) {
+	// One multi-row INSERT rather than one statement per Player (Story 9.7).
+	//
+	// A roster is only ten to fifteen rows, so this file is not the one that
+	// broke the import — the Free Agent pool's ~1,470 rows were (see the note in
+	// `pool-import.ts`). But thirty rosters staged in a single request add their
+	// round trips together against the same 10-second function budget, and a
+	// batch here is the same shape for none of the cost. Uploading all
+	// thirty-one files at once is the documented workflow, not an edge case.
+	if (rows.length > 0) {
+		const values: unknown[] = [];
+		const tuples = rows.map((row, i) => {
+			values.push(
+				teamId,
+				row.fantraxPlayerId,
+				row.playerName,
+				row.capHit,
+				row.rosterSlotKind,
+				row.contractYearsRemaining
+			);
+			const at = i * 6;
+			return `($${String(at + 1)}, $${String(at + 2)}, $${String(at + 3)}, $${String(at + 4)}, $${String(at + 5)}, $${String(at + 6)})`;
+		});
 		await client.query(
 			`insert into import_staged_rosters
 				(team_id, fantrax_player_id, player_name, cap_hit, roster_slot_kind, contract_years_remaining)
-			values ($1, $2, $3, $4, $5, $6)`,
-			[teamId, row.fantraxPlayerId, row.playerName, row.capHit, row.rosterSlotKind, row.contractYearsRemaining]
+			values ${tuples.join(', ')}`,
+			values
 		);
 	}
 

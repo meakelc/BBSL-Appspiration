@@ -106,16 +106,25 @@ function fakeGateway(
 				return { rows: [] };
 			}
 			if (/^insert into import_staged_rosters/i.test(sql)) {
-				order.push('insert-row');
-				const row: QueryResultRow = {
-					team_id: params[0],
-					fantrax_player_id: params[1],
-					player_name: params[2],
-					cap_hit: params[3],
-					roster_slot_kind: params[4],
-					contract_years_remaining: params[5]
-				};
-				insertedRows.push(row);
+				// ONE statement carrying every Player on the roster, six bind
+				// parameters each (Story 9.7). It was one statement per row until
+				// a real import showed what that costs: thirty rosters and a
+				// ~1,470-Player pool, staged in a single request, exceeded
+				// Netlify's 10-second function budget by an order of magnitude.
+				// The params are unflattened here so the assertions below still
+				// read one row at a time.
+				order.push('insert-rows');
+				expect(params.length % 6, 'params do not divide into six-column rows').toBe(0);
+				for (let at = 0; at < params.length; at += 6) {
+					insertedRows.push({
+						team_id: params[at],
+						fantrax_player_id: params[at + 1],
+						player_name: params[at + 2],
+						cap_hit: params[at + 3],
+						roster_slot_kind: params[at + 4],
+						contract_years_remaining: params[at + 5]
+					} as QueryResultRow);
+				}
 				return { rows: [] };
 			}
 			if (/^insert into import_team_sources/i.test(sql)) {
@@ -182,8 +191,7 @@ describe('stageRosterFile — the happy path', () => {
 			'select-teams',
 			'select-pool-conflicts',
 			'delete-rows',
-			'insert-row',
-			'insert-row',
+			'insert-rows',
 			'upsert-status',
 			'commit'
 		]);
