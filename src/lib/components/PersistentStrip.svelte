@@ -52,12 +52,20 @@
 	let {
 		team,
 		phase,
+		phaseSentence,
 		destinations,
 		now
 	}: {
 		/** The FACTS the figure is derived from. Never a derived figure. */
 		team: TeamMoneyState;
 		phase: LeaguePhase;
+		/**
+		 * The ambient phase sentence, already worded by `server/phase.ts`.
+		 * It lived in the header menu until that menu became the second copy
+		 * of this sheet; it is passed through here for the same reason it was
+		 * passed through there, and is worded no more here than it was.
+		 */
+		phaseSentence: string;
 		destinations: readonly Destination[];
 		/** A server instant, for the one gate that asks what time it is. */
 		now: string;
@@ -156,14 +164,40 @@
 			     VISIBLE on it is two figures rather than a verb. The word is
 			     the core's, like every other on this strip. -->
 			<span class="visually-hidden">{STRIP_SHEET_LABEL}</span>
-			{#if showsMaximumBid && figure !== null}
-				<span class="strip-label">{maximumBidLabel}</span>
-				<span class="strip-figure money">{figure}</span>
-				<span class="strip-separator" aria-hidden="true">·</span>
-			{/if}
-			<span class="strip-roster">{roster}</span>
+			<!-- The hamburger, and it is the whole reason this strip is now the
+			     ONLY menu trigger. What is otherwise visible on the summary is
+			     two figures, which announce a readout and not a control; the
+			     header menu used to be the thing that looked openable, and
+			     removing it took that signal with it. Drawn rather than
+			     lettered, so it costs none of the one line's width — the
+			     figures are the facts and never shrink. `aria-hidden`: the
+			     trigger is already named by the core's word above, and a
+			     second name here would announce the control twice. -->
+			<span class="strip-burger" aria-hidden="true">
+				<svg viewBox="0 0 16 16" width="16" height="16" focusable="false">
+					<path d="M1 3.5h14M1 8h14M1 12.5h14" />
+				</svg>
+			</span>
+			<!-- The facts share a baseline with each other; the row as a whole
+			     is centred in the strip by `.strip-summary`. Two containers
+			     because one cannot do both — `align-items: baseline` pins a
+			     single flex line to the top of the box, which is what left the
+			     text all but touching the top border. -->
+			<span class="strip-facts">
+				{#if showsMaximumBid && figure !== null}
+					<span class="strip-label">{maximumBidLabel}</span>
+					<span class="strip-figure money">{figure}</span>
+					<span class="strip-separator" aria-hidden="true">·</span>
+				{/if}
+				<span class="strip-roster">{roster}</span>
+			</span>
 		</summary>
 		<div class="strip-sheet">
+			<!-- The ambient phase sentence, which lived in the header menu
+			     until this sheet became the only menu. Same words, same
+			     source, one place. -->
+			<p class="section-label">Phase</p>
+			<p class="prose">{phaseSentence}</p>
 			<DestinationsList {destinations} />
 		</div>
 	</details>
@@ -206,11 +240,27 @@
 
 	.strip-summary {
 		display: flex;
-		align-items: baseline;
+		/*
+		 * The ROW is centred in the strip; the facts inside it share a
+		 * baseline with each other (`.strip-facts`). `align-items: baseline`
+		 * here instead put the single flex line at the top of the box, so the
+		 * text sat all but against the top border with the whole of the
+		 * reserved height empty beneath it.
+		 */
+		align-items: center;
 		gap: var(--space-card-gap);
 		min-height: var(--strip-height);
-		padding: 0 var(--space-panel-padding);
+		padding: var(--space-row-gap) var(--space-panel-padding);
+		/* The vertical padding is INSIDE the reserved height, for the same
+		   reason the strip's border is: `global.css` reserves exactly
+		   `--strip-height`, and anything added on top of it covers the last
+		   row of the page by that much. */
+		box-sizing: border-box;
 		cursor: pointer;
+		/* The hamburger IS the disclosure marker now. The browser default
+		   would sit to its left, giving the one control on every page two
+		   affordances stacked against each other. */
+		list-style: none;
 		/*
 		 * One line, always. The reserved room below the page is a fixed
 		 * `--strip-height`; a strip free to wrap to two lines would grow past
@@ -224,9 +274,45 @@
 		overflow: hidden;
 	}
 
+	/* The inner row: the baseline the label, the figure and the Roster Count
+	   share, so a 12px word and a 17px number sit on one line rather than
+	   floating against each other. It carries the one-line discipline too —
+	   it is the element that actually holds the text. */
+	.strip-facts {
+		display: flex;
+		align-items: baseline;
+		gap: var(--space-card-gap);
+		flex-wrap: nowrap;
+		white-space: nowrap;
+		overflow: hidden;
+		min-width: 0;
+	}
+
+	/* Drawn from the token palette and sized in `em` off the summary's own
+	   font, so it tracks the text rather than pinning a second size literal
+	   into the strip. It never shrinks: it is the affordance. */
+	.strip-burger {
+		display: flex;
+		flex-shrink: 0;
+		color: var(--color-text-secondary);
+	}
+
+	.strip-burger svg {
+		width: 1em;
+		height: 1em;
+		stroke: currentColor;
+		stroke-width: 1.5;
+		stroke-linecap: round;
+		fill: none;
+	}
+
 	.strip-figure,
 	.strip-roster {
 		flex-shrink: 0;
+	}
+
+	.strip-summary::-webkit-details-marker {
+		display: none;
 	}
 
 	/*
