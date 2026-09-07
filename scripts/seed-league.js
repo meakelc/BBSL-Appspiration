@@ -106,6 +106,69 @@ const MANAGERS = Object.freeze([
 	['DET', 'Tchoy', '294127376927817729', true]
 ]);
 
+/**
+ * The Discord id prefix every placeholder Manager carries.
+ *
+ * Deliberately NOT a number. A Discord snowflake is an unbroken run of digits,
+ * so a value starting with letters cannot collide with any real account —
+ * nobody can ever sign in as a placeholder, whatever they hold. That property
+ * is what makes seeding them safe rather than a back door: `managers` is the
+ * registry AD-15 gates on, and adding a row that no Discord identity can match
+ * adds a Team binding without adding an identity.
+ */
+const PLACEHOLDER_PREFIX = 'pilot-placeholder-';
+
+/**
+ * Give every Manager-less Team an inert Manager, so `refuseAuctionOpen`'s
+ * unbound-Teams gate passes during a pilot.
+ *
+ * **Why this exists.** One Discord account is one `managers` row is one Team —
+ * co-management shares a Team rather than giving one person two — so seven
+ * moderators cannot cover thirty Teams, and the auction cannot open with any
+ * Team unbound. That gate is correct: an unbound Team can neither nominate nor
+ * bid, so its roster and cap space would sit inert while the auction ran around
+ * it, and opening is irreversible.
+ *
+ * **What it costs.** Those Teams are inert anyway. A pilot run this way tests
+ * the mechanics with however many real bidders there are, against a full-size
+ * league and real rosters — thinner competition than the real auction, and
+ * every gate, refusal, close and draw still exercised.
+ *
+ * PILOT ONLY. Story 9.8 seeds all thirty-one real Managers against prod, and
+ * this function refuses to run there.
+ */
+async function seedPlaceholders(client) {
+	const { rows } = await client.query(
+		`select t.id, t.name
+		   from public.teams t
+		   left join public.managers m on m.team_id = t.id
+		  where m.id is null
+		  order by t.name`
+	);
+	if (rows.length === 0) {
+		process.stdout.write('placeholders: every Team already has a Manager; nothing to do\n\n');
+		return;
+	}
+
+	for (const row of rows) {
+		const abbrev = TEAMS.find(([, name]) => name === String(row['name']))?.[0];
+		if (abbrev === undefined) throw new Error(`Team "${String(row['name'])}" is not in TEAMS`);
+		await client.query(
+			`insert into public.managers (discord_user_id, display_name, team_id, is_commissioner)
+			 values ($1, $2, $3, false)
+			 on conflict (discord_user_id) do update
+			   set team_id = excluded.team_id, is_commissioner = false`,
+			[`${PLACEHOLDER_PREFIX}${abbrev.toLowerCase()}`, 'Unclaimed', String(row['id'])]
+		);
+	}
+
+	process.stdout.write(
+		`placeholders: ${String(rows.length)} inert Manager(s) seeded so the auction can open.\n` +
+			`  These carry non-numeric Discord ids and CANNOT sign in. They are a pilot\n` +
+			`  device only — wipe before the real auction, and never seed them on prod.\n\n`
+	);
+}
+
 async function main() {
 	const url = process.env['SUPABASE_DB_URL'];
 	if (url === undefined || url.trim() === '') {
@@ -118,8 +181,30 @@ async function main() {
 	}
 
 	const wipe = process.argv.includes('--wipe');
+	const placeholders = process.argv.includes('--placeholders');
+
+	// Checked BEFORE connecting. Refusing prod must not depend on reaching a
+	// database — a guard that only fires after a successful connection is a
+	// guard that fails open the moment the network does.
+	if (placeholders && process.env['SUPABASE_ENVIRONMENT'] === 'prod') {
+		process.stderr.write(
+			'Refusing to seed placeholder Managers against prod.\n' +
+				'Placeholders are a pilot device: they let the auction open with Teams nobody\n' +
+				'owns. Story 9.8 seeds all thirty-one real Managers instead.\n'
+		);
+		process.exitCode = 1;
+		return;
+	}
 	const client = new pg.Client({ connectionString: url });
-	await client.connect();
+	try {
+		await client.connect();
+	} catch (error) {
+		process.stderr.write(
+			`Could not connect: ${error instanceof Error ? error.message : String(error)}\n`
+		);
+		process.exitCode = 1;
+		return;
+	}
 
 	try {
 		// One transaction: a half-seeded league is worse than an unseeded one,
@@ -177,6 +262,8 @@ async function main() {
 			);
 			managersWritten += result.rowCount ?? 0;
 		}
+
+		if (placeholders) await seedPlaceholders(client);
 
 		await client.query('commit');
 
