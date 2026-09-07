@@ -82,7 +82,17 @@
 	});
 </script>
 
-<HeaderMenu destinations={data.destinations} phaseSentence={data.phase.sentence} />
+<!-- The header menu is now the FALLBACK trigger, not a second one. The strip
+     carries the same `DestinationsList` and, since it gained a hamburger, says
+     so — two identical menus, one at each end of the screen, was one menu too
+     many. But the strip does not mount for a signed-out visitor, for a Manager
+     bound to no Team, or in Setup (`+layout.server.ts`'s three gates), and a
+     page with neither is a page with no navigation and no way to reach
+     Sign-in. So exactly one of the two renders, decided by the one gate that
+     already decides the strip. -->
+{#if data.stripTeam === null}
+	<HeaderMenu destinations={data.destinations} phaseSentence={data.phase.sentence} />
+{/if}
 
 <!-- The persistent strip, mounted ONCE for every surface beneath the layout —
      the same AD-29 reason the freshness notice is mounted here rather than
@@ -109,6 +119,7 @@
 	<PersistentStrip
 		team={data.stripTeam}
 		phase={data.phase.name}
+		phaseSentence={data.phase.sentence}
 		destinations={data.destinations}
 		now={data.serverInstant}
 	/>
