@@ -286,6 +286,30 @@ describe('the SSR security headers', () => {
 		);
 	});
 
+	it('admits every hop of the sign-in redirect chain to form-action', () => {
+		// The regression that broke sign-in on every iOS browser (Story 9.7).
+		//
+		// A sign-in POSTs to this origin, 303s to Supabase's /auth/v1/authorize,
+		// goes on to discord.com, comes back to Supabase's callback and finally
+		// back here. WebKit applies `form-action` to EVERY hop of a redirect
+		// chain a form started, not just to the immediate action — Chrome and
+		// Firefox check only the action. A policy naming 'self' and Discord
+		// alone therefore let desktop sign in and silently refused the
+		// navigation on iOS, with nothing on screen to say why.
+		const parsed = directives(contentSecurityPolicy('https://ymtermqgujdemgxnbgku.supabase.co'));
+		const sources = parsed.get('form-action') ?? [];
+		for (const hop of ["'self'", 'https://discord.com', 'https://ymtermqgujdemgxnbgku.supabase.co']) {
+			expect(sources, `form-action does not admit ${hop}`).toContain(hop);
+		}
+	});
+
+	it('never widens form-action to a wildcard or an unusable host', () => {
+		for (const hostile of ['https://*.supabase.co', 'not-a-url', '']) {
+			const sources = directives(contentSecurityPolicy(hostile)).get('form-action') ?? [];
+			expect(sources).toEqual(["'self'", 'https://discord.com']);
+		}
+	});
+
 	it('degrades to same-origin when no project is configured', () => {
 		// Story 4.1's honest failure: the freshness contract sits in
 		// Reconnecting and the same-origin poll keeps the board refreshing,

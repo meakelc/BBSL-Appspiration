@@ -72,9 +72,6 @@ const BASE_DIRECTIVES: readonly string[] = Object.freeze([
 	"object-src 'none'",
 	"frame-ancestors 'none'",
 	"frame-src 'none'",
-	// 'self' plus discord.com: sign-in POSTs to this origin and the OAuth
-	// handshake then navigates to Discord.
-	"form-action 'self' https://discord.com",
 	"img-src 'self' data:",
 	"font-src 'self'",
 	"style-src 'self' 'unsafe-inline'",
@@ -83,6 +80,50 @@ const BASE_DIRECTIVES: readonly string[] = Object.freeze([
 	"worker-src 'self'",
 	'upgrade-insecure-requests'
 ]);
+
+/**
+ * The deployment's Supabase origin, or `null` when there isn't a usable one.
+ *
+ * A host that is not a plain hostname — `*.supabase.co` above all — yields
+ * `null` rather than being interpolated, so a wildcard cannot reach the policy
+ * by any input. `https://*.supabase.co` would admit every other tenant on the
+ * platform, which is the specific mistake `deferred-work.md` names twice.
+ */
+function supabaseOrigin(supabaseUrl: string | undefined): string | null {
+	if (supabaseUrl === undefined || supabaseUrl.trim() === '') return null;
+	let host: string;
+	try {
+		host = new URL(supabaseUrl).host;
+	} catch {
+		return null;
+	}
+	if (host === '' || !/^[a-z0-9.-]+(?::\d+)?$/i.test(host)) return null;
+	return host;
+}
+
+/**
+ * Where a form on this app may send the browser.
+ *
+ * **The Supabase origin belongs here, and leaving it out broke sign-in on iOS
+ * entirely** (Story 9.7). The chain a sign-in starts is: POST to this origin,
+ * 303 to `<project>.supabase.co/auth/v1/authorize`, on to `discord.com`, back
+ * to Supabase's callback, and finally back here. WebKit applies `form-action`
+ * to **every hop of a redirect chain a form submission started**, not only to
+ * the immediate action; Chrome and Firefox check the action alone. So a policy
+ * naming only `'self'` and Discord let desktop sign in and silently refused the
+ * navigation on every iOS browser — which are all WebKit — with nothing on
+ * screen to say why.
+ *
+ * That is a mobile-first product failing exclusively on mobile, and it was
+ * invisible until Story 9.3 made the CSP reach SSR responses at all: before
+ * that, pages carried no policy and nothing was ever checked.
+ */
+function formAction(supabaseUrl: string | undefined): string {
+	const host = supabaseOrigin(supabaseUrl);
+	const sources = ["'self'", 'https://discord.com'];
+	if (host !== null) sources.push(`https://${host}`);
+	return `form-action ${sources.join(' ')}`;
+}
 
 /**
  * Build `connect-src` for one deployment's Supabase project.
@@ -108,28 +149,22 @@ const BASE_DIRECTIVES: readonly string[] = Object.freeze([
  * shown as live that is not.
  */
 export function connectSrc(supabaseUrl: string | undefined): string {
-	if (supabaseUrl === undefined || supabaseUrl.trim() === '') return "connect-src 'self'";
-
-	let host: string;
-	try {
-		host = new URL(supabaseUrl).host;
-	} catch {
-		return "connect-src 'self'";
-	}
-
-	// A host containing anything but the characters a hostname is made of —
-	// most importantly `*` — is refused outright rather than interpolated.
-	if (host === '' || !/^[a-z0-9.-]+(?::\d+)?$/i.test(host)) return "connect-src 'self'";
-
+	const host = supabaseOrigin(supabaseUrl);
+	if (host === null) return "connect-src 'self'";
 	return `connect-src 'self' https://${host} wss://${host}`;
 }
 
-/** The full Content-Security-Policy for one deployment. */
+/**
+ * The full Content-Security-Policy for one deployment.
+ *
+ * `form-action` and `connect-src` are inserted after `frame-src` rather than
+ * appended, so the policy reads in the same order `netlify.toml`'s static one
+ * does and the two remain diffable by eye.
+ */
 export function contentSecurityPolicy(supabaseUrl: string | undefined): string {
-	// connect-src is placed among the others rather than appended, so the
-	// policy reads in the same order `netlify.toml`'s does.
 	const directives = [...BASE_DIRECTIVES];
-	directives.splice(6, 0, connectSrc(supabaseUrl));
+	const afterFrameSrc = directives.findIndex((d) => d.startsWith('frame-src')) + 1;
+	directives.splice(afterFrameSrc, 0, formAction(supabaseUrl), connectSrc(supabaseUrl));
 	return directives.join('; ');
 }
 
