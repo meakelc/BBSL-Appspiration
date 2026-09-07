@@ -15,11 +15,17 @@ import { SIGN_IN_DESTINATION } from '../src/lib/server/destinations.ts';
  * is what actually proves that filter, by calling it directly.
  */
 
-function destination(id: string, commissionerOnly: boolean): Destination {
-	return { id, label: id, href: `/${id}`, commissionerOnly };
+function destination(id: string, commissionerOnly: boolean, listed = true): Destination {
+	return { id, label: id, href: `/${id}`, commissionerOnly, listed };
 }
 
-const SIGN_IN: Destination = { id: 'sign-in', label: 'Sign-in', href: '/signin', commissionerOnly: false };
+const SIGN_IN: Destination = {
+	id: 'sign-in',
+	label: 'Sign-in',
+	href: '/signin',
+	commissionerOnly: false,
+	listed: true
+};
 
 describe('classifyDestinations', () => {
 	it('sorts a Commissioner-only entry into commissionerDestinations and never managerDestinations', () => {
@@ -76,6 +82,43 @@ describe('classifyDestinations', () => {
 		// recognizing Sign-in, and this test is what would catch it.
 		const result = classifyDestinations([SIGN_IN_DESTINATION]);
 		expect(result.signIn).toEqual(SIGN_IN_DESTINATION);
+	});
+
+	// --- `listed`: a permission that is not a menu row ----------------------
+
+	it('drops an unlisted entry from both groupings', () => {
+		// `auction` is the live case: it gates
+		// `/auction/[fantraxPlayerId]` on the load AND the bid action, so it
+		// must stay in the catalog, but `/auction` itself has no page. The
+		// permission survives; the row does not.
+		const unlisted = destination('auction', false, false);
+		const result = classifyDestinations([unlisted]);
+		expect(result.managerDestinations).not.toContain(unlisted);
+		expect(result.commissionerDestinations).not.toContain(unlisted);
+	});
+
+	it('drops an unlisted Commissioner-only entry too, not only a general one', () => {
+		const unlisted = destination('some-admin-gate', true, false);
+		const result = classifyDestinations([unlisted]);
+		expect(result.commissionerDestinations).not.toContain(unlisted);
+		expect(result.managerDestinations).not.toContain(unlisted);
+	});
+
+	it('keeps every listed entry beside a dropped one', () => {
+		// The filter must remove exactly the unlisted entry and nothing else.
+		const listed = destination('bid-board', false);
+		const unlisted = destination('auction', false, false);
+		const admin = destination('pause-resume', true);
+		const result = classifyDestinations([listed, unlisted, admin]);
+		expect(result.managerDestinations).toEqual([listed]);
+		expect(result.commissionerDestinations).toEqual([admin]);
+	});
+
+	it('reports hasNothingLive when every entry is unlisted', () => {
+		// A viewer holding only permissions with no rows sees an empty menu,
+		// so it must state the empty case rather than render nothing at all.
+		const result = classifyDestinations([destination('auction', false, false)]);
+		expect(result.hasNothingLive).toBe(true);
 	});
 
 	describe('hasNothingLive', () => {

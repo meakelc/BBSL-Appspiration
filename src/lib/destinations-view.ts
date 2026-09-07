@@ -25,6 +25,15 @@ export type Destination = {
 	readonly label: string;
 	readonly href: string;
 	readonly commissionerOnly: boolean;
+	/**
+	 * Whether this entry renders as a row. A catalog entry is a PERMISSION
+	 * first — `requireLiveDestination` refuses out of the same table — and
+	 * `auction` is one that gates a route (`/auction/[fantraxPlayerId]`, on
+	 * the load and on the bid action) without having a page of its own to
+	 * link to. Filtering here rather than in the catalog is what keeps the
+	 * permission intact while the dead row goes.
+	 */
+	readonly listed: boolean;
 };
 
 /** What a render of one destination list needs, split apart. */
@@ -56,11 +65,16 @@ const SIGN_IN_ID = 'sign-in';
  * mislabelling it as a Manager or Commissioner control would misstate an
  * unauthenticated visitor's one action as one of theirs — and every other
  * entry sorted into exactly one of the other two arrays by its
- * `commissionerOnly` flag.
+ * `commissionerOnly` flag. Entries with `listed: false` are permissions with
+ * no menu row and are dropped before the split.
  */
 export function classifyDestinations(destinations: readonly Destination[]): ClassifiedDestinations {
-	const signIn = destinations.find((entry) => entry.id === SIGN_IN_ID);
-	const rest = destinations.filter((entry) => entry.id !== SIGN_IN_ID);
+	// Unlisted entries are dropped before anything else looks at them, so
+	// `hasNothingLive` counts rows a Manager can actually see rather than
+	// permissions they merely hold. Sign-in is always listed.
+	const listed = destinations.filter((entry) => entry.listed);
+	const signIn = listed.find((entry) => entry.id === SIGN_IN_ID);
+	const rest = listed.filter((entry) => entry.id !== SIGN_IN_ID);
 	const managerDestinations = rest.filter((entry) => !entry.commissionerOnly);
 	const commissionerDestinations = rest.filter((entry) => entry.commissionerOnly);
 

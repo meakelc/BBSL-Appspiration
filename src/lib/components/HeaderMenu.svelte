@@ -23,6 +23,8 @@
 		readonly label: string;
 		readonly href: string;
 		readonly commissionerOnly: boolean;
+		/** False for a permission with no menu row — `classifyDestinations` drops it. */
+		readonly listed: boolean;
 	};
 
 	let {

@@ -43,16 +43,47 @@ export type Destination = {
 	readonly label: string;
 	readonly href: string;
 	readonly commissionerOnly: boolean;
+	/**
+	 * Whether this entry is RENDERED as a row in the destinations list.
+	 *
+	 * Every entry in this catalog is a permission — `requireLiveDestination`
+	 * answers "may this viewer reach this destination in this phase" out of
+	 * exactly this table, and routes call it before any read. Most permissions
+	 * also have a menu row, and for those the two are the same thing.
+	 *
+	 * `auction` is the one that is not. It gates
+	 * `routes/auction/[fantraxPlayerId]` on both the load and the bid action,
+	 * so it MUST stay in the catalog — dropping it refuses every Auction and
+	 * every Bid for everybody. But it has no page of its own to link to: the
+	 * Auction surface is per-Player, reached from a Discord notification
+	 * landing on the specific Auction (`EXPERIENCE.md:223`) or from the Bid
+	 * Board, which "is one tap away and opens unfiltered" (`:50`) and links
+	 * every card through `auctionPathFor`. The href `/auction` was
+	 * transcribed from `EXPERIENCE.md:31`'s IA row by Story 1.6 and never had
+	 * a route behind it, so the menu offered a 404 beside the Bid Board that
+	 * is already the index.
+	 *
+	 * Splitting the two is what lets the permission stay while the dead row
+	 * goes. The filter is `classifyDestinations`' in `lib/destinations-view.ts`
+	 * — the view layer decides what renders, and this module keeps answering
+	 * only what is live.
+	 */
+	readonly listed: boolean;
 };
 
-/** Build one catalog entry, frozen individually so nothing can mutate it in place. */
+/**
+ * Build one catalog entry, frozen individually so nothing can mutate it in
+ * place. `listed` defaults to `true`, because a permission with no menu row
+ * is the exception and should have to say so at its own call site.
+ */
 function destination(
 	id: string,
 	label: string,
 	href: string,
-	commissionerOnly: boolean
+	commissionerOnly: boolean,
+	listed = true
 ): Destination {
-	return Object.freeze({ id, label, href, commissionerOnly });
+	return Object.freeze({ id, label, href, commissionerOnly, listed });
 }
 
 /** A non-registered viewer's entire destination list, in every phase. */
@@ -74,7 +105,10 @@ const CATALOG: Readonly<Record<LeaguePhase, readonly Destination[]>> = Object.fr
 	Auction: [
 		destination('your-positions', 'Your Positions', '/positions', false),
 		destination('bid-board', 'Bid Board', '/board', false),
-		destination('auction', 'Auction', '/auction', false),
+		// Not listed: a permission, not a menu row. `/auction` has no page —
+		// only `/auction/[fantraxPlayerId]` does, and the Bid Board above is
+		// the index that reaches it. See `Destination.listed`.
+		destination('auction', 'Auction', '/auction', false, false),
 		destination('nominate', 'Nominate', '/nominate', false),
 		destination('teams', 'Teams', '/teams', false),
 		destination('audit-log', 'Audit Log', '/audit-log', false),
