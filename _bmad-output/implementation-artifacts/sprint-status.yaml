@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 08-18-2026 13:11
-last_updated: 09-08-2026 11:02
+last_updated: 09-08-2026 15:12
 project: BBSL-Appspiration
 project_key: NOKEY
 tracking_system: file-system
@@ -122,7 +122,7 @@ development_status:
 
   epic-10: in-progress
   10-1-the-outstanding-bid-allowance-in-the-slots-gate: done
-  10-2-lottery-entries-leave-the-slots-gate: review
+  10-2-lottery-entries-leave-the-slots-gate: done
   10-3-cancel-the-surplus-commitment-at-close: backlog
   10-4-restore-the-next-highest-bidder: backlog
   10-5-a-lottery-whose-contenders-were-cancelled: backlog
