@@ -112,11 +112,23 @@ site_url = "https://pilot--bbslapp.netlify.app"
 # documented — listing both removes the question rather than relying on the
 # answer. A redirect_to that fails the match is not refused; Supabase silently
 # falls back to `site_url`, which is the kind of failure that costs an evening.
+#
+# The local entries name port 5173 and BOTH spellings of the loopback host.
+# `vite dev` serves on 5173 and prints its URL as `localhost`, so that is the
+# origin `event.url.origin` carries and the one the matcher is handed;
+# `127.0.0.1` is a DIFFERENT origin to this matcher, and is listed too because
+# a browser reaching the dev server by IP is otherwise silently bounced to
+# `site_url`. Port 3000 was here alone until 2026-09-07 and matched nothing
+# this project ever serves — which cost exactly the evening the note above
+# predicts: a local sign-in landed on the pilot branch deploy instead, making
+# local UI work impossible to see.
 additional_redirect_urls = [
   "https://pilot--bbslapp.netlify.app/auth/callback",
   "https://pilot--bbslapp.netlify.app/auth/callback**",
-  "http://127.0.0.1:3000/auth/callback",
-  "http://127.0.0.1:3000/auth/callback**"
+  "http://localhost:5173/auth/callback",
+  "http://localhost:5173/auth/callback**",
+  "http://127.0.0.1:5173/auth/callback",
+  "http://127.0.0.1:5173/auth/callback**"
 ]
 
 # Supabase-level signup must be ON, and the reason is worth stating because the
