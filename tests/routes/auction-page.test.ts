@@ -394,22 +394,30 @@ describe('the Auction page — the bid control (AC7)', () => {
 	});
 
 	it('words no sentence of its own — every one arrives from the core', () => {
-		// The availability line, the consequence and the appended statement
-		// are all core functions. A literal here would be a second wording of
-		// a rule.
+		// The availability line and the appended statement are both core
+		// functions. A literal here would be a second wording of a rule.
 		expect(PAGE_CODE).not.toMatch(/No Bid was placed/);
 		expect(PAGE_CODE).not.toMatch(/not a whole multiple/i);
 		expect(PAGE_CODE).not.toMatch(/bid against itself/i);
 		expect(PAGE_CODE).not.toMatch(/BidPlaced event was appended/);
 		expect(PAGE).toContain('bidAppendedSentence(appended.seq)');
-		expect(PAGE).toContain('bidConsequenceSentence(');
 	});
 
-	it('names the amount being confirmed, not a fixed figure', () => {
-		// A deliberate two-part act that never states the dollar amount is
-		// the weaker half of the pattern. The consequence tracks the field.
-		expect(PAGE).toMatch(/reading\.kind === 'usable' \? reading\.amount : null/);
-		expect(PAGE).toMatch(/I confirm this Bid\. \{consequence\}/);
+	it('keeps the confirm to one line, and the consequence sentence off the page', () => {
+		// It stood twice — as a paragraph above the form and again inside the
+		// confirm label — which said one thing twice on the one surface that
+		// must read cleanly. The amount it named is in the field directly
+		// above the checkbox, where it is being typed.
+		expect(PAGE).toMatch(/<span class="prose">I confirm this Bid\.<\/span>/);
+		expect(PAGE_CODE).not.toMatch(/bidConsequenceSentence/);
+		expect(PAGE_CODE).not.toMatch(/cannot be undone/i);
+		// The act is still TWO-PART: an amount is entered, then confirmed by a
+		// control of its own. Neither half may collapse into the other.
+		expect(PAGE).toMatch(/<input[\s\S]*?name="confirm"[\s\S]*?type="checkbox"/);
+		expect(PAGE).toMatch(/<input[\s\S]*?name="amount"/);
+		// The field is still read through the core's parser, which is what the
+		// gate state below it is derived from.
+		expect(PAGE).toMatch(/const reading = \$derived\(readBidAmount\(amount\)\)/);
 	});
 
 	it('omits the minimum-legal line rather than printing an unrenderable figure', () => {

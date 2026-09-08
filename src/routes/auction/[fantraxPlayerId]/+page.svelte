@@ -22,10 +22,10 @@
 	// this page recommends an amount, ranks anything, or styles the Auction
 	// Clock to create pressure. The clock is one plain sentence.
 	//
-	// **No rule and no refusal is worded here.** Every refusal, the
-	// consequence, the disabled reason, the contention state and the
-	// statement of what was appended arrive already worded by the pure core,
-	// so each has exactly one definition in the codebase. What this file does
+	// **No rule and no refusal is worded here.** Every refusal, the disabled
+	// reason, the contention state and the statement of what was appended
+	// arrive already worded by the pure core, so each has exactly one
+	// definition in the codebase. What this file does
 	// write is the field's own label and the panel headings — the surface's
 	// own furniture, as on `/nominate`.
 	//
@@ -63,7 +63,6 @@
 	import { parseMoney } from '$lib/core/money.ts';
 	import {
 		bidAppendedSentence,
-		bidConsequenceSentence,
 		bidControlState,
 		bidGateReport,
 		bidRefusalDelta,
@@ -414,14 +413,11 @@
 	);
 
 	/**
-	 * What confirming commits, naming the amount being confirmed. Falls back
-	 * to the amount-free sentence when the field holds no usable amount —
-	 * `bidConsequenceSentence` handles that and the off-grid case alike.
+	 * The amount as the field holds it, read through the core's own parser —
+	 * the gate state below is derived from THIS rather than from the raw
+	 * string, so the control is disabled against the figure a Manager typed.
 	 */
 	const reading = $derived(readBidAmount(amount));
-	const consequence = $derived(
-		bidConsequenceSentence(reading.kind === 'usable' ? reading.amount : null)
-	);
 
 	/**
 	 * Every gate's outcome for the amount as it stands — the same `evaluate()`
@@ -607,9 +603,21 @@
 </svelte:head>
 
 <main class="page">
+	<!-- The identity block: the name, and the line that identifies the Player
+	     beneath it. The metadata had a `.panel` of its own — a background, a
+	     border, a `Player` label and twelve characters inside it — for two
+	     fields that belong to the name they sit under.
+
+	     Rendered only when the reference row exists, and OMITTED rather than
+	     blanked when it does not: the matrix names a blank rendering as the
+	     wrong answer, and an absent line is absent, not empty. -->
 	<header class="masthead">
 		<h1 class="display">{auction.playerName}</h1>
-		<p class="section-label">BBSL offseason free agent auction</p>
+		{#if auction.metadata !== null}
+			<p class="metadata" id="auction-metadata">
+				{auction.metadata.nbaTeam} &middot; {auction.metadata.positions}
+			</p>
+		{/if}
 	</header>
 
 	<section class="panel">
@@ -617,56 +625,22 @@
 		<p class="prose">{data.phase.sentence}</p>
 	</section>
 
-	<!-- Exactly two fields when the reference row exists — NBA team as a
-	     three-letter capitalised abbreviation (real-life team only, per the
-	     glossary) and positions. No cap figure and no years-remaining field:
-	     those columns do not exist on `free_agent_players`.
-	     The WHOLE panel is conditional, not just the line inside it: `.panel`
-	     carries a background, a border and padding, so leaving the section up
-	     with its label and no content is precisely the blanked rendering the
-	     matrix names as the wrong answer. Omitted entirely means omitted. -->
-	{#if auction.metadata !== null}
-		<section class="panel">
-			<p class="section-label">Player</p>
-			<p class="prose" id="auction-metadata">
-				{auction.metadata.nbaTeam} &middot; {auction.metadata.positions}
-			</p>
-		</section>
-	{/if}
-
-	<section class="panel">
-		<p class="section-label">Nominating Team</p>
-		<!-- The fantasy Team spelled out with its acting Manager attached —
-		     `formatTeamManager`'s one rendering, never re-worded here. -->
-		<p class="prose" id="auction-nominating-team">{auction.nominatingTeam}</p>
-	</section>
-
-	<section class="panel">
-		<p class="section-label">Nominated</p>
-		<!-- Time appears TWICE: a relative phrase and an absolute stamp in
-		     the viewer's own timezone. The absolute is never dropped to save
-		     space. -->
-		<p class="prose" id="auction-nominated-at">
-			<span id="auction-nominated-relative">{relative}</span>
-			{#if nominatedAbsolute !== null}
-				&mdash;
-				<span id="auction-nominated-absolute">{nominatedAbsolute}</span>
-			{/if}
-		</p>
-	</section>
-
 	<section class="panel">
 		<p class="section-label">Price</p>
 		<!-- The current price and who holds it, both from the fold. The
 		     Leading Bidder is spelled out with the acting Manager: there is
-		     no anonymity at any point on this page. -->
-		<p class="prose" id="auction-price">
-			{#if auction.price === null}
-				No bids yet.
-			{:else}
-				{auction.price}
-			{/if}
-		</p>
+		     no anonymity at any point on this page.
+
+		     The price takes the money size DESIGN.md gives a figure on the
+		     surface that bids — it is the one number a Manager reads before
+		     anything else. "No bids yet." is a STATEMENT rather than a figure,
+		     so it stays at the prose size: what distinguishes an absent price
+		     from a small one is the weight it is set in. -->
+		{#if auction.price === null}
+			<p class="prose" id="auction-price">No bids yet.</p>
+		{:else}
+			<p class="price" id="auction-price">{auction.price}</p>
+		{/if}
 		<p class="prose" id="auction-leading-bidder">
 			{#if auction.leadingBidder === null}
 				No Team leads this Auction yet.
@@ -786,22 +760,23 @@
 				{/if}
 			{/if}
 		</div>
-	</section>
 
-	<!-- The Auction Clock. Absent until the first Bid, because until then
-	     there is no clock to state — the server persists an ABSOLUTE close
-	     instant and this page counts down from it; "seconds remaining" is
-	     never sent (AD-3). Rendered TWICE, relative and absolute in the
-	     viewer's own timezone, and the absolute is never dropped. -->
-	{#if auction.closesAt !== null}
-		<section class="panel">
-			<p class="section-label">Auction Clock</p>
-			<p class="prose" id="auction-closes-at">
-				<span id="auction-closes-relative">{closesIn}</span>
+		<!-- The Auction Clock, on the price panel rather than a panel of its
+		     own: what a Manager weighs is the standing price AND how long is
+		     left to answer it, and a border between the two made them two
+		     questions. Absent until the first Bid, because until then there is
+		     no clock to state — the server persists an ABSOLUTE close instant
+		     and this page counts down from it; "seconds remaining" is never
+		     sent (AD-3).
+
+		     Rendered TWICE on one ruled row, relative and absolute in the
+		     viewer's own timezone, and the absolute is never dropped. -->
+		{#if auction.closesAt !== null}
+			<p class="clock" id="auction-closes-at">
 				{#if closesAtAbsolute !== null}
-					&mdash;
-					<span id="auction-closes-absolute">{closesAtAbsolute}</span>
+					<span class="clock-absolute" id="auction-closes-absolute">{closesAtAbsolute}</span>
 				{/if}
+				<span id="auction-closes-relative">{closesIn}</span>
 			</p>
 			<!-- The core's own sentence, printed. Not worded here, and not a
 			     second reading of the countdown beside it: both derive from
@@ -811,8 +786,8 @@
 			{#if expired}
 				<p class="prose" id="auction-expired">{AUCTION_EXPIRED}</p>
 			{/if}
-		</section>
-	{/if}
+		{/if}
+	</section>
 
 	<!-- Maximum Bid, wherever bidding occurs (FR-12), and never as a bare
 	     number: the four components are broken out and the column sums
@@ -855,8 +830,6 @@
 					: figuresAtCaption(figuresAtAbsolute)}
 			/>
 		{/if}
-
-		<p class="prose">{consequence}</p>
 
 		<form method="POST" action="?/bid">
 			<!-- The field and its submit sit on one row at the same 46px
@@ -919,9 +892,13 @@
 					value="yes"
 					bind:checked={confirmed}
 				/>
-				<span class="prose">
-					I confirm this Bid. {consequence}
-				</span>
+				<!-- The consequence sentence that stood here, and again as a
+				     paragraph above the form, is gone from both. It said one
+				     thing twice on the one surface that must read cleanly, and
+				     what it named — the amount — is in the field directly
+				     above, where it is being typed. The act is still two-part:
+				     enter an amount, then confirm. -->
+				<span class="prose">I confirm this Bid.</span>
 			</label>
 		</form>
 
@@ -963,14 +940,43 @@
 		{:else}
 			<ul class="history" id="auction-history">
 				{#each auction.bids as bid (bid.seq)}
+					<!-- Who bid and when on the left, what they bid on the right —
+					     one row instead of three stacked lines, so a seven-Bid
+					     history is read rather than scrolled. The amounts share a
+					     trailing edge, which is what makes a column of tabular
+					     figures scannable. -->
 					<li class="history-row">
+						<span class="history-bidder">
+							<span class="prose">{bid.bidder}</span>
+							<span class="history-when">{relativePhrase(bid.occurredAt, nowIso)}</span>
+						</span>
 						<span class="history-amount">{bid.amount}</span>
-						<span class="prose">{bid.bidder}</span>
-						<span class="history-when">{relativePhrase(bid.occurredAt, nowIso)}</span>
 					</li>
 				{/each}
 			</ul>
 		{/if}
+
+		<!-- The nomination, in the footnote position the mock gives it: who put
+		     this Player up and when. It had two `.panel`s of its own above the
+		     price — a Team name and a timestamp, each with a heading, in the
+		     two most valuable inches on the page — and it belongs at the foot
+		     of the record it opens, which is what the history IS.
+
+		     The Team is spelled out with its acting Manager attached, from
+		     `formatTeamManager`'s one rendering, never re-worded here. Time
+		     appears TWICE: a relative phrase and an absolute stamp in the
+		     viewer's own timezone, and the absolute is never dropped for
+		     space. -->
+		<p class="footnote" id="auction-nominated-at">
+			<span class="section-label">Nominated by</span>
+			<span id="auction-nominating-team">{auction.nominatingTeam}</span>
+			&middot;
+			<span id="auction-nominated-relative">{relative}</span>
+			{#if nominatedAbsolute !== null}
+				&middot;
+				<span id="auction-nominated-absolute">{nominatedAbsolute}</span>
+			{/if}
+		</p>
 	</section>
 </main>
 
@@ -984,6 +990,59 @@
 	.masthead h1 {
 		font-size: var(--size-26);
 		color: var(--color-text);
+	}
+
+	/* The line that identifies the Player, directly under the name it names. */
+	.metadata {
+		color: var(--color-text-secondary);
+		font-size: var(--size-13);
+		font-variant-numeric: var(--numerals);
+	}
+
+	/*
+	 * The standing price. The money treatment DESIGN.md specifies for a figure
+	 * on a bidding surface: the UI face at the largest size in the scale,
+	 * tabular, tightened, in `text`.
+	 */
+	.price {
+		font-family: var(--font-ui);
+		font-size: var(--size-26);
+		font-variant-numeric: var(--numerals);
+		letter-spacing: -0.025em;
+		color: var(--color-text);
+	}
+
+	/*
+	 * The clock row: the absolute stamp and the countdown at opposite edges,
+	 * ruled off from the price above them. `space-between` with `flex-wrap`,
+	 * so at 375px the pair stacks instead of colliding.
+	 */
+	.clock {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: var(--space-row-gap);
+		padding-top: var(--space-row-gap);
+		border-top: var(--border-width) solid var(--color-border);
+		color: var(--color-text);
+		font-size: var(--size-12-5);
+		font-variant-numeric: var(--numerals);
+	}
+
+	.clock-absolute {
+		color: var(--color-text-secondary);
+	}
+
+	/*
+	 * The footnote line at the foot of the history — DESIGN.md's `--size-11`
+	 * `text-tertiary` for timestamps and footnotes, so the record's provenance
+	 * sits a step below the Bids themselves.
+	 */
+	.footnote {
+		color: var(--color-text-tertiary);
+		font-size: var(--size-11);
+		line-height: 1.55;
 	}
 
 	form {
@@ -1068,23 +1127,37 @@
 		width: 100%;
 	}
 
+	/*
+	 * Bidder and instant on the left, amount on the right, baseline-aligned so
+	 * the Team name and its figure sit on one line. It wraps rather than
+	 * shrinking either side at 375px.
+	 */
 	.history-row {
 		display: flex;
-		flex-direction: column;
+		flex-wrap: wrap;
+		align-items: baseline;
+		justify-content: space-between;
 		gap: var(--space-row-gap);
 		padding-top: var(--space-row-gap);
 		border-top: var(--border-width) solid var(--color-border);
 	}
 
+	/* The two halves of one fact, stacked tight: who bid, and when. */
+	.history-bidder {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+	}
+
 	.history-amount {
 		color: var(--color-text);
-		font-size: var(--size-18);
+		font-size: var(--size-15);
 		font-variant-numeric: var(--numerals);
 	}
 
 	.history-when {
 		color: var(--color-text-tertiary);
-		font-size: var(--size-12-5);
+		font-size: var(--size-11);
 	}
 
 	/*
