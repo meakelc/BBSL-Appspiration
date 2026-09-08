@@ -431,9 +431,24 @@ describe('PersistentStrip.svelte — the surface, asserted against its source', 
 		// TOP of a `min-height` of the same token occupies one pixel more than
 		// was reserved, so the strip covers the last row of the page by that
 		// much — the one thing the reservation exists to prevent.
+		//
+		// This test used to assert `box-sizing: border-box` on `.strip` and
+		// stop there, and that assertion passed for a year while the strip
+		// stood at 53px. `box-sizing` governs an element's OWN specified
+		// height; `.strip` specifies none, because the `min-height` is on
+		// `.strip-summary`, a child it cannot reach. The height is where the
+		// subtraction has to happen, so that is what is asserted now.
 		const strip = /\.strip\s*\{[^}]*\}/.exec(STRIP)?.[0] ?? '';
 		expect(strip).toContain('border-top: var(--border-width)');
 		expect(strip).toContain('box-sizing: border-box');
+		// `.strip` sets no height of its own — if it ever does, this test is
+		// asserting the wrong element and should be rewritten, not deleted.
+		expect(strip, 'the strip now sizes itself; move the subtraction').not.toMatch(
+			/\s(min-)?height:/
+		);
+
+		const summary = /\.strip-summary\s*\{[^}]*\}/.exec(STRIP)?.[0] ?? '';
+		expect(summary).toContain('min-height: calc(var(--strip-height) - var(--border-width))');
 	});
 
 	it('states one line only, so it cannot wrap past the room reserved for it', () => {

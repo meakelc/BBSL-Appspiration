@@ -236,6 +236,16 @@
 		 * exactly `--strip-height` of room, so a border added on top of a
 		 * `min-height` of the same token would occupy one pixel more than was
 		 * reserved and cover the last row of the page by that much.
+		 *
+		 * `box-sizing` alone did NOT achieve that, and said so for a year.
+		 * It governs an element's OWN specified height, and this element
+		 * specifies none — the `min-height` is on `.strip-summary`, a child,
+		 * where this rule cannot reach it. So the strip stood at 53px against
+		 * 52px of reserved room: it covered the page's last row by exactly the
+		 * pixel the comment promised it would not, and `/nominate`'s sticky
+		 * action bar, which clears `--strip-height`, sat 2px over the strip.
+		 * The height is subtracted on the summary instead, below, where the
+		 * `min-height` actually is.
 		 */
 		box-sizing: border-box;
 	}
@@ -251,7 +261,13 @@
 		 */
 		align-items: center;
 		gap: var(--space-card-gap);
-		min-height: var(--strip-height);
+		/*
+		 * The strip's border is subtracted HERE, because this is the element
+		 * that carries the height. `.strip` + this row must total exactly
+		 * `--strip-height` — the room `global.css` reserves — and the border
+		 * lives on the parent, so the row is that much shorter.
+		 */
+		min-height: calc(var(--strip-height) - var(--border-width));
 		padding: var(--space-row-gap) var(--space-panel-padding);
 		/* The vertical padding is INSIDE the reserved height, for the same
 		   reason the strip's border is: `global.css` reserves exactly
