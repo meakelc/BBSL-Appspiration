@@ -42,7 +42,7 @@ import { parseMoney } from '../src/lib/core/money.ts';
 import {
 	BID_PLACED_EVENT,
 	INITIAL_AUCTIONS,
-	MINIMUM_BID_CONTENTION_LABEL,
+	MINIMUM_LOTTERY_LABEL,
 	auctionForPlayer,
 	auctionsReducer
 } from '../src/lib/core/projection/auctions.ts';
@@ -575,8 +575,9 @@ describe('Contending — a live Minimum-Bid Contention the viewer has joined', (
 		expect(positions.contending).toHaveLength(1);
 		const card = positions.contending[0];
 		expect(card?.contention).toBe('minimum_bid');
-		// The glossary term from the fold that owns it, never respelled.
-		expect(card?.contentionLabel).toBe(MINIMUM_BID_CONTENTION_LABEL);
+		// The contention's card name from the fold that owns it, never
+		// respelled — the same string the Bid Board card prints.
+		expect(card?.contentionLabel).toBe(MINIMUM_LOTTERY_LABEL);
 		expect(card?.stateLabel).toBe(VIEWER_STATE_LABELS.contender);
 		expect(card?.stateIcon).toBe(VIEWER_STATE_ICONS.contender);
 		expect(card?.contenderCount).toBe(2);

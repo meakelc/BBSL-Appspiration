@@ -66,7 +66,7 @@ import { compareMoney } from './money.ts';
 import type { Money } from './money.ts';
 import {
 	CONTENTION_CLOCK_UNMOVED,
-	MINIMUM_BID_CONTENTION_LABEL,
+	MINIMUM_LOTTERY_LABEL,
 	auctionForPlayer,
 	contenderCountSentence
 } from './projection/auctions.ts';
@@ -785,7 +785,7 @@ export function positionsFor(input: {
 				priceLabel: priceLabel(price),
 				closesAt: auction.closesAt,
 				contention: auction.contention,
-				contentionLabel: MINIMUM_BID_CONTENTION_LABEL,
+				contentionLabel: MINIMUM_LOTTERY_LABEL,
 				stateLabel: VIEWER_STATE_LABELS.contender,
 				stateIcon: VIEWER_STATE_ICONS.contender,
 				contenderCount: auction.contenders.length,

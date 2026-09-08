@@ -25,8 +25,9 @@
  * notice and the unbid phrase — so `routes/board/+page.svelte` states nothing
  * of its own and a synonym cannot appear in markup. Where a word already
  * exists in the core it is IMPORTED rather than respelled:
- * `MINIMUM_BID_CONTENTION_LABEL` is the glossary term and this module reuses
- * it, exactly as the Auction page does.
+ * `MINIMUM_LOTTERY_LABEL` is the contention's card name and this module
+ * reuses it rather than respelling it, exactly as the Auction page reuses the
+ * glossary term.
  *
  * **No urgency device of any kind.** No "ending soon", no ranking of what is
  * worth bidding on, no suggested amount. The three sorts are orderings a
@@ -38,7 +39,7 @@
 
 import { parseInstant } from './instant.ts';
 import type { Money } from './money.ts';
-import { MINIMUM_BID_CONTENTION_LABEL, auctionForPlayer } from './projection/auctions.ts';
+import { MINIMUM_LOTTERY_LABEL, auctionForPlayer } from './projection/auctions.ts';
 import type { Auction, ContentionState, OpenAuctions } from './projection/auctions.ts';
 import { openNominations } from './projection/nominations.ts';
 import type { OpenNominations } from './projection/nominations.ts';
@@ -134,14 +135,16 @@ export type BoardCard = {
  * board cannot answer for one, and inventing a label here would promise a
  * card that can never be built.
  *
- * `minimum_bid` reuses the glossary term from the fold that decides it rather
- * than respelling it — a synonym in UI copy is a defect the same way a
- * synonym in code is.
+ * `minimum_bid` reuses `MINIMUM_LOTTERY_LABEL` from the fold that decides it
+ * rather than respelling it — the card name, not the glossary term, because a
+ * board card's identity row is scanned beside a Player's name and cannot carry
+ * the full term at 375px. The term itself still stands on the Auction page
+ * this card links to.
  */
 export const AUCTION_STATE_LABELS: Readonly<Record<ContentionState, string>> = Object.freeze({
 	awaiting_opening_bid: 'Awaiting Opening Bid',
 	standard: 'Open',
-	minimum_bid: MINIMUM_BID_CONTENTION_LABEL
+	minimum_bid: MINIMUM_LOTTERY_LABEL
 });
 
 /**

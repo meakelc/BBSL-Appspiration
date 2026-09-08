@@ -18,6 +18,7 @@ import {
 	CONTENTION_DISSOLVED_EVENT,
 	INITIAL_AUCTIONS,
 	MINIMUM_BID_CONTENTION_LABEL,
+	MINIMUM_LOTTERY_LABEL,
 	SEED_COMMITMENT_UNVERIFIABLE,
 	SEED_REVEALED,
 	auctionForPlayer,
@@ -829,6 +830,12 @@ describe('contentionForAmount — the ONE derivation the reducer and decide() sh
 describe('the lottery’s own wording, beside the fold that decides it', () => {
 	it('names the contention with the glossary term and no full stop', () => {
 		expect(MINIMUM_BID_CONTENTION_LABEL).toBe('Minimum-Bid Contention');
+		// The card name for the same contention — shorter, because a Bid Board
+		// or Your Positions identity row is scanned beside a Player's name. It
+		// is the ONE deliberate second name in the product, and it lives here
+		// beside the term it shortens so a third spelling cannot appear.
+		expect(MINIMUM_LOTTERY_LABEL).toBe('Minimum Lottery');
+		expect(MINIMUM_LOTTERY_LABEL).not.toContain('.');
 		expect(MINIMUM_BID_CONTENTION_LABEL).not.toContain('.');
 	});
 

@@ -277,8 +277,13 @@ describe('the board page — what it renders', () => {
 			/class:chip=\{card\.viewerState === 'you_lead' \|\| card\.viewerState === 'outbid'\}/
 		);
 		// The Auction state line is never a chip: it describes the Auction,
-		// never the reader.
-		expect(PAGE).toMatch(/<p class="state state-ambient">/);
+		// never the reader. It rides the identity row rather than a row of its
+		// own — `card-state` is the placement, `state-ambient` is the treatment,
+		// and the treatment is what this asserts.
+		expect(PAGE).toMatch(/<p class="state state-ambient card-state">/);
+		// `not_involved` prints no marker at all: it is the state of most cards
+		// on most boards, and the absence already says what a label would.
+		expect(PAGE).toMatch(/\{#if card\.viewerState !== 'not_involved'\}/);
 		// The ambient treatment is the plain secondary label, with the fill
 		// and the outline living only on the two chip rules.
 		expect(PAGE).toMatch(/\.state-ambient \{\s*color: var\(--color-text-secondary\);\s*\}/);

@@ -50,7 +50,7 @@ import { parseMoney } from '../src/lib/core/money.ts';
 import {
 	BID_PLACED_EVENT,
 	INITIAL_AUCTIONS,
-	MINIMUM_BID_CONTENTION_LABEL,
+	MINIMUM_LOTTERY_LABEL,
 	auctionForPlayer,
 	auctionsReducer
 } from '../src/lib/core/projection/auctions.ts';
@@ -381,9 +381,11 @@ describe('every state carries a word AND a shape', () => {
 		]);
 		expect(AUCTION_STATE_LABELS.awaiting_opening_bid).toBe('Awaiting Opening Bid');
 		expect(AUCTION_STATE_LABELS.standard).toBe('Open');
-		// The glossary term from the fold that decides it, reused rather than
-		// respelled — a synonym in UI copy is a defect.
-		expect(AUCTION_STATE_LABELS.minimum_bid).toBe(MINIMUM_BID_CONTENTION_LABEL);
+		// The contention's CARD name from the fold that decides it, reused
+		// rather than respelled. Not the glossary term: a board card's identity
+		// row is scanned beside a Player's name and cannot carry the full term
+		// at 375px. The term itself still stands on the Auction page.
+		expect(AUCTION_STATE_LABELS.minimum_bid).toBe(MINIMUM_LOTTERY_LABEL);
 	});
 
 	it('words all four viewer-relative states, and no fifth', () => {

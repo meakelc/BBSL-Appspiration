@@ -323,6 +323,25 @@ export function contentionSentence(state: ContentionState): string {
 export const MINIMUM_BID_CONTENTION_LABEL = 'Minimum-Bid Contention';
 
 /**
+ * The same contention's CARD name — the word that rides the identity row of a
+ * Bid Board card and a Your Positions card, where the glossary term does not
+ * fit.
+ *
+ * A deliberate second name for one thing, and the only one in the product.
+ * `MINIMUM_BID_CONTENTION_LABEL` is the PRD §3 term and stays everywhere the
+ * contention is DEFINED or ACTED ON — the Auction page's chip, the refusal
+ * panel's `contention` gate, every sentence `rules/bidding.ts` words. This is
+ * the name on a surface that is scanned rather than read, where a 22-character
+ * term set at `--size-10` beside a Player's name wraps the identity row on
+ * every lottery card at 375px.
+ *
+ * Worded HERE, beside the term it shortens, for that term's own reason: the
+ * two cards that print it must print the same string, and a second spelling in
+ * a `.svelte` file is exactly where a third would appear.
+ */
+export const MINIMUM_LOTTERY_LABEL = 'Minimum Lottery';
+
+/**
  * The statement, in words, that joining does not restart the Auction Clock.
  *
  * `EXPERIENCE.md` asks for it by name — the lottery's card "states in words
