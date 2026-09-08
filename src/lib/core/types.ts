@@ -466,6 +466,20 @@ export type ExposingBid = {
  * reporting a capacity refusal as a cap refusal is a defect (AD-7), so the
  * two gates share the derivation — `projectedAdditionsFor` in
  * `rules/bidding.ts` — and never the outcome.
+ *
+ * **Story 10.2 changes what that shared derivation counts, on this side
+ * too.** PRD §3 defines Projected Active/Bench Additions with Minimum-Bid
+ * Contention entries excluded "however many the Team holds", and there is
+ * one such definition rather than a money one and a slots one — so the
+ * entries a Team already holds drop out of `projectedAdditions` here as
+ * well, which makes `rosterReserve` LARGER and therefore stricter. What
+ * this gate does not do is treat the Bid being PLACED as an entry: it calls
+ * `projectedAdditionsFor` with one argument, the classification defaults to
+ * `false`, and the prospective Bid is counted as an ordinary commitment.
+ * That is the stricter reading of a Bid whose landing place is still
+ * hypothetical, and it is why the two gates can now report different
+ * `projectedAdditions` for one Team — §10 example 34's tenth entry is
+ * refused on money at a Maximum Bid of $0 precisely because of it.
  */
 export type CapGateOutcome = GateOutcome & {
 	readonly offered: Money;
@@ -479,9 +493,30 @@ export type CapGateOutcome = GateOutcome & {
 	readonly maximumBid: Money | null;
 	/** Free Minor League Slots (`M`) — `max(0, 3 − occupied)`. */
 	readonly freeMinorLeagueSlots: number | null;
-	/** Eligible Leading Bids (`N`), counting the Bid being placed. */
+	/**
+	 * Eligible Leading Bids (`N`), counting the Bid being placed.
+	 *
+	 * **Unchanged by Story 10.2 — the arithmetic here is exactly what it
+	 * was.** It has always included Minimum-Bid Contention entries and it
+	 * still does, because a Contender who wins pays and the cap must carry
+	 * that exposure (FR-14, FR-18). What 10.2 added is a COUNTERPART on the
+	 * other gate, not an amendment to this one: `SlotsGateOutcome` reports
+	 * `eligibleLeadingBidsExcludingEntries`, one subtraction away, and the
+	 * two are legitimately different numbers for one Team at one instant
+	 * (§10 example 35: 3 here against 0 there). The name on this field was
+	 * left alone deliberately — renaming a figure whose value did not move
+	 * would imply a change to the cap that has not happened.
+	 */
 	readonly eligibleLeadingBids: number | null;
-	/** `max(0, N − M)` — how many eligible wins have nowhere to land. */
+	/**
+	 * `max(0, N − M)` — how many eligible wins have nowhere to land.
+	 *
+	 * **Overflow Count, the money-side figure, and Story 10.2 left its
+	 * arithmetic alone.** It feeds Minors Exposure and nothing else. What
+	 * changed is that the slots gate stopped reading it: that gate now has
+	 * `activeBenchOverflow` — one subtraction away, entries removed — and
+	 * must never quote this one (PRD §3, FR-18).
+	 */
 	readonly overflowCount: number | null;
 	/**
 	 * Whether Maximum Bid does not bound the offered amount at all: a Free
@@ -515,7 +550,25 @@ export type CapGateOutcome = GateOutcome & {
  * quietly folded into the money one. A Team can fail this with unlimited Cap
  * Space and pass it with none.
  *
- * **The rule has TWO branches (FR-37, amended 2026-09-08).** It passes when
+ * **A lottery entry is gated by FR-18 and not by FR-37 at all (Story
+ * 10.2).** A Minimum-Bid Contention entry contributes nothing to
+ * `projectedAdditions`, spends no Outstanding Bid Allowance, and is asked
+ * one question instead: has the win somewhere to land — a free Active/Bench
+ * Slot, or an eligible Player with a free Minor League Slot. Cap space is
+ * the only quantitative limit on how many a Team may hold, so a tenth entry
+ * is refused on money and never here. `isContentionEntry` records that the
+ * entry branch was the one that decided.
+ *
+ * **The gate learns that from the CONTENTION gate's verdict, never from an
+ * amount.** `evaluateContention` classifies the Bid as `joins`,
+ * `already_contending`, `converts`, `neither` or `not_a_contention`, and
+ * only the first two are entries. A $5,000,000 conversion into a live
+ * lottery is an ordinary Active/Bench commitment and is gated as one — which
+ * a naive `contention === 'minimum_bid'` test would have got wrong, letting
+ * a Team at its allowance take a third.
+ *
+ * **The rule has TWO branches for every other Bid (FR-37, amended
+ * 2026-09-08).** It passes when
  * `projectedAdditions` is zero — the Minor-League carve-out, where the win
  * lands in a Free Minor League Slot and adds nothing to Active/Bench — OR
  * when the Team holds at least one Free Active/Bench Slot AND
@@ -543,19 +596,21 @@ export type CapGateOutcome = GateOutcome & {
  * over again, deliberately copied rather than pointed at: two rows each
  * stating their own arithmetic cannot be read as one, and reporting a
  * capacity refusal as a cap refusal is a defect (AD-7). The shared
- * DERIVATION is `projectedAdditionsFor` in `rules/bidding.ts`, so the two
- * gates can never disagree about the count while agreeing they describe the
- * same roster.
+ * DERIVATION is `projectedAdditionsFor` in `rules/bidding.ts` — but since
+ * Story 10.2 the two gates hand it different arguments and may report
+ * different counts, because a lottery entry is an Active/Bench addition to
+ * the cap and to nothing else. Neither figure is wrong; they answer two
+ * questions.
  *
  * **Story 2.8 adds three COUNTS and no money, which is what lets the
  * capacity gate see Minors Exposure without seeing a dollar.** An eligible
  * win that overflows has to land in an Active/Bench Slot, so
- * `projectedAdditions` includes `overflowCount` — and `Overflow Count` is
- * `max(0, N − M)`, two integers. `freeMinorLeagueSlots` and
- * `eligibleLeadingBids` ride along so a capacity refusal can name the
- * overflow in counts alone (§10 example 25). There is still no `offered`
- * field and still no money field on this shape, so FR-37's "fails with
- * unlimited Cap Space, passes with none" remains a property of the
+ * `projectedAdditions` includes `activeBenchOverflow` — and that is
+ * `max(0, N_slots − M)`, two integers. `freeMinorLeagueSlots` and
+ * `eligibleLeadingBidsExcludingEntries` ride along so a capacity refusal can
+ * name the overflow in counts alone (§10 example 25). There is still no
+ * `offered` field and still no money field on this shape, so FR-37's "fails
+ * with unlimited Cap Space, passes with none" remains a property of the
  * signature rather than a claim to verify by reading.
  *
  * `rosterCount`, `projectedAdditions`, `freeActiveBenchSlots`, `allowance`
@@ -601,10 +656,39 @@ export type SlotsGateOutcome = GateOutcome & {
 	readonly allowance: number | null;
 	/** Free Minor League Slots (`M`). A count — this gate reads no amount. */
 	readonly freeMinorLeagueSlots: number | null;
-	/** Eligible Leading Bids (`N`), counting the Bid being placed. */
-	readonly eligibleLeadingBids: number | null;
-	/** `max(0, N − M)` — the eligible wins that must land in Active/Bench. */
-	readonly overflowCount: number | null;
+	/**
+	 * `N` on the SLOTS side: eligible leads elsewhere with Minimum-Bid
+	 * Contention entries removed, plus the Bid being placed when it is
+	 * eligible and is not itself an entry.
+	 *
+	 * Deliberately NOT `CapGateOutcome.eligibleLeadingBids`, which counts the
+	 * entries. The name carries the difference because a wording that quoted
+	 * the money-side figure inside a capacity refusal would state a count the
+	 * capacity rule never read.
+	 */
+	readonly eligibleLeadingBidsExcludingEntries: number | null;
+	/**
+	 * **Active/Bench Overflow** — `max(0, N_slots − M)`, the eligible wins
+	 * that must land in Active/Bench, and the only overflow figure that
+	 * reaches `projectedAdditions` (PRD §3, Story 10.2).
+	 *
+	 * §10 example 35 is the pair disagreeing on purpose: `Overflow Count 2`
+	 * on `CapGateOutcome` against `Active/Bench Overflow 0` here, same Team,
+	 * same instant, both correct.
+	 */
+	readonly activeBenchOverflow: number | null;
+	/**
+	 * Whether this Bid was gated as a Minimum-Bid Contention entry — FR-18's
+	 * landing test rather than FR-37's two branches.
+	 *
+	 * **Recorded because it decides which sentence the panel may say.** An
+	 * entry refused for want of a landing place has not spent an allowance
+	 * and has not met a full roster in the ordinary way, and a refusal
+	 * telling a Manager otherwise would be false. Not nullable: the
+	 * classification comes from `evaluateContention`, which knows nothing
+	 * about the Team, so it is as true of an unbound actor as of a bound one.
+	 */
+	readonly isContentionEntry: boolean;
 };
 
 /**

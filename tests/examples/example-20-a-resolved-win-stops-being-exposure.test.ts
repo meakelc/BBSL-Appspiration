@@ -148,7 +148,7 @@ describe('§10 example 20 — a resolved win stops being exposure', () => {
 		// Nothing swept, nothing recomputed, nothing invalidated. The reducer
 		// stops returning the Auction and the amount simply stops appearing.
 		expect(BEFORE.team?.eligibleLeading).toEqual([
-			{ fantraxPlayerId: 'p-stash', playerName: 'Ausar Bright', amount: 30_000_000 }
+			{ fantraxPlayerId: 'p-stash', playerName: 'Ausar Bright', amount: 30_000_000, isContentionEntry: false }
 		]);
 		expect(AFTER.team?.eligibleLeading).toEqual([]);
 		// The close moved nothing else: same Cap Space, same Roster Count.
@@ -199,7 +199,7 @@ describe('§10 example 20 — a resolved win stops being exposure', () => {
 
 		// The overflow has nowhere in the minors to land, so it counts against
 		// Active/Bench — and one addition still fits.
-		expect(slots.overflowCount).toBe(1);
+		expect(slots.activeBenchOverflow).toBe(1);
 		expect(slots.projectedAdditions).toBe(1);
 		expect(slots.rosterCount).toBe(11);
 		expect(slots.passed).toBe(true);

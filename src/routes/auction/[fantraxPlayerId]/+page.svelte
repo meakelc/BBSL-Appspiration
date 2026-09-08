@@ -107,6 +107,16 @@
 		readonly fantraxPlayerId: string;
 		readonly playerName: string;
 		readonly amount: number;
+		/**
+		 * Whether this commitment is a Minimum-Bid Contention entry (Story
+		 * 10.2, FR-18). A FACT the server folded, carried over the wire like
+		 * every other fact here — never re-derived from `amount`, which is
+		 * identical for an entry and for an unraised Opening Bid. Without it
+		 * the browser would gate a Manager's lottery entries against Roster
+		 * Capacity while the locked transaction did not, and the surface
+		 * would refuse a Bid the server would have taken.
+		 */
+		readonly isContentionEntry: boolean;
 	};
 
 	type TeamMoney = {
@@ -227,7 +237,10 @@
 	const reBrand = (lead: LeadElsewhere) => ({
 		fantraxPlayerId: lead.fantraxPlayerId,
 		playerName: lead.playerName,
-		amount: parseMoney(lead.amount)
+		amount: parseMoney(lead.amount),
+		// A boolean survives JSON intact, so it is carried rather than
+		// re-parsed — but it is carried, because the core needs it.
+		isContentionEntry: lead.isContentionEntry
 	});
 
 	const teamMoney: TeamMoneyState | null = $derived(

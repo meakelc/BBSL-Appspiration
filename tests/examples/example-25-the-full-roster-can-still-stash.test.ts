@@ -68,7 +68,8 @@ function stash(index: number): LeadingBidElsewhere {
 	return {
 		fantraxPlayerId: `p-${String(index)}`,
 		playerName: `Prospect ${String(index)}`,
-		amount: parseMoney(STASH_AMOUNT)
+		amount: parseMoney(STASH_AMOUNT),
+		isContentionEntry: false
 	};
 }
 
@@ -152,9 +153,9 @@ describe('§10 example 25 — the full roster can still stash', () => {
 	it('refuses the FOURTH on capacity: N = 4 against M = 3, Overflow 1, 13 > 12', () => {
 		const gates = evaluate(stateAfter(3), bidOf(STASH_AMOUNT, 'p-4'), NOW);
 
-		expect(gates.slots.eligibleLeadingBids).toBe(4);
+		expect(gates.slots.eligibleLeadingBidsExcludingEntries).toBe(4);
 		expect(gates.slots.freeMinorLeagueSlots).toBe(3);
-		expect(gates.slots.overflowCount).toBe(1);
+		expect(gates.slots.activeBenchOverflow).toBe(1);
 		// The overflow has nowhere in the minors to land, so it counts here.
 		expect(gates.slots.projectedAdditions).toBe(1);
 		expect(gates.slots.rosterCount).toBe(12);
@@ -176,7 +177,10 @@ describe('§10 example 25 — the full roster can still stash', () => {
 		expect(detail).toContain('no roster slot');
 		expect(detail).toContain('no free Active/Bench Slot');
 		expect(detail).toContain('Roster Capacity of 12');
-		expect(detail).toContain('Overflow Count of 1');
+		// Story 10.2 renames the SLOTS-side clause. Team R holds no lottery
+		// entry, so the two overflows are both 1 here — but the capacity
+		// sentence must quote the figure its own rule read.
+		expect(detail).toContain('Active/Bench Overflow of 1');
 		expect(detail).toContain('Eligible Leading Bids 4');
 		expect(detail).toContain('Free Minor League Slots 3');
 		// A capacity refusal that quoted a cap figure as its ground would be
@@ -195,7 +199,7 @@ describe('§10 example 25 — the full roster can still stash', () => {
 			const gates = evaluate(state, bidOf(STASH_AMOUNT, 'p-4'), NOW);
 
 			expect(gates.slots.passed, String(capSpace)).toBe(false);
-			expect(gates.slots.overflowCount, String(capSpace)).toBe(1);
+			expect(gates.slots.activeBenchOverflow, String(capSpace)).toBe(1);
 			expect(decide(state, bidOf(STASH_AMOUNT, 'p-4'), NOW, null).kind, String(capSpace)).toBe(
 				'rejected'
 			);
@@ -209,7 +213,7 @@ describe('§10 example 25 — the full roster can still stash', () => {
 
 		expect(rowFor('slots')?.chip).toBe('Slots · Refused');
 		expect(rowFor('slots')?.figure).toBe(
-			'no free Active/Bench Slot; Roster Count would be 13 of 12, Overflow Count 1'
+			'no free Active/Bench Slot; Roster Count would be 13 of 12, Active/Bench Overflow 1'
 		);
 		expect(rowFor('cap')?.chip).toBe('Cap · Passed');
 		// The Overflow Count rides the cap row even when the cap gate PASSED.
@@ -262,7 +266,7 @@ describe('§10 example 25 — the full roster can still stash', () => {
 
 		expect(ask(3, 'p-4').blocked).toBe(true);
 		expect(ask(3, 'p-4').refusingGates).toEqual(['slots']);
-		expect(ask(3, 'p-4').detail).toContain('Overflow Count of 1');
+		expect(ask(3, 'p-4').detail).toContain('Active/Bench Overflow of 1');
 	});
 
 	it('shows "no cap limit" on the first stash and a number on the fourth', () => {

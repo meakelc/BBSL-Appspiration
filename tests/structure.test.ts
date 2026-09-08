@@ -155,6 +155,16 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 	[
 		'example-30-the-allowance-needs-a-slot-to-extend.test.ts',
 		'30 — The allowance needs a slot to extend'
+	],
+	// Story 10.2 lands these two — the bidding half of each. The draw, the
+	// cascade and the restoration they narrate belong to Stories 10.3–10.5.
+	[
+		'example-34-unlimited-lotteries.test.ts',
+		'34 — Unlimited lotteries, and the one win that ends them'
+	],
+	[
+		'example-35-the-trigger-is-a-free-slot.test.ts',
+		'35 — The trigger is a free slot, not a roster count'
 	]
 ];
 

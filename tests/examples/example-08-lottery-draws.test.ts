@@ -295,7 +295,13 @@ describe('§10 example 8 — the lottery draws', () => {
 
 		for (const [teamId] of CONTENDERS) {
 			expect(committedOn(theLottery(), teamId), teamId).toEqual([
-				{ fantraxPlayerId: 'p-1', playerName: 'Jalen Green', amount: MINIMUM_BID }
+				{
+					fantraxPlayerId: 'p-1',
+					playerName: 'Jalen Green',
+					amount: MINIMUM_BID,
+					// Story 10.2: every Contender's $1,000,000 is a lottery entry.
+					isContentionEntry: true
+				}
 			]);
 			expect(committedOn(theWholeThing(), teamId), teamId).toEqual([]);
 		}

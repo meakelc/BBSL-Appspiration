@@ -206,7 +206,16 @@ describe('§10 example 6 — the lottery opens', () => {
 		});
 
 		expect(money.leading).toEqual([
-			{ fantraxPlayerId: 'p-1', playerName: 'The Lottery Player', amount: MINIMUM_BID }
+			{
+				fantraxPlayerId: 'p-1',
+				playerName: 'The Lottery Player',
+				amount: MINIMUM_BID,
+				// Story 10.2: the OPENER is the first Contender, so its own
+				// commitment on this Auction is a lottery entry — not a lead it
+				// holds alone. The flag is set from that fact, never from the
+				// amount, which is identical to an unraised Opening Bid.
+				isContentionEntry: true
+			}
 		]);
 	});
 });

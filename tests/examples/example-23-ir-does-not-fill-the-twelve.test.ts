@@ -178,7 +178,8 @@ describe('§10 example 23 — IR does not fill the twelve', () => {
 						{
 							fantraxPlayerId: 'p-0',
 							playerName: 'Someone Else',
-							amount: parseMoney(1_500_000)
+							amount: parseMoney(1_500_000),
+							isContentionEntry: false
 						}
 					]
 				},

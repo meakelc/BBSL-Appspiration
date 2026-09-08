@@ -56,7 +56,8 @@ function lead(index: number, amount: number): LeadingBidElsewhere {
 	return {
 		fantraxPlayerId: `p-${String(index)}`,
 		playerName: `Player ${String(index)}`,
-		amount: parseMoney(amount)
+		amount: parseMoney(amount),
+		isContentionEntry: false
 	};
 }
 

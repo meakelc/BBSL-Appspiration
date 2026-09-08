@@ -61,7 +61,7 @@ const TEAM_P: TeamMoneyState = {
 	rosterCount: 11,
 	leading: [],
 	eligibleLeading: [
-		{ fantraxPlayerId: 'p-stash', playerName: 'Ausar Bright', amount: parseMoney(30_000_000) }
+		{ fantraxPlayerId: 'p-stash', playerName: 'Ausar Bright', amount: parseMoney(30_000_000), isContentionEntry: false }
 	],
 	minorLeagueOccupied: 2
 };
@@ -128,7 +128,7 @@ describe('§10 example 19 — overflow refuses the cheap bid', () => {
 		// The overflow has to land somewhere, so it counts against
 		// Active/Bench — and one addition still fits.
 		expect(slots.projectedAdditions).toBe(1);
-		expect(slots.overflowCount).toBe(1);
+		expect(slots.activeBenchOverflow).toBe(1);
 		expect(slots.rosterCount).toBe(11);
 		expect(slots.passed).toBe(true);
 	});
@@ -208,7 +208,7 @@ describe('§10 example 19 — overflow refuses the cheap bid', () => {
 		// Counts, and only counts: the capacity row names the overflow without
 		// naming a dollar, because the outcome it renders carries none.
 		expect(rowFor('slots')?.figure).toBe(
-			'your 1st of 2 permitted bids; Roster Count would be 12 of 12, Overflow Count 1'
+			'your 1st of 2 permitted bids; Roster Count would be 12 of 12, Active/Bench Overflow 1'
 		);
 		expect(rowFor('slots')?.figure).not.toMatch(/\$/);
 		// Eight since Story 3.2 added `contention`, and it reached this panel by

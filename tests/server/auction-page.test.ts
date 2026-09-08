@@ -842,8 +842,11 @@ describe('loadAuctionPage — the bid control is evaluate() on the read path (AC
 						// Counts only — the capacity gate still carries no money
 						// field and no `offered` (FR-37).
 						freeMinorLeagueSlots: 3,
-						eligibleLeadingBids: 0,
-						overflowCount: 0
+						eligibleLeadingBidsExcludingEntries: 0,
+						activeBenchOverflow: 0,
+						// Story 10.2: an ordinary Bid on a Standard Contention,
+						// so FR-37's branches decided it and not FR-18's.
+						isContentionEntry: false
 					}
 				}
 			})

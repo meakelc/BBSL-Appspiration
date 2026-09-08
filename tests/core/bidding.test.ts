@@ -1416,7 +1416,8 @@ describe('bidRefusalDetail — one sentence per refusal, worded here and nowhere
 							{
 								fantraxPlayerId: 'p-stash',
 								playerName: 'Ausar Bright',
-								amount: parseMoney(30_000_000)
+								amount: parseMoney(30_000_000),
+								isContentionEntry: false
 							}
 						],
 						minorLeagueOccupied: 2
@@ -1674,25 +1675,27 @@ describe('evaluateCap — Maximum Bid, derived on every evaluation (AD-7)', () =
 	function team(input: {
 		capSpace: number;
 		rosterCount: number;
-		leading?: readonly [string, number][];
+		leading?: readonly (readonly [string, number, boolean?])[];
 		/** Story 2.8: the eligible half of the same partition. */
-		eligibleLeading?: readonly [string, number][];
+		eligibleLeading?: readonly (readonly [string, number, boolean?])[];
 		/** Story 2.8: raw occupancy, never `M`. */
 		minorLeagueOccupied?: number;
 	}): TeamMoneyState {
+		// Story 10.2: the third tuple slot is `isContentionEntry`, defaulting
+		// to `false`. The MONEY gate needs it too — an entry still commits its
+		// flat $1,000,000, but it no longer counts toward the Projected
+		// Active/Bench Additions that Roster Reserve is derived from.
+		const lead = ([fantraxPlayerId, amount, isEntry]: readonly [string, number, boolean?]) => ({
+			fantraxPlayerId,
+			playerName: fantraxPlayerId,
+			amount: parseMoney(amount),
+			isContentionEntry: isEntry ?? false
+		});
 		return {
 			capSpace: parseMoney(input.capSpace),
 			rosterCount: input.rosterCount,
-			leading: (input.leading ?? []).map(([fantraxPlayerId, amount]) => ({
-				fantraxPlayerId,
-				playerName: fantraxPlayerId,
-				amount: parseMoney(amount)
-			})),
-			eligibleLeading: (input.eligibleLeading ?? []).map(([fantraxPlayerId, amount]) => ({
-				fantraxPlayerId,
-				playerName: fantraxPlayerId,
-				amount: parseMoney(amount)
-			})),
+			leading: (input.leading ?? []).map(lead),
+			eligibleLeading: (input.eligibleLeading ?? []).map(lead),
 			minorLeagueOccupied: input.minorLeagueOccupied ?? 0
 		};
 	}
@@ -1759,7 +1762,7 @@ describe('evaluateCap — Maximum Bid, derived on every evaluation (AD-7)', () =
 		});
 
 		expect(money.leading).toEqual([
-			{ fantraxPlayerId: 'p-2', playerName: 'p-2', amount: 3_000_000 }
+			{ fantraxPlayerId: 'p-2', playerName: 'p-2', amount: 3_000_000, isContentionEntry: false }
 		]);
 	});
 
@@ -1781,7 +1784,7 @@ describe('evaluateCap — Maximum Bid, derived on every evaluation (AD-7)', () =
 		});
 
 		expect(money.leading).toEqual([
-			{ fantraxPlayerId: 'p-mine', playerName: 'p-mine', amount: 3_000_000 }
+			{ fantraxPlayerId: 'p-mine', playerName: 'p-mine', amount: 3_000_000, isContentionEntry: false }
 		]);
 	});
 
@@ -1807,10 +1810,10 @@ describe('evaluateCap — Maximum Bid, derived on every evaluation (AD-7)', () =
 		// `continue`d and the amount vanished; it is now ROUTED, which is the
 		// difference between a filter and a partition.
 		expect(money.leading).toEqual([
-			{ fantraxPlayerId: 'p-flat', playerName: 'p-flat', amount: 3_000_000 }
+			{ fantraxPlayerId: 'p-flat', playerName: 'p-flat', amount: 3_000_000, isContentionEntry: false }
 		]);
 		expect(money.eligibleLeading).toEqual([
-			{ fantraxPlayerId: 'p-eligible', playerName: 'p-eligible', amount: 9_000_000 }
+			{ fantraxPlayerId: 'p-eligible', playerName: 'p-eligible', amount: 9_000_000, isContentionEntry: false }
 		]);
 		// Every lead the fold holds lands in exactly one of the two lists —
 		// none dropped, none counted twice. That is what makes `N` and
@@ -1864,7 +1867,13 @@ describe('evaluateCap — Maximum Bid, derived on every evaluation (AD-7)', () =
 		});
 
 		expect(money.leading).toEqual([
-			{ fantraxPlayerId: 'p-lottery', playerName: 'p-lottery', amount: MINIMUM_BID }
+			{
+				fantraxPlayerId: 'p-lottery',
+				playerName: 'p-lottery',
+				amount: MINIMUM_BID,
+				// Story 10.2: a Contender's ticket, flagged as one.
+				isContentionEntry: true
+			}
 		]);
 	});
 
@@ -1928,10 +1937,11 @@ describe('evaluateCap — Maximum Bid, derived on every evaluation (AD-7)', () =
 		expect(slots.passed).toBe(true);
 		expect(slots.rosterCount).toBeNull();
 		expect(slots.projectedAdditions).toBeNull();
-		// ...and so are Story 2.8's three counts, on the same state.
+		// ...and so are Story 2.8's three counts, on the same state — under
+		// Story 10.2's slots-side names.
 		expect(slots.freeMinorLeagueSlots).toBeNull();
-		expect(slots.eligibleLeadingBids).toBeNull();
-		expect(slots.overflowCount).toBeNull();
+		expect(slots.eligibleLeadingBidsExcludingEntries).toBeNull();
+		expect(slots.activeBenchOverflow).toBeNull();
 		// The ceiling is a league constant and is true of a Team that does not
 		// exist, so it is stated rather than nulled with the others.
 		expect(slots.ceiling).toBe(ACTIVE_BENCH_SLOTS);
@@ -1988,6 +1998,58 @@ describe('evaluateCap — Maximum Bid, derived on every evaluation (AD-7)', () =
 		expect(accepted.cap.passed).toBe(true);
 		expect(accepted.cap.maximumBid).toBe(refused.cap.maximumBid);
 	});
+
+	it('drops held CONTENTION ENTRIES from Roster Reserve, which raises it (Story 10.2)', () => {
+		// **The money side's half of the exemption, at a Roster Count where
+		// the count actually moves the number.** PRD §3 defines Projected
+		// Active/Bench Additions with Minimum-Bid Contention entries excluded
+		// "however many the Team holds", and there is ONE such definition —
+		// so Roster Reserve, which is derived from it, gets the same
+		// treatment. Every other cap assertion involving entries sits at
+		// Roster Count 11 or 12, where `unfilledSlots` clamps to zero whether
+		// the entries are counted or not; this one is at 7, where it does not.
+		//
+		//   leads counted:   2 real + 1 this bid          = P 3
+		//   Roster Reserve:  $1.0M x max(0, 12 - (7 + 3)) = $2.0M
+		//   the OLD formula: 5 held + 1                   = P 6
+		//                    $1.0M x max(0, 12 - 13)      = $0
+		//
+		// Committed Bids is unmoved by any of it — the three tickets still
+		// cost $1,000,000 each, because FR-18 exempts an entry from Roster
+		// Capacity and from nothing else.
+		const teamWithEntries = team({
+			capSpace: 30_000_000,
+			rosterCount: 7,
+			leading: [
+				['p-lead-1', 4_000_000],
+				['p-lead-2', 4_000_000],
+				['p-lot-1', 1_000_000, true],
+				['p-lot-2', 1_000_000, true],
+				['p-lot-3', 1_000_000, true]
+			]
+		});
+		const state = bidStateFor(null, teamWithEntries, false, 'Auction');
+		const gates = evaluate(state, command(1_500_000), NOW);
+
+		// Still committed, all five of them.
+		expect(gates.cap.committedBids).toBe(11_000_000);
+		expect(gates.cap.availableCapSpace).toBe(19_000_000);
+		// The two real leads plus the Bid being placed — never the tickets.
+		expect(gates.cap.projectedAdditions).toBe(3);
+		expect(gates.cap.rosterReserve).toBe(2_000_000);
+		expect(gates.cap.maximumBid).toBe(17_000_000);
+
+		// **The boundary, so a revert fails on a CAP assertion and not only
+		// on a slots one.** Under the pre-10.2 count the reserve was $0 and
+		// Maximum Bid was $19,000,000, which would have admitted this.
+		expect(evaluate(state, command(17_000_000), NOW).cap.passed).toBe(true);
+		expect(evaluate(state, command(17_500_000), NOW).cap.passed).toBe(false);
+		expect(evaluate(state, command(19_000_000), NOW).cap.passed).toBe(false);
+
+		// And the capacity gate agrees about the count here, because this Bid
+		// is not itself an entry — the two only diverge on that.
+		expect(gates.slots.projectedAdditions).toBe(3);
+	});
 });
 
 describe('evaluateSlots — Roster Capacity, the second independent ground (AC2, AC3)', () => {
@@ -1995,25 +2057,27 @@ describe('evaluateSlots — Roster Capacity, the second independent ground (AC2,
 	function team(input: {
 		capSpace: number;
 		rosterCount: number;
-		leading?: readonly [string, number][];
+		leading?: readonly (readonly [string, number, boolean?])[];
 		/** Story 2.8: the eligible half of the same partition. */
-		eligibleLeading?: readonly [string, number][];
+		eligibleLeading?: readonly (readonly [string, number, boolean?])[];
 		/** Story 2.8: raw occupancy, never `M`. */
 		minorLeagueOccupied?: number;
 	}): TeamMoneyState {
+		// Story 10.2: the third tuple slot is `isContentionEntry`, defaulting
+		// to `false`. A lottery entry and an unraised Opening Bid are the same
+		// id and the same amount, so the fixture has to state which it is —
+		// exactly as `teamMoneyStateFor` states it from the fold.
+		const lead = ([fantraxPlayerId, amount, isEntry]: readonly [string, number, boolean?]) => ({
+			fantraxPlayerId,
+			playerName: fantraxPlayerId,
+			amount: parseMoney(amount),
+			isContentionEntry: isEntry ?? false
+		});
 		return {
 			capSpace: parseMoney(input.capSpace),
 			rosterCount: input.rosterCount,
-			leading: (input.leading ?? []).map(([fantraxPlayerId, amount]) => ({
-				fantraxPlayerId,
-				playerName: fantraxPlayerId,
-				amount: parseMoney(amount)
-			})),
-			eligibleLeading: (input.eligibleLeading ?? []).map(([fantraxPlayerId, amount]) => ({
-				fantraxPlayerId,
-				playerName: fantraxPlayerId,
-				amount: parseMoney(amount)
-			})),
+			leading: (input.leading ?? []).map(lead),
+			eligibleLeading: (input.eligibleLeading ?? []).map(lead),
 			minorLeagueOccupied: input.minorLeagueOccupied ?? 0
 		};
 	}
@@ -2145,8 +2209,11 @@ describe('evaluateSlots — Roster Capacity, the second independent ground (AC2,
 		expect(slots.freeActiveBenchSlots).toBeNull();
 		expect(slots.allowance).toBeNull();
 		expect(slots.freeMinorLeagueSlots).toBeNull();
-		expect(slots.eligibleLeadingBids).toBeNull();
-		expect(slots.overflowCount).toBeNull();
+		expect(slots.eligibleLeadingBidsExcludingEntries).toBeNull();
+		expect(slots.activeBenchOverflow).toBeNull();
+		// `isContentionEntry` is NOT nulled with them: the classification
+		// comes from the contention gate, which knows nothing about a Team.
+		expect(slots.isContentionEntry).toBe(false);
 		// `ceiling` is a league constant and is true of a Team that does not
 		// exist, so it is never null.
 		expect(slots.ceiling).toBe(ACTIVE_BENCH_SLOTS);
@@ -2194,9 +2261,11 @@ describe('evaluateSlots — Roster Capacity, the second independent ground (AC2,
 		expect(precondition).toContain('no free Active/Bench Slot');
 		expect(precondition).toContain('Roster Capacity of 12');
 		// It must NOT quote the allowance: saying "1 permitted" while
-		// permitting none is the confusion two sentences exist to avoid.
-		expect(precondition).not.toContain('permits');
-		expect(precondition).not.toContain('outstanding bid');
+		// permitting none is the confusion two sentences exist to avoid. The
+		// figure is what may not appear, so the guards are anchored on a
+		// digit and matched case-insensitively.
+		expect(precondition).not.toMatch(/permits?\s+\d/i);
+		expect(precondition).not.toMatch(/\d+(?:st|nd|rd|th) outstanding bid/i);
 
 		// Two refusals, two strings - never the same one.
 		expect(spent).not.toBe(precondition);
@@ -2226,12 +2295,15 @@ describe('evaluateSlots — Roster Capacity, the second independent ground (AC2,
 		// so FR-37's "fails with unlimited Cap Space, passes with none"
 		// remains a property of the signature.
 		expect(Object.keys(slotsOf(full, 5_000_000)).sort()).toEqual([
+			'activeBenchOverflow',
 			'allowance',
 			'ceiling',
-			'eligibleLeadingBids',
+			'eligibleLeadingBidsExcludingEntries',
 			'freeActiveBenchSlots',
 			'freeMinorLeagueSlots',
-			'overflowCount',
+			// Story 10.2's classification. A boolean, not a magnitude — the
+			// gate still cannot see an amount.
+			'isContentionEntry',
 			'passed',
 			'projectedAdditions',
 			'rosterCount'
@@ -2623,6 +2695,440 @@ describe('evaluateSlots — Roster Capacity, the second independent ground (AC2,
 		expect(nonEligible.slots.projectedAdditions).toBe(1);
 		expect(nonEligible.slots.passed).toBe(false);
 	});
+
+	// --- Story 10.2: lottery entries leave the slots gate ---------------------
+
+	/**
+	 * The same Bid, but into a live Minimum-Bid Contention someone else
+	 * opened — which is what makes `evaluateContention` classify it, and the
+	 * slots gate is handed that classification rather than the amount.
+	 */
+	function lottery(state: BidState, contenders: readonly string[] = ['t-other']): BidState {
+		return { ...state, contention: 'minimum_bid', contenders };
+	}
+
+	/** A lottery ENTRY the Team already holds, for the fixture's lead lists. */
+	const entryOn = (id: string): readonly [string, number, boolean] => [id, MINIMUM_BID, true];
+
+	it('lets a Team on ONE free Slot hold six entries — §10 example 34', () => {
+		// "Capacity is never consulted: entries contribute nothing to
+		// Projected Active/Bench Additions and do not consume the allowance."
+		// Five entries are held and a sixth is joined; the allowance is 2 and
+		// would have refused the third of them under the ordinary rule.
+		const state = lottery(
+			bidStateFor(
+				null,
+				team({
+					capSpace: SALARY_CAP,
+					rosterCount: 11,
+					leading: Array.from({ length: 5 }, (_unused, index) =>
+						entryOn(`p-lot-${String(index)}`)
+					),
+					// "no free Minor League Slots" — so nothing is absorbed there
+					// and the pass has to come from the Active/Bench branch.
+					minorLeagueOccupied: MINOR_LEAGUE_SLOTS
+				}),
+				false,
+				'Auction'
+			)
+		);
+		const slots = slotsOf(state, MINIMUM_BID);
+
+		expect(slots.isContentionEntry).toBe(true);
+		// The five held entries contribute nothing, and neither does this one.
+		expect(slots.projectedAdditions).toBe(0);
+		expect(slots.freeActiveBenchSlots).toBe(1);
+		expect(slots.freeMinorLeagueSlots).toBe(0);
+		expect(slots.passed).toBe(true);
+		// And the allowance is REPORTED but unspent: `P` never approaches it.
+		expect(slots.allowance).toBe(1 + OUTSTANDING_BID_ALLOWANCE);
+		expect(slots.ceiling).toBe(ACTIVE_BENCH_SLOTS);
+	});
+
+	it('refuses an entry with nowhere for the win to land, and says so', () => {
+		// FR-18's own rule, and the only capacity question an entry is asked:
+		// no free Active/Bench Slot, and a Player no Minor League Slot could
+		// take. `P = 0` here, so the ZERO branch would have admitted it —
+		// which is why the entry branch replaces the two rather than joining
+		// them.
+		const state = lottery(
+			bidStateFor(
+				null,
+				team({ capSpace: SALARY_CAP, rosterCount: 12, minorLeagueOccupied: MINOR_LEAGUE_SLOTS }),
+				false,
+				'Auction'
+			)
+		);
+		const slots = slotsOf(state, MINIMUM_BID);
+
+		expect(slots.isContentionEntry).toBe(true);
+		expect(slots.projectedAdditions).toBe(0);
+		expect(slots.freeActiveBenchSlots).toBe(0);
+		expect(slots.passed).toBe(false);
+
+		const detail = bidRefusalDetail({ kind: 'gates', gates: evaluate(state, command(MINIMUM_BID), NOW) });
+		expect(detail).toContain('A lottery entry needs somewhere for the win to land');
+		// It must NOT say the allowance was spent — an entry spends none —
+		// and it must not read as the precondition sentence either.
+		// **The ALLOWANCE FIGURE must be absent, and that is the substantive
+		// constraint** — not the word "allowance", which the sentence uses
+		// on purpose to say that none was spent. The only digits an entry
+		// refusal may carry are the Roster Count and the ceiling, both 12
+		// here; an allowance quoted anywhere would leave a stray one behind.
+		expect(detail.replace(/12/g, '')).not.toMatch(/\d/);
+		// And neither of the allowance refusal's two phrasings, matched
+		// case-insensitively so a capitalisation cannot make the guard inert.
+		expect(detail).not.toMatch(/\d+(?:st|nd|rd|th) outstanding bid/i);
+		expect(detail).not.toMatch(/permits?\s+\d/i);
+		// Nor the precondition sentence's opening.
+		expect(detail).not.toMatch(/no free Active\/Bench Slot/i);
+		// The ceiling is still quoted, because it still applies.
+		expect(detail).toContain('Roster Capacity of 12');
+		// And no money figure, on this refusal as on the other two (AD-7).
+		expect(detail).not.toMatch(/\$\d/);
+	});
+
+	it('permits an ELIGIBLE entry at a FULL roster, on the minors branch — §10 example 35', () => {
+		// Roster Count 12, `F = 0`, one Free Minor League Slot, and two
+		// eligible entries already held. The money side sees `N = 3` against
+		// `M = 1` and an Overflow Count of 2; the slots side removes the
+		// entries and sees an Active/Bench Overflow of 0. Same Team, same
+		// instant, both correct.
+		const state = lottery(
+			bidStateFor(
+				null,
+				team({
+					capSpace: SALARY_CAP,
+					rosterCount: 12,
+					eligibleLeading: [entryOn('p-elig-1'), entryOn('p-elig-2')],
+					minorLeagueOccupied: 2
+				}),
+				true,
+				'Auction'
+			)
+		);
+		const gates = evaluate(state, command(MINIMUM_BID), NOW);
+
+		expect(gates.slots.isContentionEntry).toBe(true);
+		expect(gates.slots.freeActiveBenchSlots).toBe(0);
+		expect(gates.slots.freeMinorLeagueSlots).toBe(1);
+		expect(gates.slots.passed).toBe(true);
+
+		// The two figures, disagreeing on purpose.
+		expect(gates.cap.eligibleLeadingBids).toBe(3);
+		expect(gates.cap.overflowCount).toBe(2);
+		expect(gates.slots.eligibleLeadingBidsExcludingEntries).toBe(0);
+		expect(gates.slots.activeBenchOverflow).toBe(0);
+		expect(gates.slots.projectedAdditions).toBe(0);
+	});
+
+	it('refuses the same eligible entry once the last Minor League Slot goes', () => {
+		// §10 example 35's second half, as the gate sees it: `M` falls to 0
+		// and the entry has neither branch left.
+		const state = lottery(
+			bidStateFor(
+				null,
+				team({
+					capSpace: SALARY_CAP,
+					rosterCount: 12,
+					eligibleLeading: [entryOn('p-elig-1'), entryOn('p-elig-2')],
+					minorLeagueOccupied: MINOR_LEAGUE_SLOTS
+				}),
+				true,
+				'Auction'
+			)
+		);
+		const slots = slotsOf(state, MINIMUM_BID);
+
+		expect(slots.freeMinorLeagueSlots).toBe(0);
+		expect(slots.freeActiveBenchSlots).toBe(0);
+		expect(slots.passed).toBe(false);
+	});
+
+	it('does not let entries spend the ALLOWANCE an ordinary Bid needs', () => {
+		// One real non-eligible lead and four entries, bidding a second
+		// non-eligible Player. `P = 1 + 1 = 2 <= 2` — the four entries are
+		// not counted, and under the pre-10.2 rule `P` would have been 6.
+		const state = bidStateFor(
+			null,
+			team({
+				capSpace: SALARY_CAP,
+				rosterCount: 11,
+				leading: [
+					['p-lead', 6_000_000],
+					entryOn('p-lot-1'),
+					entryOn('p-lot-2'),
+					entryOn('p-lot-3'),
+					entryOn('p-lot-4')
+				]
+			}),
+			false,
+			'Auction'
+		);
+		const slots = slotsOf(state, 1_500_000);
+
+		expect(slots.isContentionEntry).toBe(false);
+		expect(slots.projectedAdditions).toBe(2);
+		expect(slots.allowance).toBe(2);
+		expect(slots.passed).toBe(true);
+	});
+
+	it('gates a CONVERSION as the ordinary commitment it is, not as an entry', () => {
+		// The leak a naive `contention === 'minimum_bid'` test would open. A
+		// $5,000,000 bid into a live lottery dissolves it and takes an
+		// Active/Bench commitment, so it must spend the allowance like any
+		// other raise: two leads plus this is `P = 3 > 2`.
+		const state = lottery(
+			bidStateFor(
+				null,
+				team({
+					capSpace: SALARY_CAP,
+					rosterCount: 11,
+					leading: [
+						['p-lead-1', 6_000_000],
+						['p-lead-2', 6_000_000]
+					]
+				}),
+				false,
+				'Auction'
+			)
+		);
+		const gates = evaluate(state, command(5_000_000), NOW);
+
+		expect(gates.contention.entry).toBe('converts');
+		expect(gates.slots.isContentionEntry).toBe(false);
+		expect(gates.slots.projectedAdditions).toBe(3);
+		expect(gates.slots.allowance).toBe(2);
+		expect(gates.slots.passed).toBe(false);
+		expect(bidRefusalDetail({ kind: 'gates', gates })).toContain('your 3rd outstanding bid');
+	});
+
+	it('treats a Team ALREADY contending as an entry, though the join is refused', () => {
+		// `already_contending` is still a lottery entry, and neither gate
+		// short-circuits the other (AD-7): the contention gate refuses the
+		// duplicate join while the slots gate answers FR-18's question
+		// honestly beside it.
+		const state = lottery(
+			bidStateFor(null, team({ capSpace: SALARY_CAP, rosterCount: 11 }), false, 'Auction'),
+			['t-2']
+		);
+		const gates = evaluate(state, command(MINIMUM_BID), NOW);
+
+		expect(gates.contention.entry).toBe('already_contending');
+		expect(gates.contention.passed).toBe(false);
+		expect(gates.slots.isContentionEntry).toBe(true);
+		expect(gates.slots.projectedAdditions).toBe(0);
+		expect(gates.slots.passed).toBe(true);
+	});
+
+	it('refuses an ALREADY-CONTENDING Team on slots too when the win has nowhere to land', () => {
+		// The other half of `already_contending`, which the test above leaves
+		// open: the classification is an entry whichever way FR-18's landing
+		// test goes, and at Roster Count 12 with no Free Minor League Slot it
+		// goes against. BOTH gates refuse, on two separate grounds, and both
+		// are reported — the contention gate does not suppress the capacity
+		// one merely because it got there first (AD-7).
+		const state = lottery(
+			bidStateFor(
+				null,
+				team({
+					capSpace: SALARY_CAP,
+					rosterCount: 12,
+					minorLeagueOccupied: MINOR_LEAGUE_SLOTS
+				}),
+				false,
+				'Auction'
+			),
+			['t-2']
+		);
+		const gates = evaluate(state, command(MINIMUM_BID), NOW);
+
+		expect(gates.contention.entry).toBe('already_contending');
+		expect(gates.contention.passed).toBe(false);
+		expect(gates.slots.isContentionEntry).toBe(true);
+		// `P = 0`, so FR-37's zero branch would have PASSED this — the entry
+		// branch replacing it is the only reason the refusal happens.
+		expect(gates.slots.projectedAdditions).toBe(0);
+		expect(gates.slots.passed).toBe(false);
+		expect(failedGates(gates)).toEqual(['contention', 'slots']);
+		// And the capacity sentence is the entry one, not the precondition's.
+		expect(bidRefusalDetail({ kind: 'gates', gates })).toContain(
+			'A lottery entry needs somewhere for the win to land'
+		);
+	});
+
+	it('does NOT treat a dead-zone amount inside a lottery as an entry', () => {
+		// `evaluateContention`'s fifth verdict, and the last classification
+		// with no test of its own. An amount strictly between the join price
+		// and the conversion price is `neither` — not a lottery entry — so
+		// the slots gate measures it against FR-37 like any other bid. The
+		// fixture is chosen so the two rules DISAGREE: at Roster Count 11
+		// with two leads, an entry would pass on the free Slot while an
+		// ordinary bid is `P = 3` against an allowance of 2 and is refused.
+		// A revision that keyed the entry branch off `contention ===
+		// 'minimum_bid'` rather than off the verdict fails here.
+		const state = lottery(
+			bidStateFor(
+				null,
+				team({
+					capSpace: SALARY_CAP,
+					rosterCount: 11,
+					leading: [
+						['p-lead-1', 6_000_000],
+						['p-lead-2', 6_000_000]
+					]
+				}),
+				false,
+				'Auction'
+			)
+		);
+		const gates = evaluate(state, command(1_250_000), NOW);
+
+		expect(gates.contention.entry).toBe('neither');
+		expect(gates.slots.isContentionEntry).toBe(false);
+		expect(gates.slots.projectedAdditions).toBe(3);
+		expect(gates.slots.allowance).toBe(2);
+		expect(gates.slots.passed).toBe(false);
+		// The allowance sentence, because the allowance is what it spent.
+		expect(bidRefusalDetail({ kind: 'gates', gates })).toContain('your 3rd outstanding bid');
+	});
+
+	it('gates an OPENING BID of exactly $1.0M as an ordinary bid — the documented boundary', () => {
+		// The one boundary FR-18 cannot close here. On an
+		// `awaiting_opening_bid` Auction the gate cannot see the amount, so
+		// the bid that would OPEN a lottery is gated by FR-37 instead. That
+		// is the stricter reading, so nothing escapes the ceiling — and every
+		// §10 example that matters joins an existing lottery.
+		const state = bidStateFor(
+			null,
+			team({ capSpace: SALARY_CAP, rosterCount: 12 }),
+			false,
+			'Auction'
+		);
+		const gates = evaluate(state, command(MINIMUM_BID), NOW);
+
+		expect(gates.contention.entry).toBe('not_a_contention');
+		expect(gates.slots.isContentionEntry).toBe(false);
+		expect(gates.slots.projectedAdditions).toBe(1);
+		expect(gates.slots.passed).toBe(false);
+		expect(bidRefusalDetail({ kind: 'gates', gates })).toContain('no free Active/Bench Slot');
+	});
+
+	it('words the entry refusal as a FOURTH distinct string beside the other three', () => {
+		// UX-DR32 with Story 10.2's addition. Four wordings, four remedies:
+		// the passing row, the allowance spent, no free Slot at all, and an
+		// entry with nowhere to land. None of them may be another.
+		const passing = bidGateReport(
+			evaluate(
+				bidStateFor(null, team({ capSpace: SALARY_CAP, rosterCount: 9 }), false, 'Auction'),
+				command(1_500_000),
+				NOW
+			)
+		).find((row) => row.gate === 'slots')?.figure;
+		const detailOf = (state: BidState, amount: number) =>
+			bidRefusalDetail({ kind: 'gates', gates: evaluate(state, command(amount), NOW) });
+
+		const spent = detailOf(
+			bidStateFor(
+				null,
+				team({
+					capSpace: SALARY_CAP,
+					rosterCount: 11,
+					leading: [
+						['p-lead-1', 1_000_000],
+						['p-lead-2', 1_000_000]
+					]
+				}),
+				false,
+				'Auction'
+			),
+			1_500_000
+		);
+		const precondition = detailOf(
+			bidStateFor(null, team({ capSpace: SALARY_CAP, rosterCount: 12 }), false, 'Auction'),
+			1_500_000
+		);
+		const noLanding = detailOf(
+			lottery(
+				bidStateFor(
+					null,
+					team({
+						capSpace: SALARY_CAP,
+						rosterCount: 12,
+						minorLeagueOccupied: MINOR_LEAGUE_SLOTS
+					}),
+					false,
+					'Auction'
+				)
+			),
+			MINIMUM_BID
+		);
+
+		expect(new Set([passing, spent, precondition, noLanding]).size).toBe(4);
+		// Both CAPACITY refusals keep the ceiling in words, and so does the
+		// entry one — a refusal implying thirteen players are legal is the one
+		// thing none of them may say.
+		for (const sentence of [spent, precondition, noLanding]) {
+			expect(sentence).toContain('Roster Capacity of 12');
+		}
+	});
+
+	it('gives an entry its own ROW FIGURE, passing and refused alike', () => {
+		// The fifth form. It names the two figures FR-18's branch read and no
+		// permitted-bid count, because an entry is bounded by neither.
+		const figureFor = (state: BidState) =>
+			bidGateReport(evaluate(state, command(MINIMUM_BID), NOW)).find(
+				(row) => row.gate === 'slots'
+			);
+
+		const permitted = figureFor(
+			lottery(
+				bidStateFor(null, team({ capSpace: SALARY_CAP, rosterCount: 11 }), false, 'Auction')
+			)
+		);
+		expect(permitted?.chip).toBe('Slots · Passed');
+		expect(permitted?.figure).toBe(
+			'a lottery entry against 1 free Active/Bench and 3 free Minor League Slots; ' +
+				'Roster Count would be 11 of 12'
+		);
+		expect(permitted?.figure).not.toContain('permitted bids');
+
+		const refused = figureFor(
+			lottery(
+				bidStateFor(
+					null,
+					team({
+						capSpace: SALARY_CAP,
+						rosterCount: 12,
+						minorLeagueOccupied: MINOR_LEAGUE_SLOTS
+					}),
+					false,
+					'Auction'
+				)
+			)
+		);
+		expect(refused?.chip).toBe('Slots · Refused');
+		expect(refused?.figure).toBe(
+			'a lottery entry against 0 free Active/Bench and 0 free Minor League Slots; ' +
+				'Roster Count would be 12 of 12'
+		);
+	});
+
+	it('still takes no amount and still reports no money, entry or not', () => {
+		// FR-37's structural property, re-asserted across the new branch: the
+		// verdict is a classification, so a bigger or smaller Cap Space moves
+		// nothing.
+		const rich = lottery(
+			bidStateFor(null, team({ capSpace: 400_000_000, rosterCount: 12, minorLeagueOccupied: 3 }), false, 'Auction')
+		);
+		const broke = lottery(
+			bidStateFor(null, team({ capSpace: 0, rosterCount: 11 }), false, 'Auction')
+		);
+
+		expect(slotsOf(rich, MINIMUM_BID).passed).toBe(false);
+		expect(slotsOf(broke, MINIMUM_BID).passed).toBe(true);
+		expect(Object.keys(slotsOf(broke, MINIMUM_BID))).not.toContain('offered');
+	});
 });
 
 // --- Story 2.8: Minors Exposure --------------------------------------------
@@ -2639,7 +3145,8 @@ describe('the exposure arithmetic — M, N, Overflow Count and Minors Exposure',
 		const entry = ([fantraxPlayerId, amount]: [string, number]) => ({
 			fantraxPlayerId,
 			playerName: `Name ${fantraxPlayerId}`,
-			amount: parseMoney(amount)
+			amount: parseMoney(amount),
+			isContentionEntry: false
 		});
 		return {
 			capSpace: parseMoney(input.capSpace ?? SALARY_CAP),
@@ -2692,11 +3199,13 @@ describe('the exposure arithmetic — M, N, Overflow Count and Minors Exposure',
 			expect(gates.cap.freeMinorLeagueSlots, label).toBe(m);
 			expect(gates.cap.eligibleLeadingBids, label).toBe(n);
 			expect(gates.cap.overflowCount, label).toBe(overflow);
-			// The capacity gate reaches the IDENTICAL three counts, through
-			// the identical call — one expression, two gates.
+			// The capacity gate reaches its OWN three counts (Story 10.2).
+			// No lottery entry is anywhere in this table, so the slots-side
+			// figures agree with the money side here — which is the case the
+			// split leaves alone. §10 example 35 is the case it does not.
 			expect(gates.slots.freeMinorLeagueSlots, label).toBe(m);
-			expect(gates.slots.eligibleLeadingBids, label).toBe(n);
-			expect(gates.slots.overflowCount, label).toBe(overflow);
+			expect(gates.slots.eligibleLeadingBidsExcludingEntries, label).toBe(n);
+			expect(gates.slots.activeBenchOverflow, label).toBe(overflow);
 		}
 	});
 
@@ -2926,7 +3435,14 @@ describe('the exposure arithmetic — M, N, Overflow Count and Minors Exposure',
 		// Not in `leading` at all, and carrying the flat $1,000,000.
 		expect(money.leading).toEqual([]);
 		expect(money.eligibleLeading).toEqual([
-			{ fantraxPlayerId: 'p-lottery', playerName: 'Lottery Prospect', amount: MINIMUM_BID }
+			{
+				fantraxPlayerId: 'p-lottery',
+				playerName: 'Lottery Prospect',
+				amount: MINIMUM_BID,
+				// Story 10.2: an ELIGIBLE Contender's ticket. It stays inside
+				// Overflow Count on the money side and leaves the slots side.
+				isContentionEntry: true
+			}
 		]);
 
 		// And it commits NOTHING while a Free Minor League Slot absorbs it.
@@ -2957,7 +3473,7 @@ describe('the exposure arithmetic — M, N, Overflow Count and Minors Exposure',
 
 		expect(failedGates(gates)).toEqual(['cap', 'slots']);
 		expect(gates.cap.overflowCount).toBe(2);
-		expect(gates.slots.overflowCount).toBe(2);
+		expect(gates.slots.activeBenchOverflow).toBe(2);
 		expect(gates.slots.projectedAdditions).toBe(2);
 		expect(gates.slots.rosterCount).toBe(12);
 
@@ -2994,8 +3510,12 @@ describe('the exposure arithmetic — M, N, Overflow Count and Minors Exposure',
 
 		expect(gates.cap.freeMinorLeagueSlots).toBe(MINOR_LEAGUE_SLOTS);
 		expect(gates.slots.freeMinorLeagueSlots).toBe(gates.cap.freeMinorLeagueSlots);
-		expect(gates.slots.eligibleLeadingBids).toBe(gates.cap.eligibleLeadingBids);
-		expect(gates.slots.overflowCount).toBe(gates.cap.overflowCount);
+		// The two `N`s and the two overflows are separate derivations since
+		// Story 10.2 and agree only where no lottery entry is involved, which
+		// is the case here. `M` is genuinely shared — the slots side reads it
+		// from `minorsCountsFor` rather than subtracting a second time.
+		expect(gates.slots.eligibleLeadingBidsExcludingEntries).toBe(gates.cap.eligibleLeadingBids);
+		expect(gates.slots.activeBenchOverflow).toBe(gates.cap.overflowCount);
 	});
 });
 

@@ -1072,7 +1072,7 @@ describe('placeBid — Minors Exposure refuses under the lock, and writes nothin
 		// will use.
 		expect(loaded.bid.team?.leading).toEqual([]);
 		expect(loaded.bid.team?.eligibleLeading).toEqual([
-			{ fantraxPlayerId: 'p-stash', playerName: 'Ausar Bright', amount: 30_000_000 }
+			{ fantraxPlayerId: 'p-stash', playerName: 'Ausar Bright', amount: 30_000_000, isContentionEntry: false }
 		]);
 		// Occupancy from `team_rosters`; Cap Space and Roster Count unmoved by
 		// the two Minor League contracts.
@@ -1112,7 +1112,7 @@ describe('placeBid — Minors Exposure refuses under the lock, and writes nothin
 		// Minors Exposure, and is reported beside the refusal rather than
 		// left for a reader to wonder about.
 		expect(rejection.gates?.slots.passed).toBe(true);
-		expect(rejection.gates?.slots.overflowCount).toBe(1);
+		expect(rejection.gates?.slots.activeBenchOverflow).toBe(1);
 		// The sentence names the earlier Auction by Player and amount.
 		expect(rejection.detail).toContain('Ausar Bright');
 		expect(rejection.detail).toContain('$30.0M');
@@ -1136,7 +1136,7 @@ describe('placeBid — Minors Exposure refuses under the lock, and writes nothin
 		await harness.client.query('begin');
 		const loaded = await loadBidState(harness.client, 'p-second', 't-2');
 		expect(loaded.bid.team?.eligibleLeading).toEqual([
-			{ fantraxPlayerId: 'p-stash', playerName: 'Ausar Bright', amount: 30_000_000 }
+			{ fantraxPlayerId: 'p-stash', playerName: 'Ausar Bright', amount: 30_000_000, isContentionEntry: false }
 		]);
 	});
 });
@@ -1785,7 +1785,7 @@ describe('loadBidState — a won contract is in the three figures (AC4)', () => 
 
 		const open = await bidStateWith(stashEvents);
 		expect(open.loaded?.bid.team?.eligibleLeading).toEqual([
-			{ fantraxPlayerId: 'p-stash', playerName: 'Ausar Bright', amount: 30_000_000 }
+			{ fantraxPlayerId: 'p-stash', playerName: 'Ausar Bright', amount: 30_000_000, isContentionEntry: false }
 		]);
 
 		const closed = await bidStateWith([

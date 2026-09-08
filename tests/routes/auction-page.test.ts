@@ -1539,8 +1539,15 @@ describe('the bid action — a refusal carries the figures it was judged against
 			freeActiveBenchSlots: 3,
 			allowance: 4,
 			freeMinorLeagueSlots: 3,
-			eligibleLeadingBids: 0,
-			overflowCount: 0
+			// Story 10.2's slots-side names. `cap` above keeps
+			// `eligibleLeadingBids`/`overflowCount` — the money-side pair,
+			// which still counts contention entries — and the two shapes
+			// carrying different names is the point of the split.
+			eligibleLeadingBidsExcludingEntries: 0,
+			activeBenchOverflow: 0,
+			// An ordinary Bid on a Standard Contention, so FR-37's branches
+			// decided it and not FR-18's landing test.
+			isContentionEntry: false
 		}
 	};
 
