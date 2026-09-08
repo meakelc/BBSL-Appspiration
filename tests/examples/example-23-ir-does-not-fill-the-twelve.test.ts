@@ -5,7 +5,9 @@
  * > Slot. Roster Count is 11, not 12, so with no leading bids its Projected
  * > Active/Bench Additions on a new non-eligible bid is 1 and Roster Reserve
  * > is $1,000,000 × max(0, 12 − 12) = $0 — the bid itself fills the last
- * > hole. Adding a second IR player would not change that figure.
+ * > hole. Capacity passes with room to spare: Free Active/Bench Slots is 1,
+ * > so `1 ≤ 1 + 1` and Team N could hold a second outstanding bid as well.
+ * > Adding a second IR player would not change either figure.
  *
  * **The asymmetry this example exists to pin is easy to get backwards.** An
  * Injury Reserve contract counts against the CAP in full and does not count
@@ -146,6 +148,78 @@ describe('§10 example 23 — IR does not fill the twelve', () => {
 		expect(gates.slots.projectedAdditions).toBe(1);
 		expect(gates.slots.ceiling).toBe(12);
 		// `12 <= 12` — at the ceiling passes; only exceeding it is refused.
+		expect(gates.slots.passed).toBe(true);
+	});
+
+	it('passes with ROOM TO SPARE: F = 1, so a second outstanding bid is available', () => {
+		// The clause added 2026-09-08 with the Outstanding Bid Allowance
+		// (Story 10.1). The IR asymmetry is not merely worth one Slot at the
+		// margin — it is worth one Slot AND the allowance that Slot unlocks.
+		// Read Team N's roster the other way round and Roster Count would be
+		// 12, `F` would be 0, and the precondition would refuse every
+		// non-eligible bid it makes.
+		const gates = evaluate(STATE, bidOf(1_500_000), NOW);
+
+		// `F = max(0, 12 − 11) = 1`, so the precondition is satisfied...
+		expect(gates.slots.freeActiveBenchSlots).toBe(1);
+		// ...and `A = 1 + 1 = 2`, against `P = 1`.
+		expect(gates.slots.allowance).toBe(2);
+		expect(gates.slots.passed).toBe(true);
+
+		// "Team N could hold a second outstanding bid as well": the same Team
+		// already leading one non-eligible Auction has `P = 2 <= 2`, which
+		// was REFUSED before Story 10.1 at `11 + 2 = 13 > 12`.
+		const withOneLead = evaluate(
+			bidStateFor(
+				null,
+				{
+					...TEAM_N,
+					leading: [
+						{
+							fantraxPlayerId: 'p-0',
+							playerName: 'Someone Else',
+							amount: parseMoney(1_500_000)
+						}
+					]
+				},
+				false,
+				'Auction'
+			),
+			bidOf(1_500_000),
+			NOW
+		);
+
+		expect(withOneLead.slots.projectedAdditions).toBe(2);
+		expect(withOneLead.slots.freeActiveBenchSlots).toBe(1);
+		expect(withOneLead.slots.allowance).toBe(2);
+		expect(withOneLead.slots.passed).toBe(true);
+		// And the ceiling of 12 is still reported on that pass — the
+		// allowance is one extra outstanding BID, never a thirteenth Slot.
+		expect(withOneLead.slots.ceiling).toBe(12);
+	});
+
+	it('is unchanged by a second IR player on EITHER figure, not just the reserve', () => {
+		// "Adding a second IR player would not change either figure." Roster
+		// Reserve is asserted above; this is the capacity half of the same
+		// sentence, which the allowance made worth stating separately.
+		const withTwoIr: readonly CapHitRow[] = [
+			...TEAM_N_ROWS,
+			{ capHit: parseMoney(1_000_000), rosterSlotKind: 'injury_reserve' as const }
+		];
+		const gates = evaluate(
+			bidStateFor(null, {
+				capSpace: computeCapSpace(withTwoIr).capSpace,
+				rosterCount: rosterCountOf(withTwoIr),
+				leading: [],
+				eligibleLeading: [],
+				minorLeagueOccupied: 0
+			}, false, 'Auction'),
+			bidOf(1_500_000),
+			NOW
+		);
+
+		expect(gates.slots.freeActiveBenchSlots).toBe(1);
+		expect(gates.slots.allowance).toBe(2);
 		expect(gates.slots.passed).toBe(true);
 	});
 });

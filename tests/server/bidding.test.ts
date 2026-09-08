@@ -19,7 +19,7 @@ import { closedPayload } from '../fixtures/closed-event.ts';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { AUCTION_CLOCK, SALARY_CAP } from '../../src/lib/core/constants.ts';
+import { AUCTION_CLOCK, CORE_VERSION, SALARY_CAP } from '../../src/lib/core/constants.ts';
 import {
 	AUCTION_EXPIRED,
 	BID_PLACED_EVENT,
@@ -96,7 +96,7 @@ function auctionOpened(occurredAt = '2026-08-25T09:00:00.000Z'): QueryResultRow 
 		seq: 0,
 		occurred_at: new Date(occurredAt),
 		schema_version: 1,
-		core_version: 1,
+		core_version: CORE_VERSION,
 		manager_id: 'm-commissioner',
 		team_id: 't-commissioner',
 		event_type: AUCTION_OPENED_EVENT,
@@ -328,7 +328,7 @@ function logEvent(
 		seq,
 		occurred_at: new Date(occurredAt),
 		schema_version: 1,
-		core_version: 1,
+		core_version: CORE_VERSION,
 		manager_id: envelope.managerId ?? 'm-0',
 		team_id: envelope.teamId ?? 't-0',
 		event_type: type,
@@ -499,7 +499,7 @@ describe('placeBid — the gate holds (AC4)', () => {
 		// The database clock, read once by the shell (AD-3) — never Date.now().
 		expect(event?.occurredAt).toBe(NOW.toISOString());
 		expect(event?.schemaVersion).toBe(1);
-		expect(event?.coreVersion).toBe(1);
+		expect(event?.coreVersion).toBe(CORE_VERSION);
 		expect(harness.state.committed).toBe(true);
 		expect(harness.state.released).toBe(1);
 	});

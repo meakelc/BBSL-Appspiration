@@ -87,10 +87,11 @@
  * FR-13's "only the Roster Reserve check and the ordinary increment rules
  * apply there". The figure renders in WORDS, never as a number.
  *
- * **`slots` is the second, independent ground** (Story 2.7, FR-37): it
- * refuses on `Roster Count + Projected Active/Bench Additions >
- * ACTIVE_BENCH_SLOTS`, that comparison lives in `evaluateSlots` below, and
- * it reads NO amount and NO Maximum Bid — so a Team can fail it with
+ * **`slots` is the second, independent ground** (Story 2.7, FR-37, widened
+ * by Story 10.1): it passes when Projected Active/Bench Additions is zero,
+ * or when the Team holds a Free Active/Bench Slot and its projected
+ * additions are within that free count plus the Outstanding Bid Allowance.
+ * That comparison lives in `evaluateSlots` below, and it reads NO amount and NO Maximum Bid — so a Team can fail it with
  * unlimited Cap Space and pass it with none. Neither gate short-circuits,
  * subsumes or gates the other; `evaluate()` returns both outcomes with their
  * own arithmetic whether or not the other passed. Reporting a capacity
@@ -169,7 +170,8 @@ import {
 	AUCTION_CLOCK,
 	MINIMUM_BID,
 	MINIMUM_INCREMENT,
-	MINOR_LEAGUE_SLOTS
+	MINOR_LEAGUE_SLOTS,
+	OUTSTANDING_BID_ALLOWANCE
 } from '../constants.ts';
 import { hash } from '../hash.ts';
 import { parseInstant, relativePhrase } from '../instant.ts';
@@ -1014,10 +1016,20 @@ const NO_MONEY: Money = parseMoney(0);
  * copies of a formula that must agree, which is the drift this module
  * refuses everywhere else.
  *
- * **The clamp is kept** although FR-37's ceiling makes it unreachable in
- * ordinary play, because a Commissioner override (Story 7.x) can still put a
- * Team above 12 — at which point an unclamped count would go negative and
- * hand that Team extra spending power as a reward for the override.
+ * **The clamp is now REACHABLE IN ORDINARY PLAY**, which it was not before
+ * Story 10.1. The Outstanding Bid Allowance (FR-37, amended 2026-09-08) lets
+ * a Team hold one outstanding Bid beyond its free Slots, so §10 example 29
+ * evaluates `max(0, 12 − 13)` with no Commissioner override anywhere near
+ * it. A Commissioner override (Story 7.x) can still put a Team above 12 as
+ * well, and the clamp answers both: an unclamped count would go negative and
+ * hand that Team extra spending power.
+ *
+ * **`unfilledSlots(rosterCount, 0)` IS Free Active/Bench Slots** — the same
+ * clamped subtraction evaluated with no additions — and `evaluateSlots`
+ * reads its `F` from exactly that call rather than writing a second one. The
+ * clamp is what stops a Team overridden to Roster Count 13 from computing a
+ * negative `F`, an allowance of 0, and passing the precondition by
+ * arithmetic accident.
  */
 function unfilledSlots(rosterCount: number, projectedAdditions: number): number {
 	return Math.max(0, ACTIVE_BENCH_SLOTS - (rosterCount + projectedAdditions));
@@ -1264,10 +1276,13 @@ const SUBTRACTED = '−';
  * `core/constants.ts` already names both jobs, so there is no second
  * constant and nothing for a second constant to drift from.
  *
- * **The clamp is kept** although FR-37's ceiling makes it unreachable in
- * ordinary play, because a Commissioner override (Story 7.x) can still put a
- * Team above 12 — at which point an unclamped reserve would go NEGATIVE and
- * hand that Team extra spending power as a reward for the override.
+ * **The clamp is kept, and since Story 10.1 it is reachable in ORDINARY
+ * play**: the Outstanding Bid Allowance lets a Team hold one Bid beyond its
+ * free Slots, so §10 example 29's Roster Count 11 with two projected
+ * additions computes `max(0, 12 − 13)` and a $0 reserve with no override
+ * involved. A Commissioner override (Story 7.x) can still put a Team above
+ * 12 too. Either way an unclamped reserve would go NEGATIVE and hand that
+ * Team extra spending power.
  *
  * **"At or below" passes.** A Bid exactly equal to Maximum Bid is legal;
  * only one exceeding it is refused (FR-13, "any Bid exceeding").
@@ -1384,9 +1399,40 @@ function evaluateCap(state: BidState, fantraxPlayerId: string, amount: Money): C
  * it with none" is then a property of the signature rather than a claim a
  * reviewer has to verify by reading the body.
  *
- *   Roster Count + Projected Active/Bench Additions > 12  →  refused
+ * **Two branches, and the ORDER between them is the rule** (FR-37, amended
+ * 2026-09-08 by the Outstanding Bid Allowance):
  *
- * on the same POST-BID basis Roster Reserve uses: `projectedAdditionsFor`
+ *   F = max(0, 12 − Roster Count)          — Free Active/Bench Slots
+ *   A = F + OUTSTANDING_BID_ALLOWANCE      — outstanding Bids permitted
+ *
+ *   pass  ⟺  P = 0                         — the Minor-League carve-out
+ *         ∨  (F ≥ 1  ∧  P ≤ A)             — the allowance, and its guard
+ *
+ * **The precondition `F ≥ 1` is tested before the arithmetic `P ≤ A`, and
+ * that is not a micro-optimisation.** At `F = 0` the allowance is still 1,
+ * so a full roster placing its first Bid has `P = 1 ≤ 1` and would be
+ * ADMITTED — it would go on to win a thirteenth Player, with no other Close
+ * available to cancel the surplus first. §10 example 30 is that
+ * counterfactual stated as arithmetic and §10 example 24 is it stated in
+ * play. Reordering the two conjuncts breaks the ceiling this gate exists to
+ * defend, silently, in the ordinary case.
+ *
+ * **The ceiling of 12 is UNCHANGED.** What widened is how many outstanding
+ * Bids may stand against it, not how many Players may land. §10 example 29's
+ * pass leaves `11 + 2 = 13`, which is legal precisely because FR-40 cancels
+ * the surplus commitment at the Close that fills the Slot — so `ceiling` is
+ * still reported on every evaluation, pass and refusal alike. A refusal
+ * quoting only the allowance would imply thirteen players are legal.
+ *
+ * `F` comes from `unfilledSlots(rosterCount, 0)` — the SAME clamped
+ * subtraction Roster Reserve does, evaluated with no additions — rather than
+ * from a second expression that must agree with it. The clamp matters here:
+ * a Team a Commissioner override put at Roster Count 13 gets `F = 0` and
+ * fails the precondition, instead of a negative `F` that would compute an
+ * allowance of 0 and pass by accident.
+ *
+ * The counts are on the same POST-BID basis Roster Reserve uses:
+ * `projectedAdditionsFor`
  * counts the Bid being placed, and it is the identical call `evaluateCap`
  * makes, so the two gates cannot disagree about the count while agreeing
  * they describe the same roster. What they do NOT share is the outcome:
@@ -1395,15 +1441,15 @@ function evaluateCap(state: BidState, fantraxPlayerId: string, amount: Money): C
  * defect (AD-7) and two rows each stating their own arithmetic cannot be
  * read as one.
  *
- * **"At the ceiling" passes.** A Bid that fills the twelfth hole leaves
- * `12 ≤ 12` and is legal; only one that would take a Team past it is
- * refused. §10 example 23 is that case and §10 example 24 is the other.
+ * **"At the ceiling" passes, and now with room to spare.** A Bid that fills
+ * the twelfth hole leaves `F = 1` and `P = 1 ≤ 2`, so §10 example 23's Team
+ * could hold a SECOND outstanding Bid as well. §10 example 24 is the other
+ * side: a Team already at twelve has `F = 0` and no allowance at all.
  *
- * **No clamp here, deliberately** — `unfilledSlots` keeps its `max(0, …)`
- * so a Commissioner override (Story 7.x) cannot hand a Team extra spending
- * power, and this gate is the other half of that pairing: an overridden Team
- * above the ceiling is REFUSED on capacity rather than rewarded, and the
- * comparison has to see the true count to say so.
+ * **An overridden Team above the ceiling is REFUSED rather than rewarded.**
+ * `unfilledSlots`' clamp gives it `F = 0`, the precondition fails, and it
+ * gets no allowance — the same answer a Team at exactly twelve gets, which
+ * is the only defensible one.
  *
  * **Story 2.8 gives it the Overflow term, in COUNTS, and no more.** An
  * eligible win a Free Minor League Slot absorbs adds nothing to
@@ -1434,6 +1480,8 @@ function evaluateSlots(state: BidState): SlotsGateOutcome {
 			rosterCount: null,
 			projectedAdditions: null,
 			ceiling: ACTIVE_BENCH_SLOTS,
+			freeActiveBenchSlots: null,
+			allowance: null,
 			freeMinorLeagueSlots: null,
 			eligibleLeadingBids: null,
 			overflowCount: null
@@ -1444,11 +1492,24 @@ function evaluateSlots(state: BidState): SlotsGateOutcome {
 	// The IDENTICAL call `evaluateCap` makes — counts only, no amount.
 	const counts = minorsCountsFor(bound);
 	const projectedAdditions = projectedAdditionsFor(bound);
+	// `unfilledSlots` with no additions IS Free Active/Bench Slots, clamp and
+	// all — one expression, not a second subtraction that has to agree.
+	const freeActiveBenchSlots = unfilledSlots(team.rosterCount, 0);
+	const allowance = freeActiveBenchSlots + OUTSTANDING_BID_ALLOWANCE;
 	return {
-		passed: team.rosterCount + projectedAdditions <= ACTIVE_BENCH_SLOTS,
+		// FR-37's two branches, with the precondition BEFORE the arithmetic.
+		// `&&` is what enforces the ordering: at `F = 0` the right-hand side
+		// would say `1 <= 1` and admit a thirteenth Player.
+		passed:
+			projectedAdditions === 0 ||
+			(freeActiveBenchSlots >= 1 && projectedAdditions <= allowance),
 		rosterCount: team.rosterCount,
 		projectedAdditions,
 		ceiling: ACTIVE_BENCH_SLOTS,
+		freeActiveBenchSlots,
+		// Raw `F + 1` even at `F = 0`: §10 example 30's lesson IS that
+		// counterfactual. The precondition sentence must never quote it.
+		allowance,
 		freeMinorLeagueSlots: counts.freeMinorLeagueSlots,
 		eligibleLeadingBids: counts.eligibleLeadingBids,
 		overflowCount: counts.overflowCount
@@ -1843,17 +1904,21 @@ function gateSentence(gates: PlaceBidGateResults, gate: PlaceBidGate): string | 
 			if (
 				outcome.passed ||
 				outcome.rosterCount === null ||
-				outcome.projectedAdditions === null
+				outcome.projectedAdditions === null ||
+				outcome.freeActiveBenchSlots === null ||
+				outcome.allowance === null
 			) {
 				return null;
 			}
-			// No money anywhere in it, and that is the point: a capacity
-			// refusal that quoted a cap figure as its ground would be the
-			// defect AD-7 names. The counts are stated, then the sum they
-			// make, then the ceiling it passes — nobody has to add at 4am.
+			// No money anywhere in either sentence, and that is the point: a
+			// capacity refusal that quoted a cap figure as its ground would be
+			// the defect AD-7 names. The counts are stated, then the sum they
+			// make, then the ceiling — nobody has to add at 4am.
 			const projected = outcome.rosterCount + outcome.projectedAdditions;
 			// §10 example 25's overflow, named in COUNTS alone — there is no
-			// amount on this outcome to name it in anything else.
+			// amount on this outcome to name it in anything else. It rides
+			// BOTH refusals: an overflow can be what spent the allowance just
+			// as easily as what met a full roster.
 			const overflow =
 				outcome.overflowCount === null || outcome.overflowCount === 0
 					? ''
@@ -1861,16 +1926,76 @@ function gateSentence(gates: PlaceBidGateResults, gate: PlaceBidGate): string | 
 						`Minor League Slots ${String(outcome.freeMinorLeagueSlots)} leaves an Overflow ` +
 						`Count of ${String(outcome.overflowCount)}, and an eligible win with no Free ` +
 						'Minor League Slot to land in takes an Active/Bench Slot. ';
+			const arithmetic =
+				`Roster Count is ${String(outcome.rosterCount)} and Projected Active/Bench ` +
+				`Additions is ${String(outcome.projectedAdditions)}, so winning would put your ` +
+				`Team at ${String(projected)} against a Roster Capacity of ` +
+				`${String(outcome.ceiling)}. ` +
+				overflow;
+
+			// **The PRECONDITION refusal** (§10 examples 24, 25, 30): no Free
+			// Active/Bench Slot at all, so the allowance never applies. It
+			// must NOT quote `allowance` — that figure is still 1 here, and
+			// saying "1 permitted" while permitting none is precisely the
+			// confusion two separate sentences exist to avoid. The remedy is
+			// a Slot freeing up, and it lasts until one does.
+			if (outcome.freeActiveBenchSlots === 0) {
+				return (
+					'Your Team has no roster slot for this Player: with no free Active/Bench Slot, ' +
+					`no bid on this Player is permitted. ${arithmetic}` +
+					'You may bid again once a Slot frees up.'
+				);
+			}
+
+			// **The ALLOWANCE refusal** (§10 example 29's tail): the Team has
+			// room and has already used it plus its one extra outstanding
+			// Bid. A different fact and a different remedy — this one
+			// resolves itself at the next close — so UX-DR32 requires it
+			// never collapse into the sentence above.
+			const slots =
+				outcome.freeActiveBenchSlots === 1
+					? '1 free Active/Bench Slot permits'
+					: `${String(outcome.freeActiveBenchSlots)} free Active/Bench Slots permit`;
 			return (
-				'Your Team has no roster slot for this Player. Roster Count is ' +
-				`${String(outcome.rosterCount)} and Projected Active/Bench Additions is ` +
-				`${String(outcome.projectedAdditions)}, so winning would put your Team at ` +
-				`${String(projected)} against a Roster Capacity of ${String(outcome.ceiling)}. ` +
-				overflow +
-				'You may bid again once a Slot frees up.'
+				`This would be your ${ordinal(outcome.projectedAdditions)} outstanding bid, and ` +
+				`${slots} ${String(outcome.allowance)}. ${arithmetic}` +
+				'You may bid again once one of your bids closes or a Slot frees up.'
 			);
 		}
 	}
+}
+
+/**
+ * `1` as `1st` — the ordinal a bid count is spoken in.
+ *
+ * The slots wording counts outstanding bids in both directions ("your 2nd of
+ * 2 permitted bids", "this would be your 3rd outstanding bid"), and a
+ * Manager reads a position, not a cardinal. One function rather than two
+ * inline expressions, for the reason every glyph here is one: the passing
+ * figure and the refusing sentence must not spell the same number two ways.
+ *
+ * **The caller only ever passes 1 or more, and that is an invariant rather
+ * than a coincidence.** `projectedAdditions` of 0 is the zero branch, which
+ * both `gateSentence` and `gateFigure` answer BEFORE reaching an ordinal:
+ * the gate passes there and the row prints the bare roster figure, so
+ * `your 0th of 3 permitted bids` is unreachable. Anything that moves those
+ * branch tests has to keep that true, because `0th` is the one reading this
+ * function has no sensible answer for.
+ *
+ * **The 11–13 exception is real English, and it is reachable without a
+ * Commissioner override.** `allowance` is `max(0, 12 − rosterCount) + 1`, so a
+ * Team at Roster Count 2 has 11 permitted bids — and until Story 10.2 takes
+ * them out, Minimum-Bid Contention entries count toward `projectedAdditions`
+ * like any other lead. Eleven open contentions put such a Team at `P = 12`
+ * in ordinary play. Without the exception its row would read `12nd`, and a
+ * `13rd` sits one entry further on.
+ */
+function ordinal(value: number): string {
+	const suffix =
+		value % 100 >= 11 && value % 100 <= 13
+			? 'th'
+			: ['th', 'st', 'nd', 'rd'][value % 10] ?? 'th';
+	return `${String(value)}${suffix}`;
 }
 
 /**
@@ -2126,6 +2251,13 @@ export function describeAmount(amount: Money): string {
  * up the panel, in the delta, so a row that repeated it would print the same
  * words twice on the most carefully-worded surface in the product.
  *
+ * **Story 10.1 puts a clause in front of the slots row** — `your 2nd of 2
+ * permitted bids; Roster Count would be 13 of 12` — because the Outstanding
+ * Bid Allowance made the roster arithmetic ambiguous on its own: at the
+ * allowance a PASS and a refused thirteenth Player both read `13 of 12`. It
+ * is still a readout and still not the sentence; it just names one more
+ * count, which is what the gate now decides on.
+ *
  * Reporting a PASSING gate is the part that exceeds the SPEC, deliberately:
  * it proves every check ran and this is the only obstacle, which forecloses
  * "what else is it not telling me". It costs one line per gate on every
@@ -2290,20 +2422,63 @@ function gateFigure(gates: PlaceBidGateResults, gate: PlaceBidGate): string {
 		}
 		case 'slots': {
 			const outcome = gates.slots;
-			if (outcome.rosterCount === null || outcome.projectedAdditions === null) {
+			if (
+				outcome.rosterCount === null ||
+				outcome.projectedAdditions === null ||
+				outcome.freeActiveBenchSlots === null ||
+				outcome.allowance === null
+			) {
 				return 'no Team, so no Roster Count';
 			}
-			// `EXPERIENCE.md`'s shape verbatim — `Roster Count would be 10 of
-			// 12` — and ONE branch serving passed and refused alike, because
-			// the row states the arithmetic and the chip beside it states the
-			// outcome. A second branch would be a second place for the two to
-			// disagree.
+			// **The one-branch rule no longer holds, and it is the rule that
+			// changed rather than the rendering.** Until Story 10.1 the gate
+			// was a single comparison, so the row could state that one
+			// arithmetic and let the chip beside it state the verdict. FR-37
+			// now decides on one of THREE — the allowance met, the allowance
+			// spent, or the precondition failed before the allowance is
+			// reached — and a row stating only `Roster Count would be 13 of
+			// 12` cannot tell a permitted second bid apart from a refused
+			// thirteenth Player. Each form names the figure its own branch
+			// actually read.
 			const projected = outcome.rosterCount + outcome.projectedAdditions;
-			const figure = `Roster Count would be ${String(projected)} of ${String(outcome.ceiling)}`;
+			const roster = `Roster Count would be ${String(projected)} of ${String(outcome.ceiling)}`;
 			// Counts only — this outcome carries no amount to name it in
 			// anything else, which is exactly the design (FR-37).
-			if (outcome.overflowCount === null || outcome.overflowCount === 0) return figure;
-			return `${figure}, Overflow Count ${String(outcome.overflowCount)}`;
+			const overflow =
+				outcome.overflowCount === null || outcome.overflowCount === 0
+					? ''
+					: `, Overflow Count ${String(outcome.overflowCount)}`;
+
+			if (outcome.passed) {
+				// The `P = 0` branch needs no free Slot and spends no
+				// allowance, so counting it as a permitted bid would print
+				// `your 0th of 3` on a stash. `EXPERIENCE.md`'s original row,
+				// unchanged, is the honest figure there.
+				if (outcome.projectedAdditions === 0) return `${roster}${overflow}`;
+				// The allowance met. The permitted-bid count comes FIRST
+				// because at the allowance `projected` legitimately exceeds
+				// the ceiling — §10 example 29 passes at 13 of 12 — and a
+				// row opening on that number beside a `Passed` chip reads as
+				// a contradiction until the clause before it explains why.
+				return (
+					`your ${ordinal(outcome.projectedAdditions)} of ` +
+					`${String(outcome.allowance)} permitted bids; ${roster}${overflow}`
+				);
+			}
+
+			// Refused on the precondition: no free Slot, so the allowance
+			// never applied. The figure does not quote it, for the same
+			// reason the sentence does not.
+			if (outcome.freeActiveBenchSlots === 0) {
+				return `no free Active/Bench Slot; ${roster}${overflow}`;
+			}
+
+			// Refused at the allowance: there was room, and this bid is one
+			// past what it permits.
+			return (
+				`your ${ordinal(outcome.projectedAdditions)} outstanding bid against ` +
+				`${String(outcome.allowance)} permitted; ${roster}${overflow}`
+			);
 		}
 	}
 	// Unreachable: every gate above returns. Present so a gate added to

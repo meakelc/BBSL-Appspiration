@@ -515,9 +515,31 @@ export type CapGateOutcome = GateOutcome & {
  * quietly folded into the money one. A Team can fail this with unlimited Cap
  * Space and pass it with none.
  *
- * It refuses exactly when `rosterCount + projectedAdditions > ceiling`, on
- * the same POST-BID basis Roster Reserve uses — `projectedAdditions` counts
- * the Bid being placed. The two figures are `CapGateOutcome`'s two counts
+ * **The rule has TWO branches (FR-37, amended 2026-09-08).** It passes when
+ * `projectedAdditions` is zero — the Minor-League carve-out, where the win
+ * lands in a Free Minor League Slot and adds nothing to Active/Bench — OR
+ * when the Team holds at least one Free Active/Bench Slot AND
+ * `projectedAdditions <= freeActiveBenchSlots + OUTSTANDING_BID_ALLOWANCE`.
+ * Everything else is refused.
+ *
+ * **The free-Slot precondition is tested BEFORE the allowance arithmetic,
+ * and the ordering is the rule rather than an implementation detail.** With
+ * `freeActiveBenchSlots` at 0 the allowance still evaluates to 1, so a Team
+ * with a full roster would be admitted at `1 <= 1` and would go on to win a
+ * thirteenth Player with no other Close available to cancel the surplus
+ * (§10 example 30). The precondition is what makes the allowance safe.
+ *
+ * **`ceiling` is reported on every evaluation, pass and refusal alike**, and
+ * it is still 12. The allowance is one extra outstanding BID, never a
+ * thirteenth Slot; a refusal quoting only the allowance would imply thirteen
+ * players are legal, which is the one thing this shape may never say. So the
+ * outcome carries all five figures — `rosterCount`, `projectedAdditions`,
+ * `freeActiveBenchSlots`, `allowance` and `ceiling` — and the wording picks
+ * which of them a given sentence needs.
+ *
+ * The counts are on the same POST-BID basis Roster Reserve uses —
+ * `projectedAdditions` counts the Bid being placed. The two figures are
+ * `CapGateOutcome`'s two counts
  * over again, deliberately copied rather than pointed at: two rows each
  * stating their own arithmetic cannot be read as one, and reporting a
  * capacity refusal as a cap refusal is a defect (AD-7). The shared
@@ -536,8 +558,9 @@ export type CapGateOutcome = GateOutcome & {
  * unlimited Cap Space, passes with none" remains a property of the
  * signature rather than a claim to verify by reading.
  *
- * `rosterCount`, `projectedAdditions` and the three counts are `null`
- * together, and only for an actor bound to no Team — exactly as
+ * `rosterCount`, `projectedAdditions`, `freeActiveBenchSlots`, `allowance`
+ * and the three Minors counts are `null` together, and only for an actor
+ * bound to no Team — exactly as
  * `CapGateOutcome`'s nullable figures are, and for the same reason: stating
  * `0` would be an invented figure a refusal panel would then print. The gate
  * PASSES in that case, because the real refusal is `unbound_actor`.
@@ -548,6 +571,34 @@ export type SlotsGateOutcome = GateOutcome & {
 	readonly rosterCount: number | null;
 	readonly projectedAdditions: number | null;
 	readonly ceiling: number;
+	/**
+	 * Free Active/Bench Slots (`F`) — `max(0, 12 − rosterCount)`, the room
+	 * the Team has BEFORE this Bid. Both the precondition (`F >= 1`) and the
+	 * allowance (`F + 1`) are read off it, and the refusal wording names it,
+	 * so it is reported rather than left for a surface to re-derive.
+	 *
+	 * **It counts FILLED roster slots only, and deliberately ignores the
+	 * slots the Team's other outstanding Bids would claim** — `rosterCount`
+	 * alone, never `rosterCount + projectedAdditions`. That asymmetry IS the
+	 * mechanism of §10 example 29: the Team's one free Slot is what earns it
+	 * the allowance, and the second outstanding Bid it then holds must not
+	 * consume the very figure that permitted it. Netting the leads out here
+	 * would collapse the allowance back into the ceiling comparison it
+	 * replaced.
+	 */
+	readonly freeActiveBenchSlots: number | null;
+	/**
+	 * `F + OUTSTANDING_BID_ALLOWANCE` — the outstanding Active/Bench Bids
+	 * this Team may hold.
+	 *
+	 * **Raw, and unclamped by the precondition**: at `F = 0` this is still 1,
+	 * because §10 example 30's whole lesson is the counterfactual arithmetic
+	 * that would have admitted a thirteenth Player. The precondition refusal
+	 * must therefore never QUOTE it — saying "1 permitted" while permitting
+	 * none is exactly the confusion the two separate sentences exist to
+	 * avoid.
+	 */
+	readonly allowance: number | null;
 	/** Free Minor League Slots (`M`). A count — this gate reads no amount. */
 	readonly freeMinorLeagueSlots: number | null;
 	/** Eligible Leading Bids (`N`), counting the Bid being placed. */

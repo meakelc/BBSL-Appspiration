@@ -24,6 +24,7 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { CORE_VERSION } from '../../src/lib/core/constants.ts';
 import { BID_PLACED_EVENT } from '../../src/lib/core/projection/auctions.ts';
 import { MINOR_LEAGUE_ELIGIBILITY_SET } from '../../src/lib/core/projection/eligibility.ts';
 import {
@@ -67,7 +68,10 @@ function logEvent(type: string, payload: unknown): QueryResultRow {
 		seq: nextSeq,
 		occurred_at: new Date('2026-08-26T09:00:00.000Z'),
 		schema_version: 1,
-		core_version: 1,
+		// This tick's own version: the sweep fail-stops on a mismatch
+		// (AD-20), so a fixture pinned to a literal would break on the next
+		// bump for a reason that has nothing to do with sequencing.
+		core_version: CORE_VERSION,
 		manager_id: 'm-m',
 		team_id: 't-m',
 		event_type: type,

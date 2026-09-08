@@ -120,8 +120,8 @@ development_status:
   9-8-provision-prod-and-run-setup-day-for-real: backlog
   epic-9-retrospective: optional
 
-  epic-10: backlog
-  10-1-the-outstanding-bid-allowance-in-the-slots-gate: backlog
+  epic-10: in-progress
+  10-1-the-outstanding-bid-allowance-in-the-slots-gate: review
   10-2-lottery-entries-leave-the-slots-gate: backlog
   10-3-cancel-the-surplus-commitment-at-close: backlog
   10-4-restore-the-next-highest-bidder: backlog

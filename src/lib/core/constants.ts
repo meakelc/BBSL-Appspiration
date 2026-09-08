@@ -98,6 +98,29 @@ export const LIVENESS_TIMEOUT = 8 * 1000;
 export const ACTIVE_BENCH_SLOTS = 12;
 
 /**
+ * The Outstanding Bid Allowance: the ONE extra outstanding Bid a Team may
+ * hold beyond its Free Active/Bench Slots (FR-37, amended 2026-09-08).
+ *
+ * **It is not a thirteenth Slot.** `ACTIVE_BENCH_SLOTS` is unchanged and
+ * still hard; what widened is the BIDDING rule built on it, so a Manager
+ * with one free Slot may chase two Players at once instead of idling a day
+ * waiting on a close they cannot influence. The surplus commitment is taken
+ * back automatically at the Close that fills the Slot (FR-40) — which is why
+ * the allowance is safe, and why it is exactly one rather than a number.
+ *
+ * **It is a named constant rather than an inline `+ 1`** for the reason
+ * every figure in this product is: the slots gate adds it, the refusal
+ * wording quotes what it permits, and the row figure states the same count
+ * again. Three readings of one literal is three places for it to drift.
+ *
+ * **The allowance never applies without a free Slot to extend.** The gate
+ * tests that precondition BEFORE this arithmetic — see `evaluateSlots` —
+ * because `0 + 1 = 1` would otherwise admit a Bid that wins a thirteenth
+ * Player with no other Close available to cancel it (§10 example 30).
+ */
+export const OUTSTANDING_BID_ALLOWANCE = 1;
+
+/**
  * The `fantraxPlayerId` the persistent strip's baseline probe carries
  * (Story 4.2).
  *
@@ -155,7 +178,7 @@ export const EVENT_SCHEMA_VERSION = 1;
  * deleting events, a bad rules deploy cannot be rolled back by reverting
  * code alone.
  */
-export const CORE_VERSION = 1;
+export const CORE_VERSION = 2;
 
 /**
  * The single global write lock (AD-6). Every mutating transaction takes this

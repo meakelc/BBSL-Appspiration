@@ -504,19 +504,19 @@ describe('runTick — the version fail-stop (AD-20)', () => {
 				managerId: 'm-1',
 				amount: 2_000_000,
 				closesAt: '2026-08-27T08:00:00.000Z'
-			}, 2)]
+			}, CORE_VERSION + 1)]
 		});
 
 		const summary = await runTick({ gateway: harness.gateway, closeOne: async () => {} });
 
 		expect(summary.tickCoreVersion).toBe(CORE_VERSION);
-		expect(summary.logCoreVersion).toBe(2);
+		expect(summary.logCoreVersion).toBe(CORE_VERSION + 1);
 		const heartbeat = soleHeartbeat(harness);
 		expect(heartbeat.outcome).toBe('refused_version_mismatch');
 		expect(heartbeat.tickCoreVersion).toBe(CORE_VERSION);
-		expect(heartbeat.logCoreVersion).toBe(2);
+		expect(heartbeat.logCoreVersion).toBe(CORE_VERSION + 1);
 		expect(String(heartbeat.detail)).toContain(String(CORE_VERSION));
-		expect(String(heartbeat.detail)).toContain('2');
+		expect(String(heartbeat.detail)).toContain(String(CORE_VERSION + 1));
 	});
 
 	it('reads the NEWEST row’s version, by seq — an older matching row does not rescue the pass', async () => {

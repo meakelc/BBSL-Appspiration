@@ -13,6 +13,8 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { CORE_VERSION } from '../../src/lib/core/constants.ts';
+
 import { closedPayload } from '../fixtures/closed-event.ts';
 
 import {
@@ -260,7 +262,7 @@ function logEvent(seq: number, type: string, payload: unknown, occurredAt = '202
 		seq,
 		occurred_at: new Date(occurredAt),
 		schema_version: 1,
-		core_version: 1,
+		core_version: CORE_VERSION,
 		manager_id: 'm-0',
 		team_id: 't-0',
 		event_type: type,
@@ -314,7 +316,7 @@ describe('placeNomination — the gate holds', () => {
 		// The database clock, read once by the shell (AD-3) — never Date.now().
 		expect(event?.occurredAt).toBe(NOW.toISOString());
 		expect(event?.schemaVersion).toBe(1);
-		expect(event?.coreVersion).toBe(1);
+		expect(event?.coreVersion).toBe(CORE_VERSION);
 		expect(harness.state.committed).toBe(true);
 		expect(harness.state.released).toBe(1);
 	});

@@ -145,6 +145,16 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 	[
 		'example-28-the-median-lands-between-two-grid-values.test.ts',
 		'28 — The median lands between two grid values'
+	],
+	// Added 2026-09-08 with the Outstanding Bid Allowance (FR-37) and Bid
+	// Cancellation (FR-40). Story 10.1 lands the first two.
+	[
+		'example-29-the-allowance-in-the-ordinary-case.test.ts',
+		'29 — The allowance, in the ordinary case'
+	],
+	[
+		'example-30-the-allowance-needs-a-slot-to-extend.test.ts',
+		'30 — The allowance needs a slot to extend'
 	]
 ];
 

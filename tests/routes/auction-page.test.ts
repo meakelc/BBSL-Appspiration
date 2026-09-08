@@ -1530,6 +1530,14 @@ describe('the bid action — a refusal carries the figures it was judged against
 			rosterCount: 9,
 			projectedAdditions: 1,
 			ceiling: 12,
+			// Story 10.1: three Slots stand free at Roster Count 9, so this
+			// Team may hold four outstanding bids. The fixture flows through
+			// `stub.outcome`, typed `as Record<string, unknown>`, so `npm run
+			// check` does NOT catch a missing field here — the figures have
+			// to be kept consistent by hand or the stub quietly describes a
+			// state the core could never produce.
+			freeActiveBenchSlots: 3,
+			allowance: 4,
 			freeMinorLeagueSlots: 3,
 			eligibleLeadingBids: 0,
 			overflowCount: 0

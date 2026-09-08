@@ -834,6 +834,11 @@ describe('loadAuctionPage — the bid control is evaluate() on the read path (AC
 						rosterCount: 9,
 						projectedAdditions: 1,
 						ceiling: 12,
+						// Story 10.1's Outstanding Bid Allowance, reported on a
+						// PASSING gate like everything else: three Slots stand
+						// free, so this Team may hold four outstanding bids.
+						freeActiveBenchSlots: 3,
+						allowance: 4,
 						// Counts only — the capacity gate still carries no money
 						// field and no `offered` (FR-37).
 						freeMinorLeagueSlots: 3,
