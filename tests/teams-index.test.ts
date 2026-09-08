@@ -127,7 +127,7 @@ describe('the Teams index — every Team is a row', () => {
 		expect(row?.committedBidsLabel).toBe(bucks?.committedBidsLabel);
 		expect(row?.availableCapSpaceLabel).toBe(bucks?.availableCapSpaceLabel);
 		expect(row?.rosterCountHalves).toEqual(bucks?.rosterCountHalves);
-		expect(row?.minorLeagueHalves).toEqual(bucks?.minorLeagueHalves);
+		expect(row?.minorLeagueHalves).toEqual(bucks?.minorLeagueOccupancyHalves);
 		expect(row?.injuryReserveHalves).toEqual(bucks?.injuryReserveHalves);
 		expect(row?.freeActiveBenchSlots).toBe(bucks?.freeActiveBenchSlots);
 		expect(row?.nominationSlotSentence).toBe(bucks?.nominationSlot.sentence);

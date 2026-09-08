@@ -272,6 +272,11 @@ export type TeamView = {
 	readonly activeBenchHalves: SlotSentenceHalves;
 	readonly minorLeagueHalves: SlotSentenceHalves;
 	readonly injuryReserveHalves: SlotSentenceHalves;
+	/**
+	 * The Minor League line WITHOUT its Free Minor League Slots clause, for
+	 * the Teams index — `minorLeagueOccupancySentence`'s reason.
+	 */
+	readonly minorLeagueOccupancyHalves: SlotSentenceHalves;
 
 	readonly roster: readonly TeamRosterGroup[];
 	readonly nominationSlot: NominationSlotStatus;
@@ -373,11 +378,24 @@ export function minorLeagueSlotSentence(
 	occupied: number,
 	freeMinorLeagueSlots: number | null
 ): string {
-	const held = Number.isFinite(occupied) ? Math.max(0, Math.trunc(occupied)) : 0;
 	const free = freeMinorLeagueSlots === null ? FIGURE_UNAVAILABLE : String(freeMinorLeagueSlots);
-	return (
-		`Minor League ${String(held)} of ${String(MINOR_LEAGUE_SLOTS)}, ` + `Free Minor League Slots ${free}`
-	);
+	return `${minorLeagueOccupancySentence(occupied)}, Free Minor League Slots ${free}`;
+}
+
+/**
+ * The occupancy half of the sentence above, alone — `Minor League N of 3`.
+ *
+ * The Teams index prints THIS one. `N of 3` already tells a reader how much
+ * room is left, so the clause naming the gate's own free count beside it says
+ * the same thing twice on a card built to be scanned. The full sentence keeps
+ * the clause where the free count is load-bearing.
+ *
+ * Extracted rather than respelled so the two renderings share one derivation
+ * and cannot disagree about the occupancy or the ceiling.
+ */
+export function minorLeagueOccupancySentence(occupied: number): string {
+	const held = Number.isFinite(occupied) ? Math.max(0, Math.trunc(occupied)) : 0;
+	return `Minor League ${String(held)} of ${String(MINOR_LEAGUE_SLOTS)}`;
 }
 
 /**
@@ -591,6 +609,9 @@ export function teamViewFor(input: {
 		rosterCountHalves: slotSentenceHalves(rosterCountLine),
 		activeBenchHalves: slotSentenceHalves(activeBenchLine),
 		minorLeagueHalves: slotSentenceHalves(minorLeagueLine),
+		minorLeagueOccupancyHalves: slotSentenceHalves(
+			minorLeagueOccupancySentence(input.team.minorLeagueOccupied)
+		),
 		injuryReserveHalves: slotSentenceHalves(injuryReserveLine),
 
 		roster: groupRoster(input.rosterRows),

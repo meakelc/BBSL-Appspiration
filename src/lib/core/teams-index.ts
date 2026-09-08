@@ -282,7 +282,13 @@ export type TeamsIndexRow = {
 	readonly href: string;
 
 	readonly rosterCountHalves: SlotSentenceHalves;
-	readonly activeBenchHalves: SlotSentenceHalves;
+	/**
+	 * The Minor League OCCUPANCY — `Minor League N of 3`, without the Free
+	 * Minor League Slots clause the full sentence carries. There is no
+	 * Free Active/Bench Slots line on a card either: `Roster N of 12` one
+	 * line above already states the same occupancy, and a card that repeats
+	 * a figure in two spellings is a card a reader has to reconcile.
+	 */
 	readonly minorLeagueHalves: SlotSentenceHalves;
 	readonly injuryReserveHalves: SlotSentenceHalves;
 
@@ -441,8 +447,7 @@ function rowFor(view: TeamsIndexInput, viewerTeamId: string | null): TeamsIndexR
 		href: teamPathFor(view.teamId),
 
 		rosterCountHalves: view.rosterCountHalves,
-		activeBenchHalves: view.activeBenchHalves,
-		minorLeagueHalves: view.minorLeagueHalves,
+		minorLeagueHalves: view.minorLeagueOccupancyHalves,
 		injuryReserveHalves: view.injuryReserveHalves,
 
 		capSpaceLabel: view.capSpaceLabel,

@@ -184,11 +184,6 @@
 							>{row.rosterCountHalves.qualifier}</span
 						>
 					</p>
-					<p class="figure" aria-label={row.activeBenchHalves.full}>
-						<span>{row.activeBenchHalves.lead}</span><span class="figure-qualifier"
-							>{row.activeBenchHalves.qualifier}</span
-						>
-					</p>
 					<p class="figure" aria-label={row.minorLeagueHalves.full}>
 						<span>{row.minorLeagueHalves.lead}</span><span class="figure-qualifier"
 							>{row.minorLeagueHalves.qualifier}</span
