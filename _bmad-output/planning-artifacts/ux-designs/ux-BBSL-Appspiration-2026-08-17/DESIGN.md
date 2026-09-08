@@ -1,7 +1,7 @@
 ---
 title: Appspiration Design
 status: final
-updated: 2026-08-17
+updated: '2026-09-08'
 sources:
   - ../../../specs/spec-BBSL-Appspiration/SPEC.md
 colors:
@@ -210,7 +210,7 @@ Vertical order and treatment:
 |---|---|
 | Headline | Georgia 19px, `{colors.text}`, line-height 1.3 |
 | The delta | `ui` 12.5px, `{colors.text-prose}`, line-height 1.6 |
-| Gate rows | Two rows, `7px` apart. The refusing gate takes a filled `{colors.attention}` chip with `{colors.attention-ink}`; the passing gate an outlined `{colors.border-interactive}` chip with `{colors.text-secondary}`. Chip left, sentence right, top-aligned. |
+| Gate rows | Two rows, `7px` apart. The refusing gate takes a filled `{colors.attention}` chip with `{colors.attention-ink}`; the passing gate an outlined `{colors.border-interactive}` chip with `{colors.text-secondary}`. Chip left, sentence right, top-aligned. The sentence **wraps to a second line rather than truncating** — since 2026-09-08 the slots row carries two figures (bids against the allowance, and the projected roster count), and a truncated gate sentence is a gate that did not report. Line-height `1.6`, aligned to the first line of the sentence, never centred on the chip. |
 | Arithmetic | Separated above by a `{colors.border}` rule. Timestamp caption in `{colors.text-tertiary}` 10.5px, then the standard breakdown, total ruled in `{colors.border-strong}` |
 | Bid control | Disabled, with the reason beneath in `{colors.text-tertiary}` 11px |
 

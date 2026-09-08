@@ -2,7 +2,9 @@
 
 Companion to `SPEC.md`. Maps every capability to the requirements it realizes, the architecture decisions that govern it, the PRD §10 worked examples that test it, and where it lives in the source tree. Use it to check coverage before and after a change; use it when breaking capabilities into stories.
 
-Referenced documents: `prd.md` (FR-1 – FR-39, §10 examples 1–28), `ARCHITECTURE-SPINE.md` (AD-1 – AD-30), `addendum.md` (§A–§G), `DESIGN.md` and `EXPERIENCE.md` (the UX contract, adopted as companions 2026-08-18).
+Referenced documents: `prd.md` (FR-1 – FR-40, §10 examples 1–35), `ARCHITECTURE-SPINE.md` (AD-1 – AD-31), `addendum.md` (§A–§G), `DESIGN.md` and `EXPERIENCE.md` (the UX contract, adopted as companions 2026-08-18).
+
+Updated 2026-09-08: **CAP-21 (Cancel a surplus commitment and restore the Auction) added and CAP-19 rewritten**, by `sprint-change-proposal-2026-09-07.md` — the Outstanding Bid Allowance. A Team may hold one outstanding Bid beyond its free Slots, and the surplus is cancelled at the Close that fills its roster. Ripples: CAP-8's lottery entries leave the capacity gate entirely (cap space is now their only limit); CAP-11's cancellation and restoration mentions ride the **existing `outbid` category** rather than a fourth; CAP-5, CAP-6, CAP-7 and CAP-20 each gained a clause. New AD-31, with AD-2, AD-11, AD-22 and AD-25 amended. **This spec was the last artifact still carrying the pre-allowance rule** — caught by the sprint-planning readiness gate, three artifacts after the change was approved, because the correct-course impact analysis listed the SPEC in scope but routed no step to it. *Fourth instance of the standing lesson: what nobody is assigned to update does not get updated.*
 
 Updated 2026-09-05: **Epic 9 (Stand it up and let the league in) added** by `sprint-change-proposal-2026-09-05.md`, carrying provisioning, league seeding, the AR-33 real-export confirmation, the setup runbook, a moderator pilot and prod setup day. **No capability changed, no FR moved, no AD touched, and no row in the map below is affected** — Epic 9 adds nothing to the contract; it executes CAP-1 – CAP-14 against real infrastructure for the first time. The one row worth reading alongside it is CAP-15/16/17, whose Epic 8 stories are the go-live gate Epic 9 feeds.
 
@@ -20,10 +22,11 @@ Updated 2026-08-18: the architecture spine grew to 30 ADs and the UX spines were
 | CAP-3 Nomination | FR-7, FR-8, FR-9, FR-10 | AD-1, AD-4, AD-6, AD-22 | 12 | `core/rules/nomination`, `shell/` |
 | CAP-4 Maximum Bid | FR-12, FR-25 | AD-1, AD-7, AD-8 | 3, 4, 5, 23 | `core/rules/bidding`, `core/money.ts` |
 | CAP-5 Place a Bid | FR-11, FR-13, FR-15 | AD-1, AD-6, AD-7, AD-9, AD-12 | 1, 2, 15, 26 | `core/rules/bidding`, `shell/`, `routes/` form actions |
-| CAP-19 Roster Capacity | FR-37 | AD-7, AD-1, AD-11, AD-23 | 24, 25 (and passes in 18, 19, 20, 23) | `core/rules/bidding` |
+| CAP-19 Roster Capacity | FR-37 | AD-7, AD-1, AD-11, AD-23 | 23, 24, 25, 29, 30 (and passes in 18, 19, 20) | `core/rules/bidding` |
+| **CAP-21 Cancel and restore** | **FR-40** | **AD-31**, AD-2, AD-4, AD-5, AD-11, AD-14, AD-22, AD-23 | 31, 32, 33, 34, 35 | `core/rules/restore`, `core/rules/close`, `core/projection/auctions` |
 | CAP-6 Commit and release capital | FR-14, FR-35 | AD-7, AD-6, AD-11, AD-23 | 16, 17, 18, 19, 20, 21, 22 | `core/rules/bidding` |
-| CAP-7 Clock and close | FR-16, FR-21 | AD-3, AD-10, AD-11, AD-12, AD-23 | 16, 17 | `core/rules/clock`, `supabase/functions/tick` |
-| CAP-8 Minimum-Bid Contention | FR-17, FR-18, FR-19, FR-20 | AD-14, AD-3, AD-11, AD-12 | 6, 7, 8, 9, 10, 11, 21, 22 | `core/rules/clock`, `core/rules/bidding`, `functions/tick` |
+| CAP-7 Clock and close | FR-16, FR-21 | AD-3, AD-10, AD-11, AD-12, AD-23 | 16, 17, 31, 35 | `core/rules/clock`, `supabase/functions/tick` |
+| CAP-8 Minimum-Bid Contention | FR-17, FR-18, FR-19, FR-20 | AD-14, AD-3, **AD-11**, AD-12 | 6, 7, 8, 9, 10, 11, 21, 22, 34, 35 | `core/rules/clock`, `core/rules/bidding`, `functions/tick` |
 | CAP-9 League Clock and phase end | FR-22 | AD-22, AD-3, AD-4 | 13, 27 | `core/rules/clock` |
 | CAP-10 Board and views | FR-23, FR-24, FR-25 | AD-5, AD-9, AD-16, AD-3, AD-7, **AD-29**, **AD-30** | — | `routes/`, projections, Supabase Realtime |
 | CAP-20 Teams index | FR-39 | AD-5, AD-7, AD-8, **AD-29**, **AD-30** | 28 | `routes/teams`, projections, `core/money.ts` |
