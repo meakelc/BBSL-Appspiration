@@ -347,15 +347,14 @@ describe('the Auction page — the bid control (AC7)', () => {
 		expect(PAGE_CODE).toContain('readBidAmount');
 	});
 
-	it('reads every field the server ships it — nothing dead on the wire', () => {
-		// `available` disables the FIELD on a standing condition; `detail` is
-		// the sentence for that condition. A field shipped and never rendered
-		// is weight on every page view for nobody's benefit.
+	it('reads the fields it renders from — `available` disables the field itself', () => {
+		// `minimumLegalSentence` is still on the wire and still what the
+		// SERVER words; this surface no longer prints it anywhere. `detail`
+		// is read, but only into the visually-hidden reason.
 		for (const field of [
 			'control.available',
 			'control.detail',
 			'control.minimumLegal',
-			'control.minimumLegalSentence',
 			'control.leadingAmount',
 			'control.leadingTeamId',
 			'control.viewerTeamId'
@@ -372,25 +371,32 @@ describe('the Auction page — the bid control (AC7)', () => {
 		expect(PAGE).toMatch(/disabled=\{blocked\}/);
 	});
 
-	it('states ONE reason beneath the control, never the same refusal twice', () => {
-		// Stale is stated FIRST (Story 4.1): when the app cannot confirm its own
-		// figures, the arithmetic the gate reasons speak from is exactly what is
-		// in doubt. All three sentences come out of the core.
+	it('shows no explainer prose beneath the control — no visible reason, no minimum', () => {
+		// The availability line printed every `bidRefusalDetail` framing
+		// ("No Bid was placed: …") and the minimum-legal line restated the
+		// floor the field is already pre-filled to. Neither is VISIBLE any
+		// more: the minimum-legal line is gone outright, and the reason is
+		// `visually-hidden`, which is what keeps a disabled control from
+		// naming no reason at all.
+		expect(PAGE_CODE).not.toContain('auction-bid-minimum');
+		expect(PAGE_CODE).not.toContain('minimumLegalSentence');
+		expect(PAGE).toMatch(
+			/<p class="visually-hidden" id="auction-bid-availability">\{reason\}<\/p>/
+		);
+		// Not a `.prose` paragraph anywhere: `.prose` is the visible body
+		// class, and this line is not shown.
+		expect(PAGE_CODE).not.toMatch(/class="prose" id="auction-bid-availability"/);
+	});
+
+	it('states ONE reason, stale first, and every sentence comes from the core', () => {
 		expect(PAGE).toMatch(
 			/staleBlocked \? STALE_BID_REASON : control\.available \? typed\.detail : control\.detail/
 		);
-		expect(PAGE).toContain('id="auction-bid-availability">{reason}');
 	});
 
-	it('states the disabled reason BENEATH the control, always in the DOM — AC7', () => {
-		expect(PAGE).toContain('id="auction-bid-availability"');
-		expect(PAGE).toMatch(/aria-describedby="auction-bid-availability"/);
-		// Beneath: after the form closes, not before it opens.
+	it('associates that reason with BOTH controls, so neither reference dangles', () => {
 		expect(PAGE.indexOf('</form>')).toBeLessThan(PAGE.indexOf('id="auction-bid-availability">'));
-		// Unconditional, so the two `aria-describedby` references can never
-		// dangle — which is the whole justification for a disabled control's
-		// label being exempt from WCAG 1.4.3.
-		expect(PAGE).toMatch(/<p class="prose" id="auction-bid-availability">\{reason\}<\/p>/);
+		expect([...PAGE.matchAll(/aria-describedby="auction-bid-availability"/g)]).toHaveLength(2);
 	});
 
 	it('words no sentence of its own — every one arrives from the core', () => {
@@ -420,8 +426,11 @@ describe('the Auction page — the bid control (AC7)', () => {
 		expect(PAGE).toMatch(/const reading = \$derived\(readBidAmount\(amount\)\)/);
 	});
 
-	it('omits the minimum-legal line rather than printing an unrenderable figure', () => {
-		expect(PAGE).toMatch(/\{#if control\.minimumLegalSentence !== null\}/);
+	it('still pre-fills the field with the smallest LEGAL Bid', () => {
+		// The SENTENCE about the minimum is gone; the minimum itself is not —
+		// it is what the field opens holding, which is a rule and never a
+		// recommendation.
+		expect(PAGE).toContain('control.minimumLegal');
 	});
 });
 
@@ -624,10 +633,9 @@ describe('the Auction page — the lottery it renders', () => {
 		expect(PAGE).toContain('{auction.seedHash}');
 		// The page never hashes anything, and every seed-shaped value it can
 		// reach is one the LOG already published: the commitment off the fold,
-		// and — once a contention has dissolved — the seed the reveal put
-		// there. A seed that is still sealed lives in a table this process
-		// holds no privilege on and never queries, so there is nothing here
-		// for it to name.
+		// and nothing else. A sealed seed lives in a table this process holds
+		// no privilege on and never queries, so there is nothing here for it
+		// to name.
 		expect(PAGE_CODE).not.toMatch(/\bhash\(/);
 		expect(PAGE_CODE).not.toMatch(/sha256|crypto|subtle/i);
 		// Every seed VALUE this file reads is a field off the wire and
@@ -652,7 +660,7 @@ describe('the Auction page — the lottery it renders', () => {
 		const live = PAGE.slice(
 			PAGE.indexOf('{#if isContention}', PAGE.indexOf('class:lottery={isContention}'))
 		);
-		const block = live.slice(0, live.indexOf('{#if dissolved}'));
+		const block = live.slice(0, live.indexOf('</div>'));
 
 		expect(block).toContain('{:else}');
 		expect(block).toContain('id="auction-seed-unverifiable"');
@@ -661,8 +669,7 @@ describe('the Auction page — the lottery it renders', () => {
 		expect(block).toMatch(
 			/\{#if auction\.seedHash !== null\}[\s\S]*\{:else\}[\s\S]*\{\/if\}/
 		);
-		// ...and it is the CORE's sentence, the same one the dissolution
-		// prints for the same absence. Not worded here.
+		// ...and it is the CORE's sentence. Not worded here.
 		expect(PAGE_CODE).not.toMatch(/nothing to check this/);
 	});
 
@@ -673,7 +680,7 @@ describe('the Auction page — the lottery it renders', () => {
 		const live = PAGE.slice(
 			PAGE.indexOf('{#if isContention}', PAGE.indexOf('class:lottery={isContention}'))
 		);
-		const block = live.slice(0, live.indexOf('{#if dissolved}'));
+		const block = live.slice(0, live.indexOf('</div>'));
 
 		expect(block).toContain('href="/verify"');
 		expect(block).toContain('id="auction-verify-link"');
@@ -732,85 +739,29 @@ describe('the Auction page — the lottery it renders', () => {
 	});
 });
 
-// --- Story 3.3: the dissolution the same panel renders (AC5) ---------------
+// --- Story 3.3: the commitment the same panel rebuilds (AC5) ---------------
 
-describe('the Auction page — the dissolution it renders', () => {
-	it('decides it from the core’s ONE predicate, never by assembling the two facts', () => {
-		// A surface combining `seed !== null && contention === 'standard'`
-		// would be a second statement of what a dissolution IS, in the file
-		// furthest from the fold that produces it.
-		expect(PAGE).toContain('wasDissolved({');
-		expect(PAGE).toMatch(/const dissolved = \$derived\(/);
-		expect(PAGE_CODE).not.toMatch(/seed !== null && /);
-	});
-
-	it('shows no accent bar and no live Contender list once it has dissolved', () => {
-		// `isContention` is the fold's own state literal, and a dissolved
-		// Auction reads `standard` — so the bar, the icon, the label, the
-		// live count and the clock statement are all gone by construction
-		// rather than by a second condition.
-		expect(PAGE).toContain('class:lottery={isContention}');
-		const live = PAGE.slice(
-			PAGE.indexOf('{#if isContention}', PAGE.indexOf('class:lottery={isContention}'))
-		);
-		const liveEnd = live.indexOf('{#if dissolved}');
-		expect(liveEnd).toBeGreaterThan(0);
-		// The live half and the dissolved half are separate blocks: one is
-		// running or the other is over, never both.
-		expect(live.slice(0, liveEnd)).toContain('auction-contender-count');
-		expect(live.slice(0, liveEnd)).toContain('CONTENTION_CLOCK_UNMOVED');
-	});
-
-	it('states the dissolution, the former Contenders, the seed and the hash', () => {
-		const block = PAGE.slice(PAGE.indexOf('{#if dissolved}'));
-		expect(block).toContain('{CONTENTION_DISSOLVED}');
-		expect(block).toContain('formerContenderSentence(auction.contenderCount)');
-		expect(block).toContain('id="auction-former-contenders"');
-		expect(block).toContain('{auction.seed}');
-		expect(block).toContain('id="auction-published-hash">{auction.seedHash}');
-	});
-
-	it('renders the former Contenders in the server’s order, never re-sorted', () => {
-		// AD-14 makes the join order an input to a winner, so a surface that
-		// reordered it would be showing a list the draw would not have run
-		// over — which is exactly what the reveal beside it invites a Manager
-		// to check.
-		const block = PAGE.slice(PAGE.indexOf('{#if dissolved}'));
-		expect(block).toMatch(/\{#each auction\.contenders as contender, position \(position\)\}/);
-		expect(block).not.toMatch(/auction\.contenders\.(sort|reverse|toSorted)/);
-	});
-
-	it('prints ONE seed sentence or the other, never both', () => {
-		// A commitment that folded to null has nothing to check the reveal
-		// against. Two sentences making opposite claims about the same value
-		// is the one thing this page may not do.
-		const block = PAGE.slice(PAGE.indexOf('{#if dissolved}'));
-		expect(block).toMatch(
-			/auction\.seedHash === null \? SEED_COMMITMENT_UNVERIFIABLE : SEED_REVEALED/
-		);
-		// ...and neither is worded here.
-		expect(PAGE_CODE).not.toMatch(/nothing to check this/);
-		expect(PAGE_CODE).not.toMatch(/No draw was run/);
-		expect(PAGE_CODE).not.toMatch(/Minimum-Bid Contention dissolved/);
-	});
-
-	it('renders the whole block for every viewer — it hangs off no Team fact', () => {
-		// A dissolution is a fact about the Auction, not about who is looking
-		// at it. The block is conditional on `dissolved` alone.
-		const block = PAGE.slice(PAGE.indexOf('{#if dissolved}'));
-		const end = block.indexOf('</section>');
-		const dissolution = block.slice(0, end);
-		expect(dissolution).not.toMatch(/viewerTeamId/);
-		expect(dissolution).not.toMatch(/control\.available/);
-	});
-
-	it('adds no new CSS rule at all — it reuses `.contenders` and `.seed-hash`', () => {
-		// Every class the dissolution block uses already existed for the
-		// lottery. A new token or a new sizing literal is an Ask First item,
-		// and the exact-list guard below would fail on one anyway.
-		const style = PAGE.slice(PAGE.indexOf('<style>'));
-		for (const invented of ['.dissolved', '.dissolution', '.former-contenders', '.revealed-seed']) {
-			expect(style, invented).not.toContain(invented);
+describe('the Auction page — the sealed commitment it carries', () => {
+	it('renders NO dissolution block — a dissolved contention reads as Standard', () => {
+		// The card states the contention it is in and nothing else. The
+		// reveal, the former-Contender list and the sealed seed used to be
+		// printed here; they are not, and `/verify` remains the one place
+		// the procedure is described.
+		expect(PAGE).not.toContain('{#if dissolved}');
+		expect(PAGE).not.toContain('wasDissolved');
+		expect(PAGE).not.toContain('CONTENTION_DISSOLVED');
+		expect(PAGE).not.toContain('formerContenderSentence');
+		expect(PAGE).not.toContain('SEED_REVEALED');
+		expect(PAGE).not.toContain('auction.seed}');
+		for (const id of [
+			'auction-dissolved',
+			'auction-former-contender-count',
+			'auction-former-contenders',
+			'auction-seed-reveal',
+			'auction-revealed-seed',
+			'auction-published-hash'
+		]) {
+			expect(PAGE, id).not.toContain(id);
 		}
 	});
 
@@ -1285,14 +1236,11 @@ describe('the refusal panel — the only surface with a dedicated anatomy', () =
 			expect(found, marker).toBeGreaterThan(cursor);
 			cursor = found;
 		}
-		// The control and its reason are the markup that FOLLOWS the panel on
-		// the page — part six, and the reason the panel does not render one.
+		// The control is the markup that FOLLOWS the panel on the page —
+		// part six, and the reason the panel does not render one.
 		expect(PANEL_CODE).not.toContain('<form');
 		expect(PANEL_CODE).not.toContain('<button');
 		expect(PAGE.indexOf('<RefusalPanel')).toBeLessThan(PAGE.indexOf('<form method="POST"'));
-		expect(PAGE.indexOf('<form method="POST"')).toBeLessThan(
-			PAGE.indexOf('id="auction-bid-availability">{reason}')
-		);
 	});
 
 	it('gives the delta and the reassurance separate classes — they are separate parts', () => {
