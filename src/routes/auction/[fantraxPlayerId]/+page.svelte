@@ -46,16 +46,12 @@
 	import {
 		AUCTION_EXPIRED,
 		CONTENTION_CLOCK_UNMOVED,
-		CONTENTION_DISSOLVED,
 		MINIMUM_LOTTERY_LABEL,
 		SEED_COMMITMENT,
 		SEED_COMMITMENT_UNVERIFIABLE,
-		SEED_REVEALED,
 		closesInPhrase,
 		contenderCountSentence,
-		formerContenderSentence,
-		hasExpired,
-		wasDissolved
+		hasExpired
 	} from '$lib/core/projection/auctions.ts';
 	import type { ContentionState } from '$lib/core/projection/auctions.ts';
 	import type { LeaguePhase } from '$lib/core/projection/phase.ts';
@@ -123,8 +119,10 @@
 	type BidControl = {
 		readonly available: boolean;
 		readonly detail: string;
+		// `minimumLegalSentence` is deliberately NOT mirrored: the minimum is
+		// what the field is pre-filled to, and the sentence about it no
+		// longer appears anywhere on this surface.
 		readonly minimumLegal: number;
-		readonly minimumLegalSentence: string | null;
 		// The folded League phase (Story 3.7) — the ninth gate's one input, off
 		// the same narrowing the locked transaction uses. A FACT, not a verdict:
 		// nothing on this wire says "bidding is open", because that is the one
@@ -393,19 +391,19 @@
 
 
 	/**
-	 * The one sentence beneath the control, and never two.
+	 * The one reason the disabled control carries, and never two.
 	 *
-	 * Stale is stated FIRST, above every gate reason. When the app cannot
-	 * confirm its own figures, the arithmetic those gates ran on is exactly what
-	 * is in doubt — printing "your Bid must exceed $14.5M" beneath a control
-	 * disabled because that figure may be hours old would be the page explaining
-	 * its refusal with the number it has just admitted it cannot vouch for.
+	 * It is VISUALLY HIDDEN (see the markup): the page no longer explains a
+	 * refusal in prose beneath the control — the refusal panel above carries
+	 * the headline, the delta, the reassurance and the arithmetic — but a
+	 * disabled control that names no reason at all is exactly what a screen
+	 * reader user is left with nothing by, and it is the justification for a
+	 * disabled control's label being exempt from WCAG 1.4.3.
 	 *
-	 * Otherwise: a standing condition the server already stated — your Team
-	 * leads, or you are bound to none — because the field is disabled on it and
-	 * nothing they could type would change the answer. Otherwise the live
-	 * per-amount reason, which tracks the field. All three sentences come out of
-	 * the core, so no two branches can word the same refusal differently.
+	 * Stale is stated FIRST (Story 4.1): when the app cannot confirm its own
+	 * figures, the arithmetic those gates ran on is exactly what is in doubt.
+	 * All three sentences come out of the core, so no two branches can word
+	 * the same refusal differently.
 	 */
 	const reason = $derived(
 		staleBlocked ? STALE_BID_REASON : control.available ? typed.detail : control.detail
@@ -531,16 +529,6 @@
 	// literal; the page is asking which of three named states it is in, the
 	// same way it asks whether `auction.closesAt` is null.
 	const isContention = $derived(gateState.contention === 'minimum_bid');
-
-	// Whether a lottery ran here and dissolved, through the core's ONE
-	// predicate. The two facts it reads — a revealed seed and a `standard`
-	// contention — are both on the wire, but the page does not combine them
-	// itself: a surface assembling `seed !== null && contention === 'standard'`
-	// would be a second statement of what a dissolution IS, in the file
-	// furthest from the fold that produces it.
-	const dissolved = $derived(
-		wasDissolved({ contention: gateState.contention, seed: auction.seed })
-	);
 
 	// The absolute stamps are NOT safe to derive during SSR.
 	// `Intl.DateTimeFormat(undefined, ...)` resolves `undefined` to the
@@ -770,45 +758,6 @@
 				     nothing behind them to explain. -->
 				<p class="prose" id="auction-contention">{auction.contention}</p>
 			{/if}
-			<!-- The dissolution, in the same block and never beside the live
-			     one: a contention is running or it is over, and the two
-			     renderings are mutually exclusive by construction. There is
-			     no accent bar here and no `lottery` class — `isContention` is
-			     false once the fold reads `standard` — and no live Contender
-			     list, because nobody is contending any more.
-
-			     What it does show is what a Manager needs to check the thing
-			     they were asked to trust: who was in, in the fold's own join
-			     order; the seed that was sealed when the lottery opened; the
-			     commitment it was published against; and the statement that
-			     ordinary ascending rules apply from here. Every sentence is
-			     the core's, and the whole block renders for every viewer,
-			     bound to a Team or not — a dissolution is a fact about the
-			     Auction, not about who is looking at it. -->
-			{#if dissolved}
-				<p class="prose" id="auction-dissolved">{CONTENTION_DISSOLVED}</p>
-				<p class="prose" id="auction-former-contender-count">
-					{formerContenderSentence(auction.contenderCount)}
-				</p>
-				{#if auction.contenders.length > 0}
-					<ul class="contenders" id="auction-former-contenders">
-						{#each auction.contenders as contender, position (position)}
-							<li class="prose">{contender}</li>
-						{/each}
-					</ul>
-				{/if}
-				<!-- One sentence or the other, never both: a commitment that
-				     folded to null has nothing to check the reveal against,
-				     and two sentences making opposite claims about the same
-				     value is the one thing this page may not do. -->
-				<p class="prose" id="auction-seed-reveal">
-					{auction.seedHash === null ? SEED_COMMITMENT_UNVERIFIABLE : SEED_REVEALED}
-				</p>
-				<p class="prose seed-hash" id="auction-revealed-seed">{auction.seed}</p>
-				{#if auction.seedHash !== null}
-					<p class="prose seed-hash" id="auction-published-hash">{auction.seedHash}</p>
-				{/if}
-			{/if}
 		</div>
 
 		<!-- The Auction Clock, on the price panel rather than a panel of its
@@ -864,13 +813,10 @@
 	<section class="manager-block">
 		<p class="section-label">Place a Bid</p>
 
-		<!-- The refusal panel, above the control it is about — the six-part
-		     anatomy `EXPERIENCE.md` specifies, ending with the disabled
-		     control and its reason, which are the markup that follows. It
-		     appears only for a refusal that HAS arithmetic behind it; the
-		     three raised before any transaction opens carry none, and what a
-		     Manager reads for those is the availability line beneath the
-		     control. -->
+		<!-- The refusal panel, above the control it is about, ending with the
+		     disabled control that follows it. It appears only for a refusal
+		     that HAS arithmetic behind it; the three raised before any
+		     transaction opens carry none, and the control is simply off. -->
 		{#if refusalDelta !== null}
 			<RefusalPanel
 				delta={refusalDelta}
@@ -923,8 +869,8 @@
 					type="text"
 					inputmode="numeric"
 					autocomplete="off"
+					aria-describedby="auction-bid-availability"
 					disabled={!control.available || expired || staleBlocked}
-					aria-describedby="auction-bid-availability auction-bid-minimum"
 					bind:value={amount}
 				/>
 				<!-- The second part of the act, between the amount and the
@@ -952,33 +898,30 @@
 					Place the Bid
 				</button>
 			</div>
-
-			<!-- Omitted, never blanked, when the figure has no lossless
-			     rendering — which only a historical off-grid Bid could cause,
-			     and which the fold deliberately does not rewrite (AD-20). -->
-			{#if control.minimumLegalSentence !== null}
-				<p class="prose" id="auction-bid-minimum">{control.minimumLegalSentence}</p>
-			{/if}
 		</form>
 
-		<!-- The reason, BENEATH the control it is about, and always in the
-		     DOM so the two `aria-describedby` references above can never
-		     dangle — which is the entire justification for a disabled
-		     control's label being exempt from WCAG 1.4.3. Worded by the core
-		     in every branch, including the ready one: the surface prints one
-		     field and decides nothing. -->
-		<p class="prose" id="auction-bid-availability">{reason}</p>
+		<!-- The reason, BENEATH the control it is about and always in the DOM
+		     so the two `aria-describedby` references above can never dangle —
+		     but VISUALLY HIDDEN. The sentence it prints is every
+		     `bidRefusalDetail` framing ("No Bid was placed: …"), which read as
+		     explainer clutter on the one surface that must read cleanly: the
+		     panel above already states a refusal, and the control being off is
+		     the visible answer for the rest. It stays in the accessibility
+		     tree because a disabled control naming no reason is what WCAG
+		     1.4.3's exemption is conditioned on. Worded by the core in every
+		     branch, including the ready one — the surface prints one field. -->
+		<p class="visually-hidden" id="auction-bid-availability">{reason}</p>
 
 		<!-- The outcome of a submit is the only place a Manager learns whether
 		     the Bid landed, and after a form post the focus is still on the
 		     control that was pressed. `role="status"` announces it politely
 		     rather than leaving a screen reader user to go looking. -->
 		<div role="status">
-			<!-- The framed refusal sentence that stood here is gone. It was the
-			     third rendering of one refusal on one screen: the panel above
-			     carries the headline, the delta and the reassurance broken into
-			     their parts, and the availability line beneath the control
-			     states the standing reason in the core's own words. -->
+			<!-- The framed refusal sentence that stood here is gone, along with
+			     the availability line and the minimum-legal line that stood
+			     beneath the control: the panel above carries the headline, the
+			     delta, the reassurance and the arithmetic, and nothing on this
+			     screen restates them in prose. -->
 			{#if appended}
 				<p class="prose" id="auction-bid-appended">{bidAppendedSentence(appended.seq)}</p>
 			{/if}
