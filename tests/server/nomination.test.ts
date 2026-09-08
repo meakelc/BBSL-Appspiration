@@ -20,7 +20,10 @@ import {
 	NOMINATION_PLACED_EVENT
 } from '../../src/lib/core/projection/nominations.ts';
 import { AUCTION_OPENED_EVENT } from '../../src/lib/core/projection/phase.ts';
-import { nominationRefusalDetail } from '../../src/lib/core/rules/nomination.ts';
+import {
+	nominationRefusalDetail,
+	nominationSlotStatus
+} from '../../src/lib/core/rules/nomination.ts';
 import type { AppendedEvent } from '../../src/lib/core/types.ts';
 import {
 	loadNominatablePool,
@@ -771,6 +774,10 @@ describe('loadNominatablePool — the render path never writes', () => {
 		expect(pool.players.every((p) => p.unavailableDetail === null)).toBe(true);
 		expect(pool.slotAvailable).toBe(true);
 		expect(pool.slotDetail).toBeNull();
+		// The panel prints a STATUS at rest, not a refusal: nothing has been
+		// submitted, so there is nothing to say "Nothing was written" about.
+		expect(pool.slotStatus).toBe(nominationSlotStatus(null));
+		expect(pool.slotStatus).not.toContain('Nothing was written');
 	});
 
 	it('marks an already-nominated Player unavailable, in the core’s words', async () => {
@@ -808,6 +815,11 @@ describe('loadNominatablePool — the render path never writes', () => {
 
 		expect(pool.slotAvailable).toBe(false);
 		expect(pool.slotDetail).toContain('Alperen Sengun');
+		// The status NAMES the Player holding the Slot — the one fact a
+		// Manager cannot derive from this page — in one line rather than in
+		// the refusal's three.
+		expect(pool.slotStatus).toBe(nominationSlotStatus('Alperen Sengun'));
+		expect(pool.slotStatus).toContain('Alperen Sengun');
 		// Jalen Green is still an available Player — he is not the problem.
 		expect(pool.players.find((p) => p.fantraxPlayerId === 'p-1')?.available).toBe(true);
 	});
@@ -817,6 +829,10 @@ describe('loadNominatablePool — the render path never writes', () => {
 		const pool = await loadNominatablePool(harness.gateway, 't-1');
 		expect(pool.slotAvailable).toBe(false);
 		expect(pool.slotDetail).toContain('Setup');
+		// The phase is a REFUSAL, not a state of the Slot, so the status stands
+		// aside and `slotDetail` speaks. A Slot reported "open for nomination"
+		// in Setup would be the page contradicting the gate.
+		expect(pool.slotStatus).toBeNull();
 	});
 
 	it('reports an unbound actor without inventing a Team id', async () => {
@@ -824,6 +840,7 @@ describe('loadNominatablePool — the render path never writes', () => {
 		const pool = await loadNominatablePool(harness.gateway, null);
 		expect(pool.slotAvailable).toBe(false);
 		expect(pool.slotDetail).toBe(nominationRefusalDetail({ kind: 'unbound_actor' }));
+		expect(pool.slotStatus).toBeNull();
 		// Each Player's own availability is still stated.
 		expect(pool.players[0]?.available).toBe(true);
 	});

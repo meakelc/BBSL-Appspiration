@@ -80,6 +80,7 @@ import { INITIAL_PHASE, phaseReducer } from '../core/projection/phase.ts';
 import {
 	nominationConsequenceSentence,
 	nominationRefusalDetail,
+	nominationSlotStatus,
 	refuseNomination
 } from '../core/rules/nomination.ts';
 import type { NominationRefusal, NominationState } from '../core/rules/nomination.ts';
@@ -215,6 +216,13 @@ export type NominatablePool = {
 	 * `null` when the Team may nominate.
 	 */
 	readonly slotDetail: string | null;
+	/**
+	 * What the Slot is doing, in one line, for the panel that reports it at
+	 * rest. `null` when the Slot is unavailable for a reason that is NOT the
+	 * Team's own nomination — the wrong phase, an unbound actor — because
+	 * those are refusals and `slotDetail` is the sentence that owns them.
+	 */
+	readonly slotStatus: string | null;
 	/** `NOMINATION_CONSEQUENCE` as a finished sentence, for beside the confirm. */
 	readonly consequence: string;
 };
@@ -353,10 +361,23 @@ export async function loadNominatablePool(
 						actorTeamId
 					);
 
+		// The Player holding this Team's Slot, from the SAME fold every gate
+		// above reads. The panel names them rather than printing the refusal
+		// sentence at rest: a refusal is a reply to an act, and opening the
+		// page is not an act.
+		const held = actorTeamId === null ? null : nominationForTeam(nominations, actorTeamId);
+
 		return {
 			players,
 			slotAvailable: teamRefusal === null,
 			slotDetail: teamRefusal === null ? null : nominationRefusalDetail(teamRefusal),
+			// Stated for the two cases the Slot itself is the answer to — free,
+			// or held by a named Player. Every other reason the Slot is
+			// unavailable is a refusal, and `slotDetail` is its sentence.
+			slotStatus:
+				teamRefusal === null || teamRefusal.kind === 'slot_in_use'
+					? nominationSlotStatus(held?.playerName ?? null)
+					: null,
 			consequence: nominationConsequenceSentence(null)
 		};
 	} catch (error) {

@@ -95,7 +95,13 @@ async function expectRefusal(run: () => unknown, status: number): Promise<void> 
 }
 
 beforeEach(() => {
-	stub.pool = { players: [], slotAvailable: true, slotDetail: null, consequence: 'Consequence.' };
+	stub.pool = {
+		players: [],
+		slotAvailable: true,
+		slotDetail: null,
+		slotStatus: 'Open for nomination.',
+		consequence: 'Consequence.'
+	};
 	stub.outcome = {
 		kind: 'accepted',
 		events: [
@@ -170,6 +176,7 @@ describe('load — a Manager destination, gated on the destination and NOT on th
 			],
 			slotAvailable: true,
 			slotDetail: null,
+			slotStatus: 'Open for nomination.',
 			consequence: 'Consequence.'
 		};
 		const result = (await route.load({
@@ -437,6 +444,142 @@ describe('the nomination surface', () => {
 		expect(buttonAt).toBeLessThan(formEndAt);
 	});
 
+	it('narrows the list with controls that cannot submit it', () => {
+		// Both controls change what is RENDERED and nothing else. They sit
+		// OUTSIDE the form because a text input inside a form submits it on
+		// Enter — and on this form that key press is a nomination, the one act
+		// that must never happen by accident.
+		const searchAt = SOURCE.indexOf('id="pool-search"');
+		const formAt = SOURCE.indexOf('<form');
+		expect(searchAt).toBeGreaterThan(-1);
+		expect(searchAt).toBeLessThan(formAt);
+		expect(SOURCE.indexOf('class="filter-positions"')).toBeLessThan(formAt);
+		// Neither control is posted: a `name` on either would put filter state
+		// into the payload the server gates on.
+		const filterBlock = SOURCE.slice(SOURCE.indexOf('class="pool-filter"'), formAt);
+		expect(filterBlock, 'a filter control carries a name and would be posted').not.toMatch(
+			/\sname=/
+		);
+	});
+
+	it('keeps the live region mounted while it has nothing to say', () => {
+		// The pool size is not printed at rest, but the region that will carry
+		// "No Player matches" must already exist when the Manager starts
+		// typing: a live region added to the DOM is not announced by every
+		// screen reader, and that sentence is the one this page cannot do
+		// without.
+		expect(SOURCE).toMatch(/<p class="prose" role="status">\s*\{poolCountSentence\(/);
+		expect(SOURCE, 'the count is rendered conditionally and would go unannounced').not.toMatch(
+			/\{#if[^}]*\}\s*<p class="prose" role="status">/
+		);
+		// And nothing explains the chips' resting state back to the Manager.
+		expect(MARKUP, 'the page restates a control the Manager is looking at').not.toMatch(
+			/No position is picked/
+		);
+	});
+
+	it('decides what matches in the core, never in the surface', () => {
+		// The page holds the two controls' state and prints what comes back.
+		// A second predicate here is how a list and its own count disagree.
+		expect(SOURCE).toContain("from '$lib/core/pool-filter.ts'");
+		expect(SOURCE).toContain('filterPool(');
+		expect(SOURCE).toContain('poolCountSentence(');
+		expect(MARKUP, 'the surface words the count itself').not.toMatch(/Showing \d/);
+	});
+
+	it('renders the filtered rows, and never the chosen Player out from under them', () => {
+		// The radio is the only thing carrying the selection, so a chosen
+		// Player who stops matching must still be rendered — otherwise the
+		// form posts no `fantraxPlayerId` at all.
+		expect(SOURCE).toContain('{#each shown as player (player.fantraxPlayerId)}');
+		expect(SOURCE, 'the list ignores the filter').not.toContain('{#each pool.players as player');
+		expect(SOURCE).toContain("selected === '' ? [] : [selected]");
+	});
+
+	it('offers every position the export uses, from the core vocabulary', () => {
+		// Iterated from `POOL_POSITIONS`, never a literal list in the markup —
+		// a second vocabulary is a chip that can never match a row.
+		expect(SOURCE).toContain('{#each POOL_POSITIONS as position (position)}');
+		expect(SOURCE).toContain('POOL_POSITION_NAMES[position]');
+		// Multi-select: the tokens are ORed, so `PG` and `SG` asks for either.
+		const chipBlock = SOURCE.slice(
+			SOURCE.indexOf('class="filter-positions"'),
+			SOURCE.indexOf('</fieldset>')
+		);
+		expect(chipBlock).toContain('type="checkbox"');
+		expect(chipBlock, 'the chips are single-select').not.toContain('type="radio"');
+	});
+
+	it('states the Slot at rest as a status, not as a refusal', () => {
+		// The panel used to print `slotDetail` — a reply, ending in "Nothing
+		// was written", to a submit nobody had made. Three lines of it pushed
+		// the filter, the list and the control off a 375px first screen.
+		//
+		// `slotDetail` still speaks for every reason that IS a refusal: the
+		// wrong phase, an unbound actor. Both branches are here, in that order.
+		const slotAt = SOURCE.indexOf('id="nominate-slot"');
+		const block = SOURCE.slice(slotAt, SOURCE.indexOf('</section>', slotAt));
+		expect(block).toContain('pool.slotStatus');
+		expect(block).toContain('pool.slotDetail');
+		// And the surface writes neither of them.
+		expect(block, 'the surface words the Slot itself').not.toMatch(/Nomination Slot is free/);
+	});
+
+	it('never outranks the persistent strip, whose menu opens over this page', () => {
+		// The strip is `z-index: 1` and the layout mounts it BEFORE the page
+		// content, so a bar at the same z-index wins by DOM order and paints
+		// over the open menu — which expands upward to as much as 60svh.
+		// `position: sticky` alone already puts this above the pool rows.
+		// MARKUP, not SOURCE: this file EXPLAINS the missing z-index at length
+		// right inside the rule, and a scan of the raw text would match the
+		// explanation rather than a declaration.
+		const bar = /\.action-bar \{[^}]*\}/.exec(MARKUP)?.[0] ?? '';
+		expect(bar).toContain('position: sticky');
+		expect(bar, 'the action bar outranks the strip and covers its menu').not.toMatch(
+			/z-index:/
+		);
+	});
+
+	it('marks the cost disclosure with an icon, not a sentence', () => {
+		// The mark is the sighted affordance; a screen reader is already told
+		// this is a disclosure and whether it is expanded, so the icon is
+		// hidden from it and the words it stands in for are carried in text.
+		expect(SOURCE).toContain('class="explainer-mark"');
+		expect(SOURCE).toMatch(/class="explainer-mark" aria-hidden="true"/);
+		expect(SOURCE).toContain('What does nominating cost?');
+		expect(SOURCE, 'the icon is drawn at a literal size instead of tracking the text').toMatch(
+			/\.explainer-mark svg \{[^}]*width: 1\.1em/
+		);
+	});
+
+	it('puts the cost behind the heading, without hiding it from the act', () => {
+		// A `<details>`, not a hover tooltip: this page is designed for a phone
+		// and there is no hover there. It opens on tap and on Enter, announces
+		// its own expanded state, and needs no script.
+		expect(SOURCE).toContain('<details class="explainer">');
+		expect(SOURCE).toContain('<summary>');
+		expect(SOURCE, 'a hover-only affordance on a phone-first page').not.toMatch(
+			/title=|role="tooltip"/
+		);
+		expect(SOURCE, 'the disclosure is open by default').not.toContain('<details class="explainer" open');
+		// The confirmation no longer repeats the sentence; what it must still
+		// do is be a separate, deliberate tick, which the two-part-act test
+		// above asserts. All that is checked here is that the duplicate is
+		// gone and has not crept back beneath the checkbox.
+		const confirmAt = SOURCE.indexOf('id="nominate-confirm"');
+		expect(SOURCE.indexOf('pool.consequence', confirmAt)).toBe(-1);
+	});
+
+	it('clears the whole persistent strip, never the strip minus a pixel', () => {
+		// The strip is fixed to the bottom of the same viewport a sticky offset
+		// is measured against, and it occupies exactly `--strip-height`. A
+		// negative offset here is what put the bar ON the strip.
+		expect(SOURCE).toMatch(/:global\(body:has\(\.strip\)\) \.action-bar \{\s*bottom: var\(--strip-height\);/);
+		expect(SOURCE, 'a negative sticky offset overlaps whatever is below').not.toMatch(
+			/\.action-bar[^}]*bottom:\s*-/
+		);
+	});
+
 	it('keeps the confirm and the submit reachable from anywhere in the list', () => {
 		// A Manager who ticks a Player at row 900 must not have to scroll to
 		// the end of the pool to find the second half of the act. The bar is
@@ -474,15 +617,21 @@ describe('the nomination surface', () => {
 		expect(SOURCE).toContain('`unavailable-${player.fantraxPlayerId}`');
 	});
 
-	it('states the consequence in words beside the confirm', () => {
+	it('states the consequence in words, and states it exactly once', () => {
+		// It used to be printed twice — behind the heading AND beneath the
+		// confirmation — which put the same ~40 words on one screen and made
+		// the second copy read as small print. The sentence is still the
+		// core's and is still on the page; there is one of it.
 		expect(SOURCE).toContain('pool.consequence');
-		const confirmAt = SOURCE.indexOf('id="nominate-confirm"');
-		const consequenceInConfirm = SOURCE.indexOf('pool.consequence', confirmAt);
-		expect(consequenceInConfirm).toBeGreaterThan(confirmAt);
+		expect(SOURCE.match(/pool\.consequence/g)?.length).toBe(1);
+		// And it lives behind the heading of the box it belongs to.
+		const disclosureAt = SOURCE.indexOf('<details class="explainer">');
+		expect(SOURCE.indexOf('pool.consequence')).toBeGreaterThan(disclosureAt);
 	});
 
 	it('words no refusal of its own — every sentence comes from the server', () => {
 		expect(SOURCE).toContain('pool.slotDetail');
+		expect(SOURCE).toContain('pool.slotStatus');
 		expect(SOURCE).toContain('player.unavailableDetail');
 		expect(SOURCE, 'a refusal sentence is written in the surface').not.toContain(
 			'Nothing was written'
@@ -494,10 +643,22 @@ describe('the nomination surface', () => {
 
 	it('offers no suggested, ranked or similar Player — AC6', () => {
 		expect(MARKUP.toLowerCase()).not.toMatch(/suggest|recommend|ranked|ranking|similar|top pick/);
-		// The list is the pool in the order the server sorted it, and nothing
+		// The list is the pool in the order the SERVER sorted it, and nothing
 		// re-sorts or slices it here.
-		expect(SOURCE).toMatch(/#each pool\.players as player/);
-		expect(SOURCE).not.toMatch(/pool\.players\.(sort|slice|filter)\(/);
+		//
+		// Narrowing is not reordering: `shown` is `filterPool`'s output, which
+		// is a subsequence of its input in its input's order — asserted as
+		// pure logic in `tests/core/pool-filter.test.ts` rather than inferred
+		// from the markup. What this asserts is that the surface reaches for
+		// that one function and holds no ordering of its own.
+		expect(SOURCE).toMatch(/#each shown as player/);
+		expect(SOURCE).toMatch(/const shown = \$derived\(filterPool\(pool\.players,/);
+		expect(SOURCE, 'the surface orders or truncates the pool itself').not.toMatch(
+			/pool\.players\.(sort|slice|reverse)\(/
+		);
+		expect(SOURCE, 'the surface filters the pool with a predicate of its own').not.toMatch(
+			/pool\.players\.filter\(/
+		);
 	});
 
 	it('names Players rather than counting them', () => {
@@ -511,13 +672,65 @@ describe('the nomination surface', () => {
 		expect(SOURCE).not.toMatch(/\$lib\/server/);
 	});
 
-	it('stacks at 375px and becomes a table at the 640px breakpoint', () => {
+	it('labels the detail cells for a screen reader without printing the labels', () => {
+		// `PG,SG,G` and `BOS` say what they are; a visible label in front of
+		// each is clutter on a phone and a second copy of the column header at
+		// 640px. Below 640px the table is laid out as blocks, which strips its
+		// table semantics — and so its headers — from the accessibility tree,
+		// so the words are carried in hidden text at that width only.
+		expect(SOURCE).toContain('<span class="visually-hidden cell-label">Positions: </span>');
+		expect(SOURCE).toContain('<span class="visually-hidden cell-label">NBA team: </span>');
+		expect(MARKUP, 'the label is printed beside the value').not.toMatch(
+			/>Positions: \{player\.positions\}/
+		);
+		// And they are dropped where the real headers are announced again,
+		// rather than saying the column's name twice on every one of 1,467 rows.
+		const desktop = MARKUP.slice(MARKUP.indexOf('@media (min-width: 640px)'));
+		expect(desktop).toMatch(/\.cell-label \{\s*display: none;/);
+	});
+
+	it('reads as one line per Player at 375px and becomes a table at 640px', () => {
 		expect(SOURCE).toContain('@media (min-width: 640px)');
 		expect(SOURCE).toMatch(/\.pool-table\s*\{\s*display:\s*block/);
+		// A row was the radio, the name, the positions, the team and the state
+		// each on its own line — ~120px of card for four short facts, three
+		// Players to a 375px screen out of 1,467. It is a wrapping ROW now.
+		const row = /\.pool-table tr \{[^}]*\}/.exec(MARKUP)?.[0] ?? '';
+		expect(row).toContain('flex-direction: row');
+		expect(row).toContain('flex-wrap: wrap');
+		expect(row, 'the row stacks its cells again').not.toContain('flex-direction: column');
+		// Nothing is truncated to achieve it, and no padding spaces a card
+		// that no longer exists — `.row-select` holds the row open instead.
+		expect(row, 'a row padded as though it were still a card').not.toMatch(/\spadding:/);
+		expect(MARKUP, 'a Player name is truncated to fit the line').not.toMatch(
+			/text-overflow:\s*ellipsis/
+		);
+	});
+
+	it('gives an unavailable row its own line, because it carries the reason', () => {
+		// "Available" is two words and rides the same line. "Not available"
+		// brings the disabled radio's reason with it — a full sentence, and
+		// the one thing on this page that may never be hidden.
+		expect(SOURCE).toMatch(/\.cell-state:has\(\.prose\) \{\s*flex: 1 0 100%;/);
 	});
 
 	it('keeps every row target at the 46px control height for one-handed use', () => {
 		expect(SOURCE).toMatch(/\.row-select\s*\{[\s\S]*?min-height:\s*var\(--control-height\)/);
 		expect(SOURCE).toMatch(/\.confirm\s*\{[\s\S]*?min-height:\s*var\(--touch-min\)/);
+	});
+
+	it('spends the touch floor on the controls that spend something, and not elsewhere', () => {
+		// `--control-height` is the BID control's height and carries the 44px
+		// floor with it. That is right where a mis-tap is unrecoverable — a
+		// row radio, the confirmation, the submit — and wrong for a filter
+		// chip and a disclosure, where a mis-tap changes what is on screen and
+		// is undone by tapping again. Seven 46px slabs for two-letter words
+		// made the filter heavier than the list it filters.
+		const chip = /\.chip \{[^}]*\}/.exec(MARKUP)?.[0] ?? '';
+		expect(chip).toContain('min-width: var(--touch-min)');
+		expect(chip, 'the chips carry the bid control height again').not.toContain('min-height');
+
+		const summary = /\.explainer > summary \{[^}]*\}/.exec(MARKUP)?.[0] ?? '';
+		expect(summary, 'a 46px row around a 12px label').not.toContain('min-height');
 	});
 });

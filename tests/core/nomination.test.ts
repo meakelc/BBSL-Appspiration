@@ -28,6 +28,7 @@ import {
 	NOMINATION_CONSEQUENCE,
 	nominationConsequenceSentence,
 	nominationRefusalDetail,
+	nominationSlotStatus,
 	refuseNomination
 } from '../../src/lib/core/rules/nomination.ts';
 import type { NominationRefusal, NominationState } from '../../src/lib/core/rules/nomination.ts';
@@ -621,6 +622,38 @@ describe('nominationRefusalDetail', () => {
 	it('says nothing about an "already won" state, which is unreachable until Story 2.3', () => {
 		const kinds = EVERY_REFUSAL.map((refusal) => refusal.kind);
 		expect(kinds).not.toContain('already_won');
+	});
+});
+
+describe('nominationSlotStatus', () => {
+	it('says the Slot is open, in one line, when nothing holds it', () => {
+		expect(nominationSlotStatus(null)).toBe('Open for nomination.');
+		expect(nominationSlotStatus('')).toBe('Open for nomination.');
+	});
+
+	it('names the Player holding the Slot, and when it comes back', () => {
+		// The name is the one fact a Manager cannot derive from `/nominate`:
+		// "held" without it sends them to the Bid Board to find out by whom.
+		const held = nominationSlotStatus('Alperen Sengun');
+		expect(held).toContain('Alperen Sengun');
+		expect(held).toContain('until that Auction closes');
+	});
+
+	it('is a STATUS and never a refusal', () => {
+		// A refusal is a reply to an act, and ends by saying nothing was
+		// written. Opening the page is not an act, so neither branch may
+		// exculpate the app for a submit that never happened.
+		for (const sentence of [nominationSlotStatus(null), nominationSlotStatus('Jalen Green')]) {
+			expect(sentence).not.toContain('Nothing was written');
+			expect(sentence).not.toContain('No nomination was placed');
+		}
+	});
+
+	it('stays short enough to be the one line the panel prints', () => {
+		// The panel it replaced ran to three lines of refusal and pushed the
+		// filter, the list and the control off a 375px first screen.
+		expect(nominationSlotStatus(null).length).toBeLessThan(40);
+		expect(nominationSlotStatus('Alperen Sengun').length).toBeLessThan(90);
 	});
 });
 

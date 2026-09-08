@@ -260,6 +260,31 @@ export const NOMINATION_CONSEQUENCE =
 	'is placed, and your Team does not become the Leading Bidder';
 
 /**
+ * What the Team's Nomination Slot is doing right now, in one line.
+ *
+ * This is a STATUS, not a refusal, and that distinction is the reason it
+ * exists. `nominationRefusalDetail` answers "why was that submit refused" and
+ * ends every sentence with "Nothing was written", because a refusal is a
+ * reply to an act. `/nominate` was printing that reply at rest, before any
+ * act, so a Manager opening the page read three lines of exculpation about a
+ * submit they had not made — and on a phone those lines pushed the list, the
+ * filter and the control itself off the first screen.
+ *
+ * A held Slot names the PLAYER holding it, because that is the fact the
+ * Manager actually wants and the only one they cannot derive from the page:
+ * "held" without a name sends them to the Bid Board to find out by whom. The
+ * clause about the Auction closing stays, short, because when the Slot comes
+ * back is the other half of the same fact.
+ *
+ * The refusal sentence is not replaced anywhere it is a reply: a refused
+ * submit still gets `nominationRefusalDetail` in full.
+ */
+export function nominationSlotStatus(heldPlayerName: string | null): string {
+	if (heldPlayerName === null || heldPlayerName === '') return 'Open for nomination.';
+	return `Held by your nomination of ${heldPlayerName} until that Auction closes.`;
+}
+
+/**
  * `NOMINATION_CONSEQUENCE` as a finished sentence about a named Player, for
  * the surface to print beside the confirm.
  *
