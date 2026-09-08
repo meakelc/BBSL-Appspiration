@@ -585,9 +585,13 @@ describe('the Auction page — the lottery it renders', () => {
 		// core's own glossary label, so a greyscale reader and a screen-reader
 		// user both get the state in text.
 		expect(PAGE).toContain('aria-hidden="true"');
-		expect(PAGE).toContain('{MINIMUM_BID_CONTENTION_LABEL}');
-		// ...and the page does not spell the term itself.
+		// `MINIMUM_LOTTERY_LABEL`, not the glossary term: it is the CARD name
+		// the Bid Board and Your Positions print, so one contention goes by
+		// one name on every surface a Manager scans. Both are the core's, and
+		// this page spells neither itself.
+		expect(PAGE).toContain('{MINIMUM_LOTTERY_LABEL}');
 		expect(PAGE_CODE).not.toMatch(/Standard Contention|Minimum-Bid Contention/);
+		expect(PAGE_CODE).not.toMatch(/Minimum Lottery/);
 	});
 
 	it('renders the live Contender list in the server’s order, never re-sorted', () => {

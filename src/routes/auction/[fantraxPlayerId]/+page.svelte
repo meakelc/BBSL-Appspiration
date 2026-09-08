@@ -47,7 +47,7 @@
 		AUCTION_EXPIRED,
 		CONTENTION_CLOCK_UNMOVED,
 		CONTENTION_DISSOLVED,
-		MINIMUM_BID_CONTENTION_LABEL,
+		MINIMUM_LOTTERY_LABEL,
 		SEED_COMMITMENT,
 		SEED_COMMITMENT_UNVERIFIABLE,
 		SEED_REVEALED,
@@ -197,7 +197,6 @@
 	const auction = $derived(data.auction as Auction);
 	const control = $derived(auction.bidControl);
 	const bidForm = $derived(form as BidForm | undefined);
-	const notice = $derived(bidForm?.notice);
 	const appended = $derived(bidForm?.appended ?? null);
 
 	/**
@@ -664,15 +663,60 @@
 		     from the fold, the count and the clock statement are sentences
 		     from the same module, and this file spells none of them. -->
 		<div class="contention" class:lottery={isContention}>
-			<p class="prose" id="auction-contention">
-				{#if isContention}
-					<span class="contention-icon" aria-hidden="true">&#9670;</span>
-					<span class="contention-label">{MINIMUM_BID_CONTENTION_LABEL}</span>
-				{/if}
-				{auction.contention}
-			</p>
 			{#if isContention}
-				<!-- The count, then the Teams, then the clock. The list is the
+				<!--
+					The state, and what it MEANS one tap behind it.
+
+					The label carried the fold's sentence beside it — `Minimum-Bid
+					Contention` as a chip and `Minimum-Bid Contention.` as prose,
+					the same words twice on one line — so the sentence is gone from
+					the lottery branch and the label states the state alone. It is
+					`MINIMUM_LOTTERY_LABEL`, the card name the Bid Board and Your
+					Positions print, so one contention goes by one name on every
+					surface a Manager scans.
+
+					`<details>`/`<summary>` and not a tooltip element, for
+					`/nominate`'s reason: a real tooltip is hover, and this is a
+					phone. It opens on tap AND on Enter, is announced expanded or
+					collapsed, and needs no script.
+
+					What it holds is the two EXPLANATIONS — that joining does not
+					move the clock, and what the published digest commits to.
+					~90 words of prose sat between the price and the Contender list
+					on a surface a Manager opens to answer one question. The FACTS
+					stay in the open: the Contender count, the Contenders in the
+					fold's own order, the digest itself, and the link to the
+					procedure for checking it. EXPERIENCE.md:155 asks the card to
+					state the clock in words; it does, one tap from the label the
+					statement is about.
+				-->
+				<details class="explainer" id="auction-contention">
+					<summary>
+						<span class="contention-icon" aria-hidden="true">&#9670;</span>
+						<span class="contention-label">{MINIMUM_LOTTERY_LABEL}</span>
+						<!-- The affordance as a mark rather than a sentence, drawn
+						     from `currentColor` so it tracks the text beside it.
+						     `aria-hidden`, because a screen reader is already told
+						     this is a disclosure and whether it is expanded; the
+						     words it stands in for are in the hidden span below. -->
+						<span class="explainer-mark" aria-hidden="true">
+							<svg viewBox="0 0 16 16" focusable="false">
+								<circle cx="8" cy="8" r="6.5" />
+								<path d="M8 7.25v4" />
+								<path d="M8 4.75v.5" />
+							</svg>
+						</span>
+						<span class="visually-hidden">How this contention works</span>
+					</summary>
+					<p class="prose" id="auction-contention-clock">{CONTENTION_CLOCK_UNMOVED}</p>
+					<!-- The commit half of the commit-reveal, explained. The digest
+					     itself stays in the open below — this says what it is FOR,
+					     and only where there is one to explain. -->
+					{#if auction.seedHash !== null}
+						<p class="prose" id="auction-seed-commitment">{SEED_COMMITMENT}</p>
+					{/if}
+				</details>
+				<!-- The count, then the Teams. The list is the
 				     fold's own order — ascending join `seq` — and is never
 				     re-sorted here: AD-14 makes that order an input to the
 				     winner, so a surface that reordered it would be showing a
@@ -690,13 +734,14 @@
 						{/each}
 					</ul>
 				{/if}
-				<p class="prose" id="auction-contention-clock">{CONTENTION_CLOCK_UNMOVED}</p>
 				<!-- The commit half of the commit-reveal, published from the
 				     moment the lottery opens so a Manager can record it now
 				     and check the reveal against it at the draw. The seed
 				     itself is in a table no role can read, and nothing on this
-				     page has ever seen it. -->
-				<!-- One sentence or the other, never both, and never neither.
+				     page has ever seen it. The VALUE stays in the open; what it
+				     commits to is stated behind the label above.
+
+				     One rendering or the other, never both, and never neither.
 				     A lottery whose commitment folded to null used to render
 				     nothing at all here, which was indistinguishable from a
 				     commitment that simply failed to appear — and AD-14's
@@ -705,7 +750,6 @@
 				     The sentence is the core's own, the same one the
 				     dissolution prints for the same absence. -->
 				{#if auction.seedHash !== null}
-					<p class="prose" id="auction-seed-commitment">{SEED_COMMITMENT}</p>
 					<p class="prose seed-hash" id="auction-seed-hash">{auction.seedHash}</p>
 				{:else}
 					<p class="prose" id="auction-seed-unverifiable">{SEED_COMMITMENT_UNVERIFIABLE}</p>
@@ -719,6 +763,12 @@
 				<p class="prose">
 					<a href="/verify" id="auction-verify-link">How the draw is checked</a>
 				</p>
+			{:else}
+				<!-- Every other state is one sentence from the fold, and the
+				     label above belongs to the lottery alone: `Open` and
+				     `Awaiting an Opening Bid` have no accent bar, no icon and
+				     nothing behind them to explain. -->
+				<p class="prose" id="auction-contention">{auction.contention}</p>
 			{/if}
 			<!-- The dissolution, in the same block and never beside the live
 			     one: a contention is running or it is over, and the two
@@ -818,8 +868,9 @@
 		     anatomy `EXPERIENCE.md` specifies, ending with the disabled
 		     control and its reason, which are the markup that follows. It
 		     appears only for a refusal that HAS arithmetic behind it; the
-		     three raised before any transaction opens carry none and are said
-		     in the notice below instead. -->
+		     three raised before any transaction opens carry none, and what a
+		     Manager reads for those is the availability line beneath the
+		     control. -->
 		{#if refusalDelta !== null}
 			<RefusalPanel
 				delta={refusalDelta}
@@ -832,10 +883,21 @@
 		{/if}
 
 		<form method="POST" action="?/bid">
-			<!-- The field and its submit sit on one row at the same 46px
-			     height, which is the only horizontal pairing on this page.
-			     Pre-filled with the smallest LEGAL Bid — a rule, never a
-			     recommendation. -->
+			<!-- The three parts of the act on one row, in the order they are
+			     performed: type an amount, tick the confirmation, press the
+			     submit. It is the only horizontal pairing on this page, and it
+			     wraps rather than shrinking any of the three below the touch
+			     floor at 375px.
+
+			     The confirmation sits BETWEEN the field and the submit rather
+			     than beneath them: it is the second half of a two-part act,
+			     and a Manager's hand travels amount → confirm → place without
+			     passing over the button that commits on the way. The act is
+			     unchanged — the submit is still disabled until the box is
+			     ticked, and the core is still what decides that.
+
+			     The field is pre-filled with the smallest LEGAL Bid — a rule,
+			     never a recommendation. -->
 			<div class="bid-row">
 				<label class="visually-hidden" for="auction-bid-amount">
 					Your Bid, in whole dollars
@@ -865,6 +927,22 @@
 					aria-describedby="auction-bid-availability auction-bid-minimum"
 					bind:value={amount}
 				/>
+				<!-- The second part of the act, between the amount and the
+				     control that commits it. The consequence sentence that
+				     stood beside this box, and again as a paragraph above the
+				     form, is gone from both: it said one thing twice on the one
+				     surface that must read cleanly, and what it named — the
+				     amount — is in the field beside it, being typed. -->
+				<label class="confirm" for="auction-bid-confirm">
+					<input
+						id="auction-bid-confirm"
+						name="confirm"
+						type="checkbox"
+						value="yes"
+						bind:checked={confirmed}
+					/>
+					<span class="prose">I confirm this Bid.</span>
+				</label>
 				<button
 					class="control-manager"
 					type="submit"
@@ -881,25 +959,6 @@
 			{#if control.minimumLegalSentence !== null}
 				<p class="prose" id="auction-bid-minimum">{control.minimumLegalSentence}</p>
 			{/if}
-
-			<!-- The second part of the two-part act, separate from the amount
-			     above and stating what it costs, at the amount entered. -->
-			<label class="confirm" for="auction-bid-confirm">
-				<input
-					id="auction-bid-confirm"
-					name="confirm"
-					type="checkbox"
-					value="yes"
-					bind:checked={confirmed}
-				/>
-				<!-- The consequence sentence that stood here, and again as a
-				     paragraph above the form, is gone from both. It said one
-				     thing twice on the one surface that must read cleanly, and
-				     what it named — the amount — is in the field directly
-				     above, where it is being typed. The act is still two-part:
-				     enter an amount, then confirm. -->
-				<span class="prose">I confirm this Bid.</span>
-			</label>
 		</form>
 
 		<!-- The reason, BENEATH the control it is about, and always in the
@@ -915,14 +974,11 @@
 		     control that was pressed. `role="status"` announces it politely
 		     rather than leaving a screen reader user to go looking. -->
 		<div role="status">
-			<!-- Suppressed whenever the panel above carries this refusal — which
-			     is every refusal now, not only the ones with arithmetic. The
-			     panel's headline, delta and reassurance ARE this sentence,
-			     broken into its parts, and printing both would say the same
-			     thing twice on the one surface that must read cleanly. -->
-			{#if notice && refusalDelta === null}
-				<p class="prose" id="auction-bid-notice">{notice}</p>
-			{/if}
+			<!-- The framed refusal sentence that stood here is gone. It was the
+			     third rendering of one refusal on one screen: the panel above
+			     carries the headline, the delta and the reassurance broken into
+			     their parts, and the availability line beneath the control
+			     states the standing reason in the core's own words. -->
 			{#if appended}
 				<p class="prose" id="auction-bid-appended">{bidAppendedSentence(appended.seq)}</p>
 			{/if}
@@ -1083,24 +1139,29 @@
 		min-height: var(--control-height);
 	}
 
+	/*
+	 * The confirmation, between the amount and the submit. Centred against
+	 * the 46px field it sits beside rather than top-aligned, and the optical
+	 * nudge below goes with it: against a centred line it would only push the
+	 * box off centre by the same 2px it was added to correct.
+	 */
 	.confirm {
 		display: flex;
-		align-items: flex-start;
+		align-items: center;
 		gap: var(--space-row-gap);
 		min-height: var(--touch-min);
 	}
 
 	/*
-	 * 22px and the 2px nudge that optically aligns the box with the first
-	 * line of its label have no token in `tokens.css`, which sizes controls
-	 * and spacing but not a native checkbox's own box. Copied verbatim from
-	 * `/nominate`'s confirm so the two read identically; inventing a token is
-	 * an Ask First item and this is not the story to open it in.
+	 * 22px sizes a native checkbox's own box, which `tokens.css` has no token
+	 * for — it sizes controls and spacing, not a browser widget. Copied
+	 * verbatim from `/nominate`'s confirm so the two read identically;
+	 * inventing a token is an Ask First item and this is not the story to open
+	 * it in.
 	 */
 	.confirm input[type='checkbox'] {
 		width: 22px;
 		height: 22px;
-		margin-top: 2px;
 		/* The interactive token: this is a Manager control in a Manager block. */
 		accent-color: var(--color-border-interactive);
 	}
@@ -1180,6 +1241,69 @@
 	.lottery {
 		border-left: var(--accent-bar-width) solid var(--color-lottery);
 		padding-left: var(--space-panel-padding);
+	}
+
+	/*
+	 * The disclosure behind the state label — `/nominate`'s explainer,
+	 * unchanged in behaviour: the summary is the whole row, so the target is
+	 * wide however short it is, and the default marker is dropped because the
+	 * mark beside the label already carries the affordance.
+	 */
+	.explainer > summary {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--space-row-gap);
+		cursor: pointer;
+		list-style: none;
+	}
+
+	.explainer > summary::-webkit-details-marker {
+		display: none;
+	}
+
+	/*
+	 * The sighted affordance and nothing else — the words it stands in for
+	 * are in the hidden span beside it, which is what a screen reader reads.
+	 * The padding is the tap target; the glyph is sized off a type token
+	 * rather than a literal, so it tracks the label beside it.
+	 */
+	.explainer-mark {
+		display: flex;
+		flex-shrink: 0;
+		padding: var(--space-row-gap);
+		color: var(--color-text-tertiary);
+	}
+
+	.explainer-mark svg {
+		width: var(--size-13);
+		height: var(--size-13);
+		stroke: currentColor;
+		stroke-width: 1.5;
+		stroke-linecap: round;
+		fill: none;
+	}
+
+	/* Open or closed, the mark is the same mark; only the panel below moves. */
+	.explainer[open] > summary .explainer-mark {
+		color: var(--color-text);
+	}
+
+	.explainer[open] > summary {
+		margin-bottom: var(--space-row-gap);
+	}
+
+	.explainer > summary:focus-visible {
+		outline: 2px solid var(--color-text);
+		outline-offset: 2px;
+	}
+
+	/*
+	 * The disclosure's own rows, which `.contention`'s flex gap does not reach
+	 * — a `<details>` is one flex child, and its contents lay out inside it.
+	 */
+	.explainer > .prose + .prose {
+		margin-top: var(--space-row-gap);
 	}
 
 	.contention-icon {
