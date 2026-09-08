@@ -12,15 +12,24 @@
  * > **tenth is refused on money** at $10,000,000 against $9,000,000 — cap
  * > space is the throttle, and the only one.
  *
- * **This file owns the first half of the example and says so.** The draw,
- * the cascade that cancels Team X's five surviving entries and the lottery
- * that closes with no winner are Stories 10.3–10.5; nothing here asserts
- * them. What it does assert is the property those stories exist to make
- * safe: that a Team with ONE free Slot may hold nine outstanding lottery
- * entries, that the capacity gate passes every one of them, and that the
- * tenth is refused by the money gate rather than by capacity. A revision
- * that refused the third on capacity would still leave the tenth refused —
- * so the passing cases are the load-bearing assertions, not the failing one.
+ * > Three of the six expire in the same sweep. The first is drawn and **Team
+ * > X wins**: Roster Count 12, Free Active/Bench Slots 0. Before the second is
+ * > drawn, the cascade cancels Team X's five remaining entries
+ * > most-recent-first, releasing $5,000,000.
+ *
+ * **This file owns the entry half and, since Story 10.3, the cascade.** What
+ * the first half asserts is the property the cascade exists to make safe:
+ * that a Team with ONE free Slot may hold nine outstanding lottery entries,
+ * that the capacity gate passes every one of them, and that the tenth is
+ * refused by the money gate rather than by capacity. A revision that refused
+ * the third on capacity would still leave the tenth refused — so the passing
+ * cases are the load-bearing assertions, not the failing one.
+ *
+ * **The second half is the win that ends them.** The draw that removes Team X
+ * from the remaining Contender lists is Story 10.5's, and the lottery that
+ * closes with no winner is 10.5's too; what is asserted here is the
+ * cancellation itself — five entries, most recent first, $5,000,000 released,
+ * and every one of them out of its Contender list before anything is drawn.
  *
  * **The arithmetic is stated rather than approximated.** With `k` entries
  * held, Committed Bids is `k × $1,000,000`, Available Cap Space is
@@ -37,15 +46,38 @@
 import { describe, expect, it } from 'vitest';
 
 import { MINIMUM_BID, MINOR_LEAGUE_SLOTS } from '../../src/lib/core/constants.ts';
+import { hash } from '../../src/lib/core/hash.ts';
 import { parseMoney } from '../../src/lib/core/money.ts';
-import type { Auction, Bid } from '../../src/lib/core/projection/auctions.ts';
+import {
+	BID_CANCELLED_EVENT,
+	auctionForPlayer,
+	auctionsReducer,
+	wasCancelled
+} from '../../src/lib/core/projection/auctions.ts';
+import type {
+	Auction,
+	Bid,
+	Contender,
+	OpenAuctions
+} from '../../src/lib/core/projection/auctions.ts';
+import { fold } from '../../src/lib/core/projection/fold.ts';
+import { CONTENTION_DRAWN_EVENT } from '../../src/lib/core/projection/draws.ts';
+import { AUCTION_CLOSED_EVENT } from '../../src/lib/core/projection/nominations.ts';
+import { decideClose } from '../../src/lib/core/rules/close.ts';
+import type {
+	BidCancelledPayload,
+	CloseState,
+	ClosedWinner
+} from '../../src/lib/core/rules/close.ts';
+import type { AppendedEvent, EventEnvelope } from '../../src/lib/core/types.ts';
 import {
 	allGatesPassed,
 	bidRefusalDetail,
 	bidStateFor,
 	decide,
 	evaluate,
-	failedGates
+	failedGates,
+	teamMoneyStateFor
 } from '../../src/lib/core/rules/bidding.ts';
 import type { BidState, LeadingBidElsewhere, TeamMoneyState } from '../../src/lib/core/rules/bidding.ts';
 import type { PlaceBid } from '../../src/lib/core/types.ts';
@@ -211,5 +243,250 @@ describe('§10 example 34 — unlimited lotteries, ended by cap space alone', ()
 		expect(bidRefusalDetail({ kind: 'gates', gates })).toContain(
 			'A lottery entry needs somewhere for the win to land'
 		);
+	});
+});
+
+
+// --- The close half: the one win that ends them ---------------------------
+
+/**
+ * A real 64-hex seed and the commitment published against it — DERIVED, so
+ * `decideClose`'s verification succeeds for the real reason rather than
+ * because two literals happened to be typed to match.
+ */
+const SEED = '9c2ab1704e6f8d539c2ab1704e6f8d539c2ab1704e6f8d539c2ab1704e6f8d53';
+const SEED_HASH = hash(SEED);
+
+/** The fixed instant every one of these lotteries closes at. */
+const LOTTERY_CLOSES = '2026-08-25T09:00:00.000Z';
+
+function joinBid(seq: string, teamId: string, teamName: string, managerId: string): Bid {
+	return {
+		seq,
+		teamId,
+		teamName,
+		managerId,
+		// Every Contender holds the identical flat join amount (FR-14).
+		amount: parseMoney(MINIMUM_BID),
+		occurredAt: '2026-08-24T09:00:00.000Z',
+		closesAt: LOTTERY_CLOSES,
+		seedHash: null
+	};
+}
+
+function contenderOf(bid: Bid): Contender {
+	return { seq: bid.seq, teamId: bid.teamId, teamName: bid.teamName, managerId: bid.managerId };
+}
+
+/**
+ * One of Team X's six lotteries: opened by another Team, joined by Team X.
+ *
+ * `openingSeq` and `joinSeq` are what the cascade orders on, and the joins
+ * ascend across the six so "most recent first" has something to be about.
+ */
+function lotteryOf(index: number): Auction {
+	const opening = joinBid(String(100 + index * 10), 't-other', 'Team Other', 'm-other');
+	const join = joinBid(String(105 + index * 10), 't-x', 'Team X', 'm-x');
+	return {
+		fantraxPlayerId: `p-lot-${String(index)}`,
+		contention: 'minimum_bid',
+		// The fold's own artifact: a join is never strictly higher than the
+		// $1,000,000 already leading, so the opener leads.
+		leadingBid: opening,
+		closesAt: LOTTERY_CLOSES,
+		bids: [opening, join],
+		contenders: [contenderOf(opening), contenderOf(join)],
+		seedHash: SEED_HASH,
+		seed: null
+	};
+}
+
+/** The six: index 0 is drawn and won; 1–5 survive into the cascade. */
+const LOTTERIES: readonly Auction[] = [0, 1, 2, 3, 4, 5].map(lotteryOf);
+
+function auctionsOf(entries: readonly Auction[]): OpenAuctions {
+	return {
+		byPlayer: Object.fromEntries(entries.map((auction) => [auction.fantraxPlayerId, auction]))
+	};
+}
+
+const WON = LOTTERIES[0] as Auction;
+
+/** Team X, drawn out of the first lottery's two-Team list. */
+const DRAWN: ClosedWinner = {
+	kind: 'drawn',
+	teamId: 't-x',
+	teamName: 'Team X',
+	managerId: 'm-x',
+	seed: SEED,
+	contenders: WON.contenders.map((contender) => contender.teamId),
+	selectedIndex: 1
+};
+
+/**
+ * The close of the first lottery, with Team X's roster as it stands BEFORE
+ * it: Roster Count 11, no free Minor League Slot, and the other five entries
+ * still held.
+ */
+const CLOSE_STATE: CloseState = {
+	auction: WON,
+	nomination: {
+		fantraxPlayerId: WON.fantraxPlayerId,
+		playerName: 'Lottery Player 0',
+		teamId: 't-n',
+		teamName: 'Team N',
+		managerId: 'm-n',
+		occurredAt: '2026-08-24T08:00:00.000Z'
+	},
+	// "non-eligible players" throughout — the minors branch never applies.
+	playerIsMinorLeagueEligible: false,
+	minorLeagueOccupied: MINOR_LEAGUE_SLOTS,
+	auctions: auctionsOf(LOTTERIES),
+	capSpace: parseMoney(9_000_000),
+	// "Roster Count 11 (Free Active/Bench Slots 1)" — before this win.
+	rosterCount: 11,
+	isMinorLeagueEligible: () => false,
+	playerNameFor: (playerId: string) => `Lottery Player ${playerId.replace('p-lot-', '')}`,
+	drawnWinner: DRAWN
+};
+
+const DECIDED = decideClose(CLOSE_STATE, LOTTERY_CLOSES, DRAWN);
+const CANCELLATIONS = DECIDED.events.filter((event) => event.type === BID_CANCELLED_EVENT);
+
+function appended(seq: number, event: EventEnvelope): AppendedEvent {
+	return {
+		seq: String(seq),
+		occurredAt: LOTTERY_CLOSES,
+		schemaVersion: 1,
+		coreVersion: 2,
+		type: event.type,
+		payload: event.payload,
+		managerId: event.managerId,
+		teamId: event.teamId,
+		deviceClass: null,
+		dispatchOutcome: null,
+		deliveryOutcome: null
+	};
+}
+
+describe('§10 example 34 — the one win that ends them', () => {
+	it('appends the draw, then the close, then five cancellations, in that order', () => {
+		// The fixed order inside the one transaction (AD-31): cause before
+		// consequence, twice over — the draw selected the winner, the close
+		// awarded the Player, and the cancellations are what that cost.
+		expect(DECIDED.events.map((event) => event.type)).toEqual([
+			CONTENTION_DRAWN_EVENT,
+			AUCTION_CLOSED_EVENT,
+			BID_CANCELLED_EVENT,
+			BID_CANCELLED_EVENT,
+			BID_CANCELLED_EVENT,
+			BID_CANCELLED_EVENT,
+			BID_CANCELLED_EVENT
+		]);
+	});
+
+	it('cancels the five remaining entries MOST RECENT FIRST', () => {
+		// "the cascade cancels Team X's five remaining entries
+		// most-recent-first". The joins ascend with the lottery index, so
+		// descending `seq` is descending index.
+		const cancelled = CANCELLATIONS.map((event) => event.payload as BidCancelledPayload);
+		expect(cancelled.map((payload) => payload.fantraxPlayerId)).toEqual([
+			'p-lot-5',
+			'p-lot-4',
+			'p-lot-3',
+			'p-lot-2',
+			'p-lot-1'
+		]);
+		expect(cancelled.map((payload) => payload.cancelledSeq)).toEqual([
+			'155',
+			'145',
+			'135',
+			'125',
+			'115'
+		]);
+		// Each is a lottery ENTRY, and each names the win that caused it.
+		for (const payload of cancelled) {
+			expect(payload.wasContentionEntry).toBe(true);
+			expect(payload.teamId).toBe('t-x');
+			expect(payload.causeFantraxPlayerId).toBe('p-lot-0');
+			expect(payload.restoration).toBeNull();
+		}
+	});
+
+	it('releases $5,000,000 — five flat tickets, and no release written', () => {
+		const released = CANCELLATIONS.map(
+			(event) => (event.payload as BidCancelledPayload).amount
+		).reduce((total, amount) => total + amount, 0);
+		expect(released).toBe(5_000_000);
+
+		// ...and the release itself is a consequence. Fold the decided events
+		// and ask the money narrowing again: nothing says "release", and the
+		// entries simply stop being counted.
+		const survivors = auctionsOf(LOTTERIES.slice(1));
+		const before = teamMoneyStateFor({
+			teamId: 't-x',
+			fantraxPlayerId: 'p-none',
+			capSpace: parseMoney(9_000_000),
+			rosterCount: 12,
+			minorLeagueOccupied: MINOR_LEAGUE_SLOTS,
+			auctions: survivors,
+			isMinorLeagueEligible: () => false,
+			playerNameFor: (playerId: string) => playerId
+		});
+		expect(before.leading).toHaveLength(5);
+
+		const folded = fold(
+			survivors,
+			DECIDED.events.map((event, index) => appended(300 + index, event)),
+			auctionsReducer
+		);
+		const after = teamMoneyStateFor({
+			teamId: 't-x',
+			fantraxPlayerId: 'p-none',
+			capSpace: parseMoney(9_000_000),
+			rosterCount: 12,
+			minorLeagueOccupied: MINOR_LEAGUE_SLOTS,
+			auctions: folded,
+			isMinorLeagueEligible: () => false,
+			playerNameFor: (playerId: string) => playerId
+		});
+		expect(after.leading).toEqual([]);
+	});
+
+	it('takes Team X out of every remaining Contender list, keeping the history', () => {
+		// "The second lottery is therefore drawn from a Contender list that
+		// does not include Team X." The draw itself is Story 10.5's; the list
+		// it will run over is this story's, and it is `contendersFor`
+		// recomputed from Bids that are still all there.
+		const folded = fold(
+			auctionsOf(LOTTERIES.slice(1)),
+			DECIDED.events.map((event, index) => appended(300 + index, event)),
+			auctionsReducer
+		);
+		for (const index of [1, 2, 3, 4, 5]) {
+			const auction = auctionForPlayer(folded, `p-lot-${String(index)}`);
+			expect(auction?.contenders.map((contender) => contender.teamId), String(index)).toEqual([
+				't-other'
+			]);
+			// The joining Bid is still in the history, marked cancelled.
+			expect(auction?.bids, String(index)).toHaveLength(2);
+			expect(wasCancelled(auction?.bids[1] as Bid), String(index)).toBe(true);
+			// The lottery is still running and its fixed clock is untouched —
+			// a Contender leaving does not end a contention.
+			expect(auction?.contention, String(index)).toBe('minimum_bid');
+			expect(auction?.closesAt, String(index)).toBe(LOTTERY_CLOSES);
+		}
+	});
+
+	it('cancels nothing when the same win leaves a free Slot behind', () => {
+		// The negative that keeps the trigger honest. At Roster Count 10 the
+		// win takes Free Active/Bench Slots from 2 to 1 — a reduction, so the
+		// cascade fires — and every surviving entry passes FR-18's landing
+		// test on that one remaining Slot, so nothing is cancelled.
+		const roomy = decideClose({ ...CLOSE_STATE, rosterCount: 10 }, LOTTERY_CLOSES, DRAWN);
+		expect(roomy.events.map((event) => event.type)).toEqual([
+			CONTENTION_DRAWN_EVENT,
+			AUCTION_CLOSED_EVENT
+		]);
 	});
 });

@@ -14,7 +14,7 @@ import { describe, expect, it } from 'vitest';
 
 import { MINIMUM_BID } from '../../src/lib/core/constants.ts';
 import { hash } from '../../src/lib/core/hash.ts';
-import { BID_PLACED_EVENT } from '../../src/lib/core/projection/auctions.ts';
+import { BID_CANCELLED_EVENT, BID_PLACED_EVENT } from '../../src/lib/core/projection/auctions.ts';
 import { CONTENTION_DRAWN_EVENT } from '../../src/lib/core/projection/draws.ts';
 import { MINOR_LEAGUE_ELIGIBILITY_SET } from '../../src/lib/core/projection/eligibility.ts';
 import {
@@ -23,6 +23,7 @@ import {
 } from '../../src/lib/core/projection/nominations.ts';
 import type {
 	AuctionClosedPayload,
+	BidCancelledPayload,
 	ContentionDrawnPayload
 } from '../../src/lib/core/rules/close.ts';
 import { closeAuction } from '../../src/lib/server/close.ts';
@@ -713,5 +714,131 @@ describe('closeAuction — a Minimum-Bid Contention is drawn and closed (AC2, AC
 		expect((harness.appendedEvents[1]?.['payload'] as AuctionClosedPayload).winningAmount).toBe(
 			MINIMUM_BID
 		);
+	});
+});
+
+
+// --- FR-40 through the real transaction (Story 10.3) ----------------------
+
+/**
+ * Team M with ELEVEN Active/Bench contracts and no minors: Free Active/Bench
+ * Slots 1, which one win takes to 0. The roomy roster above is deliberately
+ * unusable here — the whole point is a Team the next close fills up.
+ */
+const FULL_ROSTER: QueryResultRow[] = Array.from({ length: 11 }, () => ({
+	cap_hit: '1000000',
+	roster_slot_kind: 'active_bench'
+}));
+
+/** Two nominated Players, both bid on by Team M, both due at the same instant. */
+function twoCommitments(): QueryResultRow[] {
+	return [
+		logEvent(1, NOMINATION_PLACED_EVENT, {
+			fantraxPlayerId: 'p-1',
+			playerName: 'Ausar Bright',
+			teamId: 't-n',
+			teamName: 'Team N',
+			managerId: 'm-n'
+		}),
+		bidLogged(2, 8_500_000, 'p-1'),
+		// A DIFFERENT nominating Team: `nominationsReducer` holds one
+		// Nomination Slot per Team, so Team N could not have nominated both.
+		logEvent(3, NOMINATION_PLACED_EVENT, {
+			fantraxPlayerId: 'p-2',
+			playerName: 'Dex Brooks',
+			teamId: 't-o',
+			teamName: 'Team O',
+			managerId: 'm-o'
+		}),
+		bidLogged(4, 2_000_000, 'p-2')
+	];
+}
+
+describe('closeAuction — the cancellation cascade, in the transaction (Story 10.3, FR-40)', () => {
+	it('appends AuctionClosed and then BidCancelled, in that order, in ONE transaction', async () => {
+		const harness = fakeGateway({ events: twoCommitments(), roster: FULL_ROSTER });
+
+		const outcome = await closeAuction(harness.gateway, 'p-1');
+		expect(outcome.kind).toBe('accepted');
+
+		// The fixed order (AD-31): the win that filled the Slot, then what it
+		// cost. Both inside one `begin`/`commit`, with no second transaction.
+		expect(harness.appendedEvents.map((row) => row['event_type'])).toEqual([
+			AUCTION_CLOSED_EVENT,
+			BID_CANCELLED_EVENT
+		]);
+		expect(harness.order.filter((statement) => statement === 'begin')).toHaveLength(1);
+		expect(harness.order.filter((statement) => statement === 'commit')).toHaveLength(1);
+		expect(harness.order.indexOf('append-event')).toBeLessThan(harness.order.indexOf('commit'));
+
+		const cancelled = harness.appendedEvents[1]?.['payload'] as BidCancelledPayload;
+		expect(cancelled.fantraxPlayerId).toBe('p-2');
+		expect(cancelled.playerName).toBe('Dex Brooks');
+		// The `seq` the log itself assigned to Team M's Bid on Brooks.
+		expect(cancelled.cancelledSeq).toBe('4');
+		expect(cancelled.causeFantraxPlayerId).toBe('p-1');
+		expect(cancelled.causePlayerName).toBe('Ausar Bright');
+		expect(cancelled.amount).toBe(2_000_000);
+		expect(cancelled.restoration).toBeNull();
+		// The envelope is the CANCELLED Team's — `auction_events.team_id` and
+		// `.manager_id` are `not null` and reference real rows.
+		expect(harness.appendedEvents[1]?.['team_id']).toBe('t-m');
+		expect(harness.appendedEvents[1]?.['manager_id']).toBe('m-m');
+	});
+
+	it('mentions the cancelled Team, so the notice has somewhere to go', async () => {
+		const harness = fakeGateway({ events: twoCommitments(), roster: FULL_ROSTER });
+		await closeAuction(harness.gateway, 'p-1');
+
+		const cancellationSeq = String(harness.appendedEvents[1]?.['seq']);
+		const addressed = harness.outboxIntents
+			.filter((intent) => intent.eventSeq === cancellationSeq)
+			.map((intent) => intent.recipient);
+
+		// One Manager-addressed intent for Team M — the Team that lost the
+		// Bid. The copy itself is Story 10.6's; what this story owes is that
+		// the intent exists at all.
+		expect(addressed).toContain('discord-t-m');
+	});
+
+	it('commits the cancellation BEFORE the next close is evaluated (AD-11)', async () => {
+		// The property AD-11 has always had, now load-bearing. Brooks' Auction
+		// is due at the same instant, and by the time it is offered to a close
+		// its only Bid has been cancelled and committed — so it has no Leading
+		// Bidder, no clock, and refuses rather than awarding Team M a
+		// thirteenth Player. A batched fold would have closed it.
+		const harness = fakeGateway({ events: twoCommitments(), roster: FULL_ROSTER });
+		await closeAuction(harness.gateway, 'p-1');
+
+		// The first transaction's two events, committed.
+		expect(harness.appendedEvents.map((row) => row['event_type'])).toEqual([
+			AUCTION_CLOSED_EVENT,
+			BID_CANCELLED_EVENT
+		]);
+		const appendsBefore = harness.order.filter((statement) => statement === 'append-event').length;
+
+		await expect(closeAuction(harness.gateway, 'p-2')).rejects.toThrow(/no Leading Bidder/);
+
+		// ...and the refusal appended nothing of its own. (This fake's
+		// ROLLBACK clears its whole in-memory array rather than truncating to
+		// the last COMMIT, so the count of insert statements is what states
+		// "nothing more was written" here.)
+		expect(harness.order.filter((statement) => statement === 'append-event')).toHaveLength(
+			appendsBefore
+		);
+		expect(harness.state.rolledBack).toBe(true);
+	});
+
+	it('cancels nothing when the winning Team still has room afterwards', async () => {
+		// The same two Auctions against the roomy roster: Free Active/Bench
+		// Slots falls 3 → 2, the trigger fires, and the re-test finds Team M
+		// well within its allowance. One event.
+		const harness = fakeGateway({ events: twoCommitments() });
+
+		await closeAuction(harness.gateway, 'p-1');
+
+		expect(harness.appendedEvents.map((row) => row['event_type'])).toEqual([
+			AUCTION_CLOSED_EVENT
+		]);
 	});
 });

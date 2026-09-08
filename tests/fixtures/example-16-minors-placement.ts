@@ -119,6 +119,14 @@ export const STATE_16: CloseState = {
 	playerIsMinorLeagueEligible: true,
 	// "Team M holds two players in Minor League Slots"
 	minorLeagueOccupied: minorLeagueOccupiedIn(TEAM_M_IMPORTED),
+	// **Story 10.3's cascade inputs.** `auctions` is empty here, so Team M
+	// holds no other commitment and FR-40's cascade has nothing to cancel
+	// whichever way the figures beside it go.
+	auctions: { byPlayer: {} },
+	capSpace: parseMoney(0),
+	rosterCount: 0,
+	isMinorLeagueEligible: () => false,
+	playerNameFor: (playerId: string) => playerId,
 	// A Standard Contention: no lottery, no draw, no winner to derive.
 	drawnWinner: null
 };

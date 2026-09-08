@@ -716,3 +716,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-10-1-the-outstanding-bid-allowance-in-the-slots-gate.md`
   summary: Decide whether a Commissioner-overridden Team above the roster ceiling should still pass a zero-addition (Minor League stash) bid.
   evidence: The pre-10.1 comparison `rosterCount + projectedAdditions <= 12` refused it; FR-37's rewritten `P = 0` branch admits it, because the win lands in a Free Minor League Slot and adds nothing to Active/Bench. Defensible and faithful to FR-37's text, but it is a silent behaviour change in an override state, and Story 7.x owns overrides.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-10-3-cancel-the-surplus-commitment-at-close.md`
+  summary: `auctionsLimitedTo` scans with `Array.prototype.includes` inside an `Object.entries().filter()`, giving O(n*m) per `commitmentStands` call inside the cascade's re-test loop.
+  evidence: Real but not this story's problem — the shape predates the cascade and only bites a league with many concurrent Auctions. A `Set` lookup is the obvious fix and is a one-line change whenever auction volume justifies it.

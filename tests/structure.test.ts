@@ -156,8 +156,14 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 		'example-30-the-allowance-needs-a-slot-to-extend.test.ts',
 		'30 — The allowance needs a slot to extend'
 	],
-	// Story 10.2 lands these two — the bidding half of each. The draw, the
-	// cascade and the restoration they narrate belong to Stories 10.3–10.5.
+	// Story 10.3 lands the cancellation cascade, and 31 with it. The
+	// restoration the example's last sentences narrate is Story 10.4's.
+	[
+		'example-31-the-cascade-fires-only-as-far-as-it-must.test.ts',
+		'31 — The cascade fires, and only as far as it must'
+	],
+	// Story 10.2 landed the bidding half of the two below and Story 10.3 the
+	// close half of each. The draws they narrate belong to Story 10.5.
 	[
 		'example-34-unlimited-lotteries.test.ts',
 		'34 — Unlimited lotteries, and the one win that ends them'

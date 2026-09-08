@@ -643,9 +643,19 @@ export async function loadAuctionPage(
 			// The revealed seed, straight off the fold too. `null` until a
 			// `ContentionDissolved` is in the log for this Player.
 			seed: auction?.seed ?? null,
-			price: auction === null ? null : describeAmount(auction.leadingBid.amount),
+			// Both `null` on a leaderless Auction as well as on an unbid one —
+			// `board.ts`'s `viewerStateFor` states the one reading every
+			// surface takes of FR-40's leaderless Auction, and this is that
+			// reading here: no current price, no Leading Bidder, and the
+			// "Awaiting an Opening Bid" treatment the page already gives a null
+			// leader rather than a new state of its own (§10 example 33). The
+			// Bid history below is UNAFFECTED — every Bid is still listed,
+			// cancelled ones included, which is what FR-40 requires kept
+			// visible and what Story 10.6 strikes through.
+			price:
+				auction?.leadingBid == null ? null : describeAmount(auction.leadingBid.amount),
 			leadingBidder:
-				auction === null
+				auction?.leadingBid == null
 					? null
 					: nameBidder(auction.leadingBid.teamName, nameOf(auction.leadingBid)),
 			closesAt: auction?.closesAt ?? null,

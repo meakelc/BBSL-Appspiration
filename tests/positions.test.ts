@@ -40,6 +40,7 @@ import type { BoardMetadata } from '../src/lib/core/board.ts';
 import { MINIMUM_BID, SALARY_CAP } from '../src/lib/core/constants.ts';
 import { parseMoney } from '../src/lib/core/money.ts';
 import {
+	BID_CANCELLED_EVENT,
 	BID_PLACED_EVENT,
 	INITIAL_AUCTIONS,
 	MINIMUM_LOTTERY_LABEL,
@@ -716,5 +717,124 @@ describe('a viewer bound to no Team', () => {
 		expect(answer.gateRows).toEqual([]);
 		expect(answer.maximumBidLabel).toBeNull();
 		expect(answer.sentence).toContain('not bound to a Team');
+	});
+});
+
+
+// --- A leaderless Auction (Story 10.3, FR-40) -----------------------------
+
+/** A `BidCancelled` naming one Bid's `seq`, as `rules/close.ts` writes it. */
+function cancelledBid(
+	fantraxPlayerId: string,
+	cancelledSeq: string,
+	teamId: string,
+	amount: number
+): AppendedEvent {
+	return event(
+		BID_CANCELLED_EVENT,
+		{
+			fantraxPlayerId,
+			playerName: `Player ${fantraxPlayerId}`,
+			cancelledSeq,
+			teamId,
+			teamName: `Team ${teamId}`,
+			managerId: `m-${teamId}`,
+			amount,
+			wasContentionEntry: false,
+			causeFantraxPlayerId: 'p-cause',
+			causePlayerName: 'Dex Brooks',
+			causeTeamId: teamId,
+			restoration: null
+		},
+		'2026-08-27T10:00:00.000Z'
+	);
+}
+
+describe('a leaderless Auction holds no position — for EITHER Team (Story 10.3)', () => {
+	/**
+	 * The §10 example 31 shape, on this page: the viewer leads at $4,000,000
+	 * over a rival's standing $2,000,000, and the viewer's Bid is then
+	 * cancelled by a Close elsewhere. Nothing leads until Story 10.4 restores
+	 * the rival, and every card in this module carries a price.
+	 */
+	function leaderlessLog() {
+		nextSeq = 0;
+		return [
+			nominated('p-1', 'Ellis Carter', 't-nom'),
+			bid('p-1', RIVAL, 2_000_000, '2026-08-26T09:00:00.000Z'),
+			bid('p-1', VIEWER, 4_000_000, '2026-08-26T10:00:00.000Z'),
+			// The viewer's own Bid — `seq` 3 — withdrawn.
+			cancelledBid('p-1', '3', VIEWER, 4_000_000)
+		];
+	}
+
+	it('leaves the fold leaderless with both Bids still standing in history', () => {
+		// The premise, stated before the page is asked about it: this is the
+		// state, not a state the test invented.
+		const auctions = project(leaderlessLog()).auctions;
+		const auction = auctionForPlayer(auctions, 'p-1');
+
+		expect(auction?.leadingBid).toBeNull();
+		expect(auction?.bids).toHaveLength(2);
+		// The clock is untouched — a Bid survives, so nothing cleared it.
+		expect(auction?.closesAt).toBe(CLOSES);
+	});
+
+	it('gives the cancelled ex-leader no card at all', () => {
+		// The Team whose Bid was cancelled. It holds nothing here: there is no
+		// price to state and no lead to report, and the board and the Auction
+		// page are where it still sees the Auction meanwhile.
+		const groups = build(leaderlessLog(), { viewerTeamId: VIEWER });
+
+		expect(groups.youLead).toEqual([]);
+		expect(groups.outbid).toEqual([]);
+		expect(groups.contending).toEqual([]);
+	});
+
+	it('gives the rival whose own Bid still stands no card either', () => {
+		// The other half, and the one that is easy to get wrong: the rival was
+		// never cancelled and its $2,000,000 is still in the history — but
+		// nothing leads, so there is no price for its card either, and it must
+		// not be shown as leading a Player nobody currently leads.
+		const groups = build(leaderlessLog(), { viewerTeamId: RIVAL });
+
+		expect(groups.youLead).toEqual([]);
+		expect(groups.outbid).toEqual([]);
+		expect(groups.contending).toEqual([]);
+	});
+
+	it('comes back the moment a Bid leads again', () => {
+		// The skip is about "no current price", not about the cancellation —
+		// so a fresh Bid above the survivor restores the card. (Story 10.4
+		// gets there the other way, by restoring the survivor itself.)
+		const groups = build(
+			[...leaderlessLog(), bid('p-1', VIEWER, 5_000_000, '2026-08-27T11:00:00.000Z')],
+			{ viewerTeamId: VIEWER }
+		);
+
+		expect(groups.youLead.map((card) => card.fantraxPlayerId)).toEqual(['p-1']);
+		expect(groups.youLead[0]?.price).toBe(5_000_000);
+	});
+
+	it('keeps a Contender’s card when a lottery’s artifact lead is cancelled', () => {
+		// The exception that needs no branch. In a lottery the lead is a fold
+		// artifact — every Contender holds the identical flat amount — so
+		// cancelling the opener moves it to the next surviving join and the
+		// contention goes on. The viewer joined and is still in it.
+		nextSeq = 0;
+		const groups = build(
+			[
+				nominated('p-lot', 'Ray Anderson', 't-nom'),
+				bid('p-lot', RIVAL, MINIMUM_BID, '2026-08-26T09:00:00.000Z'),
+				bid('p-lot', VIEWER, MINIMUM_BID, '2026-08-26T10:00:00.000Z'),
+				// The OPENER's Bid, which is the fold's artifact leader.
+				cancelledBid('p-lot', '2', RIVAL, MINIMUM_BID)
+			],
+			{ viewerTeamId: VIEWER }
+		);
+
+		expect(groups.contending.map((card) => card.fantraxPlayerId)).toEqual(['p-lot']);
+		expect(groups.contending[0]?.price).toBe(MINIMUM_BID);
+		expect(groups.contending[0]?.closesAt).toBe(CLOSES);
 	});
 });

@@ -217,6 +217,6 @@ describe('§10 example 15 — Co-manager race', () => {
 
 	it('starts from a real state literal, not an empty fold', () => {
 		expect(auctionForPlayer(INITIAL_AUCTIONS, 'p-1')).toBeNull();
-		expect(OPENING_AUCTION.leadingBid.amount).toBe(8_000_000);
+		expect(OPENING_AUCTION.leadingBid?.amount).toBe(8_000_000);
 	});
 });

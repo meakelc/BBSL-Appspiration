@@ -350,7 +350,7 @@ describe('decidePhaseEnd — only a nomination with NO Auction is terminated (AC
 
 		expect(after.nominations.byPlayer['p-stuck']).toBeDefined();
 		expect(after.nominations.byTeam['t-1']).toBeDefined();
-		expect(after.auctions.byPlayer['p-stuck']?.leadingBid.amount).toBe(8_000_000);
+		expect(after.auctions.byPlayer['p-stuck']?.leadingBid?.amount).toBe(8_000_000);
 		// And the unbid one is gone, both indexes together.
 		expect(after.nominations.byPlayer['p-unbid']).toBeUndefined();
 		expect(after.nominations.byTeam['t-2']).toBeUndefined();

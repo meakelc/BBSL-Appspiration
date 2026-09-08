@@ -199,7 +199,7 @@ describe('§10 example 21 — a lottery on an eligible player commits nothing', 
 				{ seq: '2', teamId: 't-q', teamName: 'Team Q', managerId: 'm-q' }
 			]
 		};
-		expect(joined.leadingBid.teamId).toBe('t-other');
+		expect(joined.leadingBid?.teamId).toBe('t-other');
 
 		const money = teamMoneyStateFor({
 			teamId: 't-q',

@@ -232,8 +232,8 @@ describe('§10 example 9 — the lottery dissolves', () => {
 		const auction = auctionForPlayer(fold(INITIAL_AUCTIONS, theWholeThing(), auctionsReducer), 'p-1');
 
 		expect(auction?.contention).toBe('standard');
-		expect(auction?.leadingBid.teamId).toBe('t-i');
-		expect(auction?.leadingBid.amount).toBe(1_500_000);
+		expect(auction?.leadingBid?.teamId).toBe('t-i');
+		expect(auction?.leadingBid?.amount).toBe(1_500_000);
 		// The reveal is on the Auction, and the commitment it answers is
 		// still the one the opening published.
 		expect(auction?.seed).toBe(SEED);
@@ -318,7 +318,7 @@ describe('§10 example 9 — the lottery dissolves', () => {
 		);
 
 		const folded = fold(INITIAL_AUCTIONS, log, auctionsReducer);
-		expect(auctionForPlayer(folded, 'p-1')?.leadingBid.teamId).toBe('t-f');
+		expect(auctionForPlayer(folded, 'p-1')?.leadingBid?.teamId).toBe('t-f');
 
 		// Read from a SECOND Auction, which is where a Team's commitments are
 		// visible at all. Exactly one entry, at the converting amount.

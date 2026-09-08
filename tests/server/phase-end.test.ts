@@ -268,7 +268,7 @@ describe('loadPhaseEndState — four folds over ONE read of the log', () => {
 		expect(state.nominations.byPlayer['p-a']?.managerId).toBe('m-1');
 		// **The fourth fold, and the one the story turns on.** Without it,
 		// "Awaiting Opening Bid" would be assumed from the nominations fold.
-		expect(state.auctions.byPlayer['p-a']?.leadingBid.amount).toBe(8_000_000);
+		expect(state.auctions.byPlayer['p-a']?.leadingBid?.amount).toBe(8_000_000);
 	});
 });
 

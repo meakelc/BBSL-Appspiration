@@ -405,7 +405,27 @@ export function viewerStateFor(
 	) {
 		return 'contender';
 	}
-	if (auction.leadingBid.teamId === viewerTeamId) return 'you_lead';
+	// **A leaderless Auction, and the ONE reading of it every surface takes**
+	// (Story 10.3, FR-40). `Auction.leadingBid` is nullable now: a cancellation
+	// withdraws the leader's standing, and until Story 10.4 restores one
+	// nothing leads even where lower Bids go on standing. There is therefore no
+	// current price and no Leading Bidder, and the product already has a
+	// treatment for exactly that — the unbid nomination (§10 example 33, which
+	// asks for "an ordinary unbid nomination" and not a new "restarted"
+	// state). So:
+	//
+	//  - the BOARD and the AUCTION PAGE print no price and name no bidder,
+	//    which is what a null leader already made them do;
+	//  - the POSITIONS page has no card to print at all, because every card
+	//    there carries a price and there is none — `positions.ts` skips it;
+	//  - and the viewer state below stays `outbid` for anyone holding a Bid,
+	//    the cancelled ex-leader included. It is not a claim that somebody
+	//    outbid them: the state's meaning here is "you bid and you are not
+	//    leading", which is true of both, and the card names nobody because
+	//    `leadingTeamName` is null. There is no fourth viewer state, and there
+	//    must not be one — Story 10.6 words what a cancelled Manager is told,
+	//    and it tells them in a notice rather than in a card label.
+	if (auction.leadingBid?.teamId === viewerTeamId) return 'you_lead';
 	if (auction.bids.some((bid) => bid.teamId === viewerTeamId)) return 'outbid';
 	return 'not_involved';
 }
@@ -448,12 +468,18 @@ export function boardCardsFor(
 			playerName: reference?.playerName ?? nomination.playerName,
 			nbaTeam: reference?.nbaTeam ?? null,
 			positions: reference?.positions ?? null,
-			price: auction === null ? null : auction.leadingBid.amount,
-			leadingTeamId: auction?.leadingBid.teamId ?? null,
-			leadingTeamName: auction?.leadingBid.teamName ?? null,
-			leadingManagerId: auction?.leadingBid.managerId ?? null,
-			// `null` is "no Opening Bid has started a clock", never "the clock ran
-			// out" — a closed Auction is absent from this projection entirely.
+			// `null` on a leaderless Auction exactly as on an unbid one: the
+			// board already renders "no Opening Bid has started a clock" and
+			// FR-40's leaderless Auction is that same treatment rather than a
+			// new "restarted" state.
+			price: auction?.leadingBid?.amount ?? null,
+			leadingTeamId: auction?.leadingBid?.teamId ?? null,
+			leadingTeamName: auction?.leadingBid?.teamName ?? null,
+			leadingManagerId: auction?.leadingBid?.managerId ?? null,
+			// `null` is "no clock is running", which is "no Opening Bid has
+			// started one" and — since Story 10.3 — "every Bid on this Auction
+			// was cancelled, so FR-40 cleared it". It is never "the clock ran
+			// out": a closed Auction is absent from this projection entirely.
 			closesAt: auction?.closesAt ?? null,
 			// The ONE mapping of "no Auction row" to a state, from the fold that
 			// owns it. Never re-derived from `auction === null` here.

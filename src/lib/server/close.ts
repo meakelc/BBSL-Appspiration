@@ -63,6 +63,7 @@ import {
 	auctionsReducer,
 	hasExpired
 } from '../core/projection/auctions.ts';
+import { BID_CANCELLED_EVENT } from '../core/projection/auctions.ts';
 import { CONTENTION_DRAWN_EVENT } from '../core/projection/draws.ts';
 import { INITIAL_CONTRACTS, contractsReducer } from '../core/projection/contracts.ts';
 import {
@@ -79,6 +80,7 @@ import {
 import { closedWinnerFor, decideClose } from '../core/rules/close.ts';
 import type { CloseState, ClosedWinner } from '../core/rules/close.ts';
 import { drawnWinnerFor } from '../core/rules/draw.ts';
+import type { AppendedEvent } from '../core/types.ts';
 import { runTransactionalWrite } from '../shell/write.ts';
 import type { ConnectionGateway, TransactionalClient, WriteOutcome } from '../shell/write.ts';
 import { readContentionSeed } from './contention-seed.ts';
@@ -151,6 +153,28 @@ export async function loadCloseState(
 	return {
 		auction,
 		nomination: nominationForPlayer(nominations, fantraxPlayerId),
+		// **The whole fold, INCLUDING the Auction being closed** (Story 10.3).
+		// `decideClose` drops the won Player itself, because the post-close
+		// picture is the core's to derive and a shell that pre-filtered it
+		// would be deciding half of FR-40 out here.
+		auctions,
+		// The WINNER's Cap Space and Roster Count at this close, off the same
+		// `loadTeamRoster` read `minorLeagueOccupied` already came from — two
+		// figures the read has always returned and this module used to
+		// discard. No new query, and no second moment they could describe.
+		capSpace: roster.capSpace,
+		rosterCount: roster.rosterCount,
+		// The eligibility FOLD and the nominations fold, handed through as
+		// `teamMoneyStateFor`'s two callbacks so the cascade's re-test
+		// partitions the winner's other commitments exactly as a Bid would.
+		// `isEligible` is asked per Player rather than pre-computed, for the
+		// reason it is asked per Player everywhere else: the answer is a fold
+		// over the whole log and the set is not enumerable from here.
+		isMinorLeagueEligible: (playerId: string) => isEligible(eligibility, playerId),
+		// The Player's name, with the id as the fallback every `readPayload`
+		// in the core already makes.
+		playerNameFor: (playerId: string) =>
+			nominationForPlayer(nominations, playerId)?.playerName ?? playerId,
 		// The eligibility FOLD's answer, never `free_agent_players`' column —
 		// `server/bidding.ts`'s reason: the column IS the fold of those events,
 		// and asking the table too would make two answers possible inside one
@@ -178,6 +202,19 @@ export async function loadCloseState(
  *  - `ContentionDrawn` mentions every Contender, in the fold's own order
  *    (AD-14). They are the Teams that had money in the lottery, and the draw is
  *    the only event that can tell them how it went.
+ *  - `BidCancelled` mentions the Team whose commitment was withdrawn (Story
+ *    10.3, FR-40) — off the APPENDED EVENT'S OWN `team_id`, which is the one
+ *    role here that does not need the state at all. `decideClose` addresses
+ *    each cancellation to the Manager and Team it is about, because
+ *    `auction_events.manager_id`/`team_id` are `not null` and reference real
+ *    rows, so the fact is already on the row this enqueue is handed. Deriving
+ *    it a second time — re-running `closedWinnerFor` over the loaded state —
+ *    would be the same fact by a longer route, and a route with a throw in it:
+ *    the enqueue runs INSIDE the write transaction, so it would have to be
+ *    caught, and a caught throw mentions nobody. This cannot silently drop a
+ *    mention, and a Manager must not be able to miss the notice telling them
+ *    they lost a Player through no act of their own. The mention has no copy
+ *    of its own until Story 10.6 and falls back to the plain factual line.
  *  - `AuctionClosed` mentions the Team that LED the Auction into its close —
  *    the winner, for every Standard close — and the Team whose Nomination Slot
  *    the close released, which is the nominator and is frequently somebody
@@ -192,7 +229,17 @@ export async function loadCloseState(
  * A `null` state is the pre-`load` window the enqueue cannot observe; empty is
  * the safe answer there.
  */
-function affectedTeamsForClose(eventType: string, state: CloseState | null): readonly string[] {
+function affectedTeamsForClose(
+	event: AppendedEvent,
+	state: CloseState | null
+): readonly string[] {
+	const eventType = event.type;
+	// **Answered before the `null` guard, because it does not read the
+	// state.** The appended row names the Team the cancellation is about, so
+	// even the pre-`load` window the enqueue cannot observe still addresses it.
+	if (eventType === BID_CANCELLED_EVENT) {
+		return event.teamId === null ? [] : [event.teamId];
+	}
 	if (state === null) return [];
 	const auction = state.auction;
 
@@ -258,7 +305,7 @@ export async function closeAuction(
 		//
 		// Story 5.3 mentions the Contenders on the draw, and the leader and the
 		// nominating Team on the close — see `affectedTeamsForClose`.
-		enqueue: enqueueBroadcastsAndMentions((event) => affectedTeamsForClose(event.type, loaded)),
+		enqueue: enqueueBroadcastsAndMentions((event) => affectedTeamsForClose(event, loaded)),
 		load: async (client) => {
 			loaded = await loadCloseState(client, fantraxPlayerId);
 			return loaded;
@@ -294,9 +341,16 @@ export async function closeAuction(
 			// core's guard can no longer tell a live Auction from an expired
 			// one. This is the check that still can. Both throw, both roll the
 			// transaction back with nothing appended (AD-1).
-			if (!hasExpired(auction.closesAt, now.toISOString())) {
+			//
+			// **A `null` clock takes the same throw** (Story 10.3). FR-40
+			// clears `closesAt` on an Auction whose every Bid was cancelled,
+			// precisely so it never closes at its old expiry with no winner —
+			// `hasExpired(null, …)` is already `false`, and stating the `null`
+			// here as well is what lets the core be handed a string below.
+			const closesAt = auction.closesAt;
+			if (closesAt === null || !hasExpired(closesAt, now.toISOString())) {
 				throw new TypeError(
-					`closeAuction: this Auction closes at ${JSON.stringify(auction.closesAt)} and the ` +
+					`closeAuction: this Auction closes at ${JSON.stringify(closesAt)} and the ` +
 						`transaction clock is ${JSON.stringify(now.toISOString())}, which has not reached ` +
 						'it. Closing a live Auction is the sweep’s bug — the same instant the expiry ' +
 						'gate refuses Bids against (AD-12)'
@@ -313,7 +367,7 @@ export async function closeAuction(
 			// `decideClose` asks `closedWinnerFor` about it again, which is pure
 			// and takes only what it is handed, so the shell and the core cannot
 			// arrive at different winners (Story 3.6).
-			return decideClose(state, auction.closesAt, state.drawnWinner);
+			return decideClose(state, closesAt, state.drawnWinner);
 		}
 	});
 }

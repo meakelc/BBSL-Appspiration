@@ -211,7 +211,7 @@ describe('§10 example 22 — a lottery that overflows does commit', () => {
 			playerNameFor: () => 'The Fourth Player'
 		});
 
-		expect(joined.leadingBid.teamId).toBe('t-other');
+		expect(joined.leadingBid?.teamId).toBe('t-other');
 		expect(money.eligibleLeading).toEqual([
 			{
 				fantraxPlayerId: 'p-d',

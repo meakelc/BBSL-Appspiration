@@ -300,7 +300,7 @@ describe('the four viewer-relative states', () => {
 			bid('p-1', 't-3', 'Heat', MINIMUM_BID, '2026-08-26T13:00:00.000Z', NOW)
 		]);
 		expect(auction.contention).toBe('minimum_bid');
-		expect(auction.leadingBid.teamId).toBe('t-2');
+		expect(auction.leadingBid?.teamId).toBe('t-2');
 		expect(viewerStateFor(auction, 't-2')).toBe('contender');
 		// And both Contenders read identically — the board states no ordering
 		// between them, because the draw has not happened.
@@ -336,7 +336,7 @@ describe('the four viewer-relative states', () => {
 		// The state the guard turns on: converted, but the list survives.
 		expect(auction.contention).toBe('standard');
 		expect(auction.contenders.length).toBeGreaterThan(0);
-		expect(auction.leadingBid.teamId).toBe('t-2');
+		expect(auction.leadingBid?.teamId).toBe('t-2');
 		// The Team that actually leads is told so.
 		expect(viewerStateFor(auction, 't-2')).toBe('you_lead');
 		// And the Team its raise genuinely outbid is told THAT — `attention`

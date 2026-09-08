@@ -774,7 +774,31 @@ export function positionsFor(input: {
 
 		const playerName = nameFor(input.metadata, input.nominations, playerId, null);
 		const metadata = metadataFor(input.metadata, playerId);
-		const price = auction.leadingBid.amount;
+		// **A leaderless Auction has no card here** (Story 10.3, FR-40), and it
+		// is the one surface that drops it rather than emptying it — which is
+		// `board.ts`'s one reading applied to a module whose cards are shaped
+		// differently, not a second reading.
+		//
+		// Every card below carries a price and a close instant as REQUIRED
+		// fields, because a Positions card exists to tell a Manager what a
+		// position is costing them and how long they have. A leaderless
+		// Auction has neither: nothing leads, so there is no current price,
+		// and until Story 10.4 restores a leader that is true of the ordinary
+		// Standard case as well — the ex-leader whose Bid was cancelled AND
+		// the rival whose lower Bid still stands both drop off this page for
+		// the one pass it takes. Widening the card shape to make both nullable
+		// would put "—" where a figure belongs on the one screen that exists
+		// to carry figures; the board and the Auction page still show the
+		// Auction, with no price, which is where a Manager sees it meanwhile.
+		//
+		// A lottery is the exception that needs no branch: its lead is a fold
+		// artifact that moves to the next surviving join, so it is never
+		// leaderless while anybody is still in it, and a Contender's card is
+		// never dropped.
+		const leader = auction.leadingBid;
+		const closesAt = auction.closesAt;
+		if (leader === null || closesAt === null) continue;
+		const price = leader.amount;
 
 		if (group === 'contending') {
 			contending.push({
@@ -783,7 +807,7 @@ export function positionsFor(input: {
 				metadata,
 				price,
 				priceLabel: priceLabel(price),
-				closesAt: auction.closesAt,
+				closesAt,
 				contention: auction.contention,
 				contentionLabel: MINIMUM_LOTTERY_LABEL,
 				stateLabel: VIEWER_STATE_LABELS.contender,
@@ -803,7 +827,7 @@ export function positionsFor(input: {
 				metadata,
 				price,
 				priceLabel: priceLabel(price),
-				closesAt: auction.closesAt,
+				closesAt,
 				contention: auction.contention,
 				stateLabel: VIEWER_STATE_LABELS.you_lead,
 				stateIcon: VIEWER_STATE_ICONS.you_lead,
@@ -826,10 +850,10 @@ export function positionsFor(input: {
 			priceLabel: priceLabel(price),
 			yourBid,
 			yourBidLabel: describeAmount(yourBid),
-			leadingTeamId: auction.leadingBid.teamId,
-			leadingTeamName: auction.leadingBid.teamName,
-			leadingManagerId: auction.leadingBid.managerId,
-			closesAt: auction.closesAt,
+			leadingTeamId: leader.teamId,
+			leadingTeamName: leader.teamName,
+			leadingManagerId: leader.managerId,
+			closesAt,
 			contention: auction.contention,
 			stateLabel: VIEWER_STATE_LABELS.outbid,
 			stateIcon: VIEWER_STATE_ICONS.outbid,

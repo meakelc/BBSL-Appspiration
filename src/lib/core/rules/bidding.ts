@@ -540,7 +540,19 @@ export function bidStateFor(
 	}
 	return {
 		phase,
-		leadingBid: { teamId: auction.leadingBid.teamId, amount: auction.leadingBid.amount },
+		// **Nullable since Story 10.3, and the `null` reads as the state
+		// `bidStateFor` already models.** FR-40 can leave an Auction leaderless
+		// — every Bid on it cancelled, or the leader cancelled and no
+		// restoration recorded yet — while its history stands. That is the same
+		// "there is nobody to bid against" the `auction === null` branch above
+		// returns, so `selfBid` steps aside, `increment` reports that no rule
+		// applies, and the pre-fill falls back to the opening minimum. Not one
+		// gate needed a branch of its own: `BidState.leadingBid` has been
+		// nullable since Story 2.5 for the no-Auction case.
+		leadingBid:
+			auction.leadingBid === null
+				? null
+				: { teamId: auction.leadingBid.teamId, amount: auction.leadingBid.amount },
 		closesAt: auction.closesAt,
 		contention: auction.contention,
 		// The published commitment, straight off the fold — never re-derived
@@ -641,16 +653,34 @@ export function teamMoneyStateFor(input: {
 		// inferred from the list being empty. A dissolved contention (3.3)
 		// keeps its Contenders — the draw and the reveal are derived from them
 		// — while committing nobody, and this is the line that makes that safe.
-		const leads = auction.leadingBid.teamId === input.teamId;
+		//
+		// **Split by contention since Story 10.3, and only so the amount can
+		// be narrowed without an assertion.** `Auction.leadingBid` is nullable
+		// now — FR-40 leaves a leaderless Auction behind — and the two branches
+		// answer the two halves of the same test the one expression used to:
+		// inside a lottery the commitment is the flat `MINIMUM_OPENING_BID`
+		// every Contender holds, and a null leader there does not release
+		// anybody; outside one the commitment IS the leading amount, so a Team
+		// leads or it has no commitment at all. A leaderless Standard Auction
+		// therefore commits nobody, which is precisely the capital release
+		// FR-40 requires and never writes.
+		const leader = auction.leadingBid;
 		const contends =
 			auction.contention === 'minimum_bid' &&
 			auction.contenders.some((contender) => contender.teamId === input.teamId);
-		if (!leads && !contends) continue;
+		const leads = leader !== null && leader.teamId === input.teamId;
+		let amount: Money;
+		if (auction.contention === 'minimum_bid') {
+			if (!leads && !contends) continue;
+			amount = MINIMUM_OPENING_BID;
+		} else {
+			if (leader === null || leader.teamId !== input.teamId) continue;
+			amount = leader.amount;
+		}
 		const entry: LeadingBidElsewhere = {
 			fantraxPlayerId: playerId,
 			playerName: input.playerNameFor(playerId),
-			amount:
-				auction.contention === 'minimum_bid' ? MINIMUM_OPENING_BID : auction.leadingBid.amount,
+			amount,
 			// Story 10.2: the SAME `contends` above, recorded rather than asked
 			// again. `contends` is already `contention === 'minimum_bid'` AND
 			// this Team on the Contender list, which is exactly FR-18's "is this

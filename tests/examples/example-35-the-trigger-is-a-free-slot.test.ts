@@ -9,11 +9,24 @@
  * > each is an Eligible Leading Bid of $1,000,000 feeding Overflow Count on
  * > the money side.
  *
- * **This file owns the first sentence and a half.** The draw, the close that
- * reduces `M` to zero and the cascade that cancels the two survivors are
- * Stories 10.3–10.5; nothing here asserts them. What it asserts is the state
- * those stories start from — three entries held by a Team with a full
- * Active/Bench roster — and the reason that state is reachable at all.
+ * > The first is drawn and **Team Y wins**: he takes the last Minor League
+ * > Slot at a $0 Cap Hit, **Roster Count stays 12**, and `M` falls to 0. The
+ * > close still fires the cascade, because it reduced a free slot — and Team
+ * > Y's two remaining entries now have neither an Active/Bench slot nor a
+ * > minors slot to land in, so **both are cancelled** before their lotteries
+ * > draw. Had the trigger been written as *"a close that increases Roster
+ * > Count"*, it would not have fired here at all.
+ *
+ * **This file owns the entry half and, since Story 10.3, the trigger.** The
+ * first half asserts the state the close starts from — three entries held by
+ * a Team with a full Active/Bench roster — and the reason that state is
+ * reachable at all. The second asserts the sentence the whole trigger wording
+ * exists for: a win that leaves Roster Count exactly where it found it, at a
+ * `$0` Cap Hit, still fires the cascade, because what it reduced was a free
+ * MINOR LEAGUE Slot. The counterfactual is stated too — the same close with a
+ * spare minors Slot cancels nothing — so a trigger rephrased as "increases
+ * Roster Count" fails here rather than silently letting Team Y finish at
+ * Roster Count 14.
  *
  * **This is where the two overflow figures visibly disagree**, which is the
  * whole reason Story 10.2 split one derivation into two:
@@ -40,8 +53,31 @@
 import { describe, expect, it } from 'vitest';
 
 import { MINIMUM_BID, MINOR_LEAGUE_SLOTS } from '../../src/lib/core/constants.ts';
+import { hash } from '../../src/lib/core/hash.ts';
 import { parseMoney } from '../../src/lib/core/money.ts';
-import type { Auction, Bid } from '../../src/lib/core/projection/auctions.ts';
+import {
+	BID_CANCELLED_EVENT,
+	auctionForPlayer,
+	auctionsReducer,
+	wasCancelled
+} from '../../src/lib/core/projection/auctions.ts';
+import type {
+	Auction,
+	Bid,
+	Contender,
+	OpenAuctions
+} from '../../src/lib/core/projection/auctions.ts';
+import { fold } from '../../src/lib/core/projection/fold.ts';
+import { CONTENTION_DRAWN_EVENT } from '../../src/lib/core/projection/draws.ts';
+import { AUCTION_CLOSED_EVENT } from '../../src/lib/core/projection/nominations.ts';
+import { decideClose } from '../../src/lib/core/rules/close.ts';
+import type {
+	AuctionClosedPayload,
+	BidCancelledPayload,
+	CloseState,
+	ClosedWinner
+} from '../../src/lib/core/rules/close.ts';
+import type { AppendedEvent, EventEnvelope } from '../../src/lib/core/types.ts';
 import {
 	allGatesPassed,
 	bidRefusalDetail,
@@ -226,5 +262,203 @@ describe('§10 example 35 — an eligible entry at a full Active/Bench roster', 
 		expect(detail).not.toMatch(/no free Active\/Bench Slot/i);
 		// And no money figure as its ground (AD-7).
 		expect(detail).not.toMatch(/\$\d/);
+	});
+});
+
+
+// --- The close half: the trigger is a free slot ---------------------------
+
+/** A real 64-hex seed, and the commitment DERIVED from it. */
+const SEED = '31d7a5c0be92f46831d7a5c0be92f46831d7a5c0be92f46831d7a5c0be92f468';
+const SEED_HASH = hash(SEED);
+
+/** The fixed instant these three lotteries close at. */
+const LOTTERY_CLOSES = '2026-08-25T09:00:00.000Z';
+
+function joinBid(seq: string, teamId: string, teamName: string, managerId: string): Bid {
+	return {
+		seq,
+		teamId,
+		teamName,
+		managerId,
+		amount: parseMoney(MINIMUM_BID),
+		occurredAt: '2026-08-24T09:00:00.000Z',
+		closesAt: LOTTERY_CLOSES,
+		seedHash: null
+	};
+}
+
+function contenderOf(bid: Bid): Contender {
+	return { seq: bid.seq, teamId: bid.teamId, teamName: bid.teamName, managerId: bid.managerId };
+}
+
+/** One of Team Y's three lotteries on a Minor League Eligible Player. */
+function eligibleLottery(index: number): Auction {
+	const opening = joinBid(String(200 + index * 10), 't-other', 'Team Other', 'm-other');
+	const join = joinBid(String(205 + index * 10), 't-y', 'Team Y', 'm-y');
+	return {
+		fantraxPlayerId: `p-elig-${String(index)}`,
+		contention: 'minimum_bid',
+		leadingBid: opening,
+		closesAt: LOTTERY_CLOSES,
+		bids: [opening, join],
+		contenders: [contenderOf(opening), contenderOf(join)],
+		seedHash: SEED_HASH,
+		seed: null
+	};
+}
+
+/** The three: index 0 is drawn and won; 1 and 2 survive into the cascade. */
+const ELIGIBLE_LOTTERIES: readonly Auction[] = [0, 1, 2].map(eligibleLottery);
+const WON_ELIGIBLE = ELIGIBLE_LOTTERIES[0] as Auction;
+
+function auctionsOf(entries: readonly Auction[]): OpenAuctions {
+	return {
+		byPlayer: Object.fromEntries(entries.map((auction) => [auction.fantraxPlayerId, auction]))
+	};
+}
+
+const DRAWN_Y: ClosedWinner = {
+	kind: 'drawn',
+	teamId: 't-y',
+	teamName: 'Team Y',
+	managerId: 'm-y',
+	seed: SEED,
+	contenders: WON_ELIGIBLE.contenders.map((contender) => contender.teamId),
+	selectedIndex: 1
+};
+
+/**
+ * The close, with Team Y's roster as it stands BEFORE it: Roster Count 12,
+ * ONE free Minor League Slot, and the other two entries still held.
+ *
+ * `minorLeagueOccupied` is `MINOR_LEAGUE_SLOTS - 1`, the same "one Free Minor
+ * League Slot" the entry half's fixture states, written as the raw occupancy
+ * the core clamps rather than as `M`.
+ */
+const CLOSE_STATE: CloseState = {
+	auction: WON_ELIGIBLE,
+	nomination: {
+		fantraxPlayerId: WON_ELIGIBLE.fantraxPlayerId,
+		playerName: 'Prospect 0',
+		teamId: 't-n',
+		teamName: 'Team N',
+		managerId: 'm-n',
+		occurredAt: '2026-08-24T08:00:00.000Z'
+	},
+	// "Minor League Eligible players" — every one of the three.
+	playerIsMinorLeagueEligible: true,
+	minorLeagueOccupied: MINOR_LEAGUE_SLOTS - 1,
+	auctions: auctionsOf(ELIGIBLE_LOTTERIES),
+	capSpace: parseMoney(40_000_000),
+	// "Roster Count 12 (Free Active/Bench Slots 0)", and it stays there.
+	rosterCount: 12,
+	isMinorLeagueEligible: () => true,
+	playerNameFor: (playerId: string) => `Prospect ${playerId.replace('p-elig-', '')}`,
+	drawnWinner: DRAWN_Y
+};
+
+const DECIDED = decideClose(CLOSE_STATE, LOTTERY_CLOSES, DRAWN_Y);
+const CANCELLATIONS = DECIDED.events.filter((event) => event.type === BID_CANCELLED_EVENT);
+
+function appended(seq: number, event: EventEnvelope): AppendedEvent {
+	return {
+		seq: String(seq),
+		occurredAt: LOTTERY_CLOSES,
+		schemaVersion: 1,
+		coreVersion: 2,
+		type: event.type,
+		payload: event.payload,
+		managerId: event.managerId,
+		teamId: event.teamId,
+		deviceClass: null,
+		dispatchOutcome: null,
+		deliveryOutcome: null
+	};
+}
+
+describe('§10 example 35 — the close that reduces a MINORS Slot and nothing else', () => {
+	it('places the win in minors at a $0 Cap Hit, leaving Roster Count where it was', () => {
+		// The premise the trigger has to survive: nothing about Active/Bench
+		// moved at all. A cascade keyed on Roster Count sees no change here.
+		const closed = DECIDED.events.find((event) => event.type === AUCTION_CLOSED_EVENT);
+		const payload = closed?.payload as AuctionClosedPayload | undefined;
+
+		expect(payload?.placement).toBe('minor_league');
+		expect(payload?.capHit).toBe(0);
+		// The flat lottery amount, unchanged by the placement (AD-23).
+		expect(payload?.winningAmount).toBe(MINIMUM_BID);
+	});
+
+	it('fires the cascade anyway, and cancels BOTH remaining entries', () => {
+		// "The close still fires the cascade, because it reduced a free slot —
+		// and Team Y's two remaining entries now have neither an Active/Bench
+		// slot nor a minors slot to land in, so both are cancelled."
+		expect(DECIDED.events.map((event) => event.type)).toEqual([
+			CONTENTION_DRAWN_EVENT,
+			AUCTION_CLOSED_EVENT,
+			BID_CANCELLED_EVENT,
+			BID_CANCELLED_EVENT
+		]);
+
+		const cancelled = CANCELLATIONS.map((event) => event.payload as BidCancelledPayload);
+		// Most recent first, here as everywhere.
+		expect(cancelled.map((payload) => payload.fantraxPlayerId)).toEqual([
+			'p-elig-2',
+			'p-elig-1'
+		]);
+		for (const payload of cancelled) {
+			expect(payload.wasContentionEntry).toBe(true);
+			expect(payload.teamId).toBe('t-y');
+			expect(payload.amount).toBe(MINIMUM_BID);
+			expect(payload.causeFantraxPlayerId).toBe('p-elig-0');
+			expect(payload.restoration).toBeNull();
+		}
+	});
+
+	it('would NOT have fired on a trigger phrased as "increases Roster Count"', () => {
+		// Stated as the arithmetic rather than as prose: Roster Count is
+		// identical on both sides of this close, and the only figure that
+		// moved is the free minors count.
+		expect(CLOSE_STATE.rosterCount).toBe(12);
+		const closed = DECIDED.events.find((event) => event.type === AUCTION_CLOSED_EVENT);
+		expect((closed?.payload as AuctionClosedPayload).placement).toBe('minor_league');
+		expect(CANCELLATIONS).toHaveLength(2);
+	});
+
+	it('cancels NOTHING when a minors Slot is still free afterwards', () => {
+		// The counterfactual that keeps the trigger from being a reflex: with
+		// two free Minor League Slots the win takes `M` from 2 to 1, which IS
+		// a reduction and does fire the cascade — and both survivors then pass
+		// FR-18's eligible branch on the Slot that is left.
+		const roomy = decideClose(
+			{ ...CLOSE_STATE, minorLeagueOccupied: MINOR_LEAGUE_SLOTS - 2 },
+			LOTTERY_CLOSES,
+			DRAWN_Y
+		);
+		expect(roomy.events.map((event) => event.type)).toEqual([
+			CONTENTION_DRAWN_EVENT,
+			AUCTION_CLOSED_EVENT
+		]);
+	});
+
+	it('takes Team Y out of both remaining Contender lists before either draws', () => {
+		const folded = fold(
+			auctionsOf(ELIGIBLE_LOTTERIES.slice(1)),
+			DECIDED.events.map((event, index) => appended(400 + index, event)),
+			auctionsReducer
+		);
+		for (const index of [1, 2]) {
+			const auction = auctionForPlayer(folded, `p-elig-${String(index)}`);
+			expect(auction?.contenders.map((contender) => contender.teamId), String(index)).toEqual([
+				't-other'
+			]);
+			// The joining Bid is still there, marked, naming the win.
+			expect(wasCancelled(auction?.bids[1] as Bid), String(index)).toBe(true);
+			expect(auction?.bids[1]?.cancellation?.causePlayerName, String(index)).toBe('Prospect 0');
+			// The lottery keeps running, on the clock it always had.
+			expect(auction?.contention, String(index)).toBe('minimum_bid');
+			expect(auction?.closesAt, String(index)).toBe(LOTTERY_CLOSES);
+		}
 	});
 });

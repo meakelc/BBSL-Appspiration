@@ -145,9 +145,18 @@ function theDraw() {
 		nomination: nominationForPlayer(fold(INITIAL_NOMINATIONS, log, nominationsReducer), 'p-1'),
 		playerIsMinorLeagueEligible: false,
 		minorLeagueOccupied: 0,
+		// **Story 10.3's cascade inputs.** `auctions` is empty here, so the
+		// winning Team holds no other commitment and FR-40's cascade has
+		// nothing to cancel whichever way the figures beside it go — which is
+		// what keeps this example about the thing it is about.
+		auctions: { byPlayer: {} },
+		capSpace: parseMoney(0),
+		rosterCount: 0,
+		isMinorLeagueEligible: () => false,
+		playerNameFor: (playerId: string) => playerId,
 		drawnWinner
 	};
-	return { log, auction, drawnWinner, decided: decideClose(state, auction.closesAt, drawnWinner) };
+	return { log, auction, drawnWinner, decided: decideClose(state, FIXED_CLOSE, drawnWinner) };
 }
 
 function theWholeThing(): readonly AppendedEvent[] {
