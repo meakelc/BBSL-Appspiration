@@ -113,11 +113,15 @@ function fakeGateway(options: {
 			if (/from import_staged_pool_players/i.test(sql)) {
 				order.push('read-staged-pool');
 				return {
-					rows: pool.map((player) => ({
+					// `source_rank` is the row's position in the supplied CSV
+					// (Story 9.8). The fixture's own array order IS that file
+					// order, so the index is the honest stand-in.
+					rows: pool.map((player, rank) => ({
 						fantrax_player_id: player.id,
 						player_name: player.name ?? 'Bob',
 						positions: player.positions ?? 'PG',
-						nba_team: player.nbaTeam ?? 'LAL'
+						nba_team: player.nbaTeam ?? 'LAL',
+						source_rank: rank
 					}))
 				};
 			}
@@ -175,13 +179,16 @@ function fakeGateway(options: {
 			}
 			if (/^insert into free_agent_players/i.test(sql)) {
 				order.push('insert-live-free-agent');
-				expect(params.length % 4, 'pool params do not divide into four-column rows').toBe(0);
-				for (let at = 0; at < params.length; at += 4) {
+				expect(params.length % 5, 'pool params do not divide into five-column rows').toBe(0);
+				for (let at = 0; at < params.length; at += 5) {
 				live.freeAgents.push({
 					fantrax_player_id: params[at],
 					player_name: params[at + 1],
 					positions: params[at + 2],
 					nba_team: params[at + 3],
+					// The file's own order, carried from staging rather than
+					// recomputed from the insert position (Story 9.8).
+					source_rank: params[at + 4],
 					// The column's own `false` default: promotion does not set this
 					// at insert. `applyEligibilityProjection` below is the one
 					// writer, and it runs inside this same transaction (Story 1.10).

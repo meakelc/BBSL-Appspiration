@@ -419,12 +419,45 @@ describe('the nomination surface', () => {
 		expect(SOURCE).toContain('disabled={blocked}');
 		expect(SOURCE).toContain('aria-describedby="nominate-availability"');
 		expect(SOURCE).toContain('id="nominate-availability"');
-		// Always present in the DOM, never inside an `{#if}` that could remove
-		// it — otherwise `aria-describedby` would dangle.
+		// The reason travels WITH the control it describes: both live inside
+		// the form, in the one branch that renders when the pool is non-empty,
+		// so `aria-describedby` cannot dangle — the button does not exist in
+		// any branch the sentence is missing from.
+		//
+		// This is what the sticky action bar is for. The sentence used to sit
+		// above the list, which for a ~1,470-Player pool meant the reason a
+		// control was disabled was an entire pool's worth of scrolling away
+		// from the control.
 		const availabilityAt = SOURCE.indexOf('id="nominate-availability"');
 		const formAt = SOURCE.indexOf('<form');
-		expect(availabilityAt).toBeGreaterThan(-1);
-		expect(availabilityAt).toBeLessThan(formAt);
+		const buttonAt = SOURCE.indexOf('type="submit"');
+		const formEndAt = SOURCE.indexOf('</form>');
+		expect(availabilityAt).toBeGreaterThan(formAt);
+		expect(availabilityAt).toBeLessThan(buttonAt);
+		expect(buttonAt).toBeLessThan(formEndAt);
+	});
+
+	it('keeps the confirm and the submit reachable from anywhere in the list', () => {
+		// A Manager who ticks a Player at row 900 must not have to scroll to
+		// the end of the pool to find the second half of the act. The bar is
+		// `sticky`, not `fixed`: it belongs to the form, so it settles into
+		// place at the end of the list rather than sitting over a short page.
+		const barAt = SOURCE.indexOf('class="action-bar"');
+		expect(barAt).toBeGreaterThan(SOURCE.indexOf('<form'));
+		expect(barAt).toBeLessThan(SOURCE.indexOf('</form>'));
+		expect(SOURCE).toMatch(/\.action-bar\s*\{[^}]*position:\s*sticky/);
+		expect(SOURCE, 'the bar is fixed rather than sticky').not.toMatch(
+			/\.action-bar\s*\{[^}]*position:\s*fixed/
+		);
+		// The confirm and the submit are both inside it — moving only one
+		// would leave the act half-reachable.
+		const confirmAt = SOURCE.indexOf('id="nominate-confirm"');
+		const submitAt = SOURCE.indexOf('type="submit"');
+		expect(confirmAt).toBeGreaterThan(barAt);
+		expect(submitAt).toBeGreaterThan(barAt);
+		// It clears the persistent strip, which is fixed to the bottom of the
+		// same viewport a sticky offset is measured against.
+		expect(SOURCE).toContain('var(--strip-height)');
 	});
 
 	it('gives every disabled control a reason that actually resolves', () => {

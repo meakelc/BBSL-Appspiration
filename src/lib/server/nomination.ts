@@ -264,13 +264,30 @@ export async function loadNominatablePool(
 		// One statement, left joined, rather than one query per Player: the
 		// contract holder is part of what makes a row unavailable, and asking
 		// per row would be a query per pool Player on every page view.
+		//
+		// THE ORDER IS THE EXPORT'S, not this app's. `source_rank` is the
+		// row's position in the supplied Fantrax CSV, which arrives in
+		// Fantrax's own default order — the order every Manager has been
+		// reading all week in Fantrax itself. Alphabetical, which this query
+		// used until Story 9.8, was never neutral: it silently substituted a
+		// second ranking for the one the file states, and made a Manager scan
+		// ~1,470 names for one they could have found by position.
+		//
+		// This is NOT the app ranking Players. It repeats the file's order and
+		// holds no opinion about it — nothing here reads a Score, and there is
+		// still no suggested Player and no "similar players".
+		//
+		// `player_name` is the tie-break, and it is what makes the list stable
+		// rather than left to the planner (AD-1): a pool staged before the
+		// rank column existed has every row at 0, and falls back to exactly
+		// the alphabetical list this query returned before.
 		const poolResult = await client.query(
 			`select p.fantrax_player_id, p.player_name, p.positions, p.nba_team,
 				t.name as contract_team_name
 			from ${FREE_AGENT_PLAYERS_TABLE} p
 			left join team_rosters r on r.fantrax_player_id = p.fantrax_player_id
 			left join teams t on t.id = r.team_id
-			order by p.player_name asc`
+			order by p.source_rank asc, p.player_name asc`
 		);
 
 		await client.query('rollback');

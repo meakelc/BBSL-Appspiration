@@ -18,9 +18,12 @@
 	// from them.
 	//
 	// No suggested Player, no ranking, no "similar players": the list is the
-	// pool in name order and nothing else. A ranked list is advice the
-	// product does not have the standing to give, and it would make the
-	// nomination the app's decision rather than the Manager's.
+	// pool in the order the Fantrax export supplied it and nothing else. A
+	// ranked list is advice the product does not have the standing to give,
+	// and it would make the nomination the app's decision rather than the
+	// Manager's — repeating the file's own order is not that, and it is the
+	// order every Manager has already been reading in Fantrax. The server
+	// decides it (`server/nomination.ts`); nothing here re-sorts.
 	//
 	// Types are declared structurally rather than imported from a server-only
 	// module: nothing in the server-only library may ever be reachable from a
@@ -131,31 +134,6 @@
 		<p class="section-label">Nominate a Player</p>
 		<p class="prose">{pool.consequence}</p>
 
-		<!-- A disabled control ALWAYS states its reason, and the reason is
-		     always in the DOM carrying this id, so the `aria-describedby`
-		     below is static and can never dangle. The server refuses
-		     regardless — disabling a control is never the check. -->
-		<p class="prose" id="nominate-availability">
-			<!-- Stale is stated FIRST, above every other reason. When the app
-			     cannot confirm the pool or the Slot, the facts the other
-			     branches speak from are exactly what is in doubt. -->
-			{#if staleBlocked}
-				{STALE_NOMINATION_REASON}
-			{:else if !pool.slotAvailable}
-				You cannot nominate right now. The reason is stated above; nothing below will
-				change it.
-			{:else if chosen === null}
-				No Player is chosen. Choose exactly one Player from the list to enable the
-				confirmation.
-			{:else if !confirmed}
-				The confirmation has not been given. Tick it to enable the control: nominating
-				{chosen.playerName} holds your Slot until that Auction closes.
-			{:else}
-				{chosen.playerName} is chosen and the confirmation has been given. The gate is
-				re-derived from the event log when you submit.
-			{/if}
-		</p>
-
 		{#if pool.players.length === 0}
 			<p class="prose">
 				The Free Agent pool is empty. There is nobody to nominate until an import has been
@@ -226,29 +204,77 @@
 					</tbody>
 				</table>
 
-				<!-- The second part of the two-part act, separate from the
-				     selection above and stating what it costs. -->
-				<label class="confirm" for="nominate-confirm">
-					<input
-						id="nominate-confirm"
-						name="confirm"
-						type="checkbox"
-						value="yes"
-						bind:checked={confirmed}
-					/>
-					<span class="prose">
-						I confirm this nomination. {pool.consequence}
-					</span>
-				</label>
+				<!--
+					The second half of the act travels WITH the Manager down the
+					list, rather than waiting at the bottom of it.
 
-				<button
-					class="control-manager"
-					type="submit"
-					disabled={blocked}
-					aria-describedby="nominate-availability"
-				>
-					Nominate the chosen Player
-				</button>
+					The pool is ~1,470 Players. Choosing a Player used to leave
+					the confirmation and the control an entire pool's worth of
+					scrolling away, with no sign at the point of choosing that
+					either existed — so the two-part act read as a broken
+					one-part act. Sticking this bar to the bottom of the viewport
+					does not make it one part: the confirmation is still a
+					separate deliberate tick, and choosing still never submits.
+					It only stops the second part being hidden.
+
+					`position: sticky` and not `fixed`: the bar belongs to the
+					form, so it scrolls into its own place at the end of the list
+					and does not sit over the page when there is nothing below it.
+
+					The reason a disabled control is disabled now sits INSIDE the
+					bar, beside the control it describes, instead of above a list
+					the Manager has already scrolled past. It is the same one
+					sentence set, still the core's words, still carrying the id
+					`aria-describedby` names — and it lives in the same branch as
+					the button, so the reference cannot dangle.
+				-->
+				<div class="action-bar">
+					<p class="prose" id="nominate-availability">
+						<!-- Stale is stated FIRST, above every other reason. When the app
+						     cannot confirm the pool or the Slot, the facts the other
+						     branches speak from are exactly what is in doubt. -->
+						{#if staleBlocked}
+							{STALE_NOMINATION_REASON}
+						{:else if !pool.slotAvailable}
+							You cannot nominate right now. The reason is stated at the top of this
+							page; nothing in the list will change it.
+						{:else if chosen === null}
+							No Player is chosen. Choose exactly one Player from the list to enable
+							the confirmation.
+						{:else if !confirmed}
+							The confirmation has not been given. Tick it to enable the control:
+							nominating {chosen.playerName} holds your Slot until that Auction
+							closes.
+						{:else}
+							{chosen.playerName} is chosen and the confirmation has been given. The
+							gate is re-derived from the event log when you submit.
+						{/if}
+					</p>
+
+					<!-- The second part of the two-part act, separate from the
+					     selection above and stating what it costs. -->
+					<label class="confirm" for="nominate-confirm">
+						<input
+							id="nominate-confirm"
+							name="confirm"
+							type="checkbox"
+							value="yes"
+							bind:checked={confirmed}
+						/>
+						<span class="prose">
+							I confirm this nomination. {pool.consequence}
+						</span>
+					</label>
+
+					<button
+						class="control-manager"
+						type="submit"
+						disabled={blocked}
+						aria-describedby="nominate-availability"
+					>
+						Nominate the chosen Player
+					</button>
+				</div>
 			</form>
 		{/if}
 
@@ -289,6 +315,56 @@
 		align-items: flex-start;
 		gap: var(--space-row-gap);
 		width: 100%;
+	}
+
+	/*
+	 * The second half of the act, stuck to the bottom of the viewport for as
+	 * long as there is list left below it, and settling into place at the end.
+	 *
+	 * It is opaque and bordered on purpose: it sits over pool rows while
+	 * scrolling, and a translucent bar would leave a Player's name showing
+	 * through the sentence that states what nominating costs.
+	 *
+	 * `bottom: -1px` closes the sub-pixel gap some browsers leave under a
+	 * sticky element at a fractional zoom, through which a row would show.
+	 */
+	.action-bar {
+		position: sticky;
+		bottom: -1px;
+		z-index: 1;
+		align-self: stretch;
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-row-gap);
+		align-items: flex-start;
+		padding: var(--space-row-gap) 0;
+		/* The Manager block's own ground, so the bar reads as part of it. */
+		background-color: var(--color-surface);
+		border-top: var(--border-width) solid var(--color-border-strong);
+	}
+
+	/*
+	 * The persistent strip is FIXED to the bottom of the viewport below 640px
+	 * (`PersistentStrip.svelte`), and a sticky element's offset is measured
+	 * against that same viewport — so `bottom: 0` would park this bar
+	 * underneath the strip and hide the control this whole change exists to
+	 * make reachable. The bar clears it by exactly `--strip-height`, the token
+	 * the strip is sized from and the room `global.css` reserves, so the two
+	 * can only ever agree.
+	 *
+	 * Gated on `body:has(.strip)` for `global.css`'s reason: the strip does
+	 * not mount for every Manager on every page, and clearing 52px of nothing
+	 * would float the bar above the fold of its own accord.
+	 */
+	:global(body:has(.strip)) .action-bar {
+		bottom: calc(var(--strip-height) - var(--border-width));
+	}
+
+	/* At 640px the strip is in the flow like anything else; nothing to clear. */
+	@media (min-width: 640px) {
+		:global(body:has(.strip)) .action-bar {
+			bottom: -1px;
+		}
 	}
 
 	.confirm {

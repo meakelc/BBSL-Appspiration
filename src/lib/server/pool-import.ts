@@ -262,19 +262,30 @@ async function writeOutcome(
 	// `minor_league_eligible` is deliberately absent from the column list: it
 	// takes the column's `false` default. Eligibility is app-owned, never
 	// imported (1.10 owns changing it).
+	//
+	// `source_rank` IS written here, and this is the only place it can be:
+	// `parsePoolFile` returns its rows in file order, and that array index is
+	// the whole of what the column means. Batching must not lose it, so the
+	// rank is computed from the row's position in `rows` — `batchStart + i` —
+	// never from `i`, which restarts at zero on every batch and would give
+	// every 500th Player rank 0. The adapter reads no `Score` or `RkOv`
+	// column; the app repeats the file's order without claiming to know why
+	// the file is in that order.
+	let batchStart = 0;
 	for (const batch of chunk(rows, POOL_INSERT_BATCH)) {
 		const values: unknown[] = [];
 		const tuples = batch.map((row, i) => {
-			values.push(row.fantraxPlayerId, row.playerName, row.positions, row.nbaTeam);
-			const at = i * 4;
-			return `($${String(at + 1)}, $${String(at + 2)}, $${String(at + 3)}, $${String(at + 4)})`;
+			values.push(row.fantraxPlayerId, row.playerName, row.positions, row.nbaTeam, batchStart + i);
+			const at = i * 5;
+			return `($${String(at + 1)}, $${String(at + 2)}, $${String(at + 3)}, $${String(at + 4)}, $${String(at + 5)})`;
 		});
 		await client.query(
 			`insert into import_staged_pool_players
-				(fantrax_player_id, player_name, positions, nba_team)
+				(fantrax_player_id, player_name, positions, nba_team, source_rank)
 			values ${tuples.join(', ')}`,
 			values
 		);
+		batchStart += batch.length;
 	}
 
 	await client.query(

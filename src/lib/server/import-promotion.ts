@@ -100,6 +100,8 @@ type LoadedPoolPlayer = {
 	readonly playerName: string;
 	readonly positions: string;
 	readonly nbaTeam: string;
+	/** The row's position in the supplied CSV, carried across verbatim. */
+	readonly sourceRank: number;
 };
 
 /** Everything `decide` needs, read under the lock in one transaction. */
@@ -169,9 +171,14 @@ async function loadPromotionState(client: TransactionalClient): Promise<Promotio
 	const poolSourceResult = await client.query('select status from import_pool_source');
 	const rawPoolStatus = poolSourceResult.rows[0]?.['status'];
 
+	// Ordered by the file's own rank, so promotion reads the pool in the
+	// order the export stated rather than whatever order the planner returned
+	// (AD-1 forbids incidental order). The rank is carried across as a column
+	// regardless — this ordering is for the read, not for the storage.
 	const poolResult = await client.query(
-		`select fantrax_player_id, player_name, positions, nba_team
-		from import_staged_pool_players`
+		`select fantrax_player_id, player_name, positions, nba_team, source_rank
+		from import_staged_pool_players
+		order by source_rank asc, player_name asc`
 	);
 
 	return {
@@ -183,7 +190,8 @@ async function loadPromotionState(client: TransactionalClient): Promise<Promotio
 			fantraxPlayerId: String(row['fantrax_player_id']),
 			playerName: String(row['player_name']),
 			positions: String(row['positions']),
-			nbaTeam: String(row['nba_team'])
+			nbaTeam: String(row['nba_team']),
+			sourceRank: Number(row['source_rank'])
 		}))
 	};
 }
@@ -391,16 +399,26 @@ async function writeLiveTables(client: TransactionalClient, state: PromotionStat
 		);
 	}
 
+	// `source_rank` travels with the row rather than being recomputed from
+	// the loop index: staging owns what the rank means, and re-deriving it
+	// here from insert position would silently invent a second answer the
+	// moment this read stopped being ordered.
 	for (const batch of chunk(state.poolPlayers, LIVE_INSERT_BATCH)) {
 		const values: unknown[] = [];
 		const tuples = batch.map((player, i) => {
-			values.push(player.fantraxPlayerId, player.playerName, player.positions, player.nbaTeam);
-			const at = i * 4;
-			return `($${String(at + 1)}, $${String(at + 2)}, $${String(at + 3)}, $${String(at + 4)})`;
+			values.push(
+				player.fantraxPlayerId,
+				player.playerName,
+				player.positions,
+				player.nbaTeam,
+				player.sourceRank
+			);
+			const at = i * 5;
+			return `($${String(at + 1)}, $${String(at + 2)}, $${String(at + 3)}, $${String(at + 4)}, $${String(at + 5)})`;
 		});
 		await client.query(
 			`insert into free_agent_players
-				(fantrax_player_id, player_name, positions, nba_team)
+				(fantrax_player_id, player_name, positions, nba_team, source_rank)
 			values ${tuples.join(', ')}`,
 			values
 		);
