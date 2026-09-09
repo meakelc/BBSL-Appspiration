@@ -347,7 +347,8 @@ const CLOSE_STATE: CloseState = {
 	rosterCount: 11,
 	isMinorLeagueEligible: () => false,
 	playerNameFor: (playerId: string) => `Lottery Player ${playerId.replace('p-lot-', '')}`,
-	drawnWinner: DRAWN
+	drawnWinner: DRAWN,
+	rosterFiguresFor: () => null
 };
 
 const DECIDED = decideClose(CLOSE_STATE, LOTTERY_CLOSES, DRAWN);

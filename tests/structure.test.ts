@@ -156,11 +156,20 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 		'example-30-the-allowance-needs-a-slot-to-extend.test.ts',
 		'30 — The allowance needs a slot to extend'
 	],
-	// Story 10.3 lands the cancellation cascade, and 31 with it. The
-	// restoration the example's last sentences narrate is Story 10.4's.
+	// Story 10.3 landed the cancellation cascade, and 31 with it; Story 10.4
+	// added the restoration its last sentences narrate, and 32 and 33 beside
+	// it — the skipped candidate and the Auction with nothing to restore.
 	[
 		'example-31-the-cascade-fires-only-as-far-as-it-must.test.ts',
 		'31 — The cascade fires, and only as far as it must'
+	],
+	[
+		'example-32-a-restoration-that-is-skipped-not-undone.test.ts',
+		'32 — A restoration that is skipped, not undone'
+	],
+	[
+		'example-33-a-restoration-with-nothing-to-restore.test.ts',
+		'33 — A restoration with nothing to restore'
 	],
 	// Story 10.2 landed the bidding half of the two below and Story 10.3 the
 	// close half of each. The draws they narrate belong to Story 10.5.

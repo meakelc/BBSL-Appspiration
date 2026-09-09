@@ -41,6 +41,8 @@ import {
 	decide,
 	describeAmount,
 	evaluate,
+	evaluateRestore,
+	allRestoreGatesPassed,
 	failedGates,
 	figuresAtCaption,
 	minimumLegalBid,
@@ -57,9 +59,9 @@ import type {
 	ContentionSeed,
 	TeamMoneyState
 } from '../../src/lib/core/rules/bidding.ts';
-import { PLACE_BID_GATES } from '../../src/lib/core/types.ts';
+import { PLACE_BID_GATES, RESTORE_LEADING_BID_GATES } from '../../src/lib/core/types.ts';
 import type { LeaguePhase } from '../../src/lib/core/projection/phase.ts';
-import type { PlaceBid } from '../../src/lib/core/types.ts';
+import type { PlaceBid, RestoreLeadingBid } from '../../src/lib/core/types.ts';
 
 /**
  * A Team the money gate cannot be the reason for anything here.
@@ -343,6 +345,106 @@ describe('evaluate — total, and the gate set is fixed per command type (AC1)',
 	it('reports failed gates in PLACE_BID_GATES order, never in object-key order', () => {
 		const gates = evaluate(standardAt(8_000_000), command(8_400_000), NOW);
 		expect(failedGates(gates)).toEqual(['increment', 'granularity']);
+	});
+});
+
+// --- AR-37: restoration is the SECOND fixed gate set (Story 10.4) ----------
+
+describe('evaluateRestore — the second command type, and its own fixed gate set (AR-37)', () => {
+	function restoreCommand(amount: number, teamId = 't-2'): RestoreLeadingBid {
+		return {
+			kind: 'RestoreLeadingBid',
+			fantraxPlayerId: 'p-1',
+			teamId,
+			teamName: teamId === 't-1' ? 'Lakers' : 'Rockets',
+			managerId: teamId === 't-1' ? 'm-1' : 'm-2',
+			amount: parseMoney(amount)
+		};
+	}
+
+	it('declares exactly two gates, in one place and in one order', () => {
+		// Asserted literally rather than by length, for `PLACE_BID_GATES`'
+		// reason: adding a third gate must be a deliberate edit here as well
+		// as in `core/types.ts`. Restoration re-commits capital and needs
+		// somewhere to put the Player, and asks nothing else.
+		expect([...RESTORE_LEADING_BID_GATES]).toEqual(['cap', 'slots']);
+	});
+
+	it('is frozen, so no caller can narrow what a restoration is judged on', () => {
+		expect(Object.isFrozen(RESTORE_LEADING_BID_GATES)).toBe(true);
+	});
+
+	it('returns those two gates and NO others — never the nine PlaceBid runs', () => {
+		// The whole of AR-37. `increment` is the one that matters: restoration
+		// hands an Auction DOWN to a lower Bid, so re-running the raise rule
+		// against a price that has just fallen would refuse every restoration
+		// that mattered. `expiry` is the second: a Restored Leading Bidder
+		// inherits whatever is left of the Auction Clock, including very
+		// little, and refusing on that would strand the Auction leaderless.
+		const gates = evaluateRestore(standardAt(8_000_000), restoreCommand(4_000_000), NOW);
+		expect(Object.keys(gates).sort()).toEqual([...RESTORE_LEADING_BID_GATES].sort());
+		for (const absent of ['phase', 'expiry', 'opening', 'contention', 'selfBid', 'increment', 'granularity']) {
+			expect(Object.keys(gates)).not.toContain(absent);
+		}
+	});
+
+	it('returns both gates in every state, passing and failing alike', () => {
+		const states: Array<[label: string, state: BidState, amount: number]> = [
+			['a lower amount than the Bid above it', standardAt(8_000_000), 4_000_000],
+			['an amount no cap could carry', standardAt(8_000_000), Number.MAX_SAFE_INTEGER],
+			['an Auction nobody has bid on', NO_BIDS, 1_500_000],
+			['a live Minimum-Bid Contention', contentionWith(['t-2']), 1_000_000]
+		];
+		for (const [label, state, amount] of states) {
+			const gates = evaluateRestore(state, restoreCommand(amount), NOW);
+			expect(Object.keys(gates).sort(), label).toEqual([...RESTORE_LEADING_BID_GATES].sort());
+			for (const gate of RESTORE_LEADING_BID_GATES) {
+				expect(typeof gates[gate].passed, `${label} / ${gate}`).toBe('boolean');
+			}
+		}
+	});
+
+	it('does not let either gate short-circuit the other', () => {
+		// AD-7, restated for the narrower set: both outcomes are returned
+		// whichever way each of them goes, so a caller reporting why a
+		// restoration was skipped can name both grounds.
+		const gates = evaluateRestore(
+			standardAt(8_000_000),
+			restoreCommand(Number.MAX_SAFE_INTEGER),
+			NOW
+		);
+		expect(gates.cap.passed).toBe(false);
+		expect(typeof gates.slots.passed).toBe('boolean');
+	});
+
+	it('ignores `now` — the set contains no gate that asks what time it is', () => {
+		// The signature takes an instant to match `evaluate`'s, and reads it
+		// nowhere. A clock nearly out must not refuse a restoration (FR-40).
+		const at = evaluateRestore(standardAt(8_000_000), restoreCommand(4_000_000), NOW);
+		expect(evaluateRestore(standardAt(8_000_000), restoreCommand(4_000_000), '')).toEqual(at);
+		expect(
+			evaluateRestore(standardAt(8_000_000), restoreCommand(4_000_000), '2099-01-01T00:00:00.000Z')
+		).toEqual(at);
+	});
+
+	it('never throws, for any amount, in any state', () => {
+		for (const amount of [1, 1_000_000, 8_400_000, Number.MAX_SAFE_INTEGER]) {
+			for (const state of [NO_BIDS, standardAt(8_000_000), contentionWith(['t-2'])]) {
+				expect(() => evaluateRestore(state, restoreCommand(amount), NOW)).not.toThrow();
+			}
+		}
+	});
+
+	it('allRestoreGatesPassed agrees with the two gates it iterates', () => {
+		const passing = evaluateRestore(standardAt(8_000_000), restoreCommand(4_000_000), NOW);
+		const failing = evaluateRestore(
+			standardAt(8_000_000),
+			restoreCommand(Number.MAX_SAFE_INTEGER),
+			NOW
+		);
+		expect(allRestoreGatesPassed(passing)).toBe(true);
+		expect(allRestoreGatesPassed(failing)).toBe(false);
+		expect(Object.keys(passing).sort()).toEqual(Object.keys(failing).sort());
 	});
 });
 

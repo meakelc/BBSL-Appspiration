@@ -63,8 +63,11 @@ import type { SlotPlacement } from '../projection/contracts.ts';
 import { CONTENTION_DRAWN_EVENT } from '../projection/draws.ts';
 import type { OpenNomination } from '../projection/nominations.ts';
 import { AUCTION_CLOSED_EVENT } from '../projection/nominations.ts';
+import type { Restoration } from '../projection/auctions.ts';
 import type { Accepted, EventEnvelope, PlaceBid } from '../types.ts';
 import { bidStateFor, evaluate, teamMoneyStateFor } from './bidding.ts';
+import { CANCELLATION_AXES, selectRestoration } from './restore.ts';
+import type { CandidateRosterFigures } from './restore.ts';
 import { isSeedShaped } from './draw.ts';
 
 /** The flat amount every Contender in a Minimum-Bid Contention holds. */
@@ -215,6 +218,31 @@ export type CloseState = {
 	 * that argument.
 	 */
 	readonly drawnWinner: ClosedWinner | null;
+	/**
+	 * The Cap and roster figures for ONE Team — any Team holding a Bid in
+	 * `auctions` — or `null` for a Team the shell did not read (Story 10.4).
+	 *
+	 * **A SIXTH fact, and the cascade needed it the moment restoration
+	 * arrived.** Everything above is about the WINNER, because until FR-40's
+	 * restorer the cascade only ever asked questions about the winner: whose
+	 * commitments no longer stand is a question about one Team's roster. A
+	 * restoration asks it of somebody else — the candidate being handed the
+	 * Auction — and there is nowhere on this shape for another Team's figures
+	 * to come from.
+	 *
+	 * `server/close.ts` answers it from ONE batched `loadLeagueRosterDetail`
+	 * over the Teams with a Bid in `auctions`, not a query per candidate: a
+	 * Close changes the winner's roster and nobody else's, so every
+	 * candidate's Slot occupancy and Cap Space are the same before and after
+	 * it and one read describes them all. What moves under a candidate is its
+	 * committed capital, and that comes from `auctions`, which the cascade is
+	 * already threading.
+	 *
+	 * `null` is a Team the read did not cover. The restorer treats it as a
+	 * failed candidate and moves down — the conservative answer, and the same
+	 * one a failed gate gives.
+	 */
+	readonly rosterFiguresFor: (teamId: string) => CandidateRosterFigures | null;
 };
 
 /**
@@ -528,12 +556,21 @@ export type ContentionDrawnPayload = {
  * example 5). The figure rides the payload so the notice and the Audit Log
  * can state what was released without re-folding the Auction it was on.
  *
- * **`restoration` is `null` and typed `null`.** Story 10.4 owns the restorer,
- * its own gate set, and every example in which an Auction is handed to its
- * next-highest surviving Bid. Typing the field as the literal rather than as
- * an optional shape is what makes 10.4 a compile error at every construction
- * site instead of a silent absence — the same posture `contractYears: null`
- * takes on the close above.
+ * **`restoration` carries the decision, and that is why it rides the event.**
+ * Story 10.4's restorer walked this Auction's surviving history inside the
+ * closing transaction, re-ran the cap and slots gates over each candidate's
+ * roster and committed capital, skipped the failures and stopped at the first
+ * pass. `auctionsReducer` READS that answer; re-deriving it would mean
+ * re-running the gate suite inside a fold, over Teams whose rosters no
+ * projection can see (AD-31). `null` is the honest answer for two different
+ * facts and the payload does not distinguish them, because nothing needs it
+ * to: nothing below survived re-validation, or the cancelled commitment was a
+ * Minimum-Bid Contention entry, where the lead is a fold artifact that moves
+ * with no re-validation at all.
+ *
+ * It is still `null` in a great many logs, and it was typed as the literal
+ * `null` until Story 10.4 for exactly that reason — which is what made this
+ * a compile error at every construction site rather than a silent absence.
  */
 export type BidCancelledPayload = {
 	/** The Auction the cancelled Bid was placed on. */
@@ -557,8 +594,8 @@ export type BidCancelledPayload = {
 	readonly causePlayerName: string;
 	/** The winning Team of that Close. The same Team as `teamId`, stated. */
 	readonly causeTeamId: string;
-	/** Story 10.4's seam, and nothing else. Always `null` here. */
-	readonly restoration: null;
+	/** Who leads the Auction now, or `null` — the decision, not a derivation. */
+	readonly restoration: Restoration | null;
 };
 
 /**
@@ -844,6 +881,40 @@ function cascadeFor(
 		now: closesAt
 	};
 
+	/**
+	 * A candidate Team's three roster figures — the shell's batched read for
+	 * everybody, and the POST-CLOSE derivation for the winning Team.
+	 *
+	 * **The override is not a convenience.** `state.rosterFiguresFor` answers
+	 * from a read taken BEFORE this close, which is correct for every other
+	 * Team — a Close changes the winner's roster and nobody else's — and wrong
+	 * for exactly one: the winner, whose Slot this close just filled and whose
+	 * Cap Space this close's Cap Hit just reduced. The winner CAN be its own
+	 * next-highest candidate, holding an older outbid Bid on the same Auction,
+	 * and judging that Bid against a pre-close roster would restore the Team
+	 * the Close had just disqualified.
+	 *
+	 * **What the post-close figures buy is a fair test, not a guaranteed
+	 * refusal.** Handed them, the winner's own older Bid is judged against the
+	 * roster and the committed capital the cancellation just left it with —
+	 * the same basis `commitmentStands` used a moment ago, and a STRICTER one,
+	 * because `candidateStands` counts the Team's whole remaining commitment
+	 * set where `commitmentStands` counted only the seniority prefix. A Team
+	 * squeezed out on capacity therefore fails again. A Team whose Bid is on a
+	 * Minor League Eligible Player a free Minor League Slot can still absorb
+	 * passes — as it should, since that is the carve-out `evaluateSlots`
+	 * already owns and the same Bid the cascade itself walks past. Either way
+	 * the answer comes from the gate, and there is no special case here.
+	 */
+	const rosterFiguresFor = (teamId: string): CandidateRosterFigures | null =>
+		teamId === party.teamId
+			? {
+					capSpace: basis.capSpace,
+					rosterCount: basis.rosterCount,
+					minorLeagueOccupied: basis.minorLeagueOccupied
+				}
+			: state.rosterFiguresFor(teamId);
+
 	// The won Auction leaves `byPlayer`: it is a contract now, not a
 	// commitment, and counting it as both is the subtle version of this bug.
 	let auctions = auctionsLimitedTo(
@@ -870,6 +941,63 @@ function cascadeFor(
 		const victim = over[over.length - 1];
 		if (victim === undefined) return events;
 
+		const cancelledAuction = auctionForPlayer(auctions, victim.fantraxPlayerId);
+		if (cancelledAuction === null) {
+			throw new TypeError(
+				'decideClose: the cascade selected a commitment on ' +
+					`${JSON.stringify(victim.fantraxPlayerId)} and no Auction for that Player is in the ` +
+					'fold it selected from (AD-1)'
+			);
+		}
+		// **The marker the REDUCER writes carries the appended event's own
+		// `seq`; this one cannot.** `seq` is assigned by the database at the
+		// insert (`shell/write.ts`), so the core has no number to put here —
+		// and it needs none, because nothing the cascade re-tests reads it. The
+		// empty string models "marked cancelled", and the fold writes the real
+		// position when the appended event comes back through
+		// `auctionsReducer`.
+		const marker = {
+			seq: '',
+			causeFantraxPlayerId: auction.fantraxPlayerId,
+			causePlayerName: playerName
+		};
+
+		// **The withdrawal FIRST, and the succession decided against it**
+		// (Story 10.4). The candidate is judged on the state the Auction is
+		// actually in once this commitment is gone — leaderless, with the
+		// winner's capital already released — so the same `withBidCancelled`
+		// the reducer will fold is what produces the basis. Restoring nothing
+		// here is not the answer; it is the question.
+		const withdrawn = {
+			byPlayer: {
+				...auctions.byPlayer,
+				[victim.fantraxPlayerId]: withBidCancelled(cancelledAuction, victim.seq, {
+					...marker,
+					restoration: null
+				})
+			}
+		};
+		const restored = selectRestoration({
+			fantraxPlayerId: victim.fantraxPlayerId,
+			withdrawnSeq: victim.seq,
+			basis: {
+				// POST-CLOSE and POST-CASCADE: the won Player is already out of
+				// `byPlayer`, every earlier cancellation is already folded in,
+				// and so is every earlier RESTORATION — which is the only way one
+				// cascade can push a non-winning Team over its own allowance, and
+				// the second candidacy has to see the first.
+				auctions: withdrawn,
+				rosterFiguresFor,
+				isMinorLeagueEligible: basis.isMinorLeagueEligible,
+				playerNameFor: basis.playerNameFor,
+				now: basis.now
+			},
+			// Retain, leave, keep. The Bid stays in the history, the Auction
+			// Clock is untouched, and the League Clock keeps its reset — the
+			// three things that make this a cancellation and not a void.
+			axes: CANCELLATION_AXES
+		}).restored;
+
 		const payload: BidCancelledPayload = {
 			fantraxPlayerId: victim.fantraxPlayerId,
 			playerName: victim.playerName,
@@ -882,41 +1010,37 @@ function cascadeFor(
 			causeFantraxPlayerId: auction.fantraxPlayerId,
 			causePlayerName: playerName,
 			causeTeamId: party.teamId,
-			// Story 10.4's seam, and the reason this field exists at all.
-			restoration: null
+			// The decision, recorded so the fold reads it rather than re-making
+			// it. No second event is appended for a restoration: one
+			// `BidCancelled` carries the cancelled `seq`, the cause AND the
+			// restored Team, Bid `seq` and amount.
+			restoration: restored
 		};
 		events.push({
 			type: BID_CANCELLED_EVENT,
 			payload,
 			// The CANCELLED Manager and Team — who this event is about, and who
 			// the mention is owed to. It is the winning Team either way: the
-			// cascade cancels the winner's own surplus and nobody else's.
+			// cascade cancels the winner's own surplus and nobody else's. The
+			// RESTORED Team is owed a mention too, and it is addressed off the
+			// payload by `server/close.ts` rather than from here: an event row
+			// carries one Team, and this one is about the cancellation.
 			managerId: victim.managerId,
 			teamId: victim.teamId
 		});
 
-		const cancelledAuction = auctionForPlayer(auctions, victim.fantraxPlayerId);
-		if (cancelledAuction === null) {
-			throw new TypeError(
-				'decideClose: the cascade selected a commitment on ' +
-					`${JSON.stringify(victim.fantraxPlayerId)} and no Auction for that Player is in the ` +
-					'fold it selected from (AD-1)'
-			);
-		}
+		// The SAME `withBidCancelled` the reducer will fold, now carrying the
+		// decision — so the next iteration's re-test, and the next
+		// restoration's, both see the restored leader and the capital it
+		// re-commits. Re-committing is a consequence and never a write:
+		// `teamMoneyStateFor` simply starts counting the Bid again once it
+		// leads.
 		auctions = {
 			byPlayer: {
 				...auctions.byPlayer,
 				[victim.fantraxPlayerId]: withBidCancelled(cancelledAuction, victim.seq, {
-					// **The marker the REDUCER writes carries the appended event's
-					// own `seq`; this one cannot.** `seq` is assigned by the database
-					// at the insert (`shell/write.ts`), so the core has no number to
-					// put here — and it needs none, because nothing the cascade
-					// re-tests reads it. The empty string models "marked cancelled",
-					// and the fold writes the real position when the appended event
-					// comes back through `auctionsReducer`.
-					seq: '',
-					causeFantraxPlayerId: auction.fantraxPlayerId,
-					causePlayerName: playerName
+					...marker,
+					restoration: restored
 				})
 			}
 		};

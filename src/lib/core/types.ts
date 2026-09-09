@@ -821,6 +821,82 @@ export type PlaceBidGateResults = {
 	readonly slots: SlotsGateOutcome;
 };
 
+// --- Story 10.4: the RestoreLeadingBid command and its fixed gate set ------
+
+/**
+ * The `RestoreLeadingBid` command (Story 10.4, FR-40, AR-37).
+ *
+ * **A distinct command type, and that is the whole point.** Restoration hands
+ * an Auction to the next-highest surviving Bid after the leader's commitment
+ * was cancelled, and the candidate has to be re-validated before it may lead
+ * — but only against the two questions a commitment already made can still
+ * fail: can this Team still afford it, and has it still got somewhere to put
+ * the win. Every other gate in `PLACE_BID_GATES` is about the act of
+ * OFFERING, and re-asking one of them here would refuse a Bid that was
+ * lawfully placed and never withdrawn by its own Manager.
+ *
+ * **`increment` is the one that makes this a separate type rather than a
+ * synthetic `PlaceBid`.** The price has just FALLEN — the leader above this
+ * candidate is gone — so a re-run of "strictly higher than the leading Bid"
+ * would compare the candidate's own amount against a leading amount that no
+ * longer exists, or against the candidate itself, and refuse every
+ * restoration that mattered. `expiry` is the second: a restored Bidder may
+ * inherit minutes of a clock that is nearly out, and refusing on that would
+ * strand the Auction leaderless for a reason FR-40 explicitly rejects.
+ *
+ * The field list is `PlaceBid`'s exactly, and deliberately: `teamName` and
+ * `managerId` are on the command for the EVENT's sake — the restoration
+ * rides `BidCancelledPayload` and the notice must name the Team and reach
+ * the Manager — while `RESTORE_LEADING_BID_GATES` decides from `teamId` and
+ * `amount` alone.
+ */
+export type RestoreLeadingBid = {
+	readonly kind: 'RestoreLeadingBid';
+	readonly fantraxPlayerId: string;
+	readonly teamId: string;
+	readonly teamName: string;
+	readonly managerId: string;
+	readonly amount: Money;
+};
+
+/**
+ * The gate set for `RestoreLeadingBid`, **fixed per command type** (AD-1),
+ * and the SECOND fixed gate set this codebase declares.
+ *
+ * Two gates, and the pair is the answer to one question: is this Team still
+ * able to keep the commitment it already made? `cap` says whether the money
+ * is still there and `slots` says whether the win still has a Slot to land
+ * in — which are exactly the two grounds a Close elsewhere can have moved
+ * under a Bid nobody touched.
+ *
+ * **The ORDER is the reading order**, as `PLACE_BID_GATES`' is: money before
+ * capacity, matching the last two entries of that list so a reader who knows
+ * one knows the other. Neither short-circuits the other and both outcomes are
+ * always returned (AD-7).
+ *
+ * Frozen at runtime as well as `as const`, for `PLACE_BID_GATES`' reason: this
+ * list is what `evaluateRestore()`'s totality is asserted against, and a
+ * caller that could splice an entry out of it could make a partial result
+ * look complete.
+ */
+export const RESTORE_LEADING_BID_GATES = Object.freeze(['cap', 'slots'] as const);
+
+/** One of the two gate names above. */
+export type RestoreLeadingBidGate = (typeof RESTORE_LEADING_BID_GATES)[number];
+
+/**
+ * What `evaluateRestore()` returns for a `RestoreLeadingBid`, in any state.
+ *
+ * **`CapGateOutcome` and `SlotsGateOutcome` are reused verbatim.** They are
+ * the same gates over the same arithmetic asked of a narrower set, so a
+ * parallel pair of outcome shapes would be two spellings of one answer — and
+ * the refusal panel, `gateFigure` and `capBreakdown` all already read these.
+ */
+export type RestoreLeadingBidGateResults = {
+	readonly cap: CapGateOutcome;
+	readonly slots: SlotsGateOutcome;
+};
+
 /**
  * `decide()` authorised the command: here are the events to append.
  *

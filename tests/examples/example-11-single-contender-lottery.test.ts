@@ -154,7 +154,8 @@ function theDraw() {
 		rosterCount: 0,
 		isMinorLeagueEligible: () => false,
 		playerNameFor: (playerId: string) => playerId,
-		drawnWinner
+		drawnWinner,
+		rosterFiguresFor: () => null
 	};
 	return { log, auction, drawnWinner, decided: decideClose(state, FIXED_CLOSE, drawnWinner) };
 }

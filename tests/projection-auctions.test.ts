@@ -919,9 +919,30 @@ describe('the lottery’s own wording, beside the fold that decides it', () => {
 function cancelled(
 	seq: number,
 	cancelledSeq: unknown,
-	options: { fantraxPlayerId?: unknown; cause?: string; causeName?: string } = {}
+	options: {
+		fantraxPlayerId?: unknown;
+		cause?: string;
+		causeName?: string;
+		/** Story 10.4's recorded decision, unnarrowed so a test can malform it. */
+		restoration?: unknown;
+		/**
+		 * Leave the `restoration` key OFF the payload altogether, rather than
+		 * writing it as `null` (Story 10.4).
+		 *
+		 * A malformed value and an absent key are different inputs to
+		 * `readRestoration`, and only this one models the Story 10.3 rows
+		 * already in the log — every `BidCancelled` written before the
+		 * restorer existed. `'restoration' in options` cannot express it,
+		 * because passing `restoration: undefined` still writes the key.
+		 */
+		omitRestoration?: boolean;
+	} = {}
 ): AppendedEvent {
+	const restoration = options.omitRestoration
+		? {}
+		: { restoration: 'restoration' in options ? options.restoration : null };
 	return event(seq, BID_CANCELLED_EVENT, {
+		...restoration,
 		fantraxPlayerId: 'fantraxPlayerId' in options ? options.fantraxPlayerId : 'p-1',
 		playerName: 'Ausar Bright',
 		cancelledSeq,
@@ -932,9 +953,13 @@ function cancelled(
 		wasContentionEntry: false,
 		causeFantraxPlayerId: options.cause ?? 'p-cause',
 		causePlayerName: options.causeName ?? 'Dex Brooks',
-		causeTeamId: 't-1',
-		restoration: null
+		causeTeamId: 't-1'
 	});
+}
+
+/** The `restoration` a well-formed payload carries, for the Bid at `seq`. */
+function restoring(seq: string, teamId: string, amount: number) {
+	return { seq, teamId, teamName: `Team ${teamId}`, managerId: `m-${teamId}`, amount };
 }
 
 describe('auctionsReducer — BidCancelled withdraws a Bid’s standing and nothing else', () => {
@@ -956,13 +981,17 @@ describe('auctionsReducer — BidCancelled withdraws a Bid’s standing and noth
 		// The Bid it did not name keeps standing.
 		expect(wasCancelled(auction?.bids[0] as never)).toBe(false);
 
-		// **The lead is withdrawn, not handed down.** Promotion to the $4.0M
-		// Bid beneath is RESTORATION and Story 10.4 owns it; a fold that
-		// promoted here would restore a Team no gate had re-validated.
+		// **The lead is withdrawn, not handed down.** This payload records no
+		// restoration, so the $4.0M Bid beneath does NOT take the lead — a
+		// fold that promoted it would be restoring a Team no gate had
+		// re-validated, which is precisely the decision `rules/restore.ts`
+		// makes inside the closing transaction and this reducer only reads.
 		expect(auction?.leadingBid).toBeNull();
-		// ...and a Bid survives, so the Auction Clock is untouched.
-		expect(auction?.closesAt).toBe(closeInstantFor('2026-08-26T09:00:00.000Z', AUCTION_CLOCK));
-		expect(auction?.contention).toBe('standard');
+		// ...and with no leader there is no clock and no contention, however
+		// many Bids are still standing in `bids` (Story 10.4). A cleared clock
+		// is what stops the Auction closing at its old expiry with no winner.
+		expect(auction?.closesAt).toBeNull();
+		expect(auction?.contention).toBe('awaiting_opening_bid');
 	});
 
 	it('leaves the lead alone when the cancelled Bid was not holding it', () => {
@@ -1117,7 +1146,9 @@ describe('auctionsReducer — BidCancelled withdraws a Bid’s standing and noth
 		const byHand = withBidCancelled(auction, '2', {
 			seq: '3',
 			causeFantraxPlayerId: 'p-cause',
-			causePlayerName: 'Dex Brooks'
+			causePlayerName: 'Dex Brooks',
+			// The same decision the fixture's payload carries: nothing restored.
+			restoration: null
 		});
 		const byFold = at([bid(1, 4_000_000), bid(2, 6_000_000), cancelled(3, '2')]);
 		expect(byHand).toEqual(byFold);
@@ -1127,8 +1158,184 @@ describe('auctionsReducer — BidCancelled withdraws a Bid’s standing and noth
 			withBidCancelled(byHand, '2', {
 				seq: '4',
 				causeFantraxPlayerId: 'p-cause',
-				causePlayerName: 'Dex Brooks'
+				causePlayerName: 'Dex Brooks',
+				restoration: null
 			})
 		).toBe(byHand);
+	});
+});
+
+describe('auctionsReducer — BidCancelled seats the RECORDED restoration (Story 10.4)', () => {
+	it('hands the lead to the Bid the payload names, and keeps the clock', () => {
+		const auction = at([
+			bid(1, 4_000_000, { teamId: 't-9' }),
+			bid(2, 6_000_000, { teamId: 't-1' }),
+			cancelled(3, '2', { restoration: restoring('1', 't-9', 4_000_000) })
+		]);
+
+		expect(auction?.leadingBid?.seq).toBe('1');
+		expect(auction?.leadingBid?.teamId).toBe('t-9');
+		expect(auction?.leadingBid?.amount).toBe(4_000_000);
+		// A leader stands, so the Auction Clock is untouched — the Restored
+		// Leading Bidder inherits whatever is left of it.
+		expect(auction?.closesAt).toBe(closeInstantFor('2026-08-26T09:00:00.000Z', AUCTION_CLOCK));
+		expect(auction?.contention).toBe('standard');
+		// The marker still rides the cancelled Bid, restoration and all.
+		expect(auction?.bids[1]?.cancellation?.restoration).toEqual(
+			restoring('1', 't-9', 4_000_000)
+		);
+	});
+
+	it('seats the recorded Bid even when a HIGHER survivor was skipped', () => {
+		// Example 32's shape. The $5.0M Bid is still standing and is higher
+		// than the restored $2.0M one; the fold must not promote it, because
+		// the gates refused it and this reducer cannot re-run them.
+		const auction = at([
+			bid(1, 2_000_000, { teamId: 't-w' }),
+			bid(2, 5_000_000, { teamId: 't-v' }),
+			bid(3, 6_000_000, { teamId: 't-1' }),
+			cancelled(4, '3', { restoration: restoring('1', 't-w', 2_000_000) })
+		]);
+
+		expect(auction?.leadingBid?.teamId).toBe('t-w');
+		expect(auction?.leadingBid?.amount).toBe(2_000_000);
+		// Skipped is not cancelled: the $5.0M Bid still stands, unmarked.
+		expect(wasCancelled(auction?.bids[1] as never)).toBe(false);
+	});
+
+	it('goes leaderless and clockless when the record says nothing was restored', () => {
+		// `highestStandingBid` is non-null here — the $4.0M Bid is right there
+		// — and the Auction still returns to Awaiting Opening Bid.
+		const auction = at([
+			bid(1, 4_000_000, { teamId: 't-9' }),
+			bid(2, 6_000_000, { teamId: 't-1' }),
+			cancelled(3, '2')
+		]);
+
+		expect(auction?.leadingBid).toBeNull();
+		expect(auction?.closesAt).toBeNull();
+		expect(auction?.contention).toBe('awaiting_opening_bid');
+		expect(auction?.bids).toHaveLength(2);
+		expect(wasCancelled(auction?.bids[0] as never)).toBe(false);
+	});
+
+	it('degrades a malformed restoration to null rather than throwing in a fold', () => {
+		// Every shape that cannot be used, and each one leaves the Auction in
+		// the leaderless state the fold already models. A throw here would
+		// take down the board, the Auction page and every close after it.
+		const malformed: readonly unknown[] = [
+			'the next-highest bid',
+			42,
+			[],
+			{},
+			{ seq: '1' },
+			{ seq: '', teamId: 't-9', teamName: 'Team 9', managerId: 'm-9', amount: 4_000_000 },
+			{ seq: '1', teamId: 't-9', teamName: 'Team 9', managerId: 'm-9' },
+			{ seq: '1', teamId: 't-9', teamName: 'Team 9', managerId: 'm-9', amount: 'lots' },
+			// `Money`'s own domain: a whole number of dollars above zero. A
+			// fraction, a negative, a zero, a NaN, an Infinity and a figure
+			// past the safe-integer range are none of them Bid amounts.
+			{ seq: '1', teamId: 't-9', teamName: 'Team 9', managerId: 'm-9', amount: 4_000_000.5 },
+			{ seq: '1', teamId: 't-9', teamName: 'Team 9', managerId: 'm-9', amount: -4_000_000 },
+			{ seq: '1', teamId: 't-9', teamName: 'Team 9', managerId: 'm-9', amount: 0 },
+			{ seq: '1', teamId: 't-9', teamName: 'Team 9', managerId: 'm-9', amount: Number.NaN },
+			{
+				seq: '1',
+				teamId: 't-9',
+				teamName: 'Team 9',
+				managerId: 'm-9',
+				amount: Number.POSITIVE_INFINITY
+			},
+			{
+				seq: '1',
+				teamId: 't-9',
+				teamName: 'Team 9',
+				managerId: 'm-9',
+				amount: Number.MAX_SAFE_INTEGER + 2
+			}
+		];
+
+		for (const restoration of malformed) {
+			const auction = at([
+				bid(1, 4_000_000, { teamId: 't-9' }),
+				bid(2, 6_000_000, { teamId: 't-1' }),
+				cancelled(3, '2', { restoration })
+			]);
+			expect(auction?.leadingBid).toBeNull();
+			expect(auction?.closesAt).toBeNull();
+			// The cancellation itself still landed — only the succession failed.
+			expect(wasCancelled(auction?.bids[1] as never)).toBe(true);
+			expect(auction?.bids[1]?.cancellation?.restoration).toBeNull();
+		}
+	});
+
+	it('reads a payload with NO restoration key as the Story 10.3 rows in the log', () => {
+		// Not the same input as a malformed value, and the distinction is not
+		// hypothetical: every `BidCancelled` Story 10.3 appended carries no
+		// restorer's decision at all, and those rows are in the log this
+		// reducer folds on every read. An absent key must reach the same
+		// leaderless state a `null` one does — never a throw, and never a
+		// seated leader read off `undefined`.
+		const auction = at([
+			bid(1, 4_000_000, { teamId: 't-9' }),
+			bid(2, 6_000_000, { teamId: 't-1' }),
+			cancelled(3, '2', { omitRestoration: true })
+		]);
+
+		expect(auction?.leadingBid).toBeNull();
+		expect(auction?.closesAt).toBeNull();
+		expect(auction?.contention).toBe('awaiting_opening_bid');
+		// The cancellation still landed, and the survivor is still standing.
+		expect(wasCancelled(auction?.bids[1] as never)).toBe(true);
+		expect(auction?.bids[1]?.cancellation?.restoration).toBeNull();
+		expect(wasCancelled(auction?.bids[0] as never)).toBe(false);
+	});
+
+	it('seats nobody when a READABLE restoration names a Bid it cannot use', () => {
+		// A different failure from the one above, and it degrades a different
+		// way. These records read cleanly, so the marker keeps them verbatim
+		// — the Audit Log should show what the event actually said — but the
+		// `seq` names no Bid in this history, or names the very Bid this event
+		// cancelled, so no leader is seated. The amount on the record is never
+		// what puts a price on an Auction; the Bid at `seq` is.
+		for (const restoration of [restoring('99', 't-9', 4_000_000), restoring('2', 't-1', 6_000_000)]) {
+			const auction = at([
+				bid(1, 4_000_000, { teamId: 't-9' }),
+				bid(2, 6_000_000, { teamId: 't-1' }),
+				cancelled(3, '2', { restoration })
+			]);
+			expect(auction?.leadingBid).toBeNull();
+			expect(auction?.closesAt).toBeNull();
+			expect(auction?.contention).toBe('awaiting_opening_bid');
+			expect(auction?.bids[1]?.cancellation?.restoration).toEqual(restoration);
+		}
+	});
+
+	it('converges on a second fold of the same log, restoration and all', () => {
+		// The identity check that makes replay converge has to survive the
+		// restoration: a `seq` already cancelled returns the Auction unchanged
+		// however the second event words its succession.
+		const log = [
+			bid(1, 4_000_000, { teamId: 't-9' }),
+			bid(2, 6_000_000, { teamId: 't-1' }),
+			cancelled(3, '2', { restoration: restoring('1', 't-9', 4_000_000) })
+		];
+		expect(at(log)).toEqual(at([...log, ...log]));
+		expect(at([...log, cancelled(4, '2')])).toEqual(at(log));
+	});
+
+	it('ignores a restoration inside a Minimum-Bid Contention', () => {
+		// The lead there is a fold artifact over identical flat amounts and
+		// moves to the earliest surviving join with no re-validation. A
+		// payload naming something else does not get to override that.
+		const auction = at([
+			bid(1, 1_000_000, { teamId: 't-1' }),
+			bid(2, 1_000_000, { teamId: 't-2' }),
+			cancelled(3, '1', { restoration: restoring('2', 't-2', 1_000_000) })
+		]);
+
+		expect(auction?.contention).toBe('minimum_bid');
+		expect(auction?.leadingBid?.seq).toBe('2');
+		expect(auction?.contenders.map((entry) => entry.teamId)).toEqual(['t-2']);
 	});
 });

@@ -776,8 +776,11 @@ describe('a leaderless Auction holds no position — for EITHER Team (Story 10.3
 
 		expect(auction?.leadingBid).toBeNull();
 		expect(auction?.bids).toHaveLength(2);
-		// The clock is untouched — a Bid survives, so nothing cleared it.
-		expect(auction?.closesAt).toBe(CLOSES);
+		// The clock is cleared: the cancellation recorded no restoration, so
+		// there is no leader — and since Story 10.4 an Auction with no leader
+		// has no clock either, however many Bids are still standing. The rival's
+		// $2,000,000 is one of them, and it is emphatically not leading.
+		expect(auction?.closesAt).toBeNull();
 	});
 
 	it('gives the cancelled ex-leader no card at all', () => {

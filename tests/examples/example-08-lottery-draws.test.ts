@@ -198,7 +198,8 @@ function theDraw() {
 		rosterCount: 0,
 		isMinorLeagueEligible: () => false,
 		playerNameFor: (playerId: string) => playerId,
-		drawnWinner
+		drawnWinner,
+		rosterFiguresFor: () => null
 	};
 	// The Auction's OWN nominal expiry as `now` — never a wall clock (AD-10).
 	const decided = decideClose(state, FIXED_CLOSE, drawnWinner);
@@ -370,7 +371,8 @@ describe('§10 example 8 — the lottery draws', () => {
 			rosterCount: 0,
 			isMinorLeagueEligible: () => false,
 			playerNameFor: (playerId: string) => playerId,
-			drawnWinner
+			drawnWinner,
+			rosterFiguresFor: () => null
 		};
 
 		expect(JSON.stringify(decideClose(state, '2026-08-25T15:00:00.000Z', drawnWinner))).toBe(

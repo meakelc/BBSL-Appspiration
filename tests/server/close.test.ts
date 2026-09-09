@@ -244,6 +244,17 @@ const nominated = (fantraxPlayerId = 'p-1', playerName = 'Ausar Bright') =>
 		managerId: 'm-n'
 	});
 
+/**
+ * The Team NAME is derived from the id rather than hardcoded (Story 10.4).
+ *
+ * It was the constant `'Team M'` for every Bid until a restoration assertion
+ * had to name a Team: pairing `teamId: 't-r'` with `teamName: 'Team M'` in an
+ * expectation means the name half passes whatever the code carries, which is
+ * an assertion that cannot fail. One derivation, so every fixture Bid names
+ * the Team it is actually from.
+ */
+const teamNameOf = (teamId: string) => `Team ${(teamId.split('-')[1] ?? teamId).toUpperCase()}`;
+
 const bidLogged = (
 	seq: number,
 	amount: number,
@@ -258,7 +269,7 @@ const bidLogged = (
 		{
 			fantraxPlayerId,
 			teamId,
-			teamName: 'Team M',
+			teamName: teamNameOf(teamId),
 			managerId,
 			amount,
 			closesAt: CLOSES_AT,
@@ -388,6 +399,11 @@ describe('closeAuction — one event, one transaction (AC3)', () => {
 			'begin',
 			'lock',
 			'read-log',
+			// TWO roster reads since Story 10.4: the WINNER's, keyed on a Team
+			// not known until the fold produced it, and then ONE batched read
+			// over every Team holding a Bid — the candidates FR-40's restorer
+			// re-validates. One statement for all of them, not a query each.
+			'read-roster',
 			'read-roster',
 			'append-event',
 			'release-claim',
@@ -654,6 +670,9 @@ describe('closeAuction — a Minimum-Bid Contention is drawn and closed (AC2, AC
 			'lock',
 			'read-log',
 			'read-seed',
+			// Two, for the reason above: the drawn winner's, then the batched
+			// candidate read.
+			'read-roster',
 			'read-roster',
 			'append-event',
 			'append-event',
@@ -799,6 +818,42 @@ describe('closeAuction — the cancellation cascade, in the transaction (Story 1
 		// Bid. The copy itself is Story 10.6's; what this story owes is that
 		// the intent exists at all.
 		expect(addressed).toContain('discord-t-m');
+	});
+
+	it('records the restored Team on the event and mentions it too (Story 10.4)', async () => {
+		// Team R bid $1,000,000 on Brooks before Team M outbid it. Closing
+		// Bright fills Team M's last Slot, its Brooks commitment is cancelled,
+		// and Team R's surviving Bid is re-validated and handed the Auction.
+		const events = [
+			...twoCommitments().slice(0, 3),
+			bidLogged(4, 1_000_000, 'p-2', 't-r', 'm-r'),
+			bidLogged(5, 2_000_000, 'p-2')
+		];
+		const harness = fakeGateway({ events, roster: FULL_ROSTER });
+
+		await closeAuction(harness.gateway, 'p-1');
+
+		const cancelled = harness.appendedEvents[1]?.['payload'] as BidCancelledPayload;
+		expect(cancelled.cancelledSeq).toBe('5');
+		// ONE event carries the cancellation AND the succession — no second
+		// event is appended for a restoration.
+		expect(harness.appendedEvents).toHaveLength(2);
+		expect(cancelled.restoration).toEqual({
+			seq: '4',
+			teamId: 't-r',
+			teamName: 'Team R',
+			managerId: 'm-r',
+			amount: 1_000_000
+		});
+
+		// Both Managers are addressed off the one event: the Team that lost the
+		// Bid, and the Team that is leading again through no act of its own.
+		const cancellationSeq = String(harness.appendedEvents[1]?.['seq']);
+		const addressed = harness.outboxIntents
+			.filter((intent) => intent.eventSeq === cancellationSeq)
+			.map((intent) => intent.recipient);
+		expect(addressed).toContain('discord-t-m');
+		expect(addressed).toContain('discord-t-r');
 	});
 
 	it('commits the cancellation BEFORE the next close is evaluated (AD-11)', async () => {

@@ -2070,6 +2070,7 @@ So that a correction is a visible, reconstructible act rather than a rewrite of 
 **When** the Auction is refolded
 **Then** it is restored to its state before that Bid, including the **prior Leading Bidder** and the **prior Auction Clock value**
 **And** the voided Team's committed capital is released and the restored Leading Bidder's is re-committed
+**And** the prior Leading Bidder is selected by **`core/rules/restore.ts`'s `selectRestoration`** — the one pure selector Story 10.4 shipped (AR-36) — called with the void's own axes (`withdrawnBid: 'erase'`, `auctionClock: 'restore'`, `leagueClockReset: 'remove'`); **this story writes no selector of its own**, and a second walk of the surviving history here would be a second answer to a question FR-40 already owns
 
 **Given** a voided Bid
 **When** the League Clock is refolded

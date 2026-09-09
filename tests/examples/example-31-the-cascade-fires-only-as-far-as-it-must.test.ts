@@ -18,14 +18,20 @@
  * > when it always would have. The League Clock does not move, and Team U's
  * > original bid stays visible in Carter's history.
  *
- * **This file owns the cancellation and stops there.** Team V's restoration —
- * the sentence between the two quoted above — is Story 10.4's, and nothing
- * here asserts it. What it does assert is everything the restoration is built
- * on: that the first close cancels nothing, that the second cancels exactly
- * one Bid and names the Brooks win as its cause, that Team U's $2,000,000 is
- * released with no release written anywhere, that Carter's clock and the
- * League Clock are both untouched, and that the cancelled Bid is still in
- * Carter's history.
+ * > Carter's auction is restored to its next-highest surviving bid — Team V's
+ * > $1,500,000 — and Team V is notified that it is leading again.
+ *
+ * **This file owns both halves since Story 10.4.** The cancellation half is
+ * unchanged: the first close cancels nothing, the second cancels exactly one
+ * Bid and names the Brooks win as its cause, Team U's $2,000,000 is released
+ * with no release written anywhere, and the cancelled Bid is still in Carter's
+ * history. The restoration half is the sentence above: Team V's $1,500,000
+ * passes both gates, the ONE `BidCancelled` carries the restored Team, Bid
+ * `seq` and amount, the fold seats Team V as Leading Bidder, Team V's capital
+ * is committed again with nothing written to commit it, and **Carter's Auction
+ * Clock and the League Clock are both still untouched** — a Restored Leading
+ * Bidder inherits the minutes that were left, and a restoration is not a
+ * reset.
  *
  * **The two negatives are the load-bearing assertions.** A cascade that fired
  * on the first close would take a Bid the allowance permits; one that kept
@@ -161,7 +167,18 @@ function closeOf(
 		rosterCount,
 		isMinorLeagueEligible: () => false,
 		playerNameFor: (playerId: string) => PLAYER_NAMES[playerId] ?? playerId,
-		drawnWinner: null
+		drawnWinner: null,
+		// **Story 10.4: the candidate's figures, from the shell's one batched
+		// read.** Team V has room and money — Roster Count 8 against a ceiling
+		// of twelve, and the same $30,000,000 nobody in this example is short
+		// of — so its $1,500,000 passes both restoration gates and it is handed
+		// the Auction. The WINNER's figures are not answered here: `cascadeFor`
+		// substitutes its own post-close derivation for Team U, which is what
+		// stops a Close restoring the Team it just disqualified.
+		rosterFiguresFor: (teamId: string) =>
+			teamId === 't-v'
+				? { capSpace: CAP_SPACE, rosterCount: 8, minorLeagueOccupied: 0 }
+				: null
 	};
 }
 
@@ -292,8 +309,21 @@ describe('§10 example 31 — the cascade fires, and only as far as it must', ()
 			// itself is derived, and the next test is where that is proved.
 			expect(payload?.amount).toBe(2_000_000);
 			expect(payload?.wasContentionEntry).toBe(false);
-			// Story 10.4's seam, and this story fills it with nothing.
-			expect(payload?.restoration).toBeNull();
+		});
+
+		it('carries the restored Team, Bid sequence and amount on the SAME event', () => {
+			// "Carter's auction is restored to its next-highest surviving bid —
+			// Team V's $1,500,000." One `BidCancelled` states the cancellation
+			// AND the succession; `rules/restore.ts` appends nothing of its own,
+			// so a second event here would be the bug.
+			expect(cancellations).toHaveLength(1);
+			expect(payload?.restoration).toEqual({
+				seq: '150',
+				teamId: 't-v',
+				teamName: 'Team V',
+				managerId: 'm-v',
+				amount: 1_500_000
+			});
 		});
 
 		it('addresses the cancelled Manager and Team, so the notice has somewhere to go', () => {
@@ -337,6 +367,44 @@ describe('§10 example 31 — the cascade fires, and only as far as it must', ()
 			expect(after.eligibleLeading).toEqual([]);
 		});
 
+		it('re-commits Team V’s $1,500,000 as a consequence — no re-commit is written', () => {
+			// The mirror of the release above, and the same mechanism read the
+			// other way. Before the fold Team V leads nothing: Team U's
+			// $2,000,000 is above it. After it, Team V leads Carter and
+			// `teamMoneyStateFor` counts the $1,500,000 again. Nothing in the
+			// log says "commit"; the Bid starts leading and the sum starts
+			// including it.
+			const before = teamMoneyStateFor({
+				teamId: 't-v',
+				fantraxPlayerId: 'p-nothing',
+				capSpace: CAP_SPACE,
+				rosterCount: 8,
+				minorLeagueOccupied: 0,
+				auctions: auctionsOf([CARTER]),
+				isMinorLeagueEligible: () => false,
+				playerNameFor: (playerId: string) => PLAYER_NAMES[playerId] ?? playerId
+			});
+			expect(before.leading).toEqual([]);
+
+			const folded = fold(
+				auctionsOf([CARTER]),
+				decided.events.map((event, index) => appended(200 + index, event, BROOKS_CLOSES)),
+				auctionsReducer
+			);
+			const after = teamMoneyStateFor({
+				teamId: 't-v',
+				fantraxPlayerId: 'p-nothing',
+				capSpace: CAP_SPACE,
+				rosterCount: 8,
+				minorLeagueOccupied: 0,
+				auctions: folded,
+				isMinorLeagueEligible: () => false,
+				playerNameFor: (playerId: string) => PLAYER_NAMES[playerId] ?? playerId
+			});
+			expect(after.leading.map((lead) => lead.amount)).toEqual([1_500_000]);
+			expect(after.eligibleLeading).toEqual([]);
+		});
+
 		it('keeps the Bid in Carter’s history, marked, and leaves the Auction Clock untouched', () => {
 			const folded = fold(
 				auctionsOf([CARTER]),
@@ -352,9 +420,14 @@ describe('§10 example 31 — the cascade fires, and only as far as it must', ()
 			expect(cancelled?.teamId).toBe('t-u');
 			expect(wasCancelled(cancelled as Bid)).toBe(true);
 			expect(cancelled?.cancellation?.causePlayerName).toBe('Dex Brooks');
-			// Team V's Bid is untouched — and unpromoted. Story 10.4 restores.
+			// Team V's Bid is untouched, and now it LEADS — seated from the
+			// recorded decision, not re-derived from the history.
 			expect(wasCancelled(carter?.bids[0] as Bid)).toBe(false);
-			expect(carter?.leadingBid).toBeNull();
+			expect(carter?.leadingBid?.seq).toBe('150');
+			expect(carter?.leadingBid?.teamId).toBe('t-v');
+			expect(carter?.leadingBid?.amount).toBe(1_500_000);
+			// The price fell, and the contention state did not move with it.
+			expect(carter?.contention).toBe('standard');
 
 			// "Carter's Auction Clock is untouched and still expires when it
 			// always would have." A Bid survives, so nothing clears it.

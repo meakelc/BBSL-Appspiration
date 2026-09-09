@@ -720,3 +720,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-10-3-cancel-the-surplus-commitment-at-close.md`
   summary: `auctionsLimitedTo` scans with `Array.prototype.includes` inside an `Object.entries().filter()`, giving O(n*m) per `commitmentStands` call inside the cascade's re-test loop.
   evidence: Real but not this story's problem — the shape predates the cascade and only bites a league with many concurrent Auctions. A `Set` lookup is the obvious fix and is a one-line change whenever auction volume justifies it.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-10-4-restore-the-next-highest-bidder.md`
+  summary: `tests/integration/auction-events.test.ts` fails against real Postgres with a foreign-key violation on `auction_events_manager_id_fkey`.
+  evidence: Pre-existing and unrelated to this story — reproduced at baseline commit 56a1e66 with the branch's changes stashed, failing identically. The seeded manager row the test inserts against does not satisfy the FK, so the whole suite reports 1 failure on every run and masks any genuine new failure in that file.

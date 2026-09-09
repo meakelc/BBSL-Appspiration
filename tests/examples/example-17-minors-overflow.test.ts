@@ -87,7 +87,8 @@ const STATE: CloseState = {
 	isMinorLeagueEligible: () => false,
 	playerNameFor: (playerId: string) => playerId,
 	// A Standard Contention: no lottery, no draw, no winner to derive.
-	drawnWinner: null
+	drawnWinner: null,
+	rosterFiguresFor: () => null
 };
 
 const DECIDED = decideClose(STATE, CLOSES_AT, null);

@@ -297,6 +297,10 @@ describe('the sequential sweep — AD-11 through the real closeAuction', () => {
 			'begin',
 			'lock',
 			'read-log',
+			// TWO roster reads since Story 10.4: the WINNER's, then ONE batched
+			// read over every Team holding a Bid — the candidates FR-40's
+			// restorer re-validates.
+			'read-roster',
 			'read-roster',
 			'append-event',
 			'release-claim',
@@ -305,6 +309,7 @@ describe('the sequential sweep — AD-11 through the real closeAuction', () => {
 			'begin',
 			'lock',
 			'read-log',
+			'read-roster',
 			'read-roster',
 			'append-event',
 			'release-claim',

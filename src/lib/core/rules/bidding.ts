@@ -198,7 +198,7 @@ import {
 	subtractMoney
 } from '../money.ts';
 import type { LeaguePhase } from '../projection/phase.ts';
-import { PLACE_BID_GATES } from '../types.ts';
+import { PLACE_BID_GATES, RESTORE_LEADING_BID_GATES } from '../types.ts';
 import type {
 	Accepted,
 	CapGateOutcome,
@@ -215,6 +215,8 @@ import type {
 	PlaceBidGate,
 	PlaceBidGateResults,
 	Rejected,
+	RestoreLeadingBid,
+	RestoreLeadingBidGateResults,
 	SelfBidGateOutcome,
 	SlotsGateOutcome
 } from '../types.ts';
@@ -1855,6 +1857,69 @@ export function evaluate(state: BidState, command: PlaceBid, now: string): Place
 		// magnitude — `SlotsGateOutcome` still carries no money field.
 		slots: evaluateSlots(state, contention.entry)
 	};
+}
+
+/**
+ * Run `RESTORE_LEADING_BID_GATES` over a candidate for restoration — the
+ * total function for the SECOND fixed gate set (Story 10.4, FR-40, AR-37).
+ *
+ * **The same two gates `evaluate` runs last, and no arithmetic of its own.**
+ * `evaluateCap` and `evaluateSlots` are called here exactly as they are
+ * called there, with the identical arguments, so a Team judged able to keep a
+ * commitment is judged by the rule that admitted it. There is no second
+ * statement of the allowance, of Minors Exposure or of the eligible carve-out
+ * anywhere in `rules/restore.ts`, and there could not be: this is the only
+ * door.
+ *
+ * **`evaluateContention` is asked, and its verdict is not a gate here.**
+ * `evaluateSlots` reads the contention gate's own `entry` classification to
+ * know whether the commitment is a lottery entry — FR-18's exemption — so the
+ * classification has to be OBTAINED rather than invented. Asking the gate is
+ * how `evaluate` obtains it, and asking it a second way here would be a
+ * second answer to a question `rules/bidding.ts` already owns. Its `passed`
+ * is deliberately discarded: `already_contending` refuses a Team joining a
+ * lottery twice, which is a rule about the ACT of joining and says nothing
+ * about a join already made.
+ *
+ * **`now` is accepted and read by nothing**, and that is the point rather
+ * than an oversight. The signature is `evaluate`'s — `(state, command, now)`
+ * — because a caller must not have to remember which of the two evaluators
+ * takes an instant, and because `expiry` is the one gate that asks what time
+ * it is and this set does not contain it. A restored Bidder inherits whatever
+ * is left of the Auction Clock, including very little (FR-40); refusing the
+ * restoration because that clock is nearly out would strand the Auction
+ * leaderless for the one reason FR-40 rules out.
+ *
+ * Every key is always present with its own outcome and its own arithmetic,
+ * whether or not that gate passed, exactly as `PlaceBidGateResults` is
+ * (AD-1). Neither gate short-circuits the other.
+ */
+export function evaluateRestore(
+	state: BidState,
+	command: RestoreLeadingBid,
+	/** Unread, and declared anyway — see above. */
+	now: string
+): RestoreLeadingBidGateResults {
+	void now;
+	const contention = evaluateContention(state, command.amount, command.teamId);
+	return {
+		cap: evaluateCap(state, command.fantraxPlayerId, command.amount),
+		slots: evaluateSlots(state, contention.entry)
+	};
+}
+
+/**
+ * Whether every gate in `RESTORE_LEADING_BID_GATES` passed.
+ *
+ * Iterated over the declared list rather than over `Object.values`, for
+ * `allGatesPassed`'s reason: the list is the sequence, fixed and ordered at
+ * the one place the gate set lives.
+ */
+export function allRestoreGatesPassed(gates: RestoreLeadingBidGateResults): boolean {
+	for (const gate of RESTORE_LEADING_BID_GATES) {
+		if (!gates[gate].passed) return false;
+	}
+	return true;
 }
 
 /**

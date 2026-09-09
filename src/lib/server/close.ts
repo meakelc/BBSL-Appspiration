@@ -64,6 +64,7 @@ import {
 	hasExpired
 } from '../core/projection/auctions.ts';
 import { BID_CANCELLED_EVENT } from '../core/projection/auctions.ts';
+import type { OpenAuctions, Restoration } from '../core/projection/auctions.ts';
 import { CONTENTION_DRAWN_EVENT } from '../core/projection/draws.ts';
 import { INITIAL_CONTRACTS, contractsReducer } from '../core/projection/contracts.ts';
 import {
@@ -87,7 +88,8 @@ import { readContentionSeed } from './contention-seed.ts';
 import { loadEventsViaClient } from './event-log.ts';
 import { releaseNomination } from './nomination.ts';
 import { enqueueBroadcastsAndMentions } from './outbox.ts';
-import { loadTeamRoster } from './team-roster.ts';
+import { loadLeagueRosterDetail, loadTeamRoster } from './team-roster.ts';
+import type { TeamRosterFigures } from './team-roster.ts';
 
 /**
  * Fold everything a close decides from out of ONE read of the log, then read
@@ -150,6 +152,27 @@ export async function loadCloseState(
 
 	const roster = await loadTeamRoster(client, winner.teamId, contracts);
 
+	// **A SECOND roster read, batched over every Team with a Bid** (Story
+	// 10.4). The cascade's restorer judges a CANDIDATE Team — somebody other
+	// than the winner — against its Cap Space, Roster Count and Minor League
+	// occupancy, and there is nowhere on `CloseState` for another Team's
+	// figures to come from. `loadTeamRoster` above answers for the winner
+	// alone, by design: `minorLeagueOccupied` is the WINNER's and the read is
+	// keyed on a Team that is not known until the winner is derived.
+	//
+	// One statement over many Teams rather than a query per candidate, and
+	// that is the whole reason `loadLeagueRosterDetail` exists: a Close changes
+	// the WINNER's roster and nobody else's, so this single read describes
+	// every candidate correctly both before and after it. `cascadeFor`
+	// substitutes the winner's own post-close derivation for its own row, so
+	// nothing here has to model the close it is about to make.
+	//
+	// The set comes from the Bid history rather than from the Team table: a
+	// Team with no Bid anywhere can never be a candidate, and reading the whole
+	// league would grow this statement with the league rather than with the
+	// close.
+	const rosterFigures = await loadLeagueRosterDetail(client, teamsWithABid(auctions), contracts);
+
 	return {
 		auction,
 		nomination: nominationForPlayer(nominations, fantraxPlayerId),
@@ -187,8 +210,44 @@ export async function loadCloseState(
 		// roster read above was keyed on. Deriving it a second time inside
 		// `decide` would be a second read of a table the transaction has
 		// already passed the right moment to ask.
-		drawnWinner
+		drawnWinner,
+		// A plain map lookup, and `undefined` narrowed to the `null` the core
+		// asks for — "a Team this read did not cover", which the restorer
+		// treats as a failed candidate and walks past.
+		rosterFiguresFor: (teamId: string): TeamRosterFigures | null =>
+			rosterFigures.get(teamId) ?? null
 	};
+}
+
+/**
+ * Every Team holding a Bid anywhere in the fold, sorted and deduplicated.
+ *
+ * Sorted because it is the argument to a single statement whose result the
+ * cascade reads (AD-5), and because a stable order makes the query text the
+ * same across two closes that see the same Teams.
+ *
+ * CANCELLED Bids are included deliberately. `bids` keeps them — that is the
+ * whole of what tells a cancellation from a void — and a Team whose Bid was
+ * cancelled on one Auction can still be the next-highest survivor on another,
+ * so filtering them here would drop a legitimate candidate to save nothing.
+ */
+function teamsWithABid(auctions: OpenAuctions): readonly string[] {
+	const teamIds = new Set<string>();
+	for (const playerId of Object.keys(auctions.byPlayer).sort()) {
+		const auction = auctionForPlayer(auctions, playerId);
+		if (auction === null) continue;
+		for (const bid of auction.bids) teamIds.add(bid.teamId);
+	}
+	return [...teamIds].sort();
+}
+
+/** The restored Team on a `BidCancelled` payload, or `null`. Total. */
+function restoredTeamId(payload: unknown): string | null {
+	if (typeof payload !== 'object' || payload === null) return null;
+	const restoration = (payload as Record<string, unknown>)['restoration'];
+	if (typeof restoration !== 'object' || restoration === null) return null;
+	const teamId = (restoration as Partial<Restoration>)['teamId'];
+	return typeof teamId === 'string' && teamId !== '' ? teamId : null;
 }
 
 /**
@@ -238,7 +297,21 @@ function affectedTeamsForClose(
 	// state.** The appended row names the Team the cancellation is about, so
 	// even the pre-`load` window the enqueue cannot observe still addresses it.
 	if (eventType === BID_CANCELLED_EVENT) {
-		return event.teamId === null ? [] : [event.teamId];
+		// **Two Teams, one event** (Story 10.4). The row names the CANCELLED
+		// Team; the RESTORED one is on the payload, because an
+		// `auction_events` row carries one Team and this one is about the
+		// cancellation. A Manager whose Bid is leading again must not miss the
+		// notice telling them so — they did nothing to earn it and nothing to
+		// deserve losing it either — so the restored Team is added here rather
+		// than left to a fold on some later read.
+		//
+		// Read straight off the payload with no narrowing beyond a string
+		// test: this runs INSIDE the write transaction, so a throw would have
+		// to be caught and a caught throw mentions nobody.
+		const cancelled = event.teamId === null ? [] : [event.teamId];
+		const restored = restoredTeamId(event.payload);
+		if (restored === null || cancelled.includes(restored)) return cancelled;
+		return [...cancelled, restored];
 	}
 	if (state === null) return [];
 	const auction = state.auction;
