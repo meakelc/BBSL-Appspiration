@@ -621,11 +621,6 @@
 	</header>
 
 	<section class="panel">
-		<p class="section-label">Phase</p>
-		<p class="prose">{data.phase.sentence}</p>
-	</section>
-
-	<section class="panel">
 		<p class="section-label">Price</p>
 		<!-- The current price and who holds it, both from the fold. The
 		     Leading Bidder is spelled out with the acting Manager: there is

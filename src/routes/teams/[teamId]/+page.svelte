@@ -165,20 +165,22 @@
 		>
 	</header>
 
-	<section class="panel">
-		<p class="section-label">{TEAM_VIEW_LABELS.phase}</p>
-		<p class="prose">{data.phase.sentence}</p>
+	<!-- Every figure on this page carries its age in anything but Live
+	     (AD-29). Nothing here is disabled, because nothing here authorises.
 
-		<!-- Every figure on this page carries its age in anything but Live
-		     (AD-29). Nothing here is disabled, because nothing here
-		     authorises. -->
-		{#if figuresAge !== null}
-			<p class="prose" id="team-figures-age">{figuresAge}</p>
-		{/if}
-		{#if readAt !== null}
-			<p class="when" id="team-figures-at">{readAt}</p>
-		{/if}
-	</section>
+	     The panel is inside the guard rather than around it: in Live there is
+	     neither an age nor a read-at to state, and a bordered box with nothing
+	     in it reads as a figure that failed to load. -->
+	{#if figuresAge !== null || readAt !== null}
+		<section class="panel">
+			{#if figuresAge !== null}
+				<p class="prose" id="team-figures-age">{figuresAge}</p>
+			{/if}
+			{#if readAt !== null}
+				<p class="when" id="team-figures-at">{readAt}</p>
+			{/if}
+		</section>
+	{/if}
 
 	<!-- Band two: slots. The Roster Count is Active/Bench only; Minor League
 	     renders `N of 3`; Injury Reserve is stated and visibly outside the

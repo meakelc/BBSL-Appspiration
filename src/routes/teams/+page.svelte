@@ -117,8 +117,6 @@
 	<header class="masthead">
 		<h1 class="section-label">{TEAMS_INDEX_TITLE}</h1>
 		<p class="prose" id="teams-count">{index.countSentence}</p>
-		<p class="prose">{data.phase.sentence}</p>
-
 		<!-- Every figure on this page carries its age in anything but Live
 		     (AD-29). Nothing here is disabled, because nothing here
 		     authorises. -->
