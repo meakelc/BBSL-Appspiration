@@ -44,10 +44,16 @@ import type { Money } from './money.ts';
 import { wonCardSentence } from './positions.ts';
 import type { OpenNomination } from './projection/nominations.ts';
 import type { LeaguePhase } from './projection/phase.ts';
-import { capBreakdown, describeAmount } from './rules/bidding.ts';
+import { capBreakdown, describeAmount, outstandingBidFiguresFor } from './rules/bidding.ts';
 import type { CapBreakdownLine, TeamMoneyState } from './rules/bidding.ts';
 import { SLOT_LABELS, chargedCapHit } from './rules/roster-import.ts';
-import { baselineCapOutcome, rosterCountSentence } from './strip.ts';
+import {
+	baselineCapOutcome,
+	contentionEntriesSentence,
+	outstandingBidsSentence,
+	rosterCountSentence,
+	stripShowsOutstandingBids
+} from './strip.ts';
 import { formatTeamManagers, teamManagerSuffix } from './team-identity.ts';
 import type { CapGateOutcome, RosterSlotKind, SlotPlacement } from './types.ts';
 
@@ -264,6 +270,44 @@ export type TeamView = {
 	readonly injuryReserveSentence: string;
 
 	/**
+	 * What this Team holds against its Outstanding Bid Allowance, and how many
+	 * open lotteries it has entered — THREE separately named figures, from the
+	 * one `outstandingBidFiguresFor` derivation the persistent strip reads
+	 * (Story 10.6).
+	 *
+	 * **The entries are never summed into the bids count** (UX-DR36). A
+	 * lottery entry consumes no allowance and a Team may hold any number of
+	 * them, so a combined figure would imply a ceiling that does not exist.
+	 * They are carried here rather than re-derived in `teams-index.ts` for the
+	 * reason every other figure on this object is: the index re-deriving is
+	 * the second computation Epic 4 forbids.
+	 */
+	readonly outstandingBids: number;
+	/** `Free Active/Bench Slots + OUTSTANDING_BID_ALLOWANCE`. */
+	readonly bidAllowance: number;
+	/** Open Minimum-Bid Contention entries. Bounded by money alone (FR-18). */
+	readonly openContentionEntries: number;
+	/**
+	 * `2 of 4 bids` — the strip's own sentence, reused verbatim — or `null`
+	 * outside the Auction Phase.
+	 *
+	 * **The three counts above are facts and stay; the sentences are what a
+	 * surface prints, and they are gated** (resolved 2026-09-09). Outside the
+	 * Auction Phase no Bid is accepted at any amount, so a figure about
+	 * outstanding Bids describes an act nobody can perform —
+	 * `stripShowsOutstandingBids` states the reason, and every surface reads
+	 * that one predicate so the strip and this object can never disagree
+	 * about the same Team at the same instant.
+	 */
+	readonly outstandingBidsSentence: string | null;
+	/**
+	 * `4 lottery entries` — its own figure, with no ceiling to state — or
+	 * `null` outside the Auction Phase AND for a Team holding none. Entries
+	 * have no ceiling (FR-18), so a zero states nothing worth a row.
+	 */
+	readonly contentionEntriesSentence: string | null;
+
+	/**
 	 * The same four sentences split into the two registers `DESIGN.md:183`
 	 * sets — the count first, the ceiling one step quieter. The whole
 	 * sentence stays on each so a screen reader reads it unbroken.
@@ -277,6 +321,10 @@ export type TeamView = {
 	 * the Teams index — `minorLeagueOccupancySentence`'s reason.
 	 */
 	readonly minorLeagueOccupancyHalves: SlotSentenceHalves;
+	/** The bids sentence in the same two registers — `2` then ` of 4 bids`. */
+	readonly outstandingBidsHalves: SlotSentenceHalves | null;
+	/** The entries sentence. It has no ceiling half, so the qualifier is empty. */
+	readonly contentionEntriesHalves: SlotSentenceHalves | null;
 
 	readonly roster: readonly TeamRosterGroup[];
 	readonly nominationSlot: NominationSlotStatus;
@@ -576,6 +624,18 @@ export function teamViewFor(input: {
 		input.rosterRows.filter((row) => row.rosterSlotKind === 'injury_reserve').length
 	);
 
+	// The ONE bids derivation, and the two sentences worded off it. The strip
+	// calls the same function over the same `TeamMoneyState`, which is what
+	// makes this page and that strip incapable of stating different counts.
+	//
+	// The counts stay whatever they are; the SENTENCES are gated on the phase
+	// through the one predicate the strip reads, so no two surfaces can ever
+	// disagree about whether the figure is sayable (resolved 2026-09-09).
+	const bidFigures = outstandingBidFiguresFor(input.team);
+	const saysBids = stripShowsOutstandingBids(input.phase);
+	const outstandingBidsLine = saysBids ? outstandingBidsSentence(bidFigures) : null;
+	const contentionEntriesLine = saysBids ? contentionEntriesSentence(bidFigures) : null;
+
 	const published = {
 		teamName: input.teamName,
 		identity: formatTeamManagers(input.teamName, input.managerNames),
@@ -606,6 +666,12 @@ export function teamViewFor(input: {
 		minorLeagueSentence: minorLeagueLine,
 		injuryReserveSentence: injuryReserveLine,
 
+		outstandingBids: bidFigures.outstandingBids,
+		bidAllowance: bidFigures.allowance,
+		openContentionEntries: bidFigures.openContentionEntries,
+		outstandingBidsSentence: outstandingBidsLine,
+		contentionEntriesSentence: contentionEntriesLine,
+
 		rosterCountHalves: slotSentenceHalves(rosterCountLine),
 		activeBenchHalves: slotSentenceHalves(activeBenchLine),
 		minorLeagueHalves: slotSentenceHalves(minorLeagueLine),
@@ -613,6 +679,10 @@ export function teamViewFor(input: {
 			minorLeagueOccupancySentence(input.team.minorLeagueOccupied)
 		),
 		injuryReserveHalves: slotSentenceHalves(injuryReserveLine),
+		outstandingBidsHalves:
+			outstandingBidsLine === null ? null : slotSentenceHalves(outstandingBidsLine),
+		contentionEntriesHalves:
+			contentionEntriesLine === null ? null : slotSentenceHalves(contentionEntriesLine),
 
 		roster: groupRoster(input.rosterRows),
 		nominationSlot: nominationStatusFor(input.nomination)

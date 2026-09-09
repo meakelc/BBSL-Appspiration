@@ -57,7 +57,9 @@
 	import { formatInstant, parseInstant, relativePhrase } from '$lib/core/instant.ts';
 	import { parseMoney } from '$lib/core/money.ts';
 	import {
+		BID_CANCELLED_LABEL,
 		bidAppendedSentence,
+		bidCancelledSentence,
 		bidControlState,
 		bidGateReport,
 		bidRefusalDelta,
@@ -66,6 +68,9 @@
 		figuresAtCaption,
 		readBidAmount
 	} from '$lib/core/rules/bidding.ts';
+	// The allowance trade the control names once, worded where every other
+	// figure and label in this product is worded.
+	import { allowanceTradeSentence } from '$lib/core/strip.ts';
 	import type { BidState, TeamMoneyState } from '$lib/core/rules/bidding.ts';
 	import type { PlaceBidGateResults } from '$lib/core/types.ts';
 	import { MAXIMUM_BID_LABELS, STALE_BID_REASON } from '$lib/core/freshness.ts';
@@ -85,6 +90,14 @@
 		readonly bidder: string;
 		readonly amount: string;
 		readonly occurredAt: string;
+		/**
+		 * The FACTS a `BidCancelled` left on this Bid, or `null` (FR-40). The
+		 * words are the core's; these are what the core is handed.
+		 */
+		readonly cancellation: {
+			readonly causePlayerName: string;
+			readonly restored: boolean;
+		} | null;
 	};
 
 	/**
@@ -476,6 +489,21 @@
 	const standingBreakdown = $derived(capBreakdown(liveGates.cap));
 
 	/**
+	 * The allowance trade, stated ONCE above the confirm step, or `null`
+	 * (UX-DR34, Story 10.6).
+	 *
+	 * Derived from `liveGates.slots` — the same live evaluation the panel and
+	 * the control read — so the sentence appears and disappears with the
+	 * arithmetic rather than with a flag. The core decides all four cases: the
+	 * allowance Bid says it, and a Bid under the allowance, a Bid with no free
+	 * Slot at all and a lottery entry each say nothing.
+	 *
+	 * It is prose. There is no dialog, no second checkbox and no repetition on
+	 * any later view.
+	 */
+	const allowanceTrade = $derived(allowanceTradeSentence(liveGates.slots));
+
+	/**
 	 * The gate set a REFUSED SUBMIT came back with, or `null`.
 	 *
 	 * Not `liveGates`: these are the figures the locked transaction actually
@@ -807,6 +835,21 @@
 
 			     The field is pre-filled with the smallest LEGAL Bid — a rule,
 			     never a recommendation. -->
+			<!-- The allowance trade, once, before the confirm step and in
+			     plain prose (UX-DR34). Not a dialog, not a checkbox, and
+			     carrying no alarm treatment: the cancellation it names is
+			     automatic and ordinary, which is exactly why it is said before
+			     rather than discovered after. Worded by the core.
+
+			     The amount field points at this paragraph through
+			     `aria-describedby` ONLY while it exists — the reference is
+			     built from the same `allowanceTrade` the `{#if}` is, so it
+			     cannot dangle the way the always-present availability
+			     sentence below is arranged never to. -->
+			{#if allowanceTrade !== null}
+				<p class="prose" id="auction-bid-allowance">{allowanceTrade}</p>
+			{/if}
+
 			<div class="bid-row">
 				<label class="visually-hidden" for="auction-bid-amount">
 					Your Bid, in whole dollars
@@ -832,7 +875,9 @@
 					type="text"
 					inputmode="numeric"
 					autocomplete="off"
-					aria-describedby="auction-bid-availability"
+					aria-describedby={allowanceTrade === null
+						? 'auction-bid-availability'
+						: 'auction-bid-availability auction-bid-allowance'}
 					disabled={!control.available || expired || staleBlocked}
 					bind:value={amount}
 				/>
@@ -841,7 +886,14 @@
 				     stood beside this box, and again as a paragraph above the
 				     form, is gone from both: it said one thing twice on the one
 				     surface that must read cleanly, and what it named — the
-				     amount — is in the field beside it, being typed. -->
+				     amount — is in the field beside it, being typed.
+
+				     What now stands above this row is a DIFFERENT sentence and
+				     is not a return of that one (Story 10.6): it appears only
+				     when this prospective Bid is the allowance Bid, it names a
+				     consequence the amount cannot show — that a win elsewhere
+				     cancels this Bid — and it is stated once, here, and on no
+				     later view. -->
 				<label class="confirm" for="auction-bid-confirm">
 					<input
 						id="auction-bid-confirm"
@@ -907,12 +959,36 @@
 					     history is read rather than scrolled. The amounts share a
 					     trailing edge, which is what makes a column of tabular
 					     figures scannable. -->
-					<li class="history-row">
+					<!-- A cancelled Bid is struck through and labelled, in
+					     unchanged `seq` order — never deleted, hidden or
+					     reordered (FR-40). The label is one word and the
+					     sentence beneath it names the win that caused it; both
+					     are the core's, and both are worded so the row cannot
+					     be read as a void, which would say somebody decided the
+					     Bid should not have stood. A Bid that was never
+					     cancelled renders exactly as before. -->
+					<li class="history-row" class:cancelled={bid.cancellation !== null}>
 						<span class="history-bidder">
 							<span class="prose">{bid.bidder}</span>
 							<span class="history-when">{relativePhrase(bid.occurredAt, nowIso)}</span>
+							{#if bid.cancellation !== null}
+								<span class="history-cancelled">
+									{bidCancelledSentence(bid.cancellation.causePlayerName, bid.cancellation.restored)}
+								</span>
+							{/if}
 						</span>
-						<span class="history-amount">{bid.amount}</span>
+						<!-- Whitespace-tight, and it has to be. `.history-row` is
+						     `justify-content: space-between`, so a newline before
+						     `{bid.amount}` or after the `{/if}` renders as a text
+						     node and walks every amount — cancelled or not — off
+						     the trailing edge that makes a column of tabular
+						     figures scannable. An uncancelled Bid must render with
+						     no layout shift at all. -->
+						<span class="history-amount"
+							>{bid.amount}{#if bid.cancellation !== null}<span class="history-cancelled-label"
+									>{BID_CANCELLED_LABEL}</span
+								>{/if}</span
+						>
 					</li>
 				{/each}
 			</ul>
@@ -1166,6 +1242,44 @@
 
 	.history-when {
 		color: var(--color-text-tertiary);
+		font-size: var(--size-11);
+	}
+
+	/*
+	 * A cancelled Bid: the Team name and the amount struck through, so the row
+	 * reads as a Bid that no longer stands at a glance. The strike is never
+	 * the ONLY signal — the word beside the amount and the sentence beneath
+	 * the bidder both say it, so a greyscale or a screen-reader reading
+	 * carries the same fact. Nothing is red, and nothing is removed.
+	 */
+	.history-row.cancelled .history-bidder .prose,
+	.history-row.cancelled .history-amount {
+		text-decoration: line-through;
+		color: var(--color-text-secondary);
+	}
+
+	/*
+	 * The one word, beside the amount and never struck through with it.
+	 *
+	 * **Tertiary, where the sentence below it is secondary, and the two tones
+	 * are the two registers this row already uses.** A bare metadata word sits
+	 * in `text-tertiary` at `size-11` — the same register `.history-when`
+	 * takes, and for the same reason: it labels the row rather than saying
+	 * anything. The cause beneath the bidder is a SENTENCE a Manager reads, so
+	 * it takes the prose register `text-secondary`. Levelling the two would
+	 * either shout the label or bury the explanation.
+	 */
+	.history-cancelled-label {
+		margin-left: var(--space-row-gap);
+		font-size: var(--size-11);
+		color: var(--color-text-tertiary);
+		text-decoration: none;
+		display: inline-block;
+	}
+
+	/* The cause, under the bidder it belongs to. Plain type, no alarm. */
+	.history-cancelled {
+		color: var(--color-text-secondary);
 		font-size: var(--size-11);
 	}
 

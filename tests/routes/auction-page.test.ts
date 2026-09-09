@@ -29,7 +29,9 @@ import { formatInstant, parseInstant } from '../../src/lib/core/instant.ts';
 import { hasExpired } from '../../src/lib/core/projection/auctions.ts';
 import { parseMoney } from '../../src/lib/core/money.ts';
 import {
+	BID_CANCELLED_LABEL,
 	BID_READY,
+	bidCancelledSentence,
 	bidGateReport,
 	bidPlacedNotice,
 	bidRefusalDetail,
@@ -37,6 +39,8 @@ import {
 	evaluate
 } from '../../src/lib/core/rules/bidding.ts';
 import { PLACE_BID_GATES } from '../../src/lib/core/types.ts';
+import { allowanceTradeSentence } from '../../src/lib/core/strip.ts';
+import { MINIMUM_BID } from '../../src/lib/core/constants.ts';
 import { LIVE_DESTINATION_REFUSAL_STATUS } from '../../src/lib/server/destinations.ts';
 import type { RegisteredManager, SessionState } from '../../src/lib/server/auth.ts';
 import type { ResolvedPhase } from '../../src/lib/server/phase.ts';
@@ -429,7 +433,16 @@ describe('the Auction page — the bid control (AC7)', () => {
 
 	it('associates that reason with BOTH controls, so neither reference dangles', () => {
 		expect(PAGE.indexOf('</form>')).toBeLessThan(PAGE.indexOf('id="auction-bid-availability">'));
-		expect([...PAGE.matchAll(/aria-describedby="auction-bid-availability"/g)]).toHaveLength(2);
+		// The button still names it literally. The amount field now names it
+		// through an expression, because Story 10.6 gave that field a SECOND
+		// description — the allowance sentence — which exists only while the
+		// sentence does. Both arms carry the availability id, so the reference
+		// this test is about cannot dangle either way, and the conditional arm
+		// adds the allowance id only when its paragraph is rendered.
+		expect([...PAGE.matchAll(/aria-describedby="auction-bid-availability"/g)]).toHaveLength(1);
+		expect(PAGE).toMatch(
+			/allowanceTrade === null\s*\?\s*'auction-bid-availability'\s*:\s*'auction-bid-availability auction-bid-allowance'/
+		);
 	});
 
 	it('words no sentence of its own — every one arrives from the core', () => {
@@ -732,8 +745,31 @@ describe('the Auction page — what it never renders', () => {
 		const controls = [...PAGE_CODE.matchAll(/<button\b[\s\S]*?<\/button>/g)].map((m) => m[0]);
 		expect(controls).toHaveLength(1);
 		expect(controls[0]).toContain('type="submit"');
-		for (const forbidden of [/cancel/i, /withdraw/i, /\bretract\b/i, /\blower\b/i, /\bamend/i]) {
+		for (const forbidden of [/withdraw/i, /\bretract\b/i, /\blower\b/i, /\bamend/i]) {
 			expect(PAGE_CODE, String(forbidden)).not.toMatch(forbidden);
+		}
+		// **`cancel` is no longer a blanket forbidden word, and that is a rule
+		// change rather than a relaxation** (Story 10.6, FR-40). The page now
+		// READS `bid.cancellation` — the mark a `BidCancelled` left on a Bid
+		// the cascade took back — so the history can strike that row through
+		// and label it. That is the opposite of a control: nothing here lets a
+		// Manager cancel anything, and what is checked instead is that no form
+		// and no action offers it, and that every occurrence of the word is
+		// the core's own reading of a fact.
+		const forms = [...PAGE_CODE.matchAll(/<form\b[^>]*>/g)].map((m) => m[0]);
+		expect(forms).toHaveLength(1);
+		expect(forms[0]).toContain('action="?/bid"');
+		expect(PAGE_CODE).not.toMatch(/\?\/cancel/);
+		const permitted = [
+			'cancellation',
+			'cancelled',
+			'bidCancelledSentence',
+			'BID_CANCELLED_LABEL',
+			'history-cancelled',
+			'history-cancelled-label'
+		];
+		for (const occurrence of PAGE_CODE.match(/[A-Za-z_-]*cancel[A-Za-z_-]*/gi) ?? []) {
+			expect(permitted, occurrence).toContain(occurrence);
 		}
 	});
 
@@ -1550,5 +1586,193 @@ describe('the bid action — a refusal carries the figures it was judged against
 		// Both strings come from the core, through one helper.
 		expect(SERVER_CODE).toContain('bidRefusalDetail(refusal)');
 		expect(SERVER_CODE).toContain('bidRefusalDelta(refusal)');
+	});
+});
+
+// --- The allowance trade, and the cancelled history row (Story 10.6) --------
+
+describe('the bid control names the allowance trade once, before the confirm step', () => {
+	const NOW_TRADE = '2026-08-27T09:00:00.000Z';
+
+	const lead = (fantraxPlayerId: string, amount: number, isContentionEntry = false) => ({
+		fantraxPlayerId,
+		playerName: fantraxPlayerId,
+		amount: parseMoney(amount),
+		isContentionEntry
+	});
+
+	/** The live `slots` outcome the surface derives the sentence from. */
+	function slotsFor(input: {
+		rosterCount: number;
+		leading?: readonly ReturnType<typeof lead>[];
+		amount?: number;
+		auction?: unknown;
+	}) {
+		return evaluate(
+			bidStateFor(
+				(input.auction ?? null) as never,
+				{
+					capSpace: parseMoney(40_000_000),
+					rosterCount: input.rosterCount,
+					leading: input.leading ?? [],
+					eligibleLeading: [],
+					minorLeagueOccupied: 0
+				},
+				false,
+				'Auction'
+			),
+			{
+				kind: 'PlaceBid',
+				fantraxPlayerId: 'p-1',
+				teamId: 't-r',
+				teamName: 'Team R',
+				managerId: 'm-r',
+				amount: parseMoney(input.amount ?? 5_000_000)
+			},
+			NOW_TRADE
+		).slots;
+	}
+
+	it('states it when this prospective Bid IS the allowance Bid', () => {
+		// Roster 11, one free Slot, one outstanding Bid already: this Bid is
+		// the second of the two permitted, and it is the one a win elsewhere
+		// would take back.
+		const slots = slotsFor({ rosterCount: 11, leading: [lead('p-other', 3_000_000)] });
+		expect(slots.projectedAdditions).toBe(2);
+		expect(slots.allowance).toBe(2);
+
+		const sentence = allowanceTradeSentence(slots);
+		expect(sentence).not.toBeNull();
+		expect(sentence).toContain('2nd of 2 permitted bids');
+		expect(sentence).toContain('cancelled');
+		expect(sentence).toContain('next-highest');
+		// Plain prose, and stated once. Not a dialog, not a checkbox.
+		expect(sentence).not.toContain('?');
+		expect(sentence).not.toMatch(/warning|careful|are you sure/i);
+	});
+
+	it('says nothing under the allowance — this Bid is not the one at risk', () => {
+		const slots = slotsFor({ rosterCount: 9 });
+		expect(slots.projectedAdditions).toBe(1);
+		expect(slots.allowance).toBe(4);
+		expect(allowanceTradeSentence(slots)).toBeNull();
+	});
+
+	it('says nothing when the precondition failed — no Bid is permitted at all', () => {
+		const slots = slotsFor({ rosterCount: 12 });
+		expect(slots.freeActiveBenchSlots).toBe(0);
+		expect(slots.passed).toBe(false);
+		// The counterfactual allowance is still 1, and the sentence must not
+		// quote it any more than the refusal wording does.
+		expect(allowanceTradeSentence(slots)).toBeNull();
+	});
+
+	it('says nothing for a lottery entry — an entry spends no allowance', () => {
+		const contention = {
+			leadingBid: {
+				seq: '1',
+				teamId: 't-x',
+				teamName: 'Team X',
+				managerId: 'm-x',
+				amount: parseMoney(MINIMUM_BID),
+				occurredAt: NOW_TRADE,
+				closesAt: '2026-08-28T09:00:00.000Z',
+				seedHash: 'h'
+			},
+			bids: [],
+			contenders: [{ teamId: 't-x', teamName: 'Team X', managerId: 'm-x', seq: '1' }],
+			contention: 'minimum_bid',
+			closesAt: '2026-08-28T09:00:00.000Z',
+			seedHash: 'h',
+			seed: null
+		};
+		const slots = slotsFor({ rosterCount: 11, amount: MINIMUM_BID, auction: contention });
+
+		expect(slots.isContentionEntry).toBe(true);
+		expect(allowanceTradeSentence(slots)).toBeNull();
+	});
+
+	it('is rendered once, above the confirm step, and worded by the core', () => {
+		expect(PAGE_CODE).toContain('allowanceTradeSentence(liveGates.slots)');
+		// Exactly one render site, and it precedes the confirm control.
+		const occurrences = PAGE_CODE.match(/{allowanceTrade}/g) ?? [];
+		expect(occurrences).toHaveLength(1);
+		expect(PAGE_CODE.indexOf('{allowanceTrade}')).toBeLessThan(
+			PAGE_CODE.indexOf('id="auction-bid-confirm"')
+		);
+		// Prose, not a control: no second checkbox, no dialog.
+		expect(PAGE_CODE).not.toContain('<dialog');
+		expect(PAGE_CODE.match(/type="checkbox"/g) ?? []).toHaveLength(1);
+	});
+});
+
+describe('the Auction history tells a cancelled Bid from a live one', () => {
+	it('words the cancellation in the core, naming the causing Player', () => {
+		const restored = bidCancelledSentence('Stephen Curry', true);
+		expect(restored).toContain('Stephen Curry');
+		expect(restored).toContain('next-highest');
+		const alone = bidCancelledSentence('Stephen Curry', false);
+		expect(alone).toContain('Stephen Curry');
+		// A cancellation is not a void: nothing here says anybody decided the
+		// Bid should not have stood (UX-DR38).
+		for (const sentence of [restored, alone]) {
+			expect(sentence.toLowerCase()).not.toContain('void');
+			expect(sentence.toLowerCase()).not.toContain('invalid');
+			expect(sentence.toLowerCase()).not.toContain('should not');
+			expect(sentence).toContain('Cancelled when this Team won');
+		}
+		expect(BID_CANCELLED_LABEL).toBe('cancelled');
+	});
+
+	it('keeps the amount span whitespace-tight, so a live row does not shift', () => {
+		// `.history-row` is `justify-content: space-between`, so a newline and
+		// its indentation inside `.history-amount` render as text nodes and
+		// walk EVERY amount — cancelled or not — off the shared trailing edge
+		// that makes a column of tabular figures scannable. The matrix is
+		// explicit that a Bid which was never cancelled renders with no layout
+		// shift, so the tightness is the assertion rather than a style note.
+		// The `>` that opens the span must be followed by the interpolation
+		// with nothing between them, and the `{/if}` must close straight into
+		// the closing tag. Either gap is a rendered space.
+		expect(PAGE_CODE).toMatch(/class="history-amount"\s*>\{bid\.amount\}/);
+		expect(PAGE_CODE).toMatch(/\{\/if\}<\/span\s*>/);
+	});
+
+	it('strikes the row through and labels it, in unchanged seq order', () => {
+		// The loop is unchanged — every Bid, keyed by `seq`, oldest first —
+		// and nothing filters, sorts or hides.
+		expect(PAGE_CODE).toContain('{#each auction.bids as bid (bid.seq)}');
+		expect(PAGE_CODE).not.toMatch(/auction\.bids\.filter/);
+		expect(PAGE_CODE).not.toMatch(/auction\.bids\.sort/);
+		// The row treatment, conditioned on the fact and on nothing else.
+		expect(PAGE_CODE).toContain('class:cancelled={bid.cancellation !== null}');
+		expect(PAGE_CODE).toContain('{BID_CANCELLED_LABEL}');
+		expect(PAGE_CODE).toContain(
+			'bidCancelledSentence(bid.cancellation.causePlayerName, bid.cancellation.restored)'
+		);
+		expect(PAGE).toContain('text-decoration: line-through');
+	});
+
+	it('leaves a Bid that was never cancelled exactly as it was', () => {
+		// Both extra elements sit inside a guard, so a live row renders the
+		// same two spans it always did — no label, no sentence, no layout
+		// shift.
+		expect(PAGE_CODE).toContain('{#if bid.cancellation !== null}');
+		expect(PAGE_CODE.match(/{#if bid\.cancellation !== null}/g) ?? []).toHaveLength(2);
+	});
+});
+
+describe('the refusal panel wraps rather than truncating (UX-DR33, inherited)', () => {
+	const PANEL = readFileSync(at('src', 'lib', 'components', 'RefusalPanel.svelte'), 'utf8');
+
+	it('keeps the gate figure at line-height 1.6 with no truncation rule', () => {
+		// Story 10.6 PINS this; it does not build it. The property was already
+		// correct, and a story that "implements" an already-correct property
+		// tends to reimplement it.
+		expect(PANEL).toContain('line-height: 1.6');
+		expect(PANEL).toContain('flex-wrap: wrap');
+		expect(PANEL).toContain('align-items: flex-start');
+		expect(PANEL).not.toContain('text-overflow');
+		expect(PANEL).not.toContain('white-space: nowrap');
 	});
 });

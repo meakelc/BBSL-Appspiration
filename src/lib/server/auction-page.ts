@@ -174,6 +174,32 @@ export type AuctionPageBid = {
 	readonly amount: string;
 	/** The Bid's own instant, for the page to render twice. */
 	readonly occurredAt: string;
+	/**
+	 * The facts a `BidCancelled` left on this Bid, or `null` on the
+	 * overwhelming majority that were never cancelled (Story 10.6, FR-40).
+	 *
+	 * **Two FACTS, never a rendered row.** The history already lists every
+	 * Bid, cancelled ones included; until this field existed it simply could
+	 * not tell them apart, and a cancelled Bid arrived indistinguishable from
+	 * one that still stands. The page words the strike-through and the label
+	 * from the core (AD-7) — nothing here is a sentence.
+	 *
+	 * The causing win is named by its PLAYER and by nothing else, because
+	 * `BidCancellation` carries no cause Team name and needs none: the Team
+	 * that won elsewhere is the one this row already names as its bidder.
+	 */
+	readonly cancellation: {
+		/** The Player whose Close caused it — a DIFFERENT Auction to this one. */
+		readonly causePlayerName: string;
+		/**
+		 * Whether anyone took the lead behind it.
+		 *
+		 * `false` is not "there was nobody below": it is "nobody below could
+		 * still keep it", which is a leaderless Auction rendering as the unbid
+		 * nomination the board already has.
+		 */
+		readonly restored: boolean;
+	} | null;
 };
 
 /**
@@ -659,12 +685,26 @@ export async function loadAuctionPage(
 					? null
 					: nameBidder(auction.leadingBid.teamName, nameOf(auction.leadingBid)),
 			closesAt: auction?.closesAt ?? null,
-			bids: bids.map((bid) => ({
-				seq: bid.seq,
-				bidder: nameBidder(bid.teamName, nameOf(bid)),
-				amount: describeAmount(bid.amount),
-				occurredAt: bid.occurredAt
-			})),
+			bids: bids.map((bid) => {
+				// `bid.cancellation ?? null` is how every reader takes it
+				// (`projection/auctions.ts`): the field is written by a LATER
+				// event onto a Bid already folded, so its absence is the
+				// ordinary case rather than a missing fact.
+				const cancellation = bid.cancellation ?? null;
+				return {
+					seq: bid.seq,
+					bidder: nameBidder(bid.teamName, nameOf(bid)),
+					amount: describeAmount(bid.amount),
+					occurredAt: bid.occurredAt,
+					cancellation:
+						cancellation === null
+							? null
+							: {
+									causePlayerName: cancellation.causePlayerName,
+									restored: cancellation.restoration !== null
+								}
+				};
+			}),
 			bidControl: readBidControl(
 				auction,
 				team,

@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
 	AUCTION_EXPIRED,
+	BID_CANCELLED_EVENT,
 	BID_PLACED_EVENT,
 	CONTENTION_DISSOLVED_EVENT
 } from '../../src/lib/core/projection/auctions.ts';
@@ -570,6 +571,44 @@ describe('loadAuctionPage — no open nomination', () => {
 const NOMINATED_AT = '2026-08-25T19:00:00.000Z';
 
 /** An Auction with two raises: $8.0M by the Lakers, $8.5M by the Rockets. */
+/**
+ * A `BidCancelled` row exactly as `rules/close.ts` appends one inside a
+ * closing transaction — the cascade's own record, folded here rather than
+ * re-decided (AD-31).
+ *
+ * `restoration` is the whole point of the fixture: a Bid the cascade seated
+ * beneath the cancelled one, or `null` when nothing survived. It is the only
+ * thing separating the two sentences the Auction history can print.
+ */
+function bidCancelled(
+	seq: number,
+	fantraxPlayerId: string,
+	cancelledSeq: string,
+	teamId: string,
+	causeFantraxPlayerId: string,
+	causePlayerName: string,
+	restoration: Record<string, unknown> | null,
+	occurredAt = '2026-08-26T13:00:00.000Z'
+): QueryResultRow {
+	return logEvent(
+		seq,
+		BID_CANCELLED_EVENT,
+		{
+			fantraxPlayerId,
+			cancelledSeq,
+			teamId,
+			causeFantraxPlayerId,
+			causePlayerName,
+			restoration
+		},
+		occurredAt,
+		// No acting Manager or Team on the envelope: a cancellation is the
+		// cascade's own act inside a close, not anybody's command. The
+		// harness fills its own placeholder, which is all this fixture needs.
+		{}
+	);
+}
+
 function contestedAuction() {
 	return fakeGateway({
 		events: [
@@ -629,13 +668,19 @@ describe('loadAuctionPage — the Auction with Bids on it (AC6)', () => {
 				seq: '2',
 				bidder: 'Lakers — Meakel',
 				amount: '$8.0M',
-				occurredAt: '2026-08-26T09:00:00.000Z'
+				occurredAt: '2026-08-26T09:00:00.000Z',
+				// Never cancelled, and the field says so rather than being
+				// absent: `loadAuctionPage` states the fact in both directions
+				// so the surface never has to distinguish "not cancelled" from
+				// "not told" (Story 10.6).
+				cancellation: null
 			},
 			{
 				seq: '3',
 				bidder: 'Rockets — Sam',
 				amount: '$8.5M',
-				occurredAt: '2026-08-26T12:00:00.000Z'
+				occurredAt: '2026-08-26T12:00:00.000Z',
+				cancellation: null
 			}
 		]);
 	});
@@ -1737,5 +1782,98 @@ describe('loadAuctionPage — a won Player is in the viewer’s figures (AC4)', 
 
 		expect(auction?.bidControl.team?.capSpace).toBe(156_000_000);
 		expect(auction?.bidControl.team?.rosterCount).toBe(9);
+	});
+});
+
+describe('loadAuctionPage — a cancelled Bid carries its cause to the wire (Story 10.6)', () => {
+	/**
+	 * The cascade took Team 1's $8.0M Bid back because Team 1 won a DIFFERENT
+	 * Player, and seated Team 2 beneath it. The page needs two facts and only
+	 * two: what the causing win was called, and whether anybody now leads.
+	 */
+	function cancelledAuction(restoration: Record<string, unknown> | null) {
+		return fakeGateway({
+			events: [
+				nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1', NOMINATED_AT),
+				bidPlaced(
+					2,
+					'p-1',
+					't-2',
+					'Rockets',
+					'm-2',
+					8_000_000,
+					'2026-08-26T09:00:00.000Z',
+					'2026-08-27T09:00:00.000Z'
+				),
+				bidPlaced(
+					3,
+					'p-1',
+					't-1',
+					'Lakers',
+					'm-1',
+					8_500_000,
+					'2026-08-26T12:00:00.000Z',
+					'2026-08-27T12:00:00.000Z'
+				),
+				bidCancelled(4, 'p-1', '3', 't-1', 'p-9', 'Stephen Curry', restoration)
+			],
+			freeAgents: [
+				{ fantraxPlayerId: 'p-1', playerName: 'Jalen Green', positions: 'SG', nbaTeam: 'HOU' }
+			],
+			managers: [
+				{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' },
+				{ id: 'm-2', teamId: 't-2', displayName: 'Sam' }
+			]
+		});
+	}
+
+	const SURVIVOR = {
+		seq: '2',
+		teamId: 't-2',
+		teamName: 'Rockets',
+		managerId: 'm-2',
+		amount: 8_000_000
+	};
+
+	it('names the causing PLAYER and reports a survivor, on the cancelled Bid alone', async () => {
+		const harness = cancelledAuction(SURVIVOR);
+
+		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+
+		// The cancelled Bid — the causing Player by NAME, not by id, and a
+		// successor was seated.
+		expect(auction?.bids.find((bid) => bid.seq === '3')?.cancellation).toEqual({
+			causePlayerName: 'Stephen Curry',
+			restored: true
+		});
+		// The Bid the cascade seated is untouched: a restoration is not a
+		// cancellation, and nothing marks it.
+		expect(auction?.bids.find((bid) => bid.seq === '2')?.cancellation).toBeNull();
+		// Still both Bids, in log order. Nothing is filtered, hidden or moved.
+		expect(auction?.bids.map((bid) => bid.seq)).toEqual(['2', '3']);
+	});
+
+	it('reports no survivor when nothing was restored — the other sentence entirely', async () => {
+		const harness = cancelledAuction(null);
+
+		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+
+		expect(auction?.bids.find((bid) => bid.seq === '3')?.cancellation).toEqual({
+			causePlayerName: 'Stephen Curry',
+			restored: false
+		});
+	});
+
+	it('carries the cause NAME rather than the cause id — they are different strings', async () => {
+		const harness = cancelledAuction(SURVIVOR);
+
+		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+
+		const cancellation = auction?.bids.find((bid) => bid.seq === '3')?.cancellation ?? null;
+		// `causeFantraxPlayerId` is `p-9` and the name is `Stephen Curry`. A
+		// mapping that reached for the wrong field would render an id into the
+		// history sentence, and both fields are on the payload to reach for.
+		expect(cancellation?.causePlayerName).toBe('Stephen Curry');
+		expect(cancellation?.causePlayerName).not.toBe('p-9');
 	});
 });

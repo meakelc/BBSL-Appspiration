@@ -182,6 +182,34 @@
 							>{row.rosterCountHalves.qualifier}</span
 						>
 					</p>
+					<!-- Outstanding Bids against the allowance, and open lottery
+					     entries, as TWO figures and never one (UX-DR36): an
+					     entry consumes no allowance, so a combined figure would
+					     state a ceiling that does not exist. Both come worded
+					     from the core, in the same two registers as the slot
+					     sentences above — this file words nothing and, at
+					     parity, gives the figure no colour, badge or warning
+					     treatment (UX-DR35).
+
+					     Either may be ABSENT rather than zero, and the core
+					     decides which: both go outside the Auction Phase, when
+					     no Bid is accepted at any amount, and the entries
+					     figure goes for a Team holding none, because entries
+					     have no ceiling and a zero there states nothing. -->
+					{#if row.outstandingBidsHalves !== null}
+						<p class="figure" aria-label={row.outstandingBidsHalves.full}>
+							<span>{row.outstandingBidsHalves.lead}</span><span class="figure-qualifier"
+								>{row.outstandingBidsHalves.qualifier}</span
+							>
+						</p>
+					{/if}
+					{#if row.contentionEntriesHalves !== null}
+						<p class="figure" aria-label={row.contentionEntriesHalves.full}>
+							<span>{row.contentionEntriesHalves.lead}</span><span class="figure-qualifier"
+								>{row.contentionEntriesHalves.qualifier}</span
+							>
+						</p>
+					{/if}
 					<p class="figure" aria-label={row.minorLeagueHalves.full}>
 						<span>{row.minorLeagueHalves.lead}</span><span class="figure-qualifier"
 							>{row.minorLeagueHalves.qualifier}</span

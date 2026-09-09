@@ -459,3 +459,81 @@ describe('the index states figures and nothing ABOUT them', () => {
 		expect(TEAMS_SORT_LABELS.name).toBe('Team name');
 	});
 });
+
+// --- The bids figures on a row (Story 10.6) ---------------------------------
+
+describe('the Teams index row — bids against the allowance, entries beside them', () => {
+	const lead = (fantraxPlayerId: string, amount: number, isContentionEntry = false) => ({
+		fantraxPlayerId,
+		playerName: fantraxPlayerId,
+		amount: parseMoney(amount),
+		isContentionEntry
+	});
+
+	function rowWith(team: TeamMoneyState) {
+		const view = teamViewFor({
+			teamName: 'Bulls',
+			managerNames: ['Meakel'],
+			rosterRows: [],
+			team,
+			phase: 'Auction',
+			nomination: null,
+			viewerIsThisTeam: false,
+			now: NOW
+		});
+		return teamsIndexFor({
+			views: [{ ...view, teamId: 't-bulls' }],
+			viewerTeamId: null
+		}).rows[0];
+	}
+
+	it('reads the row figures off the view, never re-deriving them', () => {
+		const row = rowWith(
+			teamWith({ rosterCount: 9, leading: [lead('p-1', 3_000_000), lead('p-2', 4_000_000)] })
+		);
+
+		expect(row?.outstandingBidsHalves?.full).toBe('2 of 4 bids');
+		expect(row?.outstandingBids).toBe(2);
+		expect(row?.bidAllowance).toBe(4);
+		expect(row?.openContentionEntries).toBe(0);
+		// The count is still a fact on the row; the SENTENCE is what is
+		// absent, because a Team holding no entries has nothing to report.
+		expect(row?.contentionEntriesHalves).toBeNull();
+	});
+
+	it('keeps the two figures separate — one non-entry Bid, four entries held', () => {
+		// The matrix row: bids `1 of 3`, and the four entries stated on their
+		// own and never summed into it.
+		const row = rowWith(
+			teamWith({
+				rosterCount: 10,
+				leading: [
+					lead('p-1', 3_000_000),
+					lead('lot-1', 1_000_000, true),
+					lead('lot-2', 1_000_000, true),
+					lead('lot-3', 1_000_000, true)
+				],
+				eligibleLeading: [lead('lot-4', 1_000_000, true)]
+			})
+		);
+
+		expect(row?.outstandingBidsHalves?.full).toBe('1 of 3 bids');
+		expect(row?.contentionEntriesHalves?.full).toBe('4 lottery entries');
+		// The two are never one figure: neither sentence contains the other's
+		// count, and 1 + 4 = 5 appears in neither.
+		expect(row?.outstandingBidsHalves?.full).not.toContain('4');
+		expect(row?.contentionEntriesHalves?.full).not.toContain('5');
+	});
+
+	it('reads 0 of n for a Team whose only commitments are entries', () => {
+		const row = rowWith(
+			teamWith({
+				rosterCount: 9,
+				leading: [lead('lot-1', 1_000_000, true), lead('lot-2', 1_000_000, true)]
+			})
+		);
+
+		expect(row?.outstandingBidsHalves?.full).toBe('0 of 4 bids');
+		expect(row?.contentionEntriesHalves?.full).toBe('2 lottery entries');
+	});
+});

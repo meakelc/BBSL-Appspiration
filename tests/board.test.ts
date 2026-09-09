@@ -640,3 +640,62 @@ describe('the counts and phrases the board states', () => {
 		expect(ARCHIVED_EMPTY_BOARD_STATEMENT).not.toMatch(/!|sorry|unfortunately/i);
 	});
 });
+
+// --- The leaderless Auction, pinned (Story 10.6, FR-40) ---------------------
+
+describe('a leaderless Auction renders as the unbid nomination the board already has', () => {
+	it('carries no price, no leader and no clock — and no state of its own', () => {
+		// Story 10.6 PINS this; it builds nothing. FR-40 leaves an Auction
+		// behind with every Bid cancelled and nothing restored, and the board
+		// gives it the treatment it already gives a Player Awaiting an Opening
+		// Bid. A "restarted" state would be a fourth thing for a Manager to
+		// learn about a card that has nothing new to say.
+		const { nominations, auctions } = project([
+			nominated('p-1', 'Jalen Green', 't-1', 'Lakers', '2026-08-26T00:00:00.000Z'),
+			bid('p-1', 't-2', 'Rockets', 8_500_000, '2026-08-26T12:00:00.000Z', '2026-08-27T12:00:00.000Z')
+		]);
+		const open = auctionForPlayer(auctions, 'p-1');
+		expect(open).not.toBeNull();
+		// The state FR-40 leaves: the Bids are still in `bids`, and the lead
+		// and the clock are gone.
+		const leaderless = {
+			byPlayer: {
+				...auctions.byPlayer,
+				'p-1': { ...(open as Auction), leadingBid: null, closesAt: null }
+			}
+		};
+
+		const card = cardFor(boardCardsFor(nominations, leaderless, new Map(), null), 'p-1');
+		const unbid = cardFor(
+			boardCardsFor(
+				project([nominated('p-2', 'Jalen Green', 't-1', 'Lakers', '2026-08-26T00:00:00.000Z')])
+					.nominations,
+				INITIAL_AUCTIONS,
+				new Map(),
+				null
+			),
+			'p-2'
+		);
+
+		expect(card.price).toBeNull();
+		expect(card.leadingTeamId).toBeNull();
+		expect(card.leadingTeamName).toBeNull();
+		expect(card.closesAt).toBeNull();
+		// The history is untouched — every Bid is still folded on the Auction.
+		expect((open as Auction).bids.length).toBeGreaterThan(0);
+		// And every field the card states about its state matches the unbid
+		// one, which is what "the treatment the board already has" means.
+		expect(card.viewerState).toBe(unbid.viewerState);
+		expect(card.price).toBe(unbid.price);
+		expect(card.closesAt).toBe(unbid.closesAt);
+	});
+
+	it('names no restarted state anywhere in the board vocabulary', () => {
+		for (const label of Object.values(AUCTION_STATE_LABELS)) {
+			expect(label.toLowerCase()).not.toContain('restart');
+		}
+		for (const label of Object.values(VIEWER_STATE_LABELS)) {
+			expect(label.toLowerCase()).not.toContain('restart');
+		}
+	});
+});

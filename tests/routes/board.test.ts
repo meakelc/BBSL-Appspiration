@@ -457,3 +457,19 @@ describe('the board page — what it renders', () => {
 		expect(PAGE_CODE).not.toMatch(/`\/auction\//);
 	});
 });
+
+describe('the board gains no state for a leaderless Auction (Story 10.6)', () => {
+	it('renders one treatment for a null leader, with no restarted branch', () => {
+		// FR-40 can leave an Auction with no surviving Bid. The card for it is
+		// the unbid nomination the board already draws, so this page needed no
+		// edit at all — and that is the property worth pinning: no new state,
+		// no cancellation vocabulary, no branch on a leader that is null.
+		expect(PAGE_CODE.toLowerCase()).not.toContain('restart');
+		expect(PAGE_CODE.toLowerCase()).not.toContain('cancel');
+		// A null price already has exactly ONE treatment on this page — the
+		// unbid nomination's — and a leaderless Auction inherits it rather
+		// than adding a second.
+		expect(PAGE_CODE.match(/card\.price === null/g)).toHaveLength(1);
+		expect(PAGE_CODE).toContain('card-price-absent');
+	});
+});

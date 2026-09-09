@@ -49,8 +49,9 @@ import {
 	minimumLegalSentence,
 	REFUSAL_HEADLINE,
 	REFUSAL_REASSURANCE,
-	teamMoneyStateFor,
-	readBidAmount
+	outstandingBidFiguresFor,
+	readBidAmount,
+	teamMoneyStateFor
 } from '../../src/lib/core/rules/bidding.ts';
 import type {
 	BidPlacedPayload,
@@ -4397,5 +4398,143 @@ describe('decide — a join into a lottery every Contender left (Story 10.5, FR-
 
 	it('pre-fills the join amount, because nobody is contending to be refused', () => {
 		expect(minimumLegalBid(emptiedLottery(), 't-2')).toBe(MINIMUM_BID);
+	});
+});
+
+/**
+ * The standing bids figure — Story 10.6's one new piece of arithmetic.
+ *
+ * It answers what a Team HOLDS, which is `projectedAdditions` without its
+ * prospective `+ 1`, and it counts lottery entries in a field of their own.
+ * The separation is the invariant most easily lost, so it is asserted in both
+ * directions on every case below.
+ */
+describe('outstandingBidFiguresFor — what a Team holds against its allowance (Story 10.6)', () => {
+	const lead = (fantraxPlayerId: string, amount: number, isContentionEntry = false) => ({
+		fantraxPlayerId,
+		playerName: fantraxPlayerId,
+		amount: parseMoney(amount),
+		isContentionEntry
+	});
+
+	const state = (input: {
+		rosterCount: number;
+		leading?: readonly ReturnType<typeof lead>[];
+		eligibleLeading?: readonly ReturnType<typeof lead>[];
+		minorLeagueOccupied?: number;
+	}): TeamMoneyState => ({
+		capSpace: parseMoney(SALARY_CAP),
+		rosterCount: input.rosterCount,
+		leading: input.leading ?? [],
+		eligibleLeading: input.eligibleLeading ?? [],
+		minorLeagueOccupied: input.minorLeagueOccupied ?? 0
+	});
+
+	it('states outstanding non-entry Bids against Free Active/Bench Slots plus the allowance', () => {
+		// The I/O matrix's parity row: Roster 9 of 12, three free Slots, two
+		// non-entry Bids outstanding — `2 of 4`.
+		const figures = outstandingBidFiguresFor(
+			state({ rosterCount: 9, leading: [lead('p-1', 3_000_000), lead('p-2', 4_000_000)] })
+		);
+
+		expect(figures.outstandingBids).toBe(2);
+		expect(figures.allowance).toBe(ACTIVE_BENCH_SLOTS - 9 + OUTSTANDING_BID_ALLOWANCE);
+		expect(figures.allowance).toBe(4);
+		expect(figures.openContentionEntries).toBe(0);
+	});
+
+	it('counts lottery entries SEPARATELY, never summed into the bids figure', () => {
+		// The Teams index row from the matrix: one non-entry Bid, allowance 3,
+		// four open lottery entries — and the entries are in neither the
+		// numerator nor the ceiling.
+		const figures = outstandingBidFiguresFor(
+			state({
+				rosterCount: 10,
+				leading: [
+					lead('p-1', 3_000_000),
+					lead('lot-1', MINIMUM_BID, true),
+					lead('lot-2', MINIMUM_BID, true),
+					lead('lot-3', MINIMUM_BID, true)
+				],
+				eligibleLeading: [lead('lot-4', MINIMUM_BID, true)]
+			})
+		);
+
+		expect(figures.outstandingBids).toBe(1);
+		expect(figures.allowance).toBe(3);
+		expect(figures.openContentionEntries).toBe(4);
+	});
+
+	it('reads 0 of n for a Team whose only commitments are lottery entries', () => {
+		const figures = outstandingBidFiguresFor(
+			state({
+				rosterCount: 9,
+				leading: [lead('lot-1', MINIMUM_BID, true), lead('lot-2', MINIMUM_BID, true)]
+			})
+		);
+
+		expect(figures.outstandingBids).toBe(0);
+		expect(figures.allowance).toBe(4);
+		expect(figures.openContentionEntries).toBe(2);
+	});
+
+	it('lets a Free Minor League Slot absorb an eligible lead — the clamp removes it, not a filter', () => {
+		// One eligible leading Bid against one Free Minor League Slot:
+		// `max(0, 1 - 3) = 0`, so it contributes nothing. It is the OVERFLOW
+		// clamp that removes it, which is why a second eligible lead past the
+		// Slots does contribute.
+		const absorbed = outstandingBidFiguresFor(
+			state({ rosterCount: 9, eligibleLeading: [lead('p-elig', 3_000_000)] })
+		);
+		expect(absorbed.outstandingBids).toBe(0);
+
+		const overflowing = outstandingBidFiguresFor(
+			state({
+				rosterCount: 9,
+				eligibleLeading: [lead('p-a', 3_000_000), lead('p-b', 3_000_000)],
+				minorLeagueOccupied: MINOR_LEAGUE_SLOTS - 1
+			})
+		);
+		expect(overflowing.outstandingBids).toBe(1);
+	});
+
+	it('clamps the allowance at a Team over the ceiling rather than going negative', () => {
+		// A Commissioner override can leave a Team at 13. `unfilledSlots`
+		// clamps `F` at zero, so the allowance is the raw `0 + 1` the gate
+		// itself reports and never a negative figure.
+		const figures = outstandingBidFiguresFor(state({ rosterCount: 13 }));
+
+		expect(figures.allowance).toBe(OUTSTANDING_BID_ALLOWANCE);
+		expect(figures.outstandingBids).toBe(0);
+	});
+
+	it('nulls every figure together for a viewer bound to no Team — never 0 of 0', () => {
+		expect(outstandingBidFiguresFor(null)).toBeNull();
+	});
+
+	it('is projectedAdditions without the prospective Bid, on the same Team', () => {
+		// The design note's own claim, asserted rather than described: the
+		// gate's figure for a fresh non-eligible Bid is exactly one more than
+		// what the Team already holds.
+		const team = state({
+			rosterCount: 9,
+			leading: [lead('p-1', 3_000_000), lead('lot-1', MINIMUM_BID, true)]
+		});
+		const held = outstandingBidFiguresFor(team);
+		const gates = evaluate(
+			bidStateFor(null, team, false, 'Auction'),
+			{
+				kind: 'PlaceBid',
+				fantraxPlayerId: 'p-new',
+				teamId: 't-1',
+				teamName: 't-1',
+				managerId: 'm-1',
+				amount: parseMoney(3_000_000)
+			},
+			NOW
+		);
+
+		expect(gates.slots.projectedAdditions).toBe(held.outstandingBids + 1);
+		expect(gates.slots.allowance).toBe(held.allowance);
 	});
 });

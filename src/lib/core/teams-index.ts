@@ -291,6 +291,27 @@ export type TeamsIndexRow = {
 	 */
 	readonly minorLeagueHalves: SlotSentenceHalves;
 	readonly injuryReserveHalves: SlotSentenceHalves;
+	/**
+	 * Outstanding non-entry Bids against the allowance — `2 of 4 bids` — and
+	 * the open lottery entries beside it, as TWO figures (Story 10.6).
+	 *
+	 * **They are two because entries consume no allowance** (UX-DR36).
+	 * Summing them would state a ceiling on lottery entries that FR-18 does
+	 * not impose. Both are read off the `TeamView`, which read them off the
+	 * one `outstandingBidFiguresFor` derivation the persistent strip reads —
+	 * so a row and the strip above it cannot disagree.
+	 */
+	/**
+	 * Both `null` outside the Auction Phase, and the entries figure `null`
+	 * again for a Team holding none — `teamViewFor` decides, so a row and the
+	 * strip above it can never disagree about whether the figure is sayable.
+	 */
+	readonly outstandingBidsHalves: SlotSentenceHalves | null;
+	readonly contentionEntriesHalves: SlotSentenceHalves | null;
+	/** The three figures behind the two sentences, read and never computed. */
+	readonly outstandingBids: number;
+	readonly bidAllowance: number;
+	readonly openContentionEntries: number;
 
 	readonly capSpaceLabel: string;
 	readonly committedBidsLabel: string;
@@ -449,6 +470,11 @@ function rowFor(view: TeamsIndexInput, viewerTeamId: string | null): TeamsIndexR
 		rosterCountHalves: view.rosterCountHalves,
 		minorLeagueHalves: view.minorLeagueOccupancyHalves,
 		injuryReserveHalves: view.injuryReserveHalves,
+		outstandingBidsHalves: view.outstandingBidsHalves,
+		contentionEntriesHalves: view.contentionEntriesHalves,
+		outstandingBids: view.outstandingBids,
+		bidAllowance: view.bidAllowance,
+		openContentionEntries: view.openContentionEntries,
 
 		capSpaceLabel: view.capSpaceLabel,
 		committedBidsLabel: view.committedBidsLabel,

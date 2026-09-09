@@ -482,3 +482,37 @@ describe('the Teams index page — what it renders', () => {
 		expect(styles, 'a raw colour').not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
 	});
 });
+
+describe('the Teams index row — the two bids figures (Story 10.6)', () => {
+	it('renders them as TWO figures, in the established register', () => {
+		// Both in `.figure`/`.figure-qualifier`, like the slot sentences above
+		// them, and each reading its own halves off the row.
+		expect(PAGE).toContain('row.outstandingBidsHalves.lead');
+		expect(PAGE).toContain('row.outstandingBidsHalves.qualifier');
+		expect(PAGE).toContain('row.outstandingBidsHalves.full');
+		expect(PAGE).toContain('row.contentionEntriesHalves.lead');
+		expect(PAGE).toContain('row.contentionEntriesHalves.qualifier');
+		expect(PAGE).toContain('row.contentionEntriesHalves.full');
+	});
+
+	it('never sums them, and never words either one itself', () => {
+		// A combined figure would state a ceiling on lottery entries that does
+		// not exist (UX-DR36). The page has no arithmetic for it and no
+		// vocabulary of its own: nothing adds the two counts, the raw counts
+		// are not even read, and every word on the two figures arrives inside
+		// a `Halves` object the core built.
+		expect(PAGE_CODE).not.toContain('outstandingBids +');
+		expect(PAGE_CODE).not.toContain('openContentionEntries');
+		expect(PAGE_CODE).not.toContain('row.outstandingBids}');
+		for (const forbidden of ['lottery', 'allowance', 'permitted']) {
+			expect(PAGE_CODE.toLowerCase(), forbidden).not.toContain(forbidden);
+		}
+	});
+
+	it('gives the figures no colour, badge or warning treatment (UX-DR35)', () => {
+		// At parity the figure alone is the signal. Nothing on the row is
+		// conditioned on the count.
+		expect(PAGE_CODE).not.toMatch(/class:.*[Bb]ids/);
+		expect(PAGE_CODE).not.toMatch(/outstandingBids\s*[<>=]/);
+	});
+});

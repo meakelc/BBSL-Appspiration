@@ -1408,6 +1408,76 @@ function projectedAdditionsFor(
 }
 
 /**
+ * What a Team holds RIGHT NOW against its Outstanding Bid Allowance, and how
+ * many open lotteries it has entered (Story 10.6, FR-37, FR-18).
+ *
+ * **One derivation, two surfaces.** The persistent strip and the Teams index
+ * both state this figure, and `teamViewFor` reads it from here rather than
+ * spelling it a second time — which is what makes the strip and the row
+ * structurally incapable of disagreeing.
+ *
+ * **It is deliberately NOT `projectedAdditions`.** That figure counts a
+ * PROSPECTIVE Bid: it answers "if I bid now, what would this be", which is
+ * the question the gate asks and not the question a standing figure asks.
+ * This is the same expression WITHOUT its prospective `+ 1` — built from the
+ * same parts rather than by probing the gate and subtracting one, because a
+ * subtraction is something a reader has to justify every time they meet it.
+ *
+ * The `max(0, N_slots − M)` half is `activeBenchOverflowFor`'s own call, not
+ * a second subtraction written out here, so the two figures differ in nothing
+ * at all. The state it is called with is the no-prospective-Bid one — the
+ * SAME `false` the strip's baseline passes for `playerIsMinorLeagueEligible`
+ * (`strip.ts`) — under which both of that function's prospective terms
+ * contribute zero whatever `thisBidIsEntry` says.
+ *
+ * **Entries are counted SEPARATELY and never summed in** (UX-DR36). A
+ * Minimum-Bid Contention entry consumes no allowance and a Team may hold any
+ * number of them, so folding them into the bids figure would state a ceiling
+ * that does not exist. `isContentionEntry` is the classification
+ * `teamMoneyStateFor` already recorded per Bid, so this is a filter and never
+ * a comparison against an amount.
+ *
+ * **Every figure is nulled TOGETHER for a viewer bound to no Team**, the way
+ * `evaluateCap` nulls its own: a Team that does not exist holds no bids
+ * against no allowance, and `0 of 0` would be an invented figure rather than
+ * an absent one.
+ */
+export type OutstandingBidFigures = {
+	/**
+	 * Outstanding NON-ENTRY Bids — the slots-side count, which is what the
+	 * allowance bounds. Never `overflowCount`, which counts entries because
+	 * the cap must carry them (see `minorsCountsFor`).
+	 */
+	readonly outstandingBids: number;
+	/** `Free Active/Bench Slots + OUTSTANDING_BID_ALLOWANCE` — what is permitted. */
+	readonly allowance: number;
+	/** Open Minimum-Bid Contention entries. Bounded by money alone (FR-18). */
+	readonly openContentionEntries: number;
+};
+
+export function outstandingBidFiguresFor(team: TeamMoneyState): OutstandingBidFigures;
+export function outstandingBidFiguresFor(team: TeamMoneyState | null): OutstandingBidFigures | null;
+export function outstandingBidFiguresFor(
+	team: TeamMoneyState | null
+): OutstandingBidFigures | null {
+	if (team === null) return null;
+	// The no-prospective-Bid state: there is no Player being bid on here, so
+	// nothing is eligible and nothing is an entry.
+	const bound: BoundBidState = { team, playerIsMinorLeagueEligible: false };
+	const { activeBenchOverflow } = activeBenchOverflowFor(bound, false);
+	return {
+		outstandingBids:
+			team.leading.filter((lead) => !lead.isContentionEntry).length + activeBenchOverflow,
+		// `unfilledSlots` with no additions IS Free Active/Bench Slots, clamp
+		// and all — the same one expression `evaluateSlots` reads its `F` from.
+		allowance: unfilledSlots(team.rosterCount, 0) + OUTSTANDING_BID_ALLOWANCE,
+		openContentionEntries:
+			team.leading.filter((lead) => lead.isContentionEntry).length +
+			team.eligibleLeading.filter((lead) => lead.isContentionEntry).length
+	};
+}
+
+/**
  * The operator a subtracted breakdown row carries.
  *
  * The same U+2212 MINUS SIGN `formatMoney` prefixes a negative amount with,
@@ -2297,7 +2367,7 @@ function gateSentence(gates: PlaceBidGateResults, gate: PlaceBidGate): string | 
  * A fourteenth is refused and prints `your 14th outstanding bid`. Without
  * the exception those three would read `11st`, `12nd` and `13rd`.
  */
-function ordinal(value: number): string {
+export function ordinal(value: number): string {
 	const suffix =
 		value % 100 >= 11 && value % 100 <= 13
 			? 'th'
@@ -3282,6 +3352,45 @@ export function bidAppendedSentence(seq: string): string {
 		'and the amount. The price, the Leading Bidder, the Auction Clock and the League Clock ' +
 		'are folds of that event; no flag was set anywhere.'
 	);
+}
+
+/**
+ * The one word an Auction history row carries when the Bid on it was
+ * cancelled (Story 10.6, FR-40).
+ *
+ * **It is not "void", and the distinction is the whole point** (UX-DR38). A
+ * void says somebody decided the Bid should not have stood. A cancellation
+ * says nothing of the kind: the Bid was good, it stood, and it was taken back
+ * automatically when the bidding Team's roster filled elsewhere. One word here
+ * and one sentence below, so no surface has to choose between two framings.
+ */
+export const BID_CANCELLED_LABEL = 'cancelled';
+
+/**
+ * Why a Bid in this Auction's history no longer stands, naming the win that
+ * caused it.
+ *
+ * **The cause is named by its PLAYER.** `BidCancellation` carries
+ * `causeFantraxPlayerId` and `causePlayerName` and no cause Team name
+ * (`projection/auctions.ts`) — and it needs none, because the Team that won
+ * elsewhere is the same Team this cancelled row already names as its bidder.
+ * The cascade only ever takes back the WINNING Team's own leftover
+ * commitments.
+ *
+ * `restored` is `cancellation.restoration !== null` — whether anyone took the
+ * lead behind it. `false` is never "there was nobody below": it is "nobody
+ * below could still keep it", which is why the second form states the
+ * consequence for the Auction rather than the state of its history. The
+ * Auction then renders as the unbid nomination the board already has, with
+ * this history intact.
+ *
+ * No apology, no alarm, and no verb suggesting anyone judged the Bid.
+ */
+export function bidCancelledSentence(causePlayerName: string, restored: boolean): string {
+	const cause = `Cancelled when this Team won ${causePlayerName}.`;
+	return restored
+		? `${cause} The next-highest Bid now leads.`
+		: `${cause} No surviving Bid could take the lead.`;
 }
 
 // --- decide() --------------------------------------------------------------

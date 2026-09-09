@@ -33,7 +33,7 @@
 	import { MAXIMUM_BID_LABELS } from '$lib/core/freshness.ts';
 	import { describeAmount } from '$lib/core/rules/bidding.ts';
 	import type { TeamMoneyState } from '$lib/core/rules/bidding.ts';
-	import { STRIP_REGION_LABEL, STRIP_SHEET_LABEL, baselineMaximumBid, rosterCountSentence, stripShowsMaximumBid } from '$lib/core/strip.ts';
+	import { STRIP_REGION_LABEL, STRIP_SHEET_LABEL, baselineMaximumBid, outstandingBidLines, rosterCountSentence, stripShowsMaximumBid, stripShowsOutstandingBids } from '$lib/core/strip.ts';
 	import type { LeaguePhase } from '$lib/core/projection/phase.ts';
 	import { freshness } from '$lib/client/freshness.svelte.ts';
 
@@ -147,6 +147,27 @@
 	const maximumBidLabel = $derived(MAXIMUM_BID_LABELS[freshness.state]);
 
 	const roster = $derived(rosterCountSentence(team.rosterCount));
+
+	// The bids figure, derived here from the SAME transported facts (AD-7) and
+	// worded by the same core module the Roster Count beside it is worded by.
+	// `null` for a viewer bound to no Team is the core's own answer, and it is
+	// what makes the segment absent rather than `0 of 0`.
+	//
+	// The phase gate is the core's too, and it is its OWN predicate rather
+	// than the money half's: outside the Auction Phase no Bid is accepted at
+	// any amount, so a figure about outstanding Bids would describe an act
+	// nobody can perform. The Roster Count beside it is unaffected.
+	//
+	// **Only `.bids` — the entries figure is deliberately not on the strip.**
+	// UX-DR35 words this strip as the roster figure and the bids figure and
+	// nothing else, and it is inherited by every screen, so a third figure
+	// here is a third figure everywhere. The Teams index and the Team view
+	// carry the entries count; a Manager who wants it goes to a Team record.
+	// `.entries` is therefore never read here rather than computed and
+	// thrown away.
+	const bids = $derived(
+		stripShowsOutstandingBids(phase) ? outstandingBidLines(team).bids : null
+	);
 </script>
 
 <svelte:window on:keydown={onWindowKeydown} on:pointerdown={onWindowPointerdown} />
@@ -192,6 +213,15 @@
 					<span class="strip-separator" aria-hidden="true">·</span>
 				{/if}
 				<span class="strip-roster">{roster}</span>
+				<!-- The bids figure, behind the SAME `·` the money half already
+				     uses. Plain type and nothing else: at parity the figure
+				     alone is the signal (UX-DR35), and this strip is inherited
+				     by every screen, so a warning treatment here would be a
+				     warning everywhere. -->
+				{#if bids !== null}
+					<span class="strip-separator" aria-hidden="true">·</span>
+					<span class="strip-bids">{bids}</span>
+				{/if}
 			</span>
 		</summary>
 		<div class="strip-sheet">
@@ -371,7 +401,12 @@
 		color: var(--color-text-tertiary);
 	}
 
-	.strip-roster {
+	/*
+	 * The two count figures share one rule: they are one register, read in
+	 * sequence, and a second declaration is a second thing to keep in step.
+	 */
+	.strip-roster,
+	.strip-bids {
 		font-size: var(--size-12);
 		color: var(--color-text-secondary);
 	}

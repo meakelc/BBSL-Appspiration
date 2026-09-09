@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 08-18-2026 13:11
-last_updated: 09-09-2026 10:44
+last_updated: 09-09-2026 14:55
 project: BBSL-Appspiration
 project_key: NOKEY
 tracking_system: file-system
@@ -126,5 +126,5 @@ development_status:
   10-3-cancel-the-surplus-commitment-at-close: done
   10-4-restore-the-next-highest-bidder: done
   10-5-a-lottery-whose-contenders-were-cancelled: done
-  10-6-say-it-on-the-board-and-in-discord: backlog
+  10-6-say-it-on-the-board-and-in-discord: review
   epic-10-retrospective: optional

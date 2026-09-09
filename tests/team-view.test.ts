@@ -571,3 +571,108 @@ describe('no comparison, no median, no verdict', () => {
 		}
 	});
 });
+
+// --- The bids figures (Story 10.6) ------------------------------------------
+
+describe('the bids figures on a Team view', () => {
+	const lead = (fantraxPlayerId: string, amount: number, isContentionEntry = false) => ({
+		fantraxPlayerId,
+		playerName: fantraxPlayerId,
+		amount: parseMoney(amount),
+		isContentionEntry
+	});
+
+	it('carries the three figures and the two sentences from the one derivation', () => {
+		const view = viewFor({
+			team: teamWith({
+				rosterCount: 9,
+				leading: [lead('p-1', 3_000_000), lead('p-2', 4_000_000)]
+			})
+		});
+
+		expect(view.outstandingBids).toBe(2);
+		expect(view.bidAllowance).toBe(4);
+		expect(view.openContentionEntries).toBe(0);
+		expect(view.outstandingBidsSentence).toBe('2 of 4 bids');
+		// No entries held, so no entries sentence at all — the bids figure
+		// keeps its `0 of n` because the allowance exists whether or not it is
+		// spent, while entries have no ceiling and a zero states nothing.
+		expect(view.contentionEntriesSentence).toBeNull();
+	});
+
+	it('splits the bids sentence into the same two registers every slot sentence uses', () => {
+		const view = viewFor({
+			team: teamWith({ rosterCount: 9, leading: [lead('p-1', 3_000_000)] })
+		});
+
+		expect(view.outstandingBidsHalves).toEqual(slotSentenceHalves('1 of 4 bids'));
+		expect(view.outstandingBidsHalves?.lead).toBe('1');
+		expect(view.outstandingBidsHalves?.qualifier).toBe(' of 4 bids');
+		// The entries sentence has no ceiling, so there is no quieter half to
+		// step back — the whole sentence reads in one register.
+		const held = viewFor({
+			team: teamWith({ rosterCount: 9, leading: [lead('lot-1', 1_000_000, true)] })
+		});
+		expect(held.contentionEntriesHalves?.qualifier).toBe('');
+	});
+
+	it('keeps lottery entries out of the bids figure entirely', () => {
+		const view = viewFor({
+			team: teamWith({
+				rosterCount: 10,
+				leading: [
+					lead('p-1', 3_000_000),
+					lead('lot-1', 1_000_000, true),
+					lead('lot-2', 1_000_000, true),
+					lead('lot-3', 1_000_000, true)
+				],
+				eligibleLeading: [lead('lot-4', 1_000_000, true)]
+			})
+		});
+
+		expect(view.outstandingBidsSentence).toBe('1 of 3 bids');
+		expect(view.openContentionEntries).toBe(4);
+		expect(view.contentionEntriesSentence).toBe('4 lottery entries');
+	});
+
+	it('states neither figure outside the Auction Phase, as the strip does not', () => {
+		// One predicate for every surface. The counts stay on the object — they
+		// are facts — but the SENTENCES go, because outside the Auction Phase no
+		// Bid is accepted at any amount and a figure about outstanding Bids
+		// describes an act nobody can perform. Gating the strip alone was the
+		// worse bug: in Archived it fell silent while this row still read
+		// `0 of n bids`, so two surfaces disagreed about one Team at one instant.
+		const held = { rosterCount: 9, leading: [lead('p-1', 3_000_000), lead('lot-1', 1_000_000, true)] };
+
+		for (const phase of ['Contract Assignment', 'Archived'] as const) {
+			const view = viewFor({ phase, team: teamWith(held) });
+			expect(view.outstandingBidsSentence).toBeNull();
+			expect(view.contentionEntriesSentence).toBeNull();
+			expect(view.outstandingBidsHalves).toBeNull();
+			expect(view.contentionEntriesHalves).toBeNull();
+			// The facts survive the silence.
+			expect(view.outstandingBids).toBe(1);
+			expect(view.openContentionEntries).toBe(1);
+		}
+
+		const auction = viewFor({ phase: 'Auction', team: teamWith(held) });
+		expect(auction.outstandingBidsSentence).toBe('1 of 4 bids');
+		expect(auction.contentionEntriesSentence).toBe('1 lottery entry');
+	});
+
+	it('is published on every Team, not just the viewer own — the figure is public', () => {
+		// The rival must HOLD an entry for the entries sentence to exist at
+		// all — absence there is the zero rule, not a visibility rule, and
+		// this test is about visibility.
+		const rival = viewFor({
+			viewerIsThisTeam: false,
+			team: teamWith({
+				rosterCount: 9,
+				leading: [lead('p-1', 3_000_000), lead('lot-1', 1_000_000, true)]
+			})
+		});
+
+		expect(rival.outstandingBidsSentence).toBeTypeOf('string');
+		expect(rival.contentionEntriesSentence).toBeTypeOf('string');
+	});
+});
