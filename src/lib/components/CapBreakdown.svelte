@@ -17,27 +17,70 @@
 	// `kind` is the core's instruction about what each row IS, so no component
 	// decides which rows are ledger lines and which are commentary:
 	// a `detail` row sits outside the column's arithmetic, and a `subtotal` is
-	// ruled above.
+	// ruled above. `summary` is the core's instruction about which rows stand
+	// while the column is COLLAPSED, decided the same way and for the same
+	// reason — see `CapBreakdownLine` in `core/rules/bidding.ts`.
+	//
+	// **Collapsing is opt-in, and the refusal panel does not take it.** A
+	// breakdown a Manager has to ask for is a breakdown they will not check,
+	// which is exactly what a refusal may not be; the panel renders the column
+	// whole and this control never appears there. The STANDING column is a
+	// different question — a Manager reading it before they type has an answer
+	// they mostly want, and a ledger they occasionally want — so that one asks
+	// for the disclosure.
 	//
 	// Types are declared structurally rather than imported from a server
 	// module, the rule `nominate/+page.svelte` states.
+
+	import { CAP_BREAKDOWN_COLLAPSE, CAP_BREAKDOWN_EXPAND } from '$lib/core/rules/bidding.ts';
 
 	type BreakdownLine = {
 		readonly label: string;
 		readonly figure: string;
 		readonly operator: string;
 		readonly kind: 'term' | 'detail' | 'subtotal';
+		/**
+		 * Optional so a caller building its own lines need not answer a
+		 * question it never asks: a column that is not `collapsible` renders
+		 * every row regardless, and this field is read nowhere else.
+		 */
+		readonly summary?: boolean;
 	};
 
 	let {
 		lines,
 		/** Set on the page's standing column so its rows can be found in a test. */
-		id = undefined
-	}: { lines: readonly BreakdownLine[]; id?: string | undefined } = $props();
+		id = undefined,
+		/**
+		 * Whether the column opens showing only its `summary` rows, with a
+		 * control that reveals the rest. `false` renders the whole ledger and
+		 * no control at all — which is what a refusal gets.
+		 */
+		collapsible = false
+	}: {
+		lines: readonly BreakdownLine[];
+		id?: string | undefined;
+		collapsible?: boolean;
+	} = $props();
+
+	let expanded = $state(false);
+
+	/**
+	 * Whether the control has anything to reveal.
+	 *
+	 * A column whose every row is a summary row is already whole, and a
+	 * control offering to show what is already shown is a control that lies.
+	 */
+	const hasMore = $derived(collapsible && lines.some((line) => line.summary !== true));
+
+	/** Which rows stand right now. The core decided which; this decides when. */
+	const shown = $derived(
+		!hasMore || expanded ? lines : lines.filter((line) => line.summary === true)
+	);
 </script>
 
 <dl class="breakdown" {id}>
-	{#each lines as line (line.label)}
+	{#each shown as line (line.label)}
 		<div
 			class="line"
 			class:detail={line.kind === 'detail'}
@@ -48,6 +91,27 @@
 		</div>
 	{/each}
 </dl>
+
+<!--
+	A BUTTON, not a `<details>`: the rows it reveals belong to the `<dl>` above
+	in ledger order, interleaved with the ones already standing, and a
+	`<details>` could only append them after the summary — a column that does
+	not sum in the order it is read.
+
+	`aria-expanded` is what announces the state, and `aria-controls` points at
+	the list it opens where the caller gave that list an id.
+-->
+{#if hasMore}
+	<button
+		type="button"
+		class="disclosure"
+		aria-expanded={expanded}
+		aria-controls={id}
+		onclick={() => (expanded = !expanded)}
+	>
+		{expanded ? CAP_BREAKDOWN_COLLAPSE : CAP_BREAKDOWN_EXPAND}
+	</button>
+{/if}
 
 <style>
 	.breakdown {
@@ -114,5 +178,28 @@
 	.line.total {
 		border-top: var(--border-width) solid var(--color-border-strong);
 		padding-top: var(--space-row-gap);
+	}
+
+	/*
+	 * The disclosure reads as a link rather than a control with a box: it
+	 * reveals rows already on the page and commits nothing, and a bordered
+	 * button beside the bid control would be a second thing to press on the
+	 * one surface whose single button matters.
+	 *
+	 * It still has the touch target a control needs — the padding is vertical
+	 * so the text stays flush with the column's left edge.
+	 */
+	.disclosure {
+		align-self: flex-start;
+		margin-top: var(--space-row-gap);
+		padding: var(--space-row-gap) 0;
+		border: none;
+		background: none;
+		font-family: inherit;
+		font-size: var(--size-12-5);
+		color: var(--color-text-secondary);
+		text-align: left;
+		text-decoration: underline;
+		cursor: pointer;
 	}
 </style>

@@ -3600,6 +3600,60 @@ describe('the refusal panel content, worded by the core and nowhere else', () =>
 		}
 	});
 
+	it('summarises the ANSWER, plus any term that actually bit', () => {
+		// What a collapsed column stands on: where the answer started, where
+		// it arrived, and any subtraction that moved it. A term at $0 moved
+		// nothing, and a row saying so is a row a Manager reads past.
+		const cap = evaluate(PANEL_STATE, command(10_500_000), NOW).cap;
+		const lines = capBreakdown(cap);
+		const summaryOf = (label: string): boolean | undefined =>
+			lines.find((line) => line.label === label)?.summary;
+
+		expect(summaryOf('Cap Space')).toBe(true);
+		expect(summaryOf('Maximum Bid')).toBe(true);
+		// A step ON the way, not the answer — it is what the column is opened
+		// to read.
+		expect(summaryOf('Available Cap Space')).toBe(false);
+
+		// This Team leads nothing, so Committed Bids is $0 and stands down;
+		// it holds 9 of 12 Slots, so Roster Reserve bit and stands.
+		expect(cap.committedBids).toBe(0);
+		expect(Number(cap.rosterReserve)).toBeGreaterThan(0);
+		expect(summaryOf('Committed Bids')).toBe(false);
+		expect(summaryOf('Roster Reserve')).toBe(true);
+
+		// Commentary is never a summary row: a detail sits outside the
+		// column's arithmetic, and the collapsed column IS the arithmetic.
+		for (const line of lines.filter((line) => line.kind === 'detail')) {
+			expect(line.summary, line.label).toBe(false);
+		}
+		// And a collapsed column is never empty of its answer.
+		expect(lines.filter((line) => line.summary).length).toBeGreaterThanOrEqual(2);
+	});
+
+	it('stands Committed Bids up the moment it bites', () => {
+		// The same rule from the other side: the figure that moved the answer
+		// may not be the one hidden behind a control.
+		const state = bidStateFor(null, {
+			capSpace: parseMoney(12_000_000),
+			rosterCount: 9,
+			leading: [
+				{
+					fantraxPlayerId: 'elsewhere',
+					playerName: 'Ausar Bright',
+					amount: parseMoney(3_000_000),
+					isContentionEntry: false
+				}
+			],
+			eligibleLeading: [],
+			minorLeagueOccupied: 0
+		}, false, 'Auction');
+		const lines = capBreakdown(evaluate(state, command(1_500_000), NOW).cap);
+
+		expect(lines.find((line) => line.label === 'Committed Bids')?.figure).toBe('$3.0M');
+		expect(lines.find((line) => line.label === 'Committed Bids')?.summary).toBe(true);
+	});
+
 	it('carries Minors Exposure as commentary inside Committed Bids, never as a second subtraction', () => {
 		const lines = capBreakdown(evaluate(PANEL_STATE, command(10_500_000), NOW).cap);
 		const exposure = lines.find((line) => line.label.includes('Minors Exposure'));

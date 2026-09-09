@@ -44,6 +44,10 @@
 		POSITIONS_YOUR_BID_LABEL,
 		emptyPositionsSentence
 	} from '$lib/core/positions.ts';
+	// The Auction's own state as the Bid Board marks it — the SAME record, so
+	// one state goes by one word with one shape beside it on every surface a
+	// Manager scans.
+	import { AUCTION_STATE_ICONS, AUCTION_STATE_LABELS } from '$lib/core/board.ts';
 	import { closesInPhrase } from '$lib/core/projection/auctions.ts';
 	import type { ContentionState } from '$lib/core/projection/auctions.ts';
 	import { figuresAgeSentence } from '$lib/core/freshness.ts';
@@ -380,9 +384,18 @@
 								{#if card.metadata !== null}
 									<span class="card-metadata">{card.metadata}</span>
 								{/if}
-								<p class="state chip chip-outbid">
-									<span class="chip-icon" aria-hidden="true">{card.stateIcon}</span>
-									<span class="chip-word">{card.stateLabel}</span>
+								<!-- The Auction's own state, at the trailing edge — the Bid
+								     Board card's own marker, on the card for the same
+								     Auction. Ambient and never a chip: it describes the
+								     Auction, not the reader. Icon AND word, so a
+								     greyscale screenshot reads identically. Where the
+								     READER stands rides the row below, under this
+								     marker, exactly as it does on a Board card. -->
+								<p class="state state-ambient card-state">
+									<span class="chip-icon" aria-hidden="true"
+										>{AUCTION_STATE_ICONS[card.contention]}</span
+									>
+									<span class="chip-word">{AUCTION_STATE_LABELS[card.contention]}</span>
 								</p>
 							</div>
 
@@ -391,13 +404,31 @@
 							     figures on this row are money and both are this
 							     Auction's, and only the label says which is whose. -->
 							<div class="card-figure">
-								<p class="card-price">
-									<span class="visually-hidden">{POSITIONS_PRICE_LABEL}</span>
-									{card.priceLabel}
-								</p>
-								<p class="card-leader">
-									<span class="section-label">{POSITIONS_YOUR_BID_LABEL}</span>
-									{card.yourBidLabel}
+								<!-- The two figures TOGETHER, as one item on the row, so
+								     `Your Bid` sits in line with the standing price
+								     rather than adrift between it and the chip. Both are
+								     money and both are this Auction's, so only the label
+								     says which is whose — and it stays visible for that
+								     reason. -->
+								<div class="card-figure-lead">
+									<p class="card-price">
+										<span class="visually-hidden">{POSITIONS_PRICE_LABEL}</span>
+										{card.priceLabel}
+									</p>
+									<p class="card-leader">
+										<span class="section-label">{POSITIONS_YOUR_BID_LABEL}</span>
+										{card.yourBidLabel}
+									</p>
+								</div>
+								<!-- Where the READER stands, under the Auction's own
+								     state and opposite the price — the Bid Board card's
+								     own arrangement. The chip is reserved for Outbid and
+								     You lead (DESIGN.md:194): filled `attention` here.
+								     It carries an ICON and a WORD together, so a
+								     greyscale screenshot reads identically. -->
+								<p class="state chip chip-outbid">
+									<span class="chip-icon" aria-hidden="true">{card.stateIcon}</span>
+									<span class="chip-word">{card.stateLabel}</span>
 								</p>
 							</div>
 
@@ -464,9 +495,18 @@
 								{#if card.metadata !== null}
 									<span class="card-metadata">{card.metadata}</span>
 								{/if}
-								<p class="state chip chip-lead">
-									<span class="chip-icon" aria-hidden="true">{card.stateIcon}</span>
-									<span class="chip-word">{card.stateLabel}</span>
+								<!-- The Auction's own state, at the trailing edge — the Bid
+								     Board card's own marker, on the card for the same
+								     Auction. Ambient and never a chip: it describes the
+								     Auction, not the reader. Icon AND word, so a
+								     greyscale screenshot reads identically. Where the
+								     READER stands rides the row below, under this
+								     marker, exactly as it does on a Board card. -->
+								<p class="state state-ambient card-state">
+									<span class="chip-icon" aria-hidden="true"
+										>{AUCTION_STATE_ICONS[card.contention]}</span
+									>
+									<span class="chip-word">{AUCTION_STATE_LABELS[card.contention]}</span>
 								</p>
 							</div>
 
@@ -475,13 +515,27 @@
 							     gone; the words remain, rendered for a screen
 							     reader. -->
 							<div class="card-figure">
-								<p class="card-price">
-									<span class="visually-hidden">{POSITIONS_PRICE_LABEL}</span>
-									{card.priceLabel}
-								</p>
-								<p class="card-when">
-									<span class="visually-hidden">{POSITIONS_CLOSES_LABEL}</span>
-									{closesInPhrase(card.closesAt, nowIso)}
+								<!-- The price and how long is left, together as one item
+								     on the row, so the countdown stays in line with the
+								     figure it is about rather than adrift between it and
+								     the chip. -->
+								<div class="card-figure-lead">
+									<p class="card-price">
+										<span class="visually-hidden">{POSITIONS_PRICE_LABEL}</span>
+										{card.priceLabel}
+									</p>
+									<p class="card-when">
+										<span class="visually-hidden">{POSITIONS_CLOSES_LABEL}</span>
+										{closesInPhrase(card.closesAt, nowIso)}
+									</p>
+								</div>
+								<!-- Where the READER stands, under the Auction's own
+								     state — the Bid Board card's own arrangement.
+								     Outlined, never filled: leading is a standing fact,
+								     not an alert. -->
+								<p class="state chip chip-lead">
+									<span class="chip-icon" aria-hidden="true">{card.stateIcon}</span>
+									<span class="chip-word">{card.stateLabel}</span>
 								</p>
 							</div>
 
@@ -521,6 +575,12 @@
 								{#if card.metadata !== null}
 									<span class="card-metadata">{card.metadata}</span>
 								{/if}
+								<!-- Already the Auction state, and left as it stands: this
+								     group is a Minimum-Bid Contention by construction,
+								     `contentionLabel` is the same string
+								     `AUCTION_STATE_LABELS.minimum_bid` is, and the word
+								     here is deliberately icon-less — it sits beside the
+								     accent bar that carries the state in greyscale. -->
 								<p class="state state-lottery">
 									<span class="chip-word">{card.contentionLabel}</span>
 								</p>
@@ -661,8 +721,37 @@
 		gap: var(--space-row-gap);
 	}
 
+	/*
+	 * Pushed to the trailing edge by the free space rather than by a width, so
+	 * a long Player name takes the state word to the next line instead of
+	 * squeezing it.
+	 */
 	.card-head .state {
 		margin-left: auto;
+	}
+
+	/*
+	 * The Auction state takes the Bid Board's own treatment: uppercase at
+	 * `--size-10`, a marker beside the name rather than a sentence.
+	 */
+	.card-head .card-state {
+		text-transform: uppercase;
+		letter-spacing: 0.12em;
+		font-size: var(--size-10);
+	}
+
+	/*
+	 * The figures at the leading edge, as ONE item, so where the reader stands
+	 * still sits at the opposite edge and nothing floats in the middle of the
+	 * row. Baseline-aligned, so a `--size-12` label sits on the `--size-26`
+	 * figure's own line rather than beside its middle, and wrapping, so the
+	 * pair stacks at 375px instead of squeezing the price.
+	 */
+	.card-figure-lead {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: var(--space-card-gap);
 	}
 
 	/*
