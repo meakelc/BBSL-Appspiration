@@ -43,18 +43,17 @@
 	// follows identically. `$lib/core` is a different matter: it is the pure
 	// core, it is what AD-2 says both runtimes load, and the helpers below
 	// are the same ones the server calls.
-	import {
-		AUCTION_EXPIRED,
-		CONTENTION_CLOCK_UNMOVED,
-		MINIMUM_LOTTERY_LABEL,
-		SEED_COMMITMENT,
-		SEED_COMMITMENT_UNVERIFIABLE,
-		closesInPhrase,
-		contenderCountSentence,
-		hasExpired
-	} from '$lib/core/projection/auctions.ts';
+	import { AUCTION_EXPIRED, closesInPhrase, hasExpired } from '$lib/core/projection/auctions.ts';
 	import type { ContentionState } from '$lib/core/projection/auctions.ts';
 	import type { LeaguePhase } from '$lib/core/projection/phase.ts';
+	// The Auction's own state as the Bid Board marks it — the SAME record, so
+	// a Manager who scanned a card and opened the Auction it links to reads
+	// one word for one state, with one shape beside it.
+	import {
+		AUCTION_STATE_ICONS,
+		AUCTION_STATE_LABELS,
+		BOARD_LEADING_LABEL
+	} from '$lib/core/board.ts';
 	import { formatInstant, parseInstant, relativePhrase } from '$lib/core/instant.ts';
 	import { parseMoney } from '$lib/core/money.ts';
 	import {
@@ -150,15 +149,19 @@
 		readonly metadata: AuctionMetadata | null;
 		readonly nominatingTeam: string;
 		readonly nominatedAt: string;
-		readonly contention: string;
-		// Team names in join order, and the count. The ORDER is the server's
-		// and is never re-sorted here: AD-14 makes it an input to the winner.
+		// Team names in join order. The ORDER is the server's and is never
+		// re-sorted here: AD-14 makes it an input to the winner.
+		//
+		// The server's `contention` SENTENCE, `contenderCount` and `seed` are
+		// deliberately not mirrored: the state is marked at the head of the
+		// Price panel from the Board's own record, the list below states its
+		// own length, and nothing on this page reads a revealed seed any
+		// more. A field declared here and never read is a field a later edit
+		// will find and render.
 		readonly contenders: readonly string[];
-		readonly contenderCount: number;
+		// Read into the rebuilt gate state, never rendered: `decide()`
+		// verifies a reveal against it inside the lock.
 		readonly seedHash: string | null;
-		// The revealed seed, once the contention dissolved. `null` otherwise —
-		// and it is the fold's own value: nothing is hashed on this page.
-		readonly seed: string | null;
 		readonly price: string | null;
 		readonly leadingBidder: string | null;
 		readonly closesAt: string | null;
@@ -530,6 +533,31 @@
 	// same way it asks whether `auction.closesAt` is null.
 	const isContention = $derived(gateState.contention === 'minimum_bid');
 
+	/**
+	 * The Contenders OTHER than the Team whose Bid leads.
+	 *
+	 * Printed under the Leading Bidder, so the contention reads as one list:
+	 * who is at the front, then everyone else who has joined behind them. The
+	 * leader is on the fold's Contender list like every other joiner — a
+	 * lottery opens on a Bid — so printing that list whole beneath their name
+	 * would name them twice.
+	 *
+	 * Matched by TEAM ID and never by the display string: `contenders` and
+	 * `contenderTeamIds` are the same fold array mapped two ways, in one
+	 * order, which is what makes lining them up by index sound. A surface
+	 * that compared `Rockets — Sam` against `Rockets — Sam` would be a gate
+	 * matching on a name, which is exactly what the two fields exist to
+	 * prevent.
+	 *
+	 * The ORDER is never touched: AD-14 makes ascending join `seq` an input
+	 * to the winner, so this filters and nothing else.
+	 */
+	const otherContenders = $derived(
+		auction.contenders.filter(
+			(_, position) => control.contenderTeamIds[position] !== control.leadingTeamId
+		)
+	);
+
 	// The absolute stamps are NOT safe to derive during SSR.
 	// `Intl.DateTimeFormat(undefined, ...)` resolves `undefined` to the
 	// timezone of whatever machine formats it, and this route is
@@ -607,8 +635,29 @@
 		{/if}
 	</header>
 
-	<section class="panel">
-		<p class="section-label">Price</p>
+	<!-- The 3px `lottery` left bar marks a Minimum-Bid Contention and nothing
+	     else in the system (DESIGN.md:162) — the Bid Board card's own mark, on
+	     the panel that card's price links to. It never carries the state
+	     ALONE: the icon and the word at the head of this panel are what make a
+	     greyscale screenshot read identically. -->
+	<section class="panel" class:lottery={isContention}>
+		<!-- The label, with the Auction's own state at the trailing edge — the
+		     Bid Board card's identity row, on the page that card links to.
+		     Ambient and never a chip: it describes the Auction, not the reader,
+		     and the one attention colour marks Outbid and refusal alone.
+
+		     It carries an ICON and a WORD together, so a greyscale screenshot
+		     reads identically; `lottery` tints the pair the way the Board's own
+		     card does, and the colour is never the carrier. -->
+		<div class="section-head">
+			<p class="section-label">Price</p>
+			<p class="auction-state" class:lottery-text={isContention}>
+				<span class="auction-state-icon" aria-hidden="true"
+					>{AUCTION_STATE_ICONS[gateState.contention]}</span
+				>
+				<span>{AUCTION_STATE_LABELS[gateState.contention]}</span>
+			</p>
+		</div>
 		<!-- The current price and who holds it, both from the fold. The
 		     Leading Bidder is spelled out with the acting Manager: there is
 		     no anonymity at any point on this page.
@@ -623,138 +672,38 @@
 		{:else}
 			<p class="price" id="auction-price">{auction.price}</p>
 		{/if}
+		<!-- The label is hidden rather than printed: a spelled-out
+		     `Team — Manager` on the line under a price identifies itself,
+		     which is the reading the Board and Your Positions cards have
+		     always taken. It stays a NAMED value for a screen reader, from
+		     the Board's own constant rather than respelled here — the same
+		     value goes by the same name on the card and on the page the card
+		     links to. -->
 		<p class="prose" id="auction-leading-bidder">
 			{#if auction.leadingBidder === null}
 				No Team leads this Auction yet.
 			{:else}
-				Leading Bidder: {auction.leadingBidder}
+				<span class="visually-hidden">{BOARD_LEADING_LABEL}</span>
+				{auction.leadingBidder}
 			{/if}
 		</p>
-		<!-- The contention state, worded by the fold that decides it. A plain
-		     label and no chip for the ambient states: `DESIGN.md` gives those
-		     a plain label, and the one attention colour marks Outbid and
-		     refusal.
+		<!-- The rest of the Contender list, under the Team whose Bid opened the
+		     contention. In the fold's own join order — ascending `seq` — and
+		     never re-sorted here: AD-14 makes that order an input to the
+		     winner, so a surface that reordered it would be showing a list the
+		     draw will not run over.
 
-		     A lottery is the ONE exception `DESIGN.md:162` grants — the 3px
-		     left accent bar in `lottery`, which no other element on any
-		     surface may borrow. It carries an icon AND a word beside the
-		     colour, because no state on this page may be conveyed by colour
-		     alone: a greyscale screenshot has to read identically, and the
-		     word is what makes it.
-
-		     Every string here is the core's. The label is the glossary term
-		     from the fold, the count and the clock statement are sentences
-		     from the same module, and this file spells none of them. -->
-		<div class="contention" class:lottery={isContention}>
-			{#if isContention}
-				<!--
-					The state, and what it MEANS one tap behind it.
-
-					The label carried the fold's sentence beside it — `Minimum-Bid
-					Contention` as a chip and `Minimum-Bid Contention.` as prose,
-					the same words twice on one line — so the sentence is gone from
-					the lottery branch and the label states the state alone. It is
-					`MINIMUM_LOTTERY_LABEL`, the card name the Bid Board and Your
-					Positions print, so one contention goes by one name on every
-					surface a Manager scans.
-
-					`<details>`/`<summary>` and not a tooltip element, for
-					`/nominate`'s reason: a real tooltip is hover, and this is a
-					phone. It opens on tap AND on Enter, is announced expanded or
-					collapsed, and needs no script.
-
-					What it holds is the two EXPLANATIONS — that joining does not
-					move the clock, and what the published digest commits to.
-					~90 words of prose sat between the price and the Contender list
-					on a surface a Manager opens to answer one question. The FACTS
-					stay in the open: the Contender count, the Contenders in the
-					fold's own order, the digest itself, and the link to the
-					procedure for checking it. EXPERIENCE.md:155 asks the card to
-					state the clock in words; it does, one tap from the label the
-					statement is about.
-				-->
-				<details class="explainer" id="auction-contention">
-					<summary>
-						<span class="contention-icon" aria-hidden="true">&#9670;</span>
-						<span class="contention-label">{MINIMUM_LOTTERY_LABEL}</span>
-						<!-- The affordance as a mark rather than a sentence, drawn
-						     from `currentColor` so it tracks the text beside it.
-						     `aria-hidden`, because a screen reader is already told
-						     this is a disclosure and whether it is expanded; the
-						     words it stands in for are in the hidden span below. -->
-						<span class="explainer-mark" aria-hidden="true">
-							<svg viewBox="0 0 16 16" focusable="false">
-								<circle cx="8" cy="8" r="6.5" />
-								<path d="M8 7.25v4" />
-								<path d="M8 4.75v.5" />
-							</svg>
-						</span>
-						<span class="visually-hidden">How this contention works</span>
-					</summary>
-					<p class="prose" id="auction-contention-clock">{CONTENTION_CLOCK_UNMOVED}</p>
-					<!-- The commit half of the commit-reveal, explained. The digest
-					     itself stays in the open below — this says what it is FOR,
-					     and only where there is one to explain. -->
-					{#if auction.seedHash !== null}
-						<p class="prose" id="auction-seed-commitment">{SEED_COMMITMENT}</p>
-					{/if}
-				</details>
-				<!-- The count, then the Teams. The list is the
-				     fold's own order — ascending join `seq` — and is never
-				     re-sorted here: AD-14 makes that order an input to the
-				     winner, so a surface that reordered it would be showing a
-				     list the draw will not run over. Keyed on the position
-				     rather than the name, because two Teams may legitimately
-				     share a display name and a duplicate key is a render
-				     error. -->
-				<p class="prose" id="auction-contender-count">
-					{contenderCountSentence(auction.contenderCount)}
-				</p>
-				{#if auction.contenders.length > 0}
-					<ul class="contenders" id="auction-contenders">
-						{#each auction.contenders as contender, position (position)}
-							<li class="prose">{contender}</li>
-						{/each}
-					</ul>
-				{/if}
-				<!-- The commit half of the commit-reveal, published from the
-				     moment the lottery opens so a Manager can record it now
-				     and check the reveal against it at the draw. The seed
-				     itself is in a table no role can read, and nothing on this
-				     page has ever seen it. The VALUE stays in the open; what it
-				     commits to is stated behind the label above.
-
-				     One rendering or the other, never both, and never neither.
-				     A lottery whose commitment folded to null used to render
-				     nothing at all here, which was indistinguishable from a
-				     commitment that simply failed to appear — and AD-14's
-				     trust rests on a Manager being able to SEE the commitment,
-				     so its absence is exactly the case worth naming out loud.
-				     The sentence is the core's own, the same one the
-				     dissolution prints for the same absence. -->
-				{#if auction.seedHash !== null}
-					<p class="prose seed-hash" id="auction-seed-hash">{auction.seedHash}</p>
-				{:else}
-					<p class="prose" id="auction-seed-unverifiable">{SEED_COMMITMENT_UNVERIFIABLE}</p>
-				{/if}
-				<!-- What to DO with the value above. A 64-character hex string
-				     nobody has been told the procedure for is not a check, and
-				     the procedure is prose rather than a control: it is run in
-				     a spreadsheet, by hand, off this page. Not a destination
-				     in the catalog — the question is asked here, looking at a
-				     commitment, and nowhere else. -->
-				<p class="prose">
-					<a href="/verify" id="auction-verify-link">How the draw is checked</a>
-				</p>
-			{:else}
-				<!-- Every other state is one sentence from the fold, and the
-				     label above belongs to the lottery alone: `Open` and
-				     `Awaiting an Opening Bid` have no accent bar, no icon and
-				     nothing behind them to explain. -->
-				<p class="prose" id="auction-contention">{auction.contention}</p>
-			{/if}
-		</div>
-
+		     The leading Team is dropped rather than printed twice, matched by
+		     ID and never by the display string beside it: `contenderTeamIds`
+		     is the same fold array in the same order as the names, which is
+		     what makes the index safe to line up. -->
+		{#if otherContenders.length > 0}
+			<ul class="contenders" id="auction-contenders">
+				{#each otherContenders as contender, position (position)}
+					<li class="prose">{contender}</li>
+				{/each}
+			</ul>
+		{/if}
 		<!-- The Auction Clock, on the price panel rather than a panel of its
 		     own: what a Manager weighs is the standing price AND how long is
 		     left to answer it, and a border between the two made them two
@@ -801,7 +750,13 @@
 			     age itself is stated once, by the notice the layout mounts, so
 			     it is not repeated here. -->
 			<p class="section-label">{MAXIMUM_BID_LABELS[freshness.state]}</p>
-			<CapBreakdown lines={standingBreakdown} id="auction-maximum-bid" />
+			<!-- Collapsible HERE and nowhere else: this column is read before a
+			     Manager types, when what they want is the answer and what they
+			     occasionally want is the ledger behind it. The refusal panel
+			     renders the same column whole — a breakdown a Manager has to
+			     ask for is a breakdown they will not check, which is the one
+			     thing a refusal may not be. -->
+			<CapBreakdown lines={standingBreakdown} id="auction-maximum-bid" collapsible />
 		</section>
 	{/if}
 
@@ -998,6 +953,48 @@
 	 * on a bidding surface: the UI face at the largest size in the scale,
 	 * tabular, tightened, in `text`.
 	 */
+	/*
+	 * The panel's own head: its label, and the Auction state pushed to the
+	 * trailing edge by the free space rather than by a width — so a state
+	 * word simply wraps below the label instead of squeezing it.
+	 */
+	.section-head {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: var(--space-card-gap);
+	}
+
+	/*
+	 * The same treatment the word takes on a Bid Board card — uppercase at
+	 * `--size-10`, so it reads as a marker beside a label rather than as a
+	 * sentence.
+	 */
+	.auction-state {
+		display: flex;
+		align-items: center;
+		gap: var(--space-row-gap);
+		text-transform: uppercase;
+		letter-spacing: 0.12em;
+		font-size: var(--size-10);
+		color: var(--color-text-secondary);
+	}
+
+	/*
+	 * The icon carries the state as much as the word does, so it is sized
+	 * against the word rather than left at the text size it inherits.
+	 */
+	.auction-state-icon {
+		font-size: var(--size-11);
+		line-height: 1;
+	}
+
+	/* A Minimum-Bid Contention tints the pair, the way the Board card does. */
+	.lottery-text {
+		color: var(--color-lottery-text);
+	}
+
 	.price {
 		font-family: var(--font-ui);
 		font-size: var(--size-26);
@@ -1160,117 +1157,29 @@
 	}
 
 	/*
-	 * The contention block inside the Price panel. Flow layout with the page's
-	 * own row gap, so it reads as part of the panel rather than a panel of its
-	 * own — there is no second background and no second border.
-	 */
-	.contention {
-		display: flex;
-		flex-direction: column;
-		gap: var(--space-row-gap);
-	}
-
-	/*
 	 * The 3px left accent bar marking a Minimum-Bid Contention — DESIGN.md's
 	 * one structural exception, and no other element may borrow the device.
-	 * It never carries the state ALONE: the icon and the label beside it are
-	 * what make a greyscale screenshot read identically.
+	 * It rides the PRICE panel, the way it rides a Bid Board card, and it
+	 * never carries the state ALONE: the icon and the word at the head of the
+	 * panel are what make a greyscale screenshot read identically.
+	 *
+	 * The panel's own padding already sits inside its border, so the bar
+	 * replaces that edge rather than adding to it.
 	 */
-	.lottery {
+	.panel.lottery {
 		border-left: var(--accent-bar-width) solid var(--color-lottery);
-		padding-left: var(--space-panel-padding);
 	}
 
 	/*
-	 * The disclosure behind the state label — `/nominate`'s explainer,
-	 * unchanged in behaviour: the summary is the whole row, so the target is
-	 * wide however short it is, and the default marker is dropped because the
-	 * mark beside the label already carries the affordance.
+	 * The Contenders behind the leader, as a plain list under the name they
+	 * sit behind — no bullets, the page's own row gap, and the fold's own
+	 * order.
 	 */
-	.explainer > summary {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: var(--space-row-gap);
-		cursor: pointer;
-		list-style: none;
-	}
-
-	.explainer > summary::-webkit-details-marker {
-		display: none;
-	}
-
-	/*
-	 * The sighted affordance and nothing else — the words it stands in for
-	 * are in the hidden span beside it, which is what a screen reader reads.
-	 * The padding is the tap target; the glyph is sized off a type token
-	 * rather than a literal, so it tracks the label beside it.
-	 */
-	.explainer-mark {
-		display: flex;
-		flex-shrink: 0;
-		padding: var(--space-row-gap);
-		color: var(--color-text-tertiary);
-	}
-
-	.explainer-mark svg {
-		width: var(--size-13);
-		height: var(--size-13);
-		stroke: currentColor;
-		stroke-width: 1.5;
-		stroke-linecap: round;
-		fill: none;
-	}
-
-	/* Open or closed, the mark is the same mark; only the panel below moves. */
-	.explainer[open] > summary .explainer-mark {
-		color: var(--color-text);
-	}
-
-	.explainer[open] > summary {
-		margin-bottom: var(--space-row-gap);
-	}
-
-	.explainer > summary:focus-visible {
-		outline: 2px solid var(--color-text);
-		outline-offset: 2px;
-	}
-
-	/*
-	 * The disclosure's own rows, which `.contention`'s flex gap does not reach
-	 * — a `<details>` is one flex child, and its contents lay out inside it.
-	 */
-	.explainer > .prose + .prose {
-		margin-top: var(--space-row-gap);
-	}
-
-	.contention-icon {
-		color: var(--color-lottery);
-	}
-
-	.contention-label {
-		color: var(--color-lottery-text);
-	}
-
 	.contenders {
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-row-gap);
 		list-style: none;
-	}
-
-	/*
-	 * 64 hex characters have no word boundary in them, so they must be told to
-	 * wrap or the panel scrolls sideways at 375px. `break-all` rather than
-	 * `break-word`: every character of a commitment is load-bearing, and a
-	 * hash that wraps mid-run is still checkable while one that overflows the
-	 * viewport is not.
-	 */
-	.seed-hash {
-		color: var(--color-text-secondary);
-		font-size: var(--size-12-5);
-		font-variant-numeric: var(--numerals);
-		word-break: break-all;
 	}
 
 </style>

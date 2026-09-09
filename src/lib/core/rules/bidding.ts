@@ -1942,7 +1942,41 @@ export type CapBreakdownLine = {
 	/** `'−'` where the column subtracts this term, empty otherwise. */
 	readonly operator: string;
 	readonly kind: 'term' | 'detail' | 'subtotal';
+	/**
+	 * Whether this row stands while the column is COLLAPSED.
+	 *
+	 * The column is the answer to "how much may I bid", and the whole ledger
+	 * is how that answer is checked. Most Managers, most of the time, want the
+	 * answer: what they started from and what they arrived at. So a collapsed
+	 * column carries `Cap Space` and `Maximum Bid` always, and a term that is
+	 * ACTUALLY BITING — a non-zero `Committed Bids` or `Roster Reserve` —
+	 * because a figure that moved the answer may not be hidden behind a
+	 * control. A term at $0 moved nothing and states nothing by standing
+	 * there.
+	 *
+	 * Decided HERE and not by the surface, for `kind`'s reason: this is a
+	 * judgement about the arithmetic, made beside the arithmetic, and a
+	 * component reading `$0.0M` back out of a rendered string to make it
+	 * would be formatting money in the one place that must not.
+	 *
+	 * Expanding is always available and never lossy — every row is still
+	 * there, in ledger order, and the column still sums as displayed once it
+	 * is open. A surface that shows the column WHOLE (the refusal panel,
+	 * where a breakdown a Manager has to ask for is a breakdown they will not
+	 * check) simply ignores this field.
+	 */
+	readonly summary: boolean;
 };
+
+/**
+ * The two words the collapsed column's own control goes by.
+ *
+ * Here rather than in the component for every other sentence's reason: one
+ * definition, so the control a test asserts and the control a Manager reads
+ * cannot drift apart.
+ */
+export const CAP_BREAKDOWN_EXPAND = 'Show the full calculation';
+export const CAP_BREAKDOWN_COLLAPSE = 'Hide the full calculation';
 
 /**
  * The Maximum Bid breakdown, as rows a surface prints in order.
@@ -2007,12 +2041,22 @@ export function capBreakdown(outcome: CapGateOutcome): readonly CapBreakdownLine
 	}
 	const holes = unfilledSlots(outcome.rosterCount, outcome.projectedAdditions);
 	return [
-		{ label: 'Cap Space', figure: describeAmount(outcome.capSpace), operator: '', kind: 'term' },
+		{
+			label: 'Cap Space',
+			figure: describeAmount(outcome.capSpace),
+			operator: '',
+			kind: 'term',
+			// Where the answer starts. Always stands.
+			summary: true
+		},
 		{
 			label: 'Committed Bids',
 			figure: describeAmount(outcome.committedBids),
 			operator: SUBTRACTED,
-			kind: 'term'
+			kind: 'term',
+			// Stands when it BIT. A Team with nothing committed learns nothing
+			// from a row saying so.
+			summary: outcome.committedBids > 0
 		},
 		{
 			// Inside Committed Bids already — commentary, never a second
@@ -2023,7 +2067,8 @@ export function capBreakdown(outcome: CapGateOutcome): readonly CapBreakdownLine
 			label: 'of which Minors Exposure',
 			figure: describeAmount(outcome.minorsExposure),
 			operator: '',
-			kind: 'detail'
+			kind: 'detail',
+			summary: false
 		},
 		{
 			// The three counts the figure above came from, in the shape the
@@ -2036,19 +2081,25 @@ export function capBreakdown(outcome: CapGateOutcome): readonly CapBreakdownLine
 				`${String(outcome.freeMinorLeagueSlots)} Free Minor League Slots`,
 			figure: `Overflow Count ${String(outcome.overflowCount)}`,
 			operator: '',
-			kind: 'detail'
+			kind: 'detail',
+			summary: false
 		},
 		{
 			label: 'Available Cap Space',
 			figure: describeAmount(outcome.availableCapSpace),
 			operator: '',
-			kind: 'subtotal'
+			kind: 'subtotal',
+			// A step ON the way, not the answer: it is what the full column is
+			// opened to read.
+			summary: false
 		},
 		{
 			label: 'Roster Reserve',
 			figure: describeAmount(outcome.rosterReserve),
 			operator: SUBTRACTED,
-			kind: 'term'
+			kind: 'term',
+			// Stands when it BIT — a Reserve of $0 held nothing back.
+			summary: outcome.rosterReserve > 0
 		},
 		{
 			label: `${formatMoney(MINIMUM_OPENING_BID)} × ${String(holes)} unfilled Active/Bench Slots`,
@@ -2058,7 +2109,8 @@ export function capBreakdown(outcome: CapGateOutcome): readonly CapBreakdownLine
 				`Roster Count ${String(outcome.rosterCount)}, Projected Active/Bench Additions ` +
 				`${String(outcome.projectedAdditions)}, of ${String(ACTIVE_BENCH_SLOTS)}`,
 			operator: '',
-			kind: 'detail'
+			kind: 'detail',
+			summary: false
 		},
 		{
 			label: 'Maximum Bid',
@@ -2070,7 +2122,9 @@ export function capBreakdown(outcome: CapGateOutcome): readonly CapBreakdownLine
 			// Manager they may bid $1.0M on a Player they may bid anything on.
 			figure: outcome.unbounded ? 'no cap limit' : describeAmount(outcome.maximumBid),
 			operator: '',
-			kind: 'subtotal'
+			kind: 'subtotal',
+			// The answer. Always stands.
+			summary: true
 		},
 		// ...and the breakdown says WHY, which is the half EXPERIENCE.md asks
 		// for by name. Present only when it is true: a row explaining an
@@ -2083,7 +2137,10 @@ export function capBreakdown(outcome: CapGateOutcome): readonly CapBreakdownLine
 							'A Free Minor League Slot absorbs this Player at a $0 Cap Hit, so no amount ' +
 							'is too large — but Roster Reserve must still be covered.',
 						operator: '',
-						kind: 'detail' as const
+						kind: 'detail' as const,
+						// The reason the answer is what it is — read on opening the
+						// column, beside the terms it is about.
+						summary: false
 					}
 				]
 			: [])

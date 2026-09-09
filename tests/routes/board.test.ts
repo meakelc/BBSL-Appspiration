@@ -129,6 +129,24 @@ beforeEach(() => {
 });
 
 describe('load — the destination guard runs FIRST', () => {
+	it('shortens the lottery name below 640px, and never in script', () => {
+		// `Minimum Lottery` at `--size-10` beside a Player's name wraps this
+		// card's identity row on a phone. Both spellings are the core's, and
+		// the CHOICE is CSS: a viewport question answered by the only thing
+		// that can see a viewport. A `matchMedia` here would answer it wrong
+		// for one paint during SSR and re-answer it on every resize.
+		expect(PAGE).toContain('{card.auctionStateLabelNarrow}');
+		expect(PAGE).toContain('{card.auctionStateLabel}');
+		expect(PAGE_CODE).not.toMatch(/matchMedia|innerWidth/);
+		// The same breakpoint the app already changes its mind at.
+		expect(PAGE).toMatch(/@media \(min-width: 640px\)/);
+		// Exactly one of the two is displayed at any width, so a screen reader
+		// reads the name that is on screen and never both.
+		const style = PAGE.slice(PAGE.indexOf('<style>'));
+		expect(style).toMatch(/\.chip-word-wide \{\s*display: none;/);
+		expect(style).toMatch(/\.chip-word-narrow \{\s*display: none;/);
+	});
+
 	it('serves the board to a Manager in the Auction Phase', async () => {
 		const result = (await route.load({
 			locals: locals({ kind: 'registered', manager: MANAGER })

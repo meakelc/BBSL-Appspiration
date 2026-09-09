@@ -35,6 +35,7 @@
 import {
 	AUCTION_STATE_ICONS,
 	AUCTION_STATE_LABELS,
+	AUCTION_STATE_LABELS_NARROW,
 	NO_LEADING_BIDDER,
 	VIEWER_STATE_ICONS,
 	VIEWER_STATE_LABELS,
@@ -87,6 +88,8 @@ export type BoardCardView = {
 	/** The absolute close instant, or `null` before the first Bid (AD-3). */
 	readonly closesAt: string | null;
 	readonly auctionStateLabel: string;
+	/** The same name for a narrow viewport — see `AUCTION_STATE_LABELS_NARROW`. */
+	readonly auctionStateLabelNarrow: string;
 	readonly auctionStateIcon: string;
 	/** The fold's own literal, for the one card treatment keyed on it. */
 	readonly contention: ContentionState;
@@ -298,6 +301,7 @@ export async function loadBoard(
 							),
 				closesAt: card.closesAt,
 				auctionStateLabel: AUCTION_STATE_LABELS[card.contention],
+				auctionStateLabelNarrow: AUCTION_STATE_LABELS_NARROW[card.contention],
 				auctionStateIcon: AUCTION_STATE_ICONS[card.contention],
 				contention: card.contention,
 				contenderCount: card.contenderCount,

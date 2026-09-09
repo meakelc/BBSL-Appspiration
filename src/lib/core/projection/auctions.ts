@@ -342,6 +342,26 @@ export const MINIMUM_BID_CONTENTION_LABEL = 'Minimum-Bid Contention';
 export const MINIMUM_LOTTERY_LABEL = 'Minimum Lottery';
 
 /**
+ * The same name again, for a NARROW viewport — the third and last spelling of
+ * one thing.
+ *
+ * `MINIMUM_LOTTERY_LABEL` already shortens the PRD §3 term for a surface that
+ * is scanned rather than read, and at 640px and up it fits. Below that it does
+ * not: `Minimum Lottery` set at `--size-10` beside a Player's name still wraps
+ * a Bid Board card's identity row on a phone, which is the width most of this
+ * product is read at.
+ *
+ * `Minimum` alone is unambiguous where it appears — a card carries exactly one
+ * state marker, and no other state in `AUCTION_STATE_LABELS` begins with the
+ * word — and the diamond beside it is what carries the state in greyscale
+ * either way.
+ *
+ * Worded HERE for the two labels above it's own reason: a second spelling in a
+ * `.svelte` file is exactly where a third would appear.
+ */
+export const MINIMUM_LOTTERY_LABEL_NARROW = 'Minimum';
+
+/**
  * The statement, in words, that joining does not restart the Auction Clock.
  *
  * `EXPERIENCE.md` asks for it by name — the lottery's card "states in words

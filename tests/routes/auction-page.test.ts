@@ -254,11 +254,37 @@ describe('the Auction page — what it renders', () => {
 		expect(PAGE).toMatch(/No bids have been placed yet/);
 	});
 
-	it('renders the contention state, worded by the fold that decides it', () => {
-		// Every field on the page contract is read by the template; a field
-		// shipped and never rendered is dead weight on the wire.
-		expect(PAGE).toContain('auction.contention');
+	it('states the contention ONLY as the head marker — no sentence anywhere', () => {
+		// The `Standard Contention.` / `Awaiting an Opening Bid.` line and the
+		// whole accented block beneath it are gone. The state is named once,
+		// by the marker at the head of the Price panel, and the 3px bar is
+		// what a lottery adds to it.
+		expect(PAGE_CODE).not.toContain('auction.contention');
 		expect(PAGE_CODE).not.toMatch(/Standard Contention|Minimum-Bid Contention/);
+		expect(PAGE_CODE).not.toMatch(/id="auction-contention"/);
+	});
+
+	it('marks the Auction state on the Price panel, from the Board’s own record', () => {
+		// The card's identity-row marker, on the page that card links to: one
+		// state goes by one word with one shape beside it, so a Manager who
+		// scanned the Board and opened an Auction reads the same thing twice.
+		expect(PAGE).toContain('AUCTION_STATE_LABELS[gateState.contention]');
+		expect(PAGE).toContain('AUCTION_STATE_ICONS[gateState.contention]');
+		expect(PAGE).toContain("from '$lib/core/board.ts'");
+		// Never worded here, and never a second record keyed the same way.
+		expect(PAGE_CODE).not.toMatch(/'Open'|Awaiting Opening Bid/);
+	});
+
+	it('carries an icon AND a word, and is never a chip', () => {
+		// No state in this product may be conveyed by colour alone, and the
+		// one attention chip marks Outbid and refusal — not an ambient fact
+		// about the Auction.
+		const head = PAGE.slice(PAGE.indexOf('<div class="section-head">'));
+		const marker = head.slice(0, head.indexOf('</div>'));
+		expect(marker).toContain('aria-hidden="true"');
+		expect(marker).toContain('AUCTION_STATE_ICONS');
+		expect(marker).toContain('AUCTION_STATE_LABELS');
+		expect(marker).not.toContain('chip');
 	});
 
 	it('renders every Bid in chronological order, each naming its Team and Manager — AC6', () => {
@@ -575,172 +601,91 @@ describe('the Auction page — the clock it counts down on (Story 3.1)', () => {
 
 describe('the Auction page — the lottery it renders', () => {
 	it('carries the 3px `lottery` left accent bar, through tokens and nothing else', () => {
-		const style = PAGE.slice(PAGE.indexOf('<style>'));
 		// DESIGN.md:162 grants the 3px left bar to Minimum-Bid Contention and
 		// to nothing else on any surface. Both halves are tokens: the width is
-		// `--accent-bar-width` and the colour is `--color-lottery`, which
-		// existed unused until this story.
-		expect(style).toMatch(
-			/\.lottery\s*\{[^}]*border-left:\s*var\(--accent-bar-width\)\s+solid\s+var\(--color-lottery\)/
-		);
-		// No raw hex, no raw pixel width.
-		expect(style).not.toMatch(/border-left:\s*3px/);
-		expect(style).not.toMatch(/#8B98E0/i);
-	});
-
-	it('applies the bar with Svelte’s class: directive, never a conditional class string', () => {
-		expect(PAGE).toContain('class:lottery={isContention}');
-		// The standing guard, restated where the temptation is: a conditional
-		// `class="{...}"` anywhere on this page is a finding.
-		expect(PAGE).not.toMatch(/class=["'][^"']*\{/);
-	});
-
-	it('shows an icon AND a word beside the colour — a greyscale screenshot still reads', () => {
-		// DESIGN.md:120 — no state is ever conveyed by colour alone. The icon
-		// is decorative and hidden from assistive technology; the WORD is the
-		// core's own glossary label, so a greyscale reader and a screen-reader
-		// user both get the state in text.
-		expect(PAGE).toContain('aria-hidden="true"');
-		// `MINIMUM_LOTTERY_LABEL`, not the glossary term: it is the CARD name
-		// the Bid Board and Your Positions print, so one contention goes by
-		// one name on every surface a Manager scans. Both are the core's, and
-		// this page spells neither itself.
-		expect(PAGE).toContain('{MINIMUM_LOTTERY_LABEL}');
-		expect(PAGE_CODE).not.toMatch(/Standard Contention|Minimum-Bid Contention/);
-		expect(PAGE_CODE).not.toMatch(/Minimum Lottery/);
-	});
-
-	it('renders the live Contender list in the server’s order, never re-sorted', () => {
-		expect(PAGE).toMatch(/\{#each auction\.contenders as contender/);
-		expect(PAGE).toContain('id="auction-contenders"');
-		// AD-14 makes the order an input to the winner, so a surface that
-		// reordered it would show a list the draw will not run over.
-		expect(PAGE).not.toMatch(/auction\.contenders\.(sort|reverse|toSorted)/);
-	});
-
-	it('renders the Contender count as the core’s sentence, not a bare number', () => {
-		expect(PAGE).toContain('{contenderCountSentence(auction.contenderCount)}');
-		expect(PAGE).toContain('id="auction-contender-count"');
-		// Not worded here: no singular/plural logic and no interpolated count
-		// of its own.
-		expect(PAGE_CODE).not.toMatch(/Contenders? so far/);
-		expect(PAGE_CODE).not.toMatch(/\{auction\.contenderCount\}/);
-	});
-
-	it('states in WORDS that the clock will not reset on a join, from the core', () => {
-		// `EXPERIENCE.md`:155 asks for it by name. It is imported, never
-		// spelled, so the page and the fold cannot word it differently.
-		expect(PAGE).toContain('{CONTENTION_CLOCK_UNMOVED}');
-		expect(PAGE).toContain("CONTENTION_CLOCK_UNMOVED");
-		expect(PAGE_CODE).not.toMatch(/will not reset/);
-	});
-
-	it('publishes the commitment with the core’s sentence and the fold’s digest', () => {
-		expect(PAGE).toContain('{SEED_COMMITMENT}');
-		expect(PAGE).toContain('{auction.seedHash}');
-		// The page never hashes anything, and every seed-shaped value it can
-		// reach is one the LOG already published: the commitment off the fold,
-		// and nothing else. A sealed seed lives in a table this process holds
-		// no privilege on and never queries, so there is nothing here for it
-		// to name.
-		expect(PAGE_CODE).not.toMatch(/\bhash\(/);
-		expect(PAGE_CODE).not.toMatch(/sha256|crypto|subtle/i);
-		// Every seed VALUE this file reads is a field off the wire and
-		// nothing else — `.seed` and `.seedHash`, both of them values the LOG
-		// already published. There is no third accessor, so there is nowhere
-		// for a derived or assembled one to appear. (`.seed-hash` is the CSS
-		// class, which the same two characters happen to start.)
-		for (const mention of PAGE_CODE.matchAll(/\.\s*seed[A-Za-z]*/g)) {
-			expect(['.seed', '.seedHash'], mention[0]).toContain(mention[0]);
-		}
-		// Not worded here either: the sentences are imported, never spelled.
-		expect(PAGE_CODE).not.toMatch(/sealed where no role/);
-		expect(PAGE_CODE).not.toMatch(/Hash the seed yourself/);
-	});
-
-	it('states the commitment’s ABSENCE out loud rather than rendering nothing', () => {
-		// Story 3.6, closing Story 3.2's deferred entry. The guard used to have
-		// no `{:else}`, so a lottery whose `seedHash` folded to null was
-		// visually identical to one whose commitment simply failed to render —
-		// and AD-14's trust rests on a Manager being able to SEE the
-		// commitment, which makes its absence the case worth naming.
-		const live = PAGE.slice(
-			PAGE.indexOf('{#if isContention}', PAGE.indexOf('class:lottery={isContention}'))
-		);
-		const block = live.slice(0, live.indexOf('</div>'));
-
-		expect(block).toContain('{:else}');
-		expect(block).toContain('id="auction-seed-unverifiable"');
-		expect(block).toContain('{SEED_COMMITMENT_UNVERIFIABLE}');
-		// One sentence or the other, never both and never neither.
-		expect(block).toMatch(
-			/\{#if auction\.seedHash !== null\}[\s\S]*\{:else\}[\s\S]*\{\/if\}/
-		);
-		// ...and it is the CORE's sentence. Not worded here.
-		expect(PAGE_CODE).not.toMatch(/nothing to check this/);
-	});
-
-	it('links the verification procedure, as a link and never a control', () => {
-		// A 64-character hex string nobody has been told the procedure for is
-		// not a check. The procedure is prose run in a spreadsheet, off this
-		// page — so it is an anchor, and the page still has exactly one button.
-		const live = PAGE.slice(
-			PAGE.indexOf('{#if isContention}', PAGE.indexOf('class:lottery={isContention}'))
-		);
-		const block = live.slice(0, live.indexOf('</div>'));
-
-		expect(block).toContain('href="/verify"');
-		expect(block).toContain('id="auction-verify-link"');
-		expect([...PAGE_CODE.matchAll(/<button\b[\s\S]*?<\/button>/g)]).toHaveLength(1);
-		// It is not a destination in the catalog: the question is asked here,
-		// looking at a commitment, and the nav is phase/role navigation.
-		expect(SERVER).not.toContain('verify');
-	});
-
-	it('decides the lottery from the fold’s own state literal, not from a shipped flag', () => {
-		expect(PAGE).toContain("gateState.contention === 'minimum_bid'");
-		// No transported boolean: `isLottery` and `youAreContending` are each
-		// one comparison away from facts already on the wire, and a
-		// transported derivation is one the browser trusts instead of making
-		// (AD-7, AD-9).
-		expect(PAGE_CODE).not.toMatch(/isLottery/);
-		expect(PAGE_CODE).not.toMatch(/youAreContending/);
-	});
-
-	it('rebuilds the gate state with the two contention facts, for the same evaluate()', () => {
-		expect(PAGE).toMatch(/contention: control\.contention/);
-		expect(PAGE).toMatch(/contenders: control\.contenderTeamIds/);
-	});
-
-	it('still has exactly ONE button — joining is placing a $1,000,000 Bid', () => {
-		// A second control would be a second way to commit capital, and the
-		// form that already exists is the way. Restated here because "join"
-		// is exactly the word that invites a button.
-		const controls = [...PAGE_CODE.matchAll(/<button\b[\s\S]*?<\/button>/g)];
-		expect(controls).toHaveLength(1);
-		expect(PAGE_CODE).not.toMatch(/\bJoin\b/);
-	});
-
-	it('adds no new CSS sizing literal — every value it introduced is a token', () => {
-		// The exact-list guard below already enforces this; asserted here too
-		// so the lottery block is the thing under test rather than a
-		// coincidence of where the literals happen to live.
+		// `--accent-bar-width` and the colour is `--color-lottery`.
 		const style = PAGE.slice(PAGE.indexOf('<style>'));
-		const lottery = style.slice(style.indexOf('.contention {'));
-		for (const declaration of lottery.matchAll(
-			/^\s*(?:width|height|min-height|max-width|gap|padding|padding-left|padding-top|margin|margin-top):\s*([^;]+);/gm
-		)) {
-			expect(declaration[1]?.trim(), declaration[0]).toMatch(/^var\(--[a-z0-9-]+\)$/);
-		}
+		expect(style).toMatch(
+			/\.panel\.lottery \{[^}]*border-left: var\(--accent-bar-width\) solid var\(--color-lottery\)/
+		);
+		// It rides the PRICE panel now — the Bid Board card's own placement —
+		// rather than a block of its own inside it.
+		expect(PAGE).toContain('<section class="panel" class:lottery={isContention}>');
 	});
 
-	it('renders the whole block for every viewer — it hangs off no Team fact', () => {
+	it('never carries the state by colour alone — the marker is icon AND word', () => {
+		// A greyscale screenshot has to read identically, and the bar is a
+		// colour. What names the state is the marker at the head of the same
+		// panel, from the Bid Board's own record.
+		const panel = PAGE.slice(PAGE.indexOf('class:lottery={isContention}'));
+		const head = panel.slice(0, panel.indexOf('</div>'));
+		expect(head).toContain('AUCTION_STATE_ICONS[gateState.contention]');
+		expect(head).toContain('AUCTION_STATE_LABELS[gateState.contention]');
+	});
+
+	it('renders NO explainer block — no disclosure, no digest, no verify link', () => {
+		// The whole accented block is gone from this page: the `<details>`
+		// that explained the clock and the commitment, the Contender count
+		// sentence, the published digest and the link to the procedure for
+		// checking it. What survives is the Contender list, under the Team
+		// whose Bid opened the contention.
+		for (const gone of [
+			'<details',
+			'<summary',
+			'auction-contention-clock',
+			'auction-seed-commitment',
+			'auction-seed-hash',
+			'auction-seed-unverifiable',
+			'auction-verify-link',
+			'auction-contender-count',
+			'CONTENTION_CLOCK_UNMOVED',
+			'SEED_COMMITMENT',
+			'MINIMUM_LOTTERY_LABEL',
+			'contenderCountSentence',
+			'auction.contention',
+			'auction.contenderCount'
+		]) {
+			expect(PAGE_CODE, gone).not.toContain(gone);
+		}
+		// The revealed seed is not read at all. `seedHash` is — the next
+		// assertion — so this is matched on a boundary rather than a prefix.
+		expect(PAGE_CODE).not.toMatch(/auction\.seed(?!Hash)/);
+		// `seedHash` is still READ — into the rebuilt gate state, which is how
+		// `decide()` verifies a reveal inside the lock — and still not
+		// rendered.
+		expect(PAGE).toContain('seedHash: auction.seedHash');
+	});
+
+	it('renders the Contenders BEHIND the leader, in the server’s order', () => {
+		// AD-14 makes ascending join `seq` an input to the winner, so a
+		// surface that re-sorted would show a list the draw will not run over.
+		expect(PAGE).toContain('id="auction-contenders"');
+		expect(PAGE).toMatch(/\{#each otherContenders as contender, position \(position\)\}/);
+		expect(PAGE_CODE).not.toMatch(/contenders\.(sort|reverse|toSorted)/);
+		// Filtered by TEAM ID and never by the display string beside it.
+		expect(PAGE).toMatch(
+			/control\.contenderTeamIds\[position\] !== control\.leadingTeamId/
+		);
+	});
+
+	it('names the leader once — the list beneath them drops that Team', () => {
+		// A lottery opens on a Bid, so the leading Team is on the fold's
+		// Contender list like every other joiner. Printing that list whole
+		// beneath their own name would name them twice.
+		expect(PAGE).toMatch(/const otherContenders = \$derived\(/);
+		expect(PAGE).toContain('.filter(');
+		// The list follows the leader, not the other way round.
+		expect(PAGE.indexOf('id="auction-leading-bidder"')).toBeLessThan(
+			PAGE.indexOf('id="auction-contenders"')
+		);
+	});
+
+	it('renders for every viewer — it hangs off no Team fact', () => {
 		// A lottery is a fact about the Auction, not about who is looking at
-		// it. The block is conditional on `isContention` alone, which is the
-		// fold's state, and on nothing about `control.viewerTeamId`.
-		const block = PAGE.slice(PAGE.indexOf('class:lottery={isContention}'));
-		const end = block.indexOf('</section>');
-		const lottery = block.slice(0, end);
+		// it. The bar is conditional on `isContention` alone, which is the
+		// fold's state, and the list on the fold's own Contenders.
+		const panel = PAGE.slice(PAGE.indexOf('class:lottery={isContention}'));
+		const lottery = panel.slice(0, panel.indexOf('</section>'));
 		expect(lottery).not.toMatch(/viewerTeamId/);
 		expect(lottery).not.toMatch(/control\.available/);
 	});
@@ -1215,6 +1160,9 @@ const PANEL = readFileSync(at('src', 'lib', 'components', 'RefusalPanel.svelte')
 const PANEL_CODE = stripComments(PANEL);
 
 const BREAKDOWN = readFileSync(at('src', 'lib', 'components', 'CapBreakdown.svelte'), 'utf8');
+// Prose ABOUT a forbidden thing is not that thing — `PANEL_CODE`'s discipline.
+// This component explains at length why it is a button and not a `<details>`.
+const BREAKDOWN_CODE = stripComments(BREAKDOWN);
 
 describe('the refusal panel — the only surface with a dedicated anatomy', () => {
 	it('is the one place in the product with a top accent bar, in attention', () => {
@@ -1380,6 +1328,49 @@ describe('the Maximum Bid breakdown on the page', () => {
 		// The labels and figures are the core's; the column prints rows.
 		expect(BREAKDOWN).toContain('{line.label}');
 		expect(BREAKDOWN).toContain('{line.figure}');
+	});
+
+	it('collapses on the PAGE and never in the refusal panel', () => {
+		// A breakdown a Manager has to ask for is a breakdown they will not
+		// check — which is the one thing a refusal may not be. The standing
+		// column is a different question: it is read before anything is
+		// typed, when the answer is what is wanted and the ledger is what is
+		// occasionally wanted.
+		expect(PAGE).toMatch(/<CapBreakdown[^>]*collapsible/);
+		expect(PANEL).not.toMatch(/<CapBreakdown[^>]*collapsible/);
+		// Opt-IN, so a caller that says nothing gets the whole ledger.
+		expect(BREAKDOWN).toMatch(/collapsible = false/);
+	});
+
+	it('decides WHICH rows stand from the core, never by reading a figure back', () => {
+		// `summary` is a judgement about the arithmetic, made beside the
+		// arithmetic. A component parsing `$0.0M` back out of a rendered
+		// string would be formatting money in the one file that must not.
+		expect(BREAKDOWN).toContain('line.summary');
+		expect(BREAKDOWN_CODE).not.toMatch(/\$0|parseFloat|Number\(|replace\(/);
+	});
+
+	it('offers no control when there is nothing left to reveal', () => {
+		// A control offering to show what is already shown is a control that
+		// lies. Both the rows and the button hang off the same derivation.
+		expect(BREAKDOWN).toMatch(/const hasMore = \$derived\(/);
+		expect(BREAKDOWN).toMatch(/\{#if hasMore\}/);
+	});
+
+	it('words neither state of the control — both come from the core', () => {
+		expect(BREAKDOWN).toContain('CAP_BREAKDOWN_EXPAND');
+		expect(BREAKDOWN).toContain('CAP_BREAKDOWN_COLLAPSE');
+		expect(BREAKDOWN_CODE).not.toMatch(/Show the full|Hide the full/);
+	});
+
+	it('announces the disclosure rather than merely rendering a toggle', () => {
+		// `aria-expanded` is what tells a screen reader the state, and the
+		// rows it reveals belong to the SAME list in ledger order — which is
+		// why this is a button and not a `<details>`, whose content could only
+		// append after the summary.
+		expect(BREAKDOWN).toContain('aria-expanded={expanded}');
+		expect(BREAKDOWN).toContain('aria-controls={id}');
+		expect(BREAKDOWN_CODE).not.toContain('<details');
 	});
 
 	it('is ONE column definition, shared by the page and the refusal panel', () => {

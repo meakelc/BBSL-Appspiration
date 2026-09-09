@@ -78,6 +78,7 @@
 		readonly leadingBidder: string;
 		readonly closesAt: string | null;
 		readonly auctionStateLabel: string;
+		readonly auctionStateLabelNarrow: string;
 		readonly auctionStateIcon: string;
 		readonly contention: ContentionState;
 		readonly contenderCount: number;
@@ -345,9 +346,22 @@
 						<!-- Every state carries an ICON and a WORD, never colour alone.
 						     The Auction state is never a chip: it describes the Auction,
 						     not the reader. -->
+						<!-- The state's name TWICE, one of them displayed: `Minimum
+						     Lottery` set at `--size-10` beside a Player's name still
+						     wraps this row on a phone, and a wrapped identity row is
+						     what the short name exists to prevent.
+
+						     Two spans rather than one string chosen in script, because
+						     the choice is a VIEWPORT question and CSS is what can see a
+						     viewport — a `matchMedia` here would re-answer it on every
+						     resize, and answer it wrong for one paint during SSR.
+						     Whichever span is `display: none` is not announced either,
+						     so a screen reader reads exactly the name that is on
+						     screen. Both spellings are the core's. -->
 						<p class="state state-ambient card-state">
 							<span class="chip-icon" aria-hidden="true">{card.auctionStateIcon}</span>
-							<span class="chip-word">{card.auctionStateLabel}</span>
+							<span class="chip-word chip-word-narrow">{card.auctionStateLabelNarrow}</span>
+							<span class="chip-word chip-word-wide">{card.auctionStateLabel}</span>
 						</p>
 					</div>
 
@@ -535,6 +549,25 @@
 		text-transform: uppercase;
 		letter-spacing: 0.12em;
 		font-size: var(--size-10);
+	}
+
+	/*
+	 * The short name below 640px and the full one at and above it — the same
+	 * breakpoint `global.css` already uses for the strip, so the layout has
+	 * one width where it changes its mind rather than two.
+	 */
+	.chip-word-wide {
+		display: none;
+	}
+
+	@media (min-width: 640px) {
+		.chip-word-narrow {
+			display: none;
+		}
+
+		.chip-word-wide {
+			display: inline;
+		}
 	}
 
 	/*

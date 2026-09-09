@@ -39,7 +39,11 @@
 
 import { parseInstant } from './instant.ts';
 import type { Money } from './money.ts';
-import { MINIMUM_LOTTERY_LABEL, auctionForPlayer } from './projection/auctions.ts';
+import {
+	MINIMUM_LOTTERY_LABEL,
+	MINIMUM_LOTTERY_LABEL_NARROW,
+	auctionForPlayer
+} from './projection/auctions.ts';
 import type { Auction, ContentionState, OpenAuctions } from './projection/auctions.ts';
 import { openNominations } from './projection/nominations.ts';
 import type { OpenNominations } from './projection/nominations.ts';
@@ -146,6 +150,23 @@ export const AUCTION_STATE_LABELS: Readonly<Record<ContentionState, string>> = O
 	standard: 'Open',
 	minimum_bid: MINIMUM_LOTTERY_LABEL
 });
+
+/**
+ * The same record for a NARROW viewport, where only the lottery differs.
+ *
+ * A complete record rather than an override map, so a surface indexes ONE
+ * thing by the state it holds and cannot fall through to a missing key. The
+ * other two states are the same string in both: `Open` is already short, and
+ * `Awaiting Opening Bid` is not shortened here because no one has said what
+ * it should shorten TO — inventing a spelling for it would be a second name
+ * nothing asked for, which is the whole cost the header above warns about.
+ */
+export const AUCTION_STATE_LABELS_NARROW: Readonly<Record<ContentionState, string>> =
+	Object.freeze({
+		awaiting_opening_bid: AUCTION_STATE_LABELS.awaiting_opening_bid,
+		standard: AUCTION_STATE_LABELS.standard,
+		minimum_bid: MINIMUM_LOTTERY_LABEL_NARROW
+	});
 
 /**
  * The SHAPE beside each state's word.

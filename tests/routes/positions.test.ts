@@ -423,6 +423,24 @@ describe('the Positions page — what it renders', () => {
 		expect(won).toMatch(/\{:else\}[\s\S]*card-player[\s\S]*\{\/if\}/);
 	});
 
+	it('marks the Auction state on the cards, from the Board’s own record', () => {
+		// The Bid Board card's identity-row marker, on the landing's cards for
+		// the same Auctions: one state, one word, one shape, every surface.
+		expect(PAGE).toContain("from '$lib/core/board.ts'");
+		expect(PAGE).toContain('AUCTION_STATE_LABELS[card.contention]');
+		expect(PAGE).toContain('AUCTION_STATE_ICONS[card.contention]');
+		// Ambient, never a chip: it describes the Auction, not the reader, and
+		// the chip beside it already says where the reader stands.
+		expect(PAGE).toMatch(/state state-ambient card-state/);
+		// Both groups that carry a viewer chip carry the marker too.
+		for (const group of ['id="group-outbid"', 'id="group-you-lead"']) {
+			const start = PAGE.indexOf(group);
+			expect(start, group).toBeGreaterThan(-1);
+			const head = PAGE.slice(start, PAGE.indexOf('ROW 2', start));
+			expect(head, group).toContain('AUCTION_STATE_LABELS[card.contention]');
+		}
+	});
+
 	it('labels the leading bidder as its own figure, never under “Your Bid”', () => {
 		// A review finding. Two bare sibling lines under one `Your Bid`
 		// heading read, in greyscale, as though the rival's `Rockets — Dana`
