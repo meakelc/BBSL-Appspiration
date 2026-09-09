@@ -2733,8 +2733,7 @@ describe('the refusal panel content, worded by the core and nowhere else', () =>
 				{
 					fantraxPlayerId: 'elsewhere',
 					playerName: 'Ausar Bright',
-					amount: parseMoney(3_000_000),
-					isContentionEntry: false
+					amount: parseMoney(3_000_000)
 				}
 			],
 			eligibleLeading: [],
