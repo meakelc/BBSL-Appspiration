@@ -78,8 +78,16 @@ describe('adapt — the row mapping', () => {
 		// `runTransactionalWrite` and `runTick` both read `result.rows`; handing
 		// back the driver's own object would work by accident today and break
 		// the moment the driver adds or renames a field.
-		expect(result).toEqual({ rows });
-		expect(result.rows).toBe(rows);
+		//
+		// The rows are no longer the driver's ARRAY either, and that is now
+		// deliberate rather than incidental: `normaliseRow` rebuilds every row
+		// so an `int8` reaches `src/lib` as the string `pg` would have handed
+		// over. This fixture's `seq: 1n` is the precise shape that threw
+		// `money must arrive as a string or a number, received bigint` on the
+		// dev project, and it is asserted here as `'1'` rather than passed
+		// through — which is what this file previously, wrongly, required.
+		expect(result).toEqual({ rows: [{ seq: '1', core_version: 1 }] });
+		expect(result.rows).not.toBe(rows);
 	});
 
 	it('maps an empty result to an empty rows array, never undefined', async () => {
@@ -117,5 +125,55 @@ describe('adapt — release never escapes the invocation', () => {
 		expect(() => adapt(client).release()).not.toThrow();
 		expect(error).toHaveBeenCalled();
 		error.mockRestore();
+	});
+});
+
+describe('adapt — an int8 arrives as `pg` would deliver it', () => {
+	it('renders a bigint column as a string, which is what `parseMoney` accepts', async () => {
+		// The live failure this covers: `deno-postgres` decodes `int8` to a
+		// bigint, `money.ts` accepts only a string or a number, and every
+		// close on the dev project threw `money must arrive as a string or a
+		// number, received bigint` once the schedule was first enabled.
+		const client = fakeClient({ rows: [{ amount: 42n }] });
+		const { rows } = await adapt(client).query('select amount from bids');
+		expect(rows).toEqual([{ amount: '42' }]);
+		expect(typeof rows[0]?.amount).toBe('string');
+	});
+
+	it('is exact past 2^53, which is why the text form is the right one', async () => {
+		// `Number(9007199254740993n)` is 9007199254740992 — the rounding `pg`
+		// avoids by handing back text, and the reason this converts through
+		// `String` rather than `Number`.
+		const client = fakeClient({ rows: [{ id: 9007199254740993n }] });
+		const { rows } = await adapt(client).query('select id from auction_events');
+		expect(rows[0]?.id).toBe('9007199254740993');
+	});
+
+	it('maps a bigint inside an array, for an int8[] column', async () => {
+		const client = fakeClient({ rows: [{ ids: [1n, 2n, 3n] }] });
+		const { rows } = await adapt(client).query('select ids from t');
+		expect(rows[0]?.ids).toEqual(['1', '2', '3']);
+	});
+
+	it('leaves every other column shape exactly as the driver gave it', async () => {
+		// Including a jsonb payload: its contents arrive already parsed from
+		// text and can never hold a bigint, so it must pass through untouched
+		// rather than being walked and rebuilt.
+		const when = new Date('2026-09-09T17:11:43.241Z');
+		const payload = { nested: { deep: 1 } };
+		const client = fakeClient({
+			rows: [{ name: 'a', count: 3, missing: null, ran_at: when, payload }]
+		});
+		const { rows } = await adapt(client).query('select * from t');
+		expect(rows[0]).toEqual({ name: 'a', count: 3, missing: null, ran_at: when, payload });
+		expect(rows[0]?.ran_at).toBe(when);
+		expect(rows[0]?.payload).toBe(payload);
+	});
+
+	it('does not mutate the row the driver handed over', async () => {
+		const driverRow = { amount: 42n };
+		const client = fakeClient({ rows: [driverRow] });
+		await adapt(client).query('select amount from bids');
+		expect(driverRow.amount).toBe(42n);
 	});
 });
