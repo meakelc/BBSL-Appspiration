@@ -74,6 +74,7 @@ import {
 } from '../core/projection/eligibility.ts';
 import {
 	AUCTION_CLOSED_EVENT,
+	AUCTION_TERMINATED_EVENT,
 	INITIAL_NOMINATIONS,
 	nominationForPlayer,
 	nominationsReducer
@@ -90,6 +91,21 @@ import { releaseNomination } from './nomination.ts';
 import { enqueueBroadcastsAndMentions } from './outbox.ts';
 import { loadLeagueRosterDetail, loadTeamRoster } from './team-roster.ts';
 import type { TeamRosterFigures } from './team-roster.ts';
+import type { Money } from '../core/money.ts';
+import { parseMoney } from '../core/money.ts';
+
+/**
+ * The Cap Space a close with no winning Team is handed (Story 10.5).
+ *
+ * **Not a figure about anybody.** A lottery every Contender was cancelled from
+ * has no winner, so there is no Team whose Cap Space this could be — and
+ * `decideClose` returns its termination pair before it reaches a placement, a
+ * Cap Hit or the cascade, which are the only three things that read it. Zero
+ * is what "there is nobody to describe" looks like in a `Money`, and it is
+ * stated here rather than left to a query that would have to invent a Team to
+ * ask about.
+ */
+const NO_CAP_SPACE: Money = parseMoney(0);
 
 /**
  * Fold everything a close decides from out of ONE read of the log, then read
@@ -150,7 +166,20 @@ export async function loadCloseState(
 	// before the roster is read and long before anything is written (AD-1).
 	const winner = closedWinnerFor(auction, drawnWinner);
 
-	const roster = await loadTeamRoster(client, winner.teamId, contracts);
+	// **No winning Team means no winner-keyed read** (Story 10.5). A lottery
+	// FR-40's cascade emptied closes with nobody having won: `closedWinnerFor`
+	// answers `null`, and every read below it is keyed on a Team that does not
+	// exist. `loadTeamRoster` would be a query against nothing, and
+	// `loadLeagueRosterDetail` answers the CASCADE — which this close does not
+	// run, because nobody won and so no Team's free Slots fell.
+	//
+	// `decideClose` returns its `ContentionDrawn` + `AuctionTerminated` pair
+	// before it reaches a placement, a Cap Hit or `cascadeFor`, so not one of
+	// the winner figures below is read on this path. They are stated as the
+	// zeroes they are rather than left to a second read that would describe
+	// nobody.
+	const roster: TeamRosterFigures | null =
+		winner === null ? null : await loadTeamRoster(client, winner.teamId, contracts);
 
 	// **A SECOND roster read, batched over every Team with a Bid** (Story
 	// 10.4). The cascade's restorer judges a CANDIDATE Team — somebody other
@@ -171,7 +200,10 @@ export async function loadCloseState(
 	// Team with no Bid anywhere can never be a candidate, and reading the whole
 	// league would grow this statement with the league rather than with the
 	// close.
-	const rosterFigures = await loadLeagueRosterDetail(client, teamsWithABid(auctions), contracts);
+	const rosterFigures =
+		winner === null
+			? new Map<string, TeamRosterFigures>()
+			: await loadLeagueRosterDetail(client, teamsWithABid(auctions), contracts);
 
 	return {
 		auction,
@@ -185,8 +217,8 @@ export async function loadCloseState(
 		// `loadTeamRoster` read `minorLeagueOccupied` already came from — two
 		// figures the read has always returned and this module used to
 		// discard. No new query, and no second moment they could describe.
-		capSpace: roster.capSpace,
-		rosterCount: roster.rosterCount,
+		capSpace: roster?.capSpace ?? NO_CAP_SPACE,
+		rosterCount: roster?.rosterCount ?? 0,
 		// The eligibility FOLD and the nominations fold, handed through as
 		// `teamMoneyStateFor`'s two callbacks so the cascade's re-test
 		// partitions the winner's other commitments exactly as a Bid would.
@@ -205,7 +237,7 @@ export async function loadCloseState(
 		playerIsMinorLeagueEligible: isEligible(eligibility, fantraxPlayerId),
 		// The RAW occupancy at this close, contracts included. `M = max(0, 3 −
 		// occupied)` is the core's derivation and is never computed here.
-		minorLeagueOccupied: roster.minorLeagueOccupied,
+		minorLeagueOccupied: roster?.minorLeagueOccupied ?? 0,
 		// Carried on the state so `decide` hands the CORE the very value the
 		// roster read above was keyed on. Deriving it a second time inside
 		// `decide` would be a second read of a table the transaction has
@@ -317,7 +349,22 @@ function affectedTeamsForClose(
 	const auction = state.auction;
 
 	if (eventType === CONTENTION_DRAWN_EVENT) {
+		// An emptied lottery's reveal mentions nobody, and correctly so: the
+		// list is empty, and the Teams that were on it were told the moment
+		// their Bid was cancelled. The Manager owed a notice here is the
+		// NOMINATOR, and the event that is about them is the termination
+		// below (Story 10.5).
 		return auction === null ? [] : auction.contenders.map((contender) => contender.teamId);
+	}
+	if (eventType === AUCTION_TERMINATED_EVENT) {
+		// **The nominating Team, and only them** (Story 10.5). Nobody won, so
+		// there is no winner to congratulate and no leader to console; the one
+		// party to this event is the Manager whose Nomination Slot has just
+		// come back and whose Player is in the pool again. The Team is off the
+		// nominations fold, exactly as the close case reads it — the payload
+		// names it too, but one derivation is what keeps the two from drifting.
+		const terminatedNominator = state.nomination?.teamId ?? null;
+		return terminatedNominator === null ? [] : [terminatedNominator];
 	}
 	if (eventType !== AUCTION_CLOSED_EVENT) return [];
 

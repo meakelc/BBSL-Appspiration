@@ -155,8 +155,10 @@ export function drawIndex(seed: string, contenderCount: number): number {
 }
 
 /**
- * The Contender the seed selected, as the `ClosedWinner` a lottery's close
- * requires — after verifying the commitment the log already published.
+ * How a lottery came out, as the `ClosedWinner` its close requires — the
+ * Contender the seed selected, or the fact that there was nobody to select,
+ * and either way only after verifying the commitment the log already
+ * published.
  *
  * Story 3.4 declared `ClosedWinner` and produced nothing; this is its one
  * producer. It is pure and takes only what it is handed, which is what lets
@@ -178,13 +180,23 @@ export function drawIndex(seed: string, contenderCount: number): number {
  * and the reveal states `seedHash: null` for the record without implying a
  * check that was never available.
  *
- * Four throws, all of them bugs (AD-1):
+ * **An EMPTY Contender list returns rather than throws** (Story 10.5). It used
+ * to be the third throw below, and it is now the `undrawn` result: 10.3's
+ * cascade can cancel every join, 10.5 keeps the lottery's fixed clock through
+ * that, and the emptied lottery reaches its expiry with an outcome to record —
+ * the empty list, the revealed seed, no winner. The seed-shape and
+ * commitment checks run BEFORE it and stay before it, so the empty close still
+ * opens the envelope it published. `drawIndex` is untouched and still refuses
+ * a count below 1; the empty case is decided here and never reaches it.
+ *
+ * Three throws, all of them bugs (AD-1):
  *
  *  - no sealed seed. The seeds table holds nothing for this Player, so there
  *    is no commit-reveal to open and no winner to derive. The Auction stays
- *    open and visibly unclosed, which is the honest state.
+ *    open and visibly unclosed, which is the honest state. An empty list is
+ *    NOT this case: a lottery with nobody in it and no sealed seed still
+ *    throws here, because there is still a commitment nothing can open.
  *  - a malformed seed, named against what was required.
- *  - an empty Contender list. There is nobody to draw and no winner to invent.
  *  - a selected Contender missing an identity. `auction_events.manager_id` and
  *    `.team_id` are `not null` and reference real rows, so this would fail at
  *    the foreign key otherwise — at the insert, rather than at the rule that
@@ -220,11 +232,25 @@ export function drawnWinnerFor(auction: Auction, seed: string | null): ClosedWin
 
 	// The fold's own list, in the fold's own order. Never re-sorted here.
 	const contenders = auction.contenders;
+	// **An empty list RETURNS rather than throws** (Story 10.5). Story 10.3's
+	// cascade can cancel every join a lottery holds, and 10.5 keeps the
+	// contention's own clock running through that, so a lottery reaching its
+	// expiry with nobody in it is an ordinary outcome the log must record —
+	// not a bug and not a state to strand. There is still nobody to draw and
+	// still no winner to invent, which is precisely what the `undrawn` result
+	// says; what changes is that saying it is now this function's job.
+	//
+	// **It is decided HERE and not one level down.** `drawIndex` goes on
+	// refusing a count below 1 — a modulus of zero makes every intermediate
+	// `NaN` and would index the list with a non-number — and the empty case
+	// never reaches it.
+	//
+	// **After the seed shape and the commitment check, never before them.**
+	// The reveal happens on an empty close exactly as on a drawn one: a
+	// published commitment that never opens is the one outcome AD-14 cannot
+	// survive, and an empty Contender list does not excuse it.
 	if (contenders.length === 0) {
-		throw new TypeError(
-			`drawnWinnerFor: "${auction.fantraxPlayerId}" is in a Minimum-Bid Contention with no ` +
-				'Contenders. There is nobody to draw and no winner to invent (AD-14)'
-		);
+		return { kind: 'undrawn', seed, contenders: [] };
 	}
 
 	// Computed ONCE and carried onto the winner. `decideClose` publishes this

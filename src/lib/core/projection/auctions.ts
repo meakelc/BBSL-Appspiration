@@ -51,7 +51,12 @@ import { formatInstant, parseInstant } from '../instant.ts';
 import type { Money } from '../money.ts';
 import { compareMoney, parseMoney } from '../money.ts';
 import type { Reducer } from './fold.ts';
-import { AUCTION_CLOSED_EVENT, readClosedPlayerId } from './nominations.ts';
+import {
+	AUCTION_CLOSED_EVENT,
+	AUCTION_TERMINATED_EVENT,
+	readClosedPlayerId,
+	readTerminatedPlayerId
+} from './nominations.ts';
 
 /**
  * The event type a successful Bid appends (`server/bidding.ts`).
@@ -1048,15 +1053,28 @@ function readRestoration(value: unknown): Restoration | null {
  *    contention that is still running, which is the opposite of what FR-40
  *    asks for.
  *  - `closesAt` is cleared, and `contention` returns to `awaiting_opening_bid`,
- *    only when the Auction is left with NO LEADER. A cancellation resets no
- *    clock and removes none: where a Bid is restored the Auction Clock is
- *    untouched and the Restored Leading Bidder inherits whatever is left of it
- *    — possibly minutes — and where none is, a cleared clock is what stops the
- *    Auction closing at its old expiry with no winner. Note that "no leader"
- *    is not "no surviving Bid": every candidate can fail re-validation while
- *    `bids` still holds several standing offers, and that Auction goes back to
- *    Awaiting Opening Bid with the Player still on the Board and the
- *    nominator's Nomination Slot still held (FR-9).
+ *    only when a STANDARD Auction is left with no leader. A cancellation
+ *    resets no clock and removes none: where a Bid is restored the Auction
+ *    Clock is untouched and the Restored Leading Bidder inherits whatever is
+ *    left of it — possibly minutes — and where none is, a cleared clock is
+ *    what stops the Auction closing at its old expiry with no winner. Note
+ *    that "no leader" is not "no surviving Bid": every candidate can fail
+ *    re-validation while `bids` still holds several standing offers, and that
+ *    Auction goes back to Awaiting Opening Bid with the Player still on the
+ *    Board and the nominator's Nomination Slot still held (FR-9).
+ *  - **inside a Minimum-Bid Contention neither happens, however many joins
+ *    are cancelled — including the last** (Story 10.5). The contention stays
+ *    `minimum_bid` and keeps its fixed `closesAt` even with `contenders`
+ *    empty and `leadingBid` null. A lottery's clock is the CONTENTION's, not
+ *    any bidder's, so no Team's departure earns it: "a cancellation resets
+ *    nothing and removes nothing" applies to the clock too. And an emptied
+ *    lottery has a definite outcome that must be RECORDED — the empty list,
+ *    the revealed seed, the Player back in the pool and the nominator's Slot
+ *    released — which only an expiry the sweep still offers can reach.
+ *    `rules/close.ts` decides that outcome as a `ContentionDrawn` over an
+ *    empty list followed by an `AuctionTerminated`; clearing the clock here
+ *    would strand the sealed seed unopened, which is the one thing AD-14
+ *    cannot survive.
  *
  * Idempotent: a Bid already carrying a marker, or a `seq` this Auction has
  * never held, returns the Auction unchanged, so a second fold of the same log
@@ -1098,13 +1116,23 @@ export function withBidCancelled(
 		? (auction.contention === 'minimum_bid' ? artifactSuccessor : restored)
 		: auction.leadingBid;
 
+	// **A lottery keeps both, always** (Story 10.5). Inside a Minimum-Bid
+	// Contention the clock belongs to the contention rather than to any
+	// bidder, so an emptied Contender list leaves it exactly where it was and
+	// the Auction goes on being a lottery with nobody in it — one the sweep
+	// still offers, and that `decideClose` ends by revealing the seed over an
+	// empty list and terminating. Only a STANDARD Auction withdraws to
+	// Awaiting Opening Bid with its clock cleared, which is Story 10.4's
+	// branch and is untouched here.
+	const leaderless = leadingBid === null && auction.contention !== 'minimum_bid';
+
 	return {
 		...auction,
-		contention: leadingBid === null ? 'awaiting_opening_bid' : auction.contention,
+		contention: leaderless ? 'awaiting_opening_bid' : auction.contention,
 		leadingBid,
 		// Untouched wherever a leader stands — restored or never withdrawn —
-		// and cleared only where none does.
-		closesAt: leadingBid === null ? null : auction.closesAt,
+		// and cleared only where a Standard Auction has none.
+		closesAt: leaderless ? null : auction.closesAt,
 		bids,
 		contenders: contendersFor(bids)
 	};
@@ -1348,6 +1376,28 @@ export const auctionsReducer: Reducer<OpenAuctions> = (state, event) => {
 			if (fantraxPlayerId === null) return state;
 			if (!hasOwn(state.byPlayer, fantraxPlayerId)) return state;
 			return { byPlayer: omitKey(state.byPlayer, fantraxPlayerId) };
+		}
+		case AUCTION_TERMINATED_EVENT: {
+			// **The close case, for the other way an Auction ends** (Story
+			// 10.5). Until now no terminated Player had an Auction at all —
+			// `phase-end.ts` terminates nominations that never drew a Bid — so
+			// this fold had nothing to drop and needed no case. A lottery whose
+			// every Contender was cancelled does: it keeps its clock, expires,
+			// reveals its seed over an empty list and terminates with no
+			// winner. Without this case that Auction would survive its own
+			// termination and be offered to `overdueAuctions` again on every
+			// sweep, closing forever over the same empty list.
+			//
+			// The SAME reader `nominationsReducer` folds a termination through,
+			// for the close case's reason: the board seat, the Nomination Slot
+			// and the Auction can never be released apart from one another.
+			// A termination naming a Player with no Auction — every one
+			// `phase-end.ts` appends — changes nothing, which is what makes a
+			// second fold of the same log converge.
+			const terminated = readTerminatedPlayerId(event.payload);
+			if (terminated === null) return state;
+			if (!hasOwn(state.byPlayer, terminated)) return state;
+			return { byPlayer: omitKey(state.byPlayer, terminated) };
 		}
 		default:
 			return state;

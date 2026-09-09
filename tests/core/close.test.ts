@@ -21,7 +21,11 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { MINIMUM_BID, MINOR_LEAGUE_SLOTS } from '../../src/lib/core/constants.ts';
+import {
+	ACTIVE_BENCH_SLOTS,
+	MINIMUM_BID,
+	MINOR_LEAGUE_SLOTS
+} from '../../src/lib/core/constants.ts';
 import { hash } from '../../src/lib/core/hash.ts';
 import { parseMoney } from '../../src/lib/core/money.ts';
 import {
@@ -34,7 +38,10 @@ import {
 import type { Auction, Bid, OpenAuctions } from '../../src/lib/core/projection/auctions.ts';
 import { fold } from '../../src/lib/core/projection/fold.ts';
 import { CONTENTION_DRAWN_EVENT } from '../../src/lib/core/projection/draws.ts';
-import { AUCTION_CLOSED_EVENT } from '../../src/lib/core/projection/nominations.ts';
+import {
+	AUCTION_CLOSED_EVENT,
+	AUCTION_TERMINATED_EVENT
+} from '../../src/lib/core/projection/nominations.ts';
 import type { OpenNomination } from '../../src/lib/core/projection/nominations.ts';
 import {
 	capHitFor,
@@ -46,9 +53,15 @@ import type {
 	AuctionClosedPayload,
 	BidCancelledPayload,
 	CloseState,
+	ClosedParty,
 	ClosedWinner,
-	ContentionDrawnPayload
+	ContentionDrawnPayload,
+	DrawnContentionPayload,
+	DrawnWinner,
+	UndrawnContentionPayload,
+	UndrawnLottery
 } from '../../src/lib/core/rules/close.ts';
+import type { AuctionTerminatedPayload } from '../../src/lib/core/rules/phase-end.ts';
 import type { CandidateRosterFigures } from '../../src/lib/core/rules/restore.ts';
 import type { AppendedEvent, EventEnvelope } from '../../src/lib/core/types.ts';
 
@@ -132,7 +145,18 @@ function stateOf(overrides: Partial<CloseState> = {}): CloseState {
  */
 const SEED = '4d81f0b6a72c395e4d81f0b6a72c395e4d81f0b6a72c395e4d81f0b6a72c395e';
 
-const DRAWN: ClosedWinner = {
+/**
+ * `closedWinnerFor`'s answer, asserted to be a party (Story 10.5). It answers
+ * `null` for an emptied lottery and for nothing else, so every test that reads
+ * a winning Team is stating "and somebody won" as part of its expectation.
+ */
+function partyOf(auction: Auction | null, winner: ClosedWinner | null): ClosedParty {
+	const party = closedWinnerFor(auction, winner);
+	if (party === null) throw new Error('expected a closing party, received none');
+	return party;
+}
+
+const DRAWN: DrawnWinner = {
 	kind: 'drawn',
 	teamId: 't-f',
 	teamName: 'Team F',
@@ -257,7 +281,7 @@ describe('closedWinnerFor — who won, and for how much', () => {
 		// so assert the shell's derivation against the payload the core emits,
 		// rather than the function against itself.
 		const auction = auctionOf();
-		const shellAnswer = closedWinnerFor(auction, null);
+		const shellAnswer = partyOf(auction, null);
 		const { payload } = payloadOf(stateOf({ auction }));
 
 		expect(payload.teamId).toBe(shellAnswer.teamId);
@@ -273,7 +297,7 @@ describe('closedWinnerFor — who won, and for how much', () => {
 		// shell reading the winner off `leadingBid` would disagree with the
 		// payload here and nowhere else.
 		const auction = auctionOf({ contention: 'minimum_bid' });
-		const shellAnswer = closedWinnerFor(auction, DRAWN);
+		const shellAnswer = partyOf(auction, DRAWN);
 		const { payload } = payloadOf(stateOf({ auction }), AT_EXPIRY, DRAWN);
 
 		expect(payload.teamId).toBe(shellAnswer.teamId);
@@ -488,7 +512,7 @@ describe('decideClose — ContentionDrawn, then AuctionClosed (Story 3.6, AD-14)
 
 	it('carries the seed, the commitment, the ordered list and the selection', () => {
 		const decided = decideClose(lotteryState(), AT_EXPIRY, DRAWN);
-		const drawn = decided.events[0]?.payload as ContentionDrawnPayload;
+		const drawn = decided.events[0]?.payload as DrawnContentionPayload;
 
 		expect(drawn).toEqual({
 			fantraxPlayerId: 'p-stash',
@@ -500,7 +524,7 @@ describe('decideClose — ContentionDrawn, then AuctionClosed (Story 3.6, AD-14)
 			winningTeamName: 'Team F',
 			winningManagerId: 'm-f',
 			drawnAt: CLOSES_AT
-		} satisfies ContentionDrawnPayload);
+		} satisfies DrawnContentionPayload);
 		// The recorded position and the recorded winner agree by construction,
 		// which is what a Manager who ran the arithmetic checks against.
 		expect(drawn.contenders[drawn.selectedIndex]).toBe(drawn.winningTeamId);
@@ -548,21 +572,21 @@ describe('decideClose — ContentionDrawn, then AuctionClosed (Story 3.6, AD-14)
 		// with `indexOf` would publish 1 — the first occurrence — while the
 		// reduction that actually chose the winner produced 2. The number a
 		// Manager checks their spreadsheet against must be the arithmetic's.
-		const duplicated: ClosedWinner = {
+		const duplicated: DrawnWinner = {
 			...DRAWN,
 			contenders: ['t-e', 't-f', 't-f'],
 			selectedIndex: 2
 		};
 
 		const decided = decideClose(lotteryState(), AT_EXPIRY, duplicated);
-		const drawn = decided.events[0]?.payload as ContentionDrawnPayload;
+		const drawn = decided.events[0]?.payload as DrawnContentionPayload;
 
 		expect(drawn.selectedIndex).toBe(2);
 		expect(drawn.contenders[drawn.selectedIndex]).toBe('t-f');
 	});
 
 	it('throws when the carried position is outside the list it was drawn from', () => {
-		const offList: ClosedWinner = { ...DRAWN, selectedIndex: 2 };
+		const offList: DrawnWinner = { ...DRAWN, selectedIndex: 2 };
 
 		expect(() => decideClose(lotteryState(), AT_EXPIRY, offList)).toThrow(
 			/not a place in the Contender list/
@@ -572,7 +596,7 @@ describe('decideClose — ContentionDrawn, then AuctionClosed (Story 3.6, AD-14)
 	it('throws when the carried position and the carried winner disagree', () => {
 		// `t-f` is real and position 0 is real; they are just not each other.
 		// Neither is silently preferred over the other.
-		const mismatched: ClosedWinner = { ...DRAWN, selectedIndex: 0 };
+		const mismatched: DrawnWinner = { ...DRAWN, selectedIndex: 0 };
 
 		expect(() => decideClose(lotteryState(), AT_EXPIRY, mismatched)).toThrow(
 			/is not at position 0/
@@ -580,7 +604,7 @@ describe('decideClose — ContentionDrawn, then AuctionClosed (Story 3.6, AD-14)
 	});
 
 	it('throws when the winner is not on the list it was drawn from at all', () => {
-		const stranger: ClosedWinner = { ...DRAWN, teamId: 't-z', teamName: 'Team Z' };
+		const stranger: DrawnWinner = { ...DRAWN, teamId: 't-z', teamName: 'Team Z' };
 
 		expect(() => decideClose(lotteryState(), AT_EXPIRY, stranger)).toThrow(/is not at position/);
 	});
@@ -588,10 +612,188 @@ describe('decideClose — ContentionDrawn, then AuctionClosed (Story 3.6, AD-14)
 	it('throws on a revealed seed that is not 64 lowercase hex digits', () => {
 		// The commitment check cannot stand in for this one: with `seedHash`
 		// null it never runs, and an unshaped seed would reach the payload.
-		const unshaped: ClosedWinner = { ...DRAWN, seed: 'not-a-seed' };
+		const unshaped: DrawnWinner = { ...DRAWN, seed: 'not-a-seed' };
 		const state = lotteryState({ seedHash: null });
 
 		expect(() => decideClose(state, AT_EXPIRY, unshaped)).toThrow(/64 lowercase hex digits/);
+	});
+});
+
+// --- A lottery every Contender was cancelled from (Story 10.5, FR-40) ------
+
+/**
+ * The empty close, end to end through the core.
+ *
+ * §10 example 34's second half: "one of the five had Team X as its only
+ * Contender: it closes with no winner and that player returns to the pool."
+ * The list is empty because 10.3's cascade cancelled the only join, and the
+ * Auction still has a clock because 10.5 stopped a cancellation taking one.
+ */
+const UNDRAWN: UndrawnLottery = { kind: 'undrawn', seed: SEED, contenders: [] };
+
+/** The same lottery as `lotteryState`, with nobody left in it. */
+function emptiedLotteryState(overrides: Partial<Auction> = {}): CloseState {
+	return lotteryState({ contenders: [], ...overrides });
+}
+
+describe('closedWinnerFor — an emptied lottery has no party at all (Story 10.5)', () => {
+	it('answers null rather than throwing or inventing a Team', () => {
+		expect(closedWinnerFor(emptiedLotteryState().auction, UNDRAWN)).toBeNull();
+	});
+
+	it('still throws for a lottery handed NO winner at all — null is not "undrawn"', () => {
+		// The shell must derive an outcome. A missing one is a bug; an empty
+		// one is a result, and the two must not read the same.
+		expect(() => closedWinnerFor(emptiedLotteryState().auction, null)).toThrow(/drawnWinnerFor/);
+	});
+
+	it('still refuses an undrawn winner handed to a STANDARD close', () => {
+		expect(() => closedWinnerFor(auctionOf(), UNDRAWN)).toThrow(
+			/closes on its Leading Bidder and takes no/
+		);
+	});
+});
+
+describe('decideClose — the empty close: ContentionDrawn, then AuctionTerminated', () => {
+	it('emits EXACTLY two events, the reveal then the termination, and no close', () => {
+		const decided = decideClose(emptiedLotteryState(), AT_EXPIRY, UNDRAWN);
+
+		expect(decided.kind).toBe('accepted');
+		expect(decided.events).toHaveLength(2);
+		expect(decided.events[0]?.type).toBe(CONTENTION_DRAWN_EVENT);
+		expect(decided.events[1]?.type).toBe(AUCTION_TERMINATED_EVENT);
+		// No award, no contract, no compensating cancellation.
+		expect(decided.events.map((entry) => entry.type)).not.toContain(AUCTION_CLOSED_EVENT);
+		expect(decided.events.map((entry) => entry.type)).not.toContain(BID_CANCELLED_EVENT);
+	});
+
+	it('records the empty list and the REVEALED seed, with no selection and no winner', () => {
+		const decided = decideClose(emptiedLotteryState(), AT_EXPIRY, UNDRAWN);
+		const drawn = decided.events[0]?.payload as UndrawnContentionPayload;
+
+		expect(drawn).toEqual({
+			fantraxPlayerId: 'p-stash',
+			seed: SEED,
+			seedHash: hash(SEED),
+			contenders: [],
+			drawnAt: CLOSES_AT
+		} satisfies UndrawnContentionPayload);
+		// Stated by their absence rather than by an invented value.
+		expect(drawn.selectedIndex).toBeUndefined();
+		expect(drawn.winningTeamId).toBeUndefined();
+		expect(drawn.winningTeamName).toBeUndefined();
+		expect(drawn.winningManagerId).toBeUndefined();
+	});
+
+	it('names the NOMINATING Team on the termination, never a bidder', () => {
+		const decided = decideClose(emptiedLotteryState(), AT_EXPIRY, UNDRAWN);
+		const terminated = decided.events[1]?.payload as AuctionTerminatedPayload;
+
+		expect(terminated).toEqual({
+			fantraxPlayerId: 'p-stash',
+			playerName: 'Ausar Bright',
+			teamId: 't-n',
+			teamName: 'Team N',
+			managerId: 'm-n',
+			// The AUCTION's own persisted expiry, not the League Clock's and
+			// not `now`.
+			expiredAt: CLOSES_AT,
+			evaluatedAt: AT_EXPIRY
+		} satisfies AuctionTerminatedPayload);
+		// `t-e` opened the lottery and was cancelled out of it.
+		expect(terminated.teamId).not.toBe('t-e');
+	});
+
+	it('acts both events as the nominator, the pair moving together', () => {
+		const decided = decideClose(emptiedLotteryState(), AT_EXPIRY, UNDRAWN);
+
+		for (const entry of decided.events) {
+			expect(entry.teamId).toBe('t-n');
+			expect(entry.managerId).toBe('m-n');
+		}
+	});
+
+	it('records NEITHER actor when the nomination named no Manager', () => {
+		// `auction_events_actor_pair_null_together`, and `manager_id`
+		// references `managers(id)` — an invented id would be a foreign key
+		// violation rather than a cosmetic blemish.
+		const state = stateOf({
+			auction: emptiedLotteryState().auction,
+			nomination: { ...NOMINATION, managerId: null }
+		});
+		const decided = decideClose(state, AT_EXPIRY, UNDRAWN);
+
+		for (const entry of decided.events) {
+			expect(entry.managerId).toBeNull();
+			expect(entry.teamId).toBeNull();
+		}
+		// The payload still names the Team whose Slot comes back.
+		expect((decided.events[1]?.payload as AuctionTerminatedPayload).teamId).toBe('t-n');
+	});
+
+	it('runs NO cascade — nobody won, so no Team free Slots fell', () => {
+		// A winner's own other commitments, laid out so a cascade would have
+		// something to cancel if one ran. It must not.
+		const other = auctionOf({
+			fantraxPlayerId: 'p-other',
+			leadingBid: bid({ seq: '9', teamId: 't-e', teamName: 'Team E', managerId: 'm-e' })
+		});
+		const state = stateOf({
+			auction: emptiedLotteryState().auction,
+			auctions: { byPlayer: { 'p-other': other } },
+			rosterCount: ACTIVE_BENCH_SLOTS - 1,
+			capSpace: parseMoney(50_000_000),
+			rosterFiguresFor: () => ({
+				capSpace: parseMoney(50_000_000),
+				rosterCount: ACTIVE_BENCH_SLOTS - 1,
+				minorLeagueOccupied: 0
+			})
+		});
+
+		const decided = decideClose(state, AT_EXPIRY, UNDRAWN);
+
+		expect(decided.events).toHaveLength(2);
+		expect(decided.events.map((entry) => entry.type)).not.toContain(BID_CANCELLED_EVENT);
+	});
+
+	it('is invariant under `now` except for evaluatedAt (AD-10)', () => {
+		const late = decideClose(emptiedLotteryState(), LATE, UNDRAWN);
+		const onTime = decideClose(emptiedLotteryState(), AT_EXPIRY, UNDRAWN);
+
+		expect(late.events[0]).toEqual(onTime.events[0]);
+		expect((late.events[1]?.payload as AuctionTerminatedPayload).expiredAt).toBe(CLOSES_AT);
+		expect((late.events[1]?.payload as AuctionTerminatedPayload).evaluatedAt).toBe(LATE);
+	});
+
+	it('refuses to close an emptied lottery whose clock has not run out', () => {
+		expect(() => decideClose(emptiedLotteryState(), EARLY, UNDRAWN)).toThrow(/has not reached it/);
+	});
+
+	it('throws, appending nothing, when the revealed seed fails the commitment', () => {
+		const state = emptiedLotteryState({ seedHash: hash('a-different-seed') });
+
+		expect(() => decideClose(state, AT_EXPIRY, UNDRAWN)).toThrow(/does not match the published/);
+	});
+
+	it('throws on a revealed seed that is not 64 lowercase hex digits', () => {
+		const state = emptiedLotteryState({ seedHash: null });
+		const unshaped: UndrawnLottery = { ...UNDRAWN, seed: 'not-a-seed' };
+
+		expect(() => decideClose(state, AT_EXPIRY, unshaped)).toThrow(/64 lowercase hex digits/);
+	});
+
+	it('throws when an "undrawn" result somehow carries Contenders', () => {
+		const contradictory: UndrawnLottery = { ...UNDRAWN, contenders: ['t-e'] };
+
+		expect(() => decideClose(emptiedLotteryState(), AT_EXPIRY, contradictory)).toThrow(
+			/no Contenders by definition/
+		);
+	});
+
+	it('throws when there is no nomination to name the terminating Team', () => {
+		const state = stateOf({ auction: emptiedLotteryState().auction, nomination: null });
+
+		expect(() => decideClose(state, AT_EXPIRY, UNDRAWN)).toThrow(/NOMINATING Team/);
 	});
 });
 
@@ -609,7 +811,7 @@ describe('closedWinnerFor — the winner it is handed is validated (Story 3.6)',
 			// reference real rows, so an empty identity would otherwise fail at
 			// the insert with a driver's message, after the whole close had
 			// been computed.
-			const winner: ClosedWinner = { ...DRAWN, [field]: '' };
+			const winner: DrawnWinner = { ...DRAWN, [field]: '' };
 
 			expect(() => closedWinnerFor(lottery(), winner)).toThrow(TypeError);
 			expect(() => closedWinnerFor(lottery(), winner)).toThrow(new RegExp(`empty "${field}"`));
@@ -617,7 +819,7 @@ describe('closedWinnerFor — the winner it is handed is validated (Story 3.6)',
 	);
 
 	it('accepts a winner whose three identities are all present', () => {
-		expect(closedWinnerFor(lottery(), DRAWN).teamId).toBe('t-f');
+		expect(partyOf(lottery(), DRAWN).teamId).toBe('t-f');
 	});
 });
 

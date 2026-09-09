@@ -25,11 +25,15 @@
  * the third on capacity would still leave the tenth refused — so the passing
  * cases are the load-bearing assertions, not the failing one.
  *
- * **The second half is the win that ends them.** The draw that removes Team X
- * from the remaining Contender lists is Story 10.5's, and the lottery that
- * closes with no winner is 10.5's too; what is asserted here is the
- * cancellation itself — five entries, most recent first, $5,000,000 released,
- * and every one of them out of its Contender list before anything is drawn.
+ * **The second half is the win that ends them**, and since Story 10.5 this
+ * file owns all of it. Story 10.3 wrote the cascade — five entries, most
+ * recent first, $5,000,000 released, and every one of them out of its
+ * Contender list before anything is drawn. Story 10.5 wrote the two draws
+ * that follow: the second lottery drawn from a list that no longer holds Team
+ * X, and the lottery Team X was the ONLY Contender in, which reaches its own
+ * expiry with nobody in it, reveals its seed over an empty list and
+ * terminates with no winner — the Player back in the pool and the nominator's
+ * Slot with them.
  *
  * **The arithmetic is stated rather than approximated.** With `k` entries
  * held, Committed Bids is `k × $1,000,000`, Available Cap Space is
@@ -61,14 +65,30 @@ import type {
 	OpenAuctions
 } from '../../src/lib/core/projection/auctions.ts';
 import { fold } from '../../src/lib/core/projection/fold.ts';
-import { CONTENTION_DRAWN_EVENT } from '../../src/lib/core/projection/draws.ts';
-import { AUCTION_CLOSED_EVENT } from '../../src/lib/core/projection/nominations.ts';
+import {
+	CONTENTION_DRAWN_EVENT,
+	INITIAL_DRAWS,
+	drawForPlayer,
+	drawsReducer
+} from '../../src/lib/core/projection/draws.ts';
+import {
+	AUCTION_CLOSED_EVENT,
+	AUCTION_TERMINATED_EVENT,
+	INITIAL_NOMINATIONS,
+	NOMINATION_PLACED_EVENT,
+	nominationForPlayer,
+	nominationForTeam,
+	nominationsReducer
+} from '../../src/lib/core/projection/nominations.ts';
 import { decideClose } from '../../src/lib/core/rules/close.ts';
 import type {
 	BidCancelledPayload,
 	CloseState,
-	ClosedWinner
+	DrawnContentionPayload,
+	DrawnWinner,
+	UndrawnContentionPayload
 } from '../../src/lib/core/rules/close.ts';
+import { drawIndex, drawnWinnerFor } from '../../src/lib/core/rules/draw.ts';
 import type { AppendedEvent, EventEnvelope } from '../../src/lib/core/types.ts';
 import {
 	allGatesPassed,
@@ -313,7 +333,7 @@ function auctionsOf(entries: readonly Auction[]): OpenAuctions {
 const WON = LOTTERIES[0] as Auction;
 
 /** Team X, drawn out of the first lottery's two-Team list. */
-const DRAWN: ClosedWinner = {
+const DRAWN: DrawnWinner = {
 	kind: 'drawn',
 	teamId: 't-x',
 	teamName: 'Team X',
@@ -489,5 +509,266 @@ describe('§10 example 34 — the one win that ends them', () => {
 			CONTENTION_DRAWN_EVENT,
 			AUCTION_CLOSED_EVENT
 		]);
+	});
+});
+
+// --- The draw half: what the shorter lists draw (Story 10.5, FR-40) -------
+
+/**
+ * A SEVENTH lottery, and the one the second half of example 34 turns on:
+ *
+ * > one of the five had Team X as its only Contender: it closes with no
+ * > winner and that player returns to the pool.
+ *
+ * Team X opened it and nobody else joined, so the cascade that cancels Team
+ * X's surplus entries empties it outright.
+ */
+const SOLO_JOIN = joinBid('160', 't-x', 'Team X', 'm-x');
+const SOLO: Auction = {
+	fantraxPlayerId: 'p-lot-solo',
+	contention: 'minimum_bid',
+	leadingBid: SOLO_JOIN,
+	closesAt: LOTTERY_CLOSES,
+	bids: [SOLO_JOIN],
+	contenders: [contenderOf(SOLO_JOIN)],
+	seedHash: SEED_HASH,
+	seed: null
+};
+
+/**
+ * An EIGHTH lottery, and the one that keeps the reproduction honest.
+ *
+ * Every other lottery here is joined by exactly two Teams, so cancelling Team
+ * X always leaves a list of one — and `seed mod 1` is `0` for every seed,
+ * which makes "the recorded selection is reproducible" a sentence that cannot
+ * fail. This one is joined by THREE, so the post-cancellation list still has
+ * two Teams in it and `drawIndex` has a real choice to make over the shorter
+ * list (the spec's I/O matrix row: X, P and Q, with X cancelled, leaves
+ * `[P, Q]`).
+ */
+const TRIO_OPENING = joinBid('170', 't-other', 'Team Other', 'm-other');
+const TRIO_X = joinBid('175', 't-x', 'Team X', 'm-x');
+const TRIO_THIRD = joinBid('180', 't-third', 'Team Third', 'm-third');
+const TRIO: Auction = {
+	fantraxPlayerId: 'p-lot-trio',
+	contention: 'minimum_bid',
+	leadingBid: TRIO_OPENING,
+	closesAt: LOTTERY_CLOSES,
+	bids: [TRIO_OPENING, TRIO_X, TRIO_THIRD],
+	contenders: [contenderOf(TRIO_OPENING), contenderOf(TRIO_X), contenderOf(TRIO_THIRD)],
+	seedHash: SEED_HASH,
+	seed: null
+};
+
+/** The same close, with the solo and three-Team lotteries among Team X's commitments. */
+const WITH_SOLO: CloseState = {
+	...CLOSE_STATE,
+	auctions: auctionsOf([...LOTTERIES, SOLO, TRIO])
+};
+
+/**
+ * Every Auction as it stands AFTER the first close and its cascade — the
+ * state AD-11 guarantees the next close in the sweep is evaluated against,
+ * because each close commits before the next is loaded.
+ */
+const AFTER_THE_CASCADE = (() => {
+	const decided = decideClose(WITH_SOLO, LOTTERY_CLOSES, DRAWN);
+	return fold(
+		auctionsOf([...LOTTERIES.slice(1), SOLO, TRIO]),
+		decided.events.map((event, index) => appended(400 + index, event)),
+		auctionsReducer
+	);
+})();
+
+/** A close state for one of the surviving lotteries, as the sweep refolds it. */
+function nextCloseState(fantraxPlayerId: string): CloseState {
+	const auction = auctionForPlayer(AFTER_THE_CASCADE, fantraxPlayerId);
+	if (auction === null) throw new Error(`example 34: ${fantraxPlayerId} did not survive the fold`);
+	return {
+		...CLOSE_STATE,
+		auction,
+		nomination: {
+			fantraxPlayerId,
+			playerName: `Lottery Player ${fantraxPlayerId.replace('p-lot-', '')}`,
+			teamId: 't-n2',
+			teamName: 'Team N2',
+			managerId: 'm-n2',
+			occurredAt: '2026-08-24T08:00:00.000Z'
+		},
+		auctions: AFTER_THE_CASCADE,
+		// This close is about Team Other, not Team X, and Team Other has room
+		// to spare — so the cascade has nothing to take back from the winner
+		// and the events here are the draw and the close alone. Team X's own
+		// cascade already ran, in the close above.
+		rosterCount: 0,
+		rosterFiguresFor: () => ({
+			capSpace: parseMoney(9_000_000),
+			rosterCount: 0,
+			minorLeagueOccupied: MINOR_LEAGUE_SLOTS
+		}),
+		drawnWinner: null
+	};
+}
+
+describe('§10 example 34 — the second lottery draws from the shorter list', () => {
+	it('draws Team X’s replacement from a list that no longer holds Team X', () => {
+		const state = nextCloseState('p-lot-1');
+		const auction = state.auction as Auction;
+		const winner = drawnWinnerFor(auction, SEED);
+		if (winner.kind !== 'drawn') throw new Error('example 34: the second lottery drew nobody');
+
+		// One Contender left, and it is not Team X.
+		expect(winner.contenders).toEqual(['t-other']);
+		expect(winner.teamId).toBe('t-other');
+		// The recorded seed and the recorded list reproduce the recorded
+		// selection by hand — `seed mod 1` is 0 for every seed.
+		expect(winner.selectedIndex).toBe(drawIndex(SEED, winner.contenders.length));
+
+		const decided = decideClose(state, LOTTERY_CLOSES, winner);
+		expect(decided.events.map((event) => event.type)).toEqual([
+			CONTENTION_DRAWN_EVENT,
+			AUCTION_CLOSED_EVENT
+		]);
+		const drawn = decided.events[0]?.payload as DrawnContentionPayload;
+		expect(drawn.contenders).toEqual(['t-other']);
+		expect(drawn.winningTeamId).toBe('t-other');
+		expect(drawn.contenders[drawn.selectedIndex]).toBe(drawn.winningTeamId);
+		// Team X is out of the draw and still in the history — one skip, in
+		// `contendersFor`, and nothing was deleted to achieve it.
+		expect(auction.bids.map((bid) => bid.teamId)).toEqual(['t-other', 't-x']);
+		expect(wasCancelled(auction.bids[1] as Bid)).toBe(true);
+	});
+
+	it('reproduces the selection by hand over a list that still has TWO Teams in it', () => {
+		// The reproduction claim with something to prove. Everywhere else the
+		// cascade leaves one Contender, and `seed mod 1` is 0 for every seed —
+		// so the assertion holds whatever the arithmetic does. Here the
+		// shorter list is still two long, the position is `seed mod 2`, and
+		// the recorded winner has to be the Team standing at it.
+		const state = nextCloseState('p-lot-trio');
+		const auction = state.auction as Auction;
+		const winner = drawnWinnerFor(auction, SEED);
+		if (winner.kind !== 'drawn') throw new Error('example 34: the three-Team lottery drew nobody');
+
+		// Team X is gone; the other two survive, in ascending join `seq`.
+		expect(winner.contenders).toEqual(['t-other', 't-third']);
+		expect(winner.contenders).toHaveLength(2);
+
+		// The recorded position is the arithmetic's own answer over the
+		// POST-cancellation length, and the recorded winner is the Team at it.
+		const byHand = drawIndex(SEED, 2);
+		expect(winner.selectedIndex).toBe(byHand);
+		expect(winner.contenders[byHand]).toBe(winner.teamId);
+
+		// ...and the same three facts survive into the record a Manager reads.
+		const decided = decideClose(state, LOTTERY_CLOSES, winner);
+		const drawn = decided.events[0]?.payload as DrawnContentionPayload;
+		expect(drawn.contenders).toEqual(['t-other', 't-third']);
+		expect(drawn.selectedIndex).toBe(byHand);
+		expect(drawn.contenders[drawn.selectedIndex]).toBe(drawn.winningTeamId);
+
+		// The draw ran over the SHORTER list and not the list as it stood
+		// before the cascade: over three Teams the position could differ, and
+		// Team X could have been selected at all.
+		expect(drawn.contenders).not.toContain('t-x');
+		expect(auction.bids.map((bid) => bid.teamId)).toEqual(['t-other', 't-x', 't-third']);
+		expect(wasCancelled(auction.bids[1] as Bid)).toBe(true);
+	});
+
+	it('gives every survivor 1/n over the POST-cancellation list', () => {
+		// Two Teams joined each lottery and one was cancelled, so the
+		// survivor's probability is 1/1 rather than the 1/2 the pre-cascade
+		// list would have implied. Stated across all five.
+		for (const index of [1, 2, 3, 4, 5]) {
+			const auction = auctionForPlayer(AFTER_THE_CASCADE, `p-lot-${String(index)}`) as Auction;
+			expect(auction.contenders, String(index)).toHaveLength(1);
+			expect(drawIndex(SEED, auction.contenders.length), String(index)).toBe(0);
+		}
+	});
+});
+
+describe('§10 example 34 — the lottery Team X was the ONLY Contender in', () => {
+	const emptied = auctionForPlayer(AFTER_THE_CASCADE, 'p-lot-solo') as Auction;
+
+	it('is emptied by the cascade and keeps its contention and its clock', () => {
+		// The seam this story exists for. A cancellation resets nothing and
+		// removes nothing — including the lottery's own fixed clock — so the
+		// sweep still offers this Auction to a close and the outcome gets
+		// recorded instead of stranding a sealed seed forever.
+		expect(emptied.contenders).toEqual([]);
+		expect(emptied.contention).toBe('minimum_bid');
+		expect(emptied.closesAt).toBe(LOTTERY_CLOSES);
+		expect(emptied.leadingBid).toBeNull();
+		// The entry is still in the history, marked.
+		expect(emptied.bids).toHaveLength(1);
+		expect(wasCancelled(emptied.bids[0] as Bid)).toBe(true);
+	});
+
+	it('closes with NO winner: the empty reveal, then a termination', () => {
+		const winner = drawnWinnerFor(emptied, SEED);
+		expect(winner).toEqual({ kind: 'undrawn', seed: SEED, contenders: [] });
+
+		const decided = decideClose(nextCloseState('p-lot-solo'), LOTTERY_CLOSES, winner);
+
+		expect(decided.events.map((event) => event.type)).toEqual([
+			CONTENTION_DRAWN_EVENT,
+			AUCTION_TERMINATED_EVENT
+		]);
+		// No award, no contract, and no second cascade — nobody won, so no
+		// Team's free Slots fell.
+		expect(decided.events.map((event) => event.type)).not.toContain(AUCTION_CLOSED_EVENT);
+		expect(decided.events.map((event) => event.type)).not.toContain(BID_CANCELLED_EVENT);
+
+		// The seed is revealed anyway: a published commitment that never
+		// opens is the one outcome AD-14 cannot survive.
+		const drawn = decided.events[0]?.payload as UndrawnContentionPayload;
+		expect(drawn.seed).toBe(SEED);
+		expect(drawn.seedHash).toBe(SEED_HASH);
+		expect(drawn.contenders).toEqual([]);
+		expect(drawn.selectedIndex).toBeUndefined();
+		expect(drawn.winningTeamId).toBeUndefined();
+	});
+
+	it('returns the Player to the pool and the nominator’s Slot with them', () => {
+		// "it closes with no winner and that player returns to the pool."
+		// Read through the folds rather than asserted about the payload: the
+		// board seat and the Nomination Slot both come back because
+		// `nominationsReducer` drops the entry, and the Auction goes because
+		// `auctionsReducer` learned this event in Story 10.5.
+		const winner = drawnWinnerFor(emptied, SEED);
+		const decided = decideClose(nextCloseState('p-lot-solo'), LOTTERY_CLOSES, winner);
+		const nomination = appended(500, {
+			type: NOMINATION_PLACED_EVENT,
+			payload: {
+				fantraxPlayerId: 'p-lot-solo',
+				playerName: 'Lottery Player solo',
+				teamId: 't-n2',
+				teamName: 'Team N2',
+				managerId: 'm-n2'
+			},
+			managerId: 'm-n2',
+			teamId: 't-n2'
+		});
+		const log = [nomination, ...decided.events.map((event, index) => appended(501 + index, event))];
+
+		const nominations = fold(INITIAL_NOMINATIONS, log, nominationsReducer);
+		expect(nominationForPlayer(nominations, 'p-lot-solo')).toBeNull();
+		expect(nominationForTeam(nominations, 't-n2')).toBeNull();
+
+		// ...and the Auction is gone from `OpenAuctions`, so no later sweep
+		// finds it overdue and closes it a second time.
+		const auctions = fold(AFTER_THE_CASCADE, log, auctionsReducer);
+		expect(auctionForPlayer(auctions, 'p-lot-solo')).toBeNull();
+
+		// The draw record outlives both, which is where a Manager who held
+		// the published commitment goes to check it.
+		const draws = fold(INITIAL_DRAWS, log, drawsReducer);
+		expect(drawForPlayer(draws, 'p-lot-solo')).toEqual({
+			kind: 'undrawn',
+			fantraxPlayerId: 'p-lot-solo',
+			seed: SEED,
+			seedHash: SEED_HASH,
+			contenders: []
+		});
 	});
 });

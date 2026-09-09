@@ -4347,3 +4347,55 @@ describe('phase — bidding is disabled league-wide outside the Auction Phase (A
 		expect(evaluate(NO_BIDS, command(1_500_000), NOW).phase.passed).toBe(true);
 	});
 });
+
+describe('decide — a join into a lottery every Contender left (Story 10.5, FR-40)', () => {
+	/**
+	 * The `(minimum_bid, leadingBid: null)` pairing Story 10.5 created.
+	 *
+	 * Before it, an Auction with no leader was never in a Minimum-Bid
+	 * Contention: a cancellation that took the last Bid also took the
+	 * contention and the clock. 10.5 keeps both, so the empty outcome can be
+	 * recorded — and this is the state that leaves behind.
+	 */
+	function emptiedLottery(): BidState {
+		const live = contentionWith();
+		return { ...live, leadingBid: null, contenders: [] };
+	}
+
+	it('joins rather than OPENING a second contention — the commitment already stands', () => {
+		// The audit this story owed. `opensContention` reads
+		// `leadingBid === null && the amount is MINIMUM_BID`, which this state
+		// now satisfies while a lottery is already running. Treating it as an
+		// opening would demand a FRESH seed the shell does not supply inside a
+		// live contention — and would publish a second `seedHash` for a Player
+		// whose sealed seed row already exists.
+		const state = emptiedLottery();
+		const decided = decide(state, command(MINIMUM_BID), NOW, seedAsTheShellWould(state));
+
+		expect(decided.kind).toBe('accepted');
+		if (decided.kind !== 'accepted') return;
+		expect(decided.events).toHaveLength(1);
+		const payload = decided.events[0]?.payload as BidPlacedPayload;
+		// No second commitment: the one published at the real opening stands.
+		expect('seedHash' in payload).toBe(false);
+		// And the contention's own fixed clock, not a fresh 24 hours.
+		expect(payload.closesAt).toBe(state.closesAt);
+	});
+
+	it('classifies the amount as a JOIN, over a Contender list of none', () => {
+		const state = emptiedLottery();
+		const gates = evaluate(state, command(MINIMUM_BID), NOW);
+
+		expect(gates.contention.entry).toBe('joins');
+		expect(gates.contention.contenderCount).toBe(0);
+		expect(gates.contention.passed).toBe(true);
+		// A join is not a raise, so the increment gate stands aside as it
+		// always has inside a lottery.
+		expect(gates.increment.passed).toBe(true);
+		expect(allGatesPassed(gates)).toBe(true);
+	});
+
+	it('pre-fills the join amount, because nobody is contending to be refused', () => {
+		expect(minimumLegalBid(emptiedLottery(), 't-2')).toBe(MINIMUM_BID);
+	});
+});

@@ -98,17 +98,21 @@ export const NOMINATION_PLACED_EVENT = 'NominationPlaced';
 export const AUCTION_CLOSED_EVENT = 'AuctionClosed';
 
 /**
- * The event type that ends a nominated Player's Auction with no Bid ever
- * placed on it, releasing the nomination (Story 3.7, FR-22).
+ * The event type that ends a nominated Player's Auction with no Bid that still
+ * stands, releasing the nomination (Story 3.7, FR-22).
  *
  * Declared here, beside the reducer that gives it meaning, for
- * `AUCTION_CLOSED_EVENT`'s reason. One is appended for every nomination still
- * in Awaiting Opening Bid when the League Clock expires — by
- * `core/rules/phase-end.ts`, inside the same transaction as the
- * `ContractAssignmentOpened` that follows them all.
+ * `AUCTION_CLOSED_EVENT`'s reason. **Two producers.** `core/rules/phase-end.ts`
+ * appends one for every nomination still in Awaiting Opening Bid when the
+ * League Clock expires — no Bid was ever placed — inside the same transaction
+ * as the `ContractAssignmentOpened` that follows them all. `core/rules/close.ts`
+ * appends one for a Minimum-Bid Contention whose every Contender was cancelled
+ * by FR-40's cascade (Story 10.5) — Teams did bid, and none of those joins
+ * still stands — after the `ContentionDrawn` that reveals the seed over the
+ * empty list.
  *
- * **A termination is not a close and appends no contract.** Nobody bid, so
- * nobody won: the Player simply stops being on the board and the nominating
+ * **A termination is not a close and appends no contract.** Nobody was left to
+ * win: the Player simply stops being on the board and the nominating
  * Team's Slot comes back. `contractsReducer` has no case for this event and
  * needs none, which is what returns the Player to the Free Agent pool by
  * arithmetic rather than by a table write.

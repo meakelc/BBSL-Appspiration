@@ -75,7 +75,10 @@ export const CONTENTION_DRAWN_EVENT = 'ContentionDrawn';
  * and the record they check it against is a number rather than a lookup they
  * have to perform correctly first.
  */
-export type Draw = {
+export type Draw = DrawnDraw | UndrawnDraw;
+
+/** What both records state, whatever the lottery came out as. */
+type DrawFacts = {
 	readonly fantraxPlayerId: string;
 	/** The seed, revealed. The one place a drawn seed enters `auction_events`. */
 	readonly seed: string;
@@ -83,6 +86,11 @@ export type Draw = {
 	readonly seedHash: string | null;
 	/** The Contender list the draw ran over, ascending join `seq` — ids. */
 	readonly contenders: readonly string[];
+};
+
+/** A lottery somebody was drawn from. */
+export type DrawnDraw = DrawFacts & {
+	readonly kind: 'drawn';
 	/** The 0-based position `seed mod contenders.length` produced. */
 	readonly selectedIndex: number;
 	/** The Team at that position. */
@@ -100,6 +108,26 @@ export type Draw = {
 	 * hand-written row and says exactly that.
 	 */
 	readonly winningManagerId: string | null;
+};
+
+/**
+ * A lottery whose every Contender was cancelled before it drew (Story 10.5).
+ *
+ * **A real record, not a rejected row.** The empty list is the whole of what
+ * happened, and a verification surface that dropped it would leave a Manager
+ * who published a `seedHash` with nothing to check it against — which is the
+ * exact failure this projection exists to prevent. The seed is here for that
+ * reason and no other: the commitment is discharged whatever the list came out
+ * as, and an empty list does not excuse leaving it sealed (AD-14).
+ *
+ * **No `selectedIndex` and no winner fields.** `drawIndex` was never reached,
+ * so there is no position to record, and `readDrawnFacts` does not fall back
+ * to one — a `0` beside an empty list would name a place that does not exist.
+ */
+export type UndrawnDraw = DrawFacts & {
+	readonly kind: 'undrawn';
+	/** Empty, by construction: this record exists only for an empty list. */
+	readonly contenders: readonly [];
 };
 
 /** Every draw this log has recorded, keyed on the Player. */
@@ -137,10 +165,19 @@ export function drawForPlayer(draws: Draws, fantraxPlayerId: string): Draw | nul
  * `readPayload`'s discipline everywhere else in the core, for the same reason.
  *
  * **What is required is what makes a draw MEAN anything**: the Player it is
- * about, the seed it revealed, the list it ran over and the Team it selected.
- * A payload short any of those is not a partial draw to be repaired — it is a
- * row that cannot answer the question this projection exists to answer, and
- * recording it would put a half-draw on a verification surface.
+ * about, the seed it revealed, the list it ran over and — where the list holds
+ * anybody — the Team it selected. A payload short any of those is not a
+ * partial draw to be repaired — it is a row that cannot answer the question
+ * this projection exists to answer, and recording it would put a half-draw on
+ * a verification surface.
+ *
+ * **Two shapes are read, and the two contradictions between them are
+ * rejected** (Story 10.5). An EMPTY list with no winner is the emptied lottery
+ * — a real outcome, recorded as `undrawn`. A non-empty list with a winner on
+ * it is the ordinary draw. An empty list carrying a winner, and a non-empty
+ * list carrying none, are neither: each states two things that cannot both be
+ * true of one lottery, and each is skipped exactly as any self-contradicting
+ * payload is.
  *
  * `seedHash` is the one field allowed to be absent, because `null` is a real
  * value it can honestly hold. The two names fall back to their ids, which
@@ -158,8 +195,9 @@ export function readDrawnFacts(payload: unknown): Draw | null {
 	const seed = record['seed'];
 	if (typeof seed !== 'string' || seed === '') return null;
 
-	const winningTeamId = record['winningTeamId'];
-	if (typeof winningTeamId !== 'string' || winningTeamId === '') return null;
+	const rawWinningTeamId = record['winningTeamId'];
+	const winningTeamId =
+		typeof rawWinningTeamId === 'string' && rawWinningTeamId !== '' ? rawWinningTeamId : null;
 
 	const rawContenders = record['contenders'];
 	if (!Array.isArray(rawContenders)) return null;
@@ -168,7 +206,40 @@ export function readDrawnFacts(payload: unknown): Draw | null {
 	// renumber every position after it.
 	if (!rawContenders.every((entry) => typeof entry === 'string' && entry !== '')) return null;
 	const contenders = rawContenders as readonly string[];
-	if (contenders.length === 0) return null;
+
+	// **The empty record, and it is a DRAW rather than a rejection** (Story
+	// 10.5). A lottery FR-40's cascade emptied reaches its expiry with nobody
+	// in it, reveals its seed and terminates with no winner — and this
+	// projection is where a Manager who published the commitment goes to check
+	// it. Rejecting the row would leave the one lottery whose fairness is
+	// hardest to take on trust as the one lottery with no record.
+	//
+	// **An empty list beside a named winner is REJECTED**, as the two other
+	// self-contradicting shapes below are. There is no list for that Team to
+	// have been on, so the row describes a derivation that cannot have
+	// happened — the same judgement the cross-field check below makes, at the
+	// only other place two fields can disagree.
+	if (contenders.length === 0) {
+		if (winningTeamId !== null) return null;
+		const seedHashOfEmpty = record['seedHash'];
+		return {
+			kind: 'undrawn',
+			fantraxPlayerId,
+			seed,
+			seedHash:
+				typeof seedHashOfEmpty === 'string' && seedHashOfEmpty !== '' ? seedHashOfEmpty : null,
+			// **No `selectedIndex` and no winner fields, and emphatically no
+			// fallback to one.** `drawIndex` never ran; a recovered position
+			// would be a number this record has no business holding.
+			contenders: []
+		};
+	}
+
+	// **A non-empty list with no winner is the mirror rejection.** A draw over
+	// Teams selected one of them, so a row stating the list and naming nobody
+	// is missing the fact it exists to carry rather than describing the empty
+	// outcome above.
+	if (winningTeamId === null) return null;
 
 	// **The winner must be ON the list the draw ran over**, and this is the one
 	// cross-FIELD check in this reader. Every test above asks whether a field
@@ -189,6 +260,7 @@ export function readDrawnFacts(payload: unknown): Draw | null {
 	const selectedIndex = record['selectedIndex'];
 
 	return {
+		kind: 'drawn',
 		fantraxPlayerId,
 		seed,
 		seedHash: typeof seedHash === 'string' && seedHash !== '' ? seedHash : null,

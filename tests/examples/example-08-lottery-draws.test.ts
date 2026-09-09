@@ -59,7 +59,11 @@ import {
 import { bidStateFor, decide, teamMoneyStateFor } from '../../src/lib/core/rules/bidding.ts';
 import type { ContentionSeed, TeamMoneyState } from '../../src/lib/core/rules/bidding.ts';
 import { decideClose } from '../../src/lib/core/rules/close.ts';
-import type { AuctionClosedPayload, CloseState, ContentionDrawnPayload } from '../../src/lib/core/rules/close.ts';
+import type {
+	AuctionClosedPayload,
+	CloseState,
+	DrawnContentionPayload
+} from '../../src/lib/core/rules/close.ts';
 import { drawIndex, drawnWinnerFor } from '../../src/lib/core/rules/draw.ts';
 import type { AppendedEvent, PlaceBid } from '../../src/lib/core/types.ts';
 
@@ -184,6 +188,10 @@ function theDraw() {
 	// The shell reads the sealed seed under the lock and hands it here; the
 	// core generates nothing and reads no random source.
 	const drawnWinner = drawnWinnerFor(auction, SEED);
+	// Story 10.5 gave `ClosedWinner` an `undrawn` case for a lottery every
+	// Contender was cancelled from. Four Teams are contending here, so this
+	// example is stating "and it drew one" as part of its premise.
+	if (drawnWinner.kind !== 'drawn') throw new Error('example 8: the lottery drew nobody');
 	const state: CloseState = {
 		auction,
 		nomination: nominationForPlayer(nominations, 'p-1'),
@@ -257,7 +265,7 @@ describe('§10 example 8 — the lottery draws', () => {
 	it('records the seed, the ordered list and the selection', () => {
 		// "Seed, ordered list, and selection are recorded and displayed."
 		const { decided } = theDraw();
-		const drawn = decided.events[0]?.payload as ContentionDrawnPayload;
+		const drawn = decided.events[0]?.payload as DrawnContentionPayload;
 
 		expect(drawn.seed).toBe(SEED);
 		// The commitment restated beside the reveal, so ONE row answers the
@@ -340,7 +348,7 @@ describe('§10 example 8 — the lottery draws', () => {
 		const draw = drawForPlayer(fold(INITIAL_DRAWS, log, drawsReducer), 'p-1');
 		expect(draw?.seed).toBe(SEED);
 		expect(draw?.contenders).toEqual(['t-e', 't-f', 't-g', 't-h']);
-		expect(draw?.winningTeamId).toBe('t-g');
+		expect(draw?.kind === 'drawn' ? draw.winningTeamId : null).toBe('t-g');
 	});
 
 	it('selects the same Team however many times the log is folded', () => {
@@ -350,7 +358,7 @@ describe('§10 example 8 — the lottery draws', () => {
 
 		const log = theWholeThing();
 		const twice = drawForPlayer(fold(INITIAL_DRAWS, [...log, ...log], drawsReducer), 'p-1');
-		expect(twice?.winningTeamId).toBe('t-g');
+		expect(twice?.kind === 'drawn' ? twice.winningTeamId : null).toBe('t-g');
 	});
 
 	it('is a LATE draw and never a wrong one (AD-10)', () => {

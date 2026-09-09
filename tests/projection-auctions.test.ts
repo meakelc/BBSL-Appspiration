@@ -36,7 +36,10 @@ import {
 	wasDissolved,
 	withBidCancelled
 } from '../src/lib/core/projection/auctions.ts';
-import { AUCTION_CLOSED_EVENT } from '../src/lib/core/projection/nominations.ts';
+import {
+	AUCTION_CLOSED_EVENT,
+	AUCTION_TERMINATED_EVENT
+} from '../src/lib/core/projection/nominations.ts';
 import { fold } from '../src/lib/core/projection/fold.ts';
 import type { AppendedEvent } from '../src/lib/core/types.ts';
 
@@ -961,6 +964,109 @@ function cancelled(
 function restoring(seq: string, teamId: string, amount: number) {
 	return { seq, teamId, teamName: `Team ${teamId}`, managerId: `m-${teamId}`, amount };
 }
+
+// --- An emptied lottery keeps its clock (Story 10.5, FR-40) ---------------
+
+/** A `AuctionTerminated`, as `rules/close.ts` and `rules/phase-end.ts` write it. */
+function terminated(seq: number, fantraxPlayerId: unknown = 'p-1'): AppendedEvent {
+	return event(seq, AUCTION_TERMINATED_EVENT, {
+		fantraxPlayerId,
+		playerName: 'Ausar Bright',
+		teamId: 't-n',
+		teamName: 'Team N',
+		managerId: 'm-n',
+		expiredAt: '2026-08-27T09:00:00.000Z',
+		evaluatedAt: '2026-08-27T09:00:00.000Z'
+	});
+}
+
+describe('auctionsReducer — cancelling the LAST Contender does not stop the clock', () => {
+	it('keeps `minimum_bid` and `closesAt` with the Contender list emptied', () => {
+		// The whole seam. A lottery's `closesAt` is the CONTENTION's clock,
+		// not any bidder's, so no Team's departure earns it — and only an
+		// expiry the sweep still offers can reach the outcome the empty close
+		// has to record.
+		const log = [bid(1, 1_000_000, { teamId: 't-x' }), cancelled(2, '1')];
+		const before = at([log[0] as AppendedEvent]);
+		const auction = at(log);
+
+		expect(auction?.contention).toBe('minimum_bid');
+		expect(auction?.closesAt).toBe(before?.closesAt);
+		expect(auction?.closesAt).not.toBeNull();
+		expect(auction?.contenders).toEqual([]);
+		expect(auction?.leadingBid).toBeNull();
+		// The join is still in the history, marked — the record must show the
+		// Team entered AND that its entry was cancelled.
+		expect(auction?.bids).toHaveLength(1);
+		expect(wasCancelled(auction?.bids[0] as never)).toBe(true);
+	});
+
+	it('keeps the clock however many joins are cancelled, down to none', () => {
+		const opening = bid(1, 1_000_000, { teamId: 't-x' });
+		const auction = at([
+			opening,
+			bid(2, 1_000_000, { teamId: 't-p' }),
+			bid(3, 1_000_000, { teamId: 't-q' }),
+			cancelled(4, '2'),
+			cancelled(5, '3'),
+			cancelled(6, '1')
+		]);
+
+		expect(auction?.contention).toBe('minimum_bid');
+		expect(auction?.closesAt).toBe(at([opening])?.closesAt);
+		expect(auction?.contenders).toEqual([]);
+	});
+
+	it('leaves the STANDARD leaderless branch exactly as Story 10.4 wrote it', () => {
+		// The rule is narrowed to lotteries and nowhere else: outside one, no
+		// leader still means no clock, because a cleared clock is what stops a
+		// close at the old expiry with no winner.
+		const auction = at([bid(1, 4_000_000, { teamId: 't-1' }), cancelled(2, '1')]);
+
+		expect(auction?.contention).toBe('awaiting_opening_bid');
+		expect(auction?.closesAt).toBeNull();
+	});
+
+	it('lets a new join re-enter an emptied lottery before its expiry', () => {
+		// The clock is still running, so a Team may still bid MINIMUM_BID —
+		// it becomes a Contender again and the Auction draws normally.
+		const auction = at([
+			bid(1, 1_000_000, { teamId: 't-x' }),
+			cancelled(2, '1'),
+			bid(3, 1_000_000, { teamId: 't-p' })
+		]);
+
+		expect(auction?.contention).toBe('minimum_bid');
+		expect(auction?.contenders.map((entry) => entry.teamId)).toEqual(['t-p']);
+		expect(auction?.leadingBid?.teamId).toBe('t-p');
+		expect(auction?.closesAt).not.toBeNull();
+	});
+});
+
+describe('auctionsReducer — AuctionTerminated drops the Auction (Story 10.5)', () => {
+	it('removes an emptied lottery, so it is never offered to a second sweep', () => {
+		const log = [bid(1, 1_000_000, { teamId: 't-x' }), cancelled(2, '1'), terminated(3)];
+
+		expect(at(log)).toBeNull();
+	});
+
+	it('is idempotent — a second fold finds nothing to drop', () => {
+		const log = [bid(1, 1_000_000, { teamId: 't-x' }), cancelled(2, '1'), terminated(3)];
+		const once = fold(INITIAL_AUCTIONS, log, auctionsReducer);
+
+		expect(fold(INITIAL_AUCTIONS, [...log, ...log], auctionsReducer)).toEqual(once);
+		expect(fold(once, [terminated(4)], auctionsReducer)).toEqual(once);
+	});
+
+	it('changes nothing for a Player with no Auction, or a payload naming none', () => {
+		// Every termination `phase-end.ts` appends is this case: a nomination
+		// nobody ever bid on has no Auction row at all.
+		expect(at([terminated(1)])).toBeNull();
+		const live = [bid(1, 1_000_000, { teamId: 't-x' })];
+		expect(at([...live, terminated(2, 'p-other')])).toEqual(at(live));
+		expect(at([...live, terminated(2, 7)])).toEqual(at(live));
+	});
+});
 
 describe('auctionsReducer — BidCancelled withdraws a Bid’s standing and nothing else', () => {
 	it('marks the Bid, keeps it in history, and withdraws the lead', () => {

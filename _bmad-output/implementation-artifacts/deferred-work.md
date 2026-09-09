@@ -724,3 +724,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-10-4-restore-the-next-highest-bidder.md`
   summary: `tests/integration/auction-events.test.ts` fails against real Postgres with a foreign-key violation on `auction_events_manager_id_fkey`.
   evidence: Pre-existing and unrelated to this story — reproduced at baseline commit 56a1e66 with the branch's changes stashed, failing identically. The seeded manager row the test inserts against does not satisfy the FK, so the whole suite reports 1 failure on every run and masks any genuine new failure in that file.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-10-5-a-lottery-whose-contenders-were-cancelled.md`
+  summary: `src/lib/adapters/discord/broadcast.ts` still comments that an empty Contender list "is malformed, not merely uninteresting ... describes a draw that cannot have happened", which Story 10.5 made false.
+  evidence: Real but deliberately not fixed here — the behaviour is already correct (the renderer returns null and falls through to the fallback line, no crash), and the spec forbids touching notice copy, which is Story 10.6's. 10.6 rewrites that renderer to word the empty draw, and the stale comment must be corrected in the same pass rather than leaving two stories editing one function.

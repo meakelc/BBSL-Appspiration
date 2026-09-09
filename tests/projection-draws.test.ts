@@ -28,15 +28,29 @@ import {
 	drawsReducer,
 	readDrawnFacts
 } from '../src/lib/core/projection/draws.ts';
-import type { Draw } from '../src/lib/core/projection/draws.ts';
+import type { Draw, DrawnDraw } from '../src/lib/core/projection/draws.ts';
 import { fold } from '../src/lib/core/projection/fold.ts';
 import { BID_PLACED_EVENT } from '../src/lib/core/projection/auctions.ts';
-import { AUCTION_CLOSED_EVENT } from '../src/lib/core/projection/nominations.ts';
+import {
+	AUCTION_CLOSED_EVENT,
+	AUCTION_TERMINATED_EVENT
+} from '../src/lib/core/projection/nominations.ts';
 import type { AppendedEvent } from '../src/lib/core/types.ts';
 
 const SEED = '4d81f0b6a72c395e4d81f0b6a72c395e4d81f0b6a72c395e4d81f0b6a72c395e';
 const SEED_HASH = '0f1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a6978';
 const CLOSES_AT = '2026-08-27T09:00:00.000Z';
+
+/**
+ * The drawn half of the record, asserted rather than cast (Story 10.5). `Draw`
+ * gained an `undrawn` case for a lottery FR-40's cascade emptied, so a test
+ * reading a winner is stating "and this row recorded one".
+ */
+function drawnRecord(draw: Draw | null | undefined): DrawnDraw {
+	if (draw === undefined || draw === null) throw new Error('expected a recorded draw');
+	if (draw.kind !== 'drawn') throw new Error(`expected a drawn record, received "${draw.kind}"`);
+	return draw;
+}
 
 let nextSeq = 0;
 
@@ -98,6 +112,7 @@ describe('drawsReducer — the draw is recorded', () => {
 		const draws = foldDraws([drawn()]);
 
 		expect(drawForPlayer(draws, 'p-1')).toEqual({
+			kind: 'drawn',
 			fantraxPlayerId: 'p-1',
 			seed: SEED,
 			seedHash: SEED_HASH,
@@ -130,7 +145,7 @@ describe('drawsReducer — replay converges (AD-5)', () => {
 			drawn({ winningTeamId: 't-h', winningTeamName: 'Team H', selectedIndex: 3 })
 		]);
 
-		expect(drawForPlayer(draws, 'p-1')?.winningTeamId).toBe('t-g');
+		expect(drawnRecord(drawForPlayer(draws, 'p-1')).winningTeamId).toBe('t-g');
 	});
 
 	it('folds the same log twice onto the same state', () => {
@@ -164,10 +179,10 @@ describe('drawsReducer — nothing removes an entry (the AC’s permanence)', ()
 
 		expect(auctionForPlayer(fold(INITIAL_AUCTIONS, log, auctionsReducer), 'p-1')).toBeNull();
 
-		const draw = drawForPlayer(foldDraws(log), 'p-1');
-		expect(draw?.seed).toBe(SEED);
-		expect(draw?.contenders).toEqual(['t-e', 't-f', 't-g', 't-h']);
-		expect(draw?.winningTeamId).toBe('t-g');
+		const draw = drawnRecord(drawForPlayer(foldDraws(log), 'p-1'));
+		expect(draw.seed).toBe(SEED);
+		expect(draw.contenders).toEqual(['t-e', 't-f', 't-g', 't-h']);
+		expect(draw.winningTeamId).toBe('t-g');
 	});
 
 	it('is unmoved by a close naming a DIFFERENT Player, too', () => {
@@ -187,7 +202,10 @@ describe('readDrawnFacts — a malformed payload is SKIPPED, never thrown over',
 		['an empty winner', drawnPayload({ winningTeamId: '' })],
 		['no Contender list', drawnPayload({ contenders: undefined })],
 		['a Contender list that is not an array', drawnPayload({ contenders: 't-e' })],
-		['an EMPTY Contender list', drawnPayload({ contenders: [] })],
+		// An empty list is a REAL record since Story 10.5 — but not beside a
+		// named winner, which is a row stating two things that cannot both be
+		// true of one lottery. `drawnPayload` names `t-g`.
+		['an EMPTY Contender list that still names a winner', drawnPayload({ contenders: [] })],
 		['a hole in the Contender list', drawnPayload({ contenders: ['t-e', '', 't-g'] })],
 		['a non-string in the Contender list', drawnPayload({ contenders: ['t-e', 7] })]
 	])('skips %s', (_label: string, payload: unknown) => {
@@ -207,30 +225,31 @@ describe('readDrawnFacts — a malformed payload is SKIPPED, never thrown over',
 	});
 
 	it('falls back on the NAME rather than dropping a real draw', () => {
-		const draw = drawForPlayer(foldDraws([drawn({ winningTeamName: undefined })]), 'p-1');
+		const draw = drawnRecord(drawForPlayer(foldDraws([drawn({ winningTeamName: undefined })]), 'p-1'));
 
 		// A name standing in for its own id still points at the same Team.
-		expect(draw?.winningTeamName).toBe('t-g');
+		expect(draw.winningTeamName).toBe('t-g');
 	});
 
 	it('records a missing winningManagerId as null, and NEVER as the Team id', () => {
-		const draw = drawForPlayer(foldDraws([drawn({ winningManagerId: undefined })]), 'p-1');
+		const draw = drawnRecord(drawForPlayer(foldDraws([drawn({ winningManagerId: undefined })]), 'p-1'));
 
 		// A Manager id filled in from the Team id would be a value from another
 		// namespace wearing this field's label — a surface printing it would
 		// attribute the draw to a Manager who does not exist.
-		expect(draw?.winningManagerId).toBeNull();
-		expect(draw?.winningManagerId).not.toBe('t-g');
+		expect(draw.winningManagerId).toBeNull();
+		expect(draw.winningManagerId).not.toBe('t-g');
 		// The draw itself still stands; the absence is recorded, not fatal.
-		expect(draw?.winningTeamId).toBe('t-g');
+		expect(draw.winningTeamId).toBe('t-g');
 	});
 
 	it('recovers a missing selectedIndex from the list it was recorded with', () => {
 		expect(
-			drawForPlayer(foldDraws([drawn({ selectedIndex: undefined })]), 'p-1')?.selectedIndex
+			drawnRecord(drawForPlayer(foldDraws([drawn({ selectedIndex: undefined })]), 'p-1'))
+				.selectedIndex
 		).toBe(2);
 		expect(
-			drawForPlayer(foldDraws([drawn({ selectedIndex: 'two' })]), 'p-1')?.selectedIndex
+			drawnRecord(drawForPlayer(foldDraws([drawn({ selectedIndex: 'two' })]), 'p-1')).selectedIndex
 		).toBe(2);
 	});
 
@@ -240,7 +259,8 @@ describe('readDrawnFacts — a malformed payload is SKIPPED, never thrown over',
 		// The list holds four, so 0..3 are real positions and these are not.
 		for (const outOfRange of [-1, 4, 99]) {
 			expect(
-				drawForPlayer(foldDraws([drawn({ selectedIndex: outOfRange })]), 'p-1')?.selectedIndex
+				drawnRecord(drawForPlayer(foldDraws([drawn({ selectedIndex: outOfRange })]), 'p-1'))
+					.selectedIndex
 			).toBe(2);
 		}
 	});
@@ -251,5 +271,95 @@ describe('readDrawnFacts — a malformed payload is SKIPPED, never thrown over',
 		expect(
 			drawForPlayer(foldDraws([drawn({ winningTeamId: 't-nobody' })]), 'p-1')
 		).toBeNull();
+	});
+});
+
+describe('readDrawnFacts — the empty record is a DRAW, not a rejection (Story 10.5)', () => {
+	/** The reveal `decideClose` writes for a lottery every Contender left. */
+	const undrawnPayload = (overrides: Record<string, unknown> = {}) => ({
+		fantraxPlayerId: 'p-1',
+		seed: SEED,
+		seedHash: SEED_HASH,
+		contenders: [],
+		drawnAt: CLOSES_AT,
+		...overrides
+	});
+
+	it('records the empty list and the revealed seed, with no winner and no position', () => {
+		// A published commitment that never opens is the one outcome AD-14
+		// cannot survive, so the seed is here — and this projection is where a
+		// Manager who recorded the hash goes to check it. Rejecting the row
+		// would leave the one lottery whose fairness is hardest to take on
+		// trust as the one lottery with no record.
+		const draws = foldDraws([event(CONTENTION_DRAWN_EVENT, undrawnPayload())]);
+
+		expect(drawForPlayer(draws, 'p-1')).toEqual({
+			kind: 'undrawn',
+			fantraxPlayerId: 'p-1',
+			seed: SEED,
+			seedHash: SEED_HASH,
+			contenders: []
+		} satisfies Draw);
+	});
+
+	it('records a null commitment on the empty record too', () => {
+		const draw = drawForPlayer(
+			foldDraws([event(CONTENTION_DRAWN_EVENT, undrawnPayload({ seedHash: undefined }))]),
+			'p-1'
+		);
+
+		expect(draw?.kind).toBe('undrawn');
+		expect(draw?.seedHash).toBeNull();
+	});
+
+	it('never falls back to a selectedIndex for an empty list', () => {
+		// `drawIndex` never ran, so there is no position to recover. A `0`
+		// beside an empty list would name a place that does not exist.
+		const draw = drawForPlayer(
+			foldDraws([event(CONTENTION_DRAWN_EVENT, undrawnPayload({ selectedIndex: 0 }))]),
+			'p-1'
+		);
+
+		expect(draw).not.toBeNull();
+		expect(Object.hasOwn(draw as object, 'selectedIndex')).toBe(false);
+		expect(Object.hasOwn(draw as object, 'winningTeamId')).toBe(false);
+	});
+
+	it('SKIPS the two self-contradicting shapes', () => {
+		// An empty list naming a winner: there is no list for that Team to
+		// have been on. A non-empty list naming nobody: a draw over Teams
+		// selected one of them. Each states two things that cannot both be
+		// true of one lottery.
+		expect(readDrawnFacts(undrawnPayload({ winningTeamId: 't-g' }))).toBeNull();
+		expect(
+			readDrawnFacts(drawnPayload({ winningTeamId: undefined, selectedIndex: undefined }))
+		).toBeNull();
+		expect(readDrawnFacts(drawnPayload({ winningTeamId: '' }))).toBeNull();
+	});
+
+	it('still requires the Player and the seed on the empty record', () => {
+		expect(readDrawnFacts(undrawnPayload({ fantraxPlayerId: '' }))).toBeNull();
+		expect(readDrawnFacts(undrawnPayload({ seed: undefined }))).toBeNull();
+	});
+
+	it('outlives the AuctionTerminated that ended the lottery', () => {
+		// The permanence property, for the outcome that has no `AuctionClosed`
+		// at all: the Auction is dropped by the termination and the record of
+		// the empty draw is not.
+		const log = [
+			event(CONTENTION_DRAWN_EVENT, undrawnPayload()),
+			event(AUCTION_TERMINATED_EVENT, {
+				fantraxPlayerId: 'p-1',
+				playerName: 'Ausar Bright',
+				teamId: 't-n',
+				teamName: 'Team N',
+				managerId: 'm-n',
+				expiredAt: CLOSES_AT,
+				evaluatedAt: CLOSES_AT
+			})
+		];
+
+		expect(auctionForPlayer(fold(INITIAL_AUCTIONS, log, auctionsReducer), 'p-1')).toBeNull();
+		expect(drawForPlayer(foldDraws(log), 'p-1')?.seed).toBe(SEED);
 	});
 });

@@ -62,13 +62,21 @@ import {
 import type { SlotPlacement } from '../projection/contracts.ts';
 import { CONTENTION_DRAWN_EVENT } from '../projection/draws.ts';
 import type { OpenNomination } from '../projection/nominations.ts';
-import { AUCTION_CLOSED_EVENT } from '../projection/nominations.ts';
+import { AUCTION_CLOSED_EVENT, AUCTION_TERMINATED_EVENT } from '../projection/nominations.ts';
 import type { Restoration } from '../projection/auctions.ts';
 import type { Accepted, EventEnvelope, PlaceBid } from '../types.ts';
 import { bidStateFor, evaluate, teamMoneyStateFor } from './bidding.ts';
 import { CANCELLATION_AXES, selectRestoration } from './restore.ts';
 import type { CandidateRosterFigures } from './restore.ts';
 import { isSeedShaped } from './draw.ts';
+// **The type is REUSED, not re-declared** (Story 10.5). `AuctionTerminated`
+// already means "this Auction ended with no winner, the nominating Team's Slot
+// comes back and the Player returns to the pool", and an emptied lottery is
+// that outcome arrived at a second way. A type of its own here would be a
+// second name for one fact, and `releaseNomination` and `nominationsReducer`
+// would each need a third case to read it. Type-only, and `phase-end.ts`
+// imports nothing from this module, so there is no cycle.
+import type { AuctionTerminatedPayload } from './phase-end.ts';
 
 /** The flat amount every Contender in a Minimum-Bid Contention holds. */
 const CONTENTION_AMOUNT: Money = parseMoney(MINIMUM_BID);
@@ -77,8 +85,8 @@ const CONTENTION_AMOUNT: Money = parseMoney(MINIMUM_BID);
 const NO_CAP_HIT: Money = parseMoney(0);
 
 /**
- * The Contender a draw selected — the winner argument a Minimum-Bid
- * Contention's close REQUIRES, and the only kind there is.
+ * How a Minimum-Bid Contention came out — the winner argument its close
+ * REQUIRES, in the two shapes a lottery can end in.
  *
  * **Declared by Story 3.4 and produced since Story 3.6.** `rules/draw.ts`
  * derives a winner from the revealed seed and the ordered Contender list
@@ -88,20 +96,27 @@ const NO_CAP_HIT: Money = parseMoney(0);
  * `server/close.ts` reads the sealed seed under the lock and passes the drawn
  * winner, so a live contention now closes rather than throwing.
  *
- * Written as a discriminated union of one so 3.6 could add a case — a
- * single-Contender lottery that needs no draw (§10 example 11), say. **It did
- * not need one**, and the union stays a union of one: `seed mod 1 = 0` selects
- * the only Contender there is, the one-team list is recorded exactly as the
- * multi-team one, and a second case would be a branch stating something the
- * arithmetic already states.
+ * **Story 3.4 wrote it as a discriminated union of one so a later story could
+ * add a case, and 10.5 is that story.** The case 3.6 was expected to need — a
+ * single-Contender lottery — never materialised, and still does not: `seed mod
+ * 1 = 0` selects the only Contender there is and the one-team list is recorded
+ * exactly as the multi-team one. The case that did materialise is the
+ * **empty** one. Story 10.3's cascade can cancel every join a lottery holds,
+ * and 10.5 stops that clearing the contention's clock, so a lottery now
+ * reaches its own expiry with nobody in it. Nobody won, so there is no Team,
+ * no amount and no position to name — and that is a `kind`, not a nullable
+ * winner a reading could mistake for a Standard close.
  *
  * `seed` and `contenders` were carried for 3.6's reveal and deliberately not
  * read by 3.4. **Story 3.6 reads them**: `decideClose` builds the
  * `ContentionDrawn` payload from this shape, which is why the drawer puts the
  * derivation's inputs here beside its output. `rules/draw.ts` is the one
- * producer; nothing else in the codebase constructs one.
+ * producer of both cases; nothing else in the codebase constructs one.
  */
-export type ClosedWinner = {
+export type ClosedWinner = DrawnWinner | UndrawnLottery;
+
+/** The Contender the seed selected, and the position it selected them at. */
+export type DrawnWinner = {
 	readonly kind: 'drawn';
 	/** The Team the draw selected. */
 	readonly teamId: string;
@@ -126,6 +141,32 @@ export type ClosedWinner = {
 	 * nothing.
 	 */
 	readonly selectedIndex: number;
+};
+
+/**
+ * A lottery that reached its expiry with nobody in it (Story 10.5, FR-40).
+ *
+ * Reachable one way: 10.3's cascade cancelled every Contender, and 10.5 keeps
+ * the contention's own clock running through that so the outcome can be
+ * recorded rather than stranded. `contendersFor` is what emptied the list —
+ * one skip, in one place — and this shape is what the close is told about it.
+ *
+ * **It carries the seed and nothing else it does not have.** There is no Team,
+ * no name, no Manager, no amount and no `selectedIndex`, because there is
+ * nothing that could honestly fill them; `drawIndex` is never reached, and
+ * goes on refusing a count below 1. The seed is here because it is still
+ * REVEALED: a published commitment that never opens is the one outcome AD-14
+ * cannot survive, and an empty Contender list does not excuse it.
+ *
+ * `contenders` is carried, empty, rather than omitted — the payload states the
+ * list the close ran over, and "empty" is the fact being recorded.
+ */
+export type UndrawnLottery = {
+	readonly kind: 'undrawn';
+	/** The revealed seed, verified against the commitment before it got here. */
+	readonly seed: string;
+	/** Empty, by construction: this case exists only for an empty list. */
+	readonly contenders: readonly string[];
 };
 
 /**
@@ -264,6 +305,14 @@ export type CloseState = {
  * it off the leading Bid would be a figure that is right today and wrong the
  * moment anything about a lottery's amounts changes (FR-21).
  *
+ * **`null` is an outcome and not a failure** (Story 10.5). A lottery whose
+ * every Contender was cancelled reaches its expiry with nobody in it, and
+ * there is no Team, no amount and no contention to close "on" anybody. The
+ * absence of a party is returned as one; `decideClose` turns it into the empty
+ * reveal and an `AuctionTerminated`, and `server/close.ts` reads it as "no
+ * winning Team to key a roster read on". Every other route out of here is
+ * either a party or a throw.
+ *
  * Three throws, all of them shell bugs (AD-1):
  *
  *  - no Auction at all — nobody bid, or the Auction already closed. There is
@@ -289,7 +338,7 @@ export type ClosedParty = {
 export function closedWinnerFor(
 	auction: Auction | null,
 	winner: ClosedWinner | null
-): ClosedParty {
+): ClosedParty | null {
 	if (auction === null) {
 		throw new TypeError(
 			'closeAuction: there is no Auction to close — no Bid was ever placed on this Player, or ' +
@@ -308,6 +357,14 @@ export function closedWinnerFor(
 					'(AD-14)'
 			);
 		}
+		// **A lottery nobody is left in has no party, and that is an OUTCOME
+		// rather than a throw** (Story 10.5). There is no Team to name, no
+		// price to name it at and no contention to close "on" anybody — so the
+		// answer is the absence of a party, stated as one. `decideClose` reads
+		// the same `undrawn` winner and emits the empty reveal plus an
+		// `AuctionTerminated`; `server/close.ts` reads this `null` and skips
+		// the winner-keyed roster reads it has nothing to key on.
+		if (winner.kind === 'undrawn') return null;
 		// **The winner is validated HERE, at the rule that can name the field**
 		// (Story 3.6). `auction_events.manager_id` and `.team_id` are
 		// `not null` and reference real rows, so a `ClosedWinner` with an empty
@@ -342,7 +399,9 @@ export function closedWinnerFor(
 	if (winner !== null) {
 		throw new TypeError(
 			`closeAuction: a "${auction.contention}" Auction closes on its Leading Bidder and takes no ` +
-				`drawn winner; received one naming team "${winner.teamId}" (AD-1)`
+				`drawn winner; received a "${winner.kind}" one` +
+				(winner.kind === 'drawn' ? ` naming team "${winner.teamId}"` : '') +
+				' (AD-1)'
 		);
 	}
 
@@ -508,8 +567,22 @@ export type AuctionClosedPayload = {
  * `seq` — ids, unfiltered, exactly as the draw ran over them. AD-14 makes that
  * order an INPUT to the winner, so a list recorded in any other order would be
  * a list nobody could check the draw against.
+ *
+ * **Two shapes since Story 10.5**, because a lottery has two outcomes. A draw
+ * that selected somebody records the list, the position and the winner. A
+ * lottery every Contender was cancelled from records the list — empty — and
+ * the revealed seed, and states the winner fields by their absence rather than
+ * inventing values for them. The reveal is appended either way; what follows
+ * it is an `AuctionClosed` in the first case and an `AuctionTerminated` in the
+ * second.
  */
-export type ContentionDrawnPayload = {
+export type ContentionDrawnPayload = DrawnContentionPayload | UndrawnContentionPayload;
+
+/**
+ * What both shapes state: which Player, what was revealed, what it was
+ * published against, the list it ran over and when the Auction was due.
+ */
+type ContentionDrawnFacts = {
 	readonly fantraxPlayerId: string;
 	/** The seed, revealed. The one place a drawn seed enters `auction_events`. */
 	readonly seed: string;
@@ -517,6 +590,12 @@ export type ContentionDrawnPayload = {
 	readonly seedHash: string | null;
 	/** The Contender list the draw ran over, ascending join `seq` — ids. */
 	readonly contenders: readonly string[];
+	/** The Auction's own persisted expiry — never the transaction clock. */
+	readonly drawnAt: string;
+};
+
+/** A lottery somebody was drawn from: the list, the position, the winner. */
+export type DrawnContentionPayload = ContentionDrawnFacts & {
 	/**
 	 * The 0-based position the reduction produced.
 	 *
@@ -533,8 +612,29 @@ export type ContentionDrawnPayload = {
 	readonly winningTeamName: string;
 	/** The Manager whose joining Bid put that Team in the draw. */
 	readonly winningManagerId: string;
-	/** The Auction's own persisted expiry — never the transaction clock. */
-	readonly drawnAt: string;
+};
+
+/**
+ * A lottery whose every Contender was cancelled (Story 10.5, FR-40).
+ *
+ * **The four winner fields are ABSENT rather than null**, and `selectedIndex`
+ * with them. There was no selection: `drawIndex` was never reached, and a
+ * `selectedIndex: 0` beside an empty list would name a position that does not
+ * exist in a list that has none. A record stating the empty list and the
+ * revealed seed is the whole truth of what happened here, and
+ * `projection/draws.ts` reads exactly that back — a real record, not a row it
+ * rejects.
+ *
+ * `contenders` is `[]` and `seed` is present for the reason it is present on
+ * the drawn shape: the commitment published at the opening is discharged
+ * whatever the list came out as.
+ */
+export type UndrawnContentionPayload = ContentionDrawnFacts & {
+	readonly contenders: readonly [];
+	readonly selectedIndex?: undefined;
+	readonly winningTeamId?: undefined;
+	readonly winningTeamName?: undefined;
+	readonly winningManagerId?: undefined;
 };
 
 /**
@@ -1053,6 +1153,154 @@ function cascadeFor(
 }
 
 /**
+ * The two events an emptied lottery ends with (Story 10.5, FR-40, AD-14).
+ *
+ * **The `ContentionDrawn` first, and it is not a formality.** The lottery
+ * published a `seedHash` at its opening and a Manager may have recorded it. A
+ * contention that closed with its seed still sealed is the outcome AD-14
+ * cannot survive — an empty Contender list does not excuse it — so the reveal
+ * is appended here exactly as it is on a drawn close, carrying the empty list
+ * as the fact it is. `drawnWinnerFor` verified `hash(seed)` before it built
+ * this result; it is verified AGAIN below, because this function must never
+ * publish a seed that does not answer the commitment whatever route the
+ * `ClosedWinner` took to reach it.
+ *
+ * **Then an `AuctionTerminated`, and never an `AuctionClosed`.**
+ * `AuctionClosedPayload` requires a `teamId`, a `managerId`, a
+ * `winningAmount` and a `placement`, and the columns behind the first two are
+ * `not null` and reference real rows. Nobody won, so there is nothing to put
+ * in any of them. `AuctionTerminated` already means precisely this outcome —
+ * no winner, no contract, the nominating Team's Slot back, the Player in the
+ * Free Agent pool by arithmetic rather than by a table write — and
+ * `server/nomination.ts`'s `releaseNomination` already reads both event types.
+ * What this story gives it is a second producer: until now every one came from
+ * `phase-end.ts`, for a nomination that never drew a Bid at all.
+ *
+ * **No cascade, and that is the rule rather than an omission.** `cascadeFor`
+ * is not consulted: nobody won, so no Team's free Slots fell, so no
+ * commitment anywhere became surplus. The trigger FR-40 names is a Close that
+ * REDUCES the winning Team's free Slots, and this close has no winning Team.
+ *
+ * The nomination is required rather than fallen back on. `expiredAt` is the
+ * Auction's own persisted `closesAt` — `closedAt`'s rule for `closedAt`'s
+ * reason — and `evaluatedAt` the injected `now`, which is the one thing this
+ * whole function emits that varies with the clock.
+ */
+function undrawnClose(
+	state: CloseState,
+	auction: Auction,
+	winner: UndrawnLottery,
+	closesAt: string,
+	playerName: string,
+	now: string
+): Accepted<readonly EventEnvelope[]> {
+	// **An `undrawn` result carrying Contenders is a caller bug** (AD-14). The
+	// one producer builds it only for an empty list; anything else reaching
+	// here would record a draw that ran over Teams and selected none of them,
+	// which is a record inviting a Manager to reproduce a derivation that
+	// never happened — so it is tagged as the sibling guards below are, on the
+	// verification record it would corrupt rather than on the caller.
+	if (winner.contenders.length > 0) {
+		throw new TypeError(
+			`decideClose: an undrawn lottery has no Contenders by definition; received ` +
+				`${String(winner.contenders.length)} (AD-14)`
+		);
+	}
+
+	// The shape first and the comparison second, `decideClose`'s own order for
+	// `decideClose`'s own reason: when `auction.seedHash` is `null` — the
+	// corrupt-log case that reveals anyway rather than stranding the Auction —
+	// the comparison does not run at all, and an unshaped seed would reach the
+	// payload unexamined.
+	if (!isSeedShaped(winner.seed)) {
+		throw new TypeError(
+			'decideClose: the revealed seed is not 64 lowercase hex digits, as sha256sum prints ' +
+				`them; received ${JSON.stringify(winner.seed)} (AD-14)`
+		);
+	}
+	if (auction.seedHash !== null) {
+		const revealed = hash(winner.seed);
+		if (revealed !== auction.seedHash) {
+			throw new TypeError(
+				'decideClose: the revealed seed does not match the published commitment; hash(seed) ' +
+					`is ${revealed} and the log published ${auction.seedHash} (AD-14)`
+			);
+		}
+	}
+
+	// **The NOMINATING Team, off the nominations fold, and there is no
+	// fallback for it.** `AuctionTerminatedPayload` names the Team whose
+	// Nomination Slot comes back, and no other fold knows who that is — the
+	// Auction names bidders, and every one of them has been cancelled. A close
+	// with an Auction and no nomination is a log this codebase cannot write
+	// (the `no_open_auction` check refuses a Bid on an unnominated Player), so
+	// this is AD-1's throw rather than a synthetic Team on a `not null` column
+	// that references `teams(id)`.
+	const nomination = state.nomination;
+	if (nomination === null) {
+		throw new TypeError(
+			`decideClose: "${auction.fantraxPlayerId}" drew no Contender and its termination must ` +
+				'name the NOMINATING Team, which only the nominations fold knows; none was loaded ' +
+				'(FR-22, AD-1)'
+		);
+	}
+
+	const drawn: UndrawnContentionPayload = {
+		fantraxPlayerId: auction.fantraxPlayerId,
+		// Revealed, and only after the comparison above.
+		seed: winner.seed,
+		seedHash: auction.seedHash,
+		// Empty, stated. No `selectedIndex` and no winner fields: there was no
+		// selection to record and no Team to invent one for.
+		contenders: [],
+		// The Auction's OWN persisted expiry, never `now` (AD-10).
+		drawnAt: closesAt
+	};
+
+	const terminated: AuctionTerminatedPayload = {
+		fantraxPlayerId: auction.fantraxPlayerId,
+		playerName,
+		teamId: nomination.teamId,
+		teamName: nomination.teamName,
+		managerId: nomination.managerId,
+		// **The AUCTION's own expiry here, not the League Clock's.** The other
+		// producer terminates on the phase boundary and puts that instant on
+		// this field; this one terminates on the Auction running out with
+		// nobody in it, and the Auction's persisted `closesAt` is the instant
+		// that describes. Both are "when it was due", and neither is `now`.
+		expiredAt: closesAt,
+		evaluatedAt: now
+	};
+
+	// **Cause, then consequence**, the same fixed order a drawn close keeps: a
+	// log read in `seq` order states the empty draw before it states the
+	// termination that empty draw caused.
+	const accepted: Accepted<readonly EventEnvelope[]> = {
+		kind: 'accepted',
+		events: [
+			{
+				type: CONTENTION_DRAWN_EVENT,
+				payload: drawn,
+				// The NOMINATOR's, because there is no winner whose it could
+				// be. `phase-end.ts` states the pair the same way, and for the
+				// same constraint: `auction_events_actor_pair_null_together`
+				// means a nomination that named no Manager records NEITHER
+				// rather than inventing a `manager_id` that column references.
+				managerId: nomination.managerId,
+				teamId: nomination.managerId === null ? null : nomination.teamId
+			},
+			{
+				type: AUCTION_TERMINATED_EVENT,
+				payload: terminated,
+				managerId: nomination.managerId,
+				teamId: nomination.managerId === null ? null : nomination.teamId
+			}
+		]
+	};
+	return accepted;
+}
+
+/**
  * Close one Auction: one `AuctionClosed` envelope — or, for a Minimum-Bid
  * Contention, the `ContentionDrawn` reveal and then the close — or a throw.
  *
@@ -1134,11 +1382,6 @@ export function decideClose(
 		);
 	}
 
-	const placement = slotPlacementFor(state.playerIsMinorLeagueEligible, state.minorLeagueOccupied);
-	// Computed from the placement and the winning amount SEPARATELY, and never
-	// by assuming the two money figures are equal (AD-23).
-	const capHit = capHitFor(placement, party.winningAmount);
-
 	// The nomination is what knows the Player's NAME — the fold that holds it
 	// is the same one this close releases. A close whose nomination somehow
 	// folded away still names the Player by id rather than dropping the field,
@@ -1147,6 +1390,27 @@ export function decideClose(
 	// whose win caused it, and one derivation is what keeps the close and the
 	// cancellations from naming them two different ways.
 	const playerName = state.nomination?.playerName ?? auction.fantraxPlayerId;
+
+	// **A lottery every Contender was cancelled from: the THIRD return**
+	// (Story 10.5, FR-40). It is taken before anything a winner would be
+	// needed for — the placement, the Cap Hit, the close payload and the
+	// cascade are all downstream of a party this outcome does not have.
+	if (winner !== null && winner.kind === 'undrawn') {
+		return undrawnClose(state, auction, winner, closesAt, playerName, now);
+	}
+	// Unreachable: `closedWinnerFor` returns `null` for an `undrawn` winner
+	// and for nothing else, and that case returned one line above. The guard
+	// is the narrowing TypeScript cannot prove through a function boundary.
+	if (party === null) {
+		throw new TypeError(
+			'decideClose: no closing party was derived and no lottery was undrawn (AD-1)'
+		);
+	}
+
+	const placement = slotPlacementFor(state.playerIsMinorLeagueEligible, state.minorLeagueOccupied);
+	// Computed from the placement and the winning amount SEPARATELY, and never
+	// by assuming the two money figures are equal (AD-23).
+	const capHit = capHitFor(placement, party.winningAmount);
 
 	const payload: AuctionClosedPayload = {
 		fantraxPlayerId: auction.fantraxPlayerId,

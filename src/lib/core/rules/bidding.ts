@@ -3560,8 +3560,24 @@ export function decide(
 	// opening half; the `contention` gate cannot answer this, because it
 	// reports on the contention already running rather than the one about to
 	// start.
+	//
+	// **A lottery ALREADY running is not one about to start** (Story 10.5).
+	// Until 10.5 the two halves could not disagree: an Auction with no leader
+	// was never in a Minimum-Bid Contention, so `leadingBid === null` alone
+	// meant `contention !== 'minimum_bid'` too. 10.5 created the pairing —
+	// FR-40's cascade can cancel every join, and the lottery keeps its
+	// contention and its fixed clock so the empty outcome can be recorded. A
+	// Team bidding `MINIMUM_BID` into that Auction is JOINING it, not opening
+	// a second one: the commitment was published at the real opening and the
+	// sealed seed row still exists. Without this clause the join would demand
+	// a fresh seed the shell correctly did not supply — it passes the SEALED
+	// one inside a live contention — and throw, and a second `seedHash` on the
+	// payload would fire `recordContentionSeed` against a primary key that
+	// already holds a row.
 	const opensContention =
-		state.leadingBid === null && contentionForAmount(command.amount) === 'minimum_bid';
+		state.contention !== 'minimum_bid' &&
+		state.leadingBid === null &&
+		contentionForAmount(command.amount) === 'minimum_bid';
 	// **A missing or wrong-kinded seed is a shell bug and THROWS** (AD-1), on
 	// both halves of the commit-reveal. `seedFor` is the one narrowing, so the
 	// two branches below hold a `string` rather than a union nothing has ruled

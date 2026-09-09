@@ -19,13 +19,16 @@ import { CONTENTION_DRAWN_EVENT } from '../../src/lib/core/projection/draws.ts';
 import { MINOR_LEAGUE_ELIGIBILITY_SET } from '../../src/lib/core/projection/eligibility.ts';
 import {
 	AUCTION_CLOSED_EVENT,
+	AUCTION_TERMINATED_EVENT,
 	NOMINATION_PLACED_EVENT
 } from '../../src/lib/core/projection/nominations.ts';
 import type {
 	AuctionClosedPayload,
 	BidCancelledPayload,
-	ContentionDrawnPayload
+	ContentionDrawnPayload,
+	UndrawnContentionPayload
 } from '../../src/lib/core/rules/close.ts';
+import type { AuctionTerminatedPayload } from '../../src/lib/core/rules/phase-end.ts';
 import { closeAuction } from '../../src/lib/server/close.ts';
 import type {
 	ConnectionGateway,
@@ -895,5 +898,139 @@ describe('closeAuction — the cancellation cascade, in the transaction (Story 1
 		expect(harness.appendedEvents.map((row) => row['event_type'])).toEqual([
 			AUCTION_CLOSED_EVENT
 		]);
+	});
+});
+
+describe('closeAuction — a lottery every Contender was cancelled from (Story 10.5, FR-40)', () => {
+	/**
+	 * The log an earlier close in the same sweep leaves behind: two Teams
+	 * joined the lottery, and FR-40's cascade cancelled both of their entries
+	 * when their own wins filled their last Slots.
+	 *
+	 * The cancellations are LOGGED rather than produced here, because that is
+	 * how this state actually arises — each close commits before the next is
+	 * loaded (AD-11), so the emptied list is something `loadCloseState` folds,
+	 * not something this transaction causes.
+	 */
+	const cancelledLogged = (seq: number, cancelledSeq: string, teamId: string, managerId: string) =>
+		logEvent(
+			seq,
+			BID_CANCELLED_EVENT,
+			{
+				fantraxPlayerId: 'p-1',
+				playerName: 'Ausar Bright',
+				cancelledSeq,
+				teamId,
+				teamName: teamNameOf(teamId),
+				managerId,
+				amount: MINIMUM_BID,
+				wasContentionEntry: true,
+				causeFantraxPlayerId: 'p-9',
+				causePlayerName: 'Someone Else',
+				restoration: null
+			},
+			'2026-08-26T10:00:00.000Z',
+			{ managerId, teamId }
+		);
+
+	const emptied = () =>
+		fakeGateway({
+			events: [
+				nominated(),
+				bidLogged(2, MINIMUM_BID, 'p-1', 't-e', 'm-e', hash(SEALED_SEED)),
+				bidLogged(3, MINIMUM_BID, 'p-1', 't-f', 'm-f'),
+				cancelledLogged(4, '3', 't-f', 'm-f'),
+				cancelledLogged(5, '2', 't-e', 'm-e')
+			],
+			sealedSeed: SEALED_SEED
+		});
+
+	it('appends ContentionDrawn and then AuctionTerminated, and no close', async () => {
+		const harness = emptied();
+
+		const outcome = await closeAuction(harness.gateway, 'p-1');
+
+		expect(outcome.kind).toBe('accepted');
+		expect(harness.appendedEvents.map((row) => row['event_type'])).toEqual([
+			CONTENTION_DRAWN_EVENT,
+			AUCTION_TERMINATED_EVENT
+		]);
+		// Nobody won, so nothing is awarded and no Team's free Slots fell.
+		expect(harness.appendedEvents.map((row) => row['event_type'])).not.toContain(
+			AUCTION_CLOSED_EVENT
+		);
+		expect(harness.appendedEvents.map((row) => row['event_type'])).not.toContain(
+			BID_CANCELLED_EVENT
+		);
+		expect(harness.state.committed).toBe(true);
+		// The board seat goes back exactly as any close releases it.
+		expect(harness.releasedClaims).toEqual([['p-1']]);
+	});
+
+	it('issues NO roster read — there is no winning Team to key one on', async () => {
+		// The short-circuit in `loadCloseState`. Both roster reads are keyed on
+		// a winner: the drawn Team's own, and the batched candidate read the
+		// cascade would need. An undrawn lottery has neither, and reverting
+		// either short-circuit dereferences `null` and rolls the transaction
+		// back — the Auction could then never close and the sweep would
+		// re-offer it every pass.
+		const harness = emptied();
+
+		await closeAuction(harness.gateway, 'p-1');
+
+		expect(harness.order).toEqual([
+			'begin',
+			'lock',
+			'read-log',
+			'read-seed',
+			'append-event',
+			'append-event',
+			'release-claim',
+			'commit'
+		]);
+		expect(harness.order).not.toContain('read-roster');
+	});
+
+	it('reveals the seed and records the empty list, with no winner', async () => {
+		const harness = emptied();
+
+		await closeAuction(harness.gateway, 'p-1');
+
+		const drawn = harness.appendedEvents[0]?.['payload'] as UndrawnContentionPayload;
+		// A published commitment that never opens is the one outcome AD-14
+		// cannot survive, and an empty list does not excuse it.
+		expect(drawn.seed).toBe(SEALED_SEED);
+		expect(drawn.seedHash).toBe(hash(SEALED_SEED));
+		expect(drawn.contenders).toEqual([]);
+		expect(drawn.selectedIndex).toBeUndefined();
+		expect(drawn.winningTeamId).toBeUndefined();
+
+		// The termination names the NOMINATOR, never a bidder — there is no
+		// winner, which is the whole reason it is this event.
+		const terminated = harness.appendedEvents[1]?.['payload'] as AuctionTerminatedPayload;
+		expect(terminated.fantraxPlayerId).toBe('p-1');
+		expect(terminated.teamId).toBe('t-n');
+		expect(terminated.managerId).toBe('m-n');
+		expect(harness.appendedEvents[1]?.['team_id']).toBe('t-n');
+	});
+
+	it('mentions the nominating Team, and nobody else', async () => {
+		// The Manager whose Nomination Slot just came back is the one party to
+		// this event. Dropping the `AuctionTerminated` branch in
+		// `affectedTeamsForClose` files no intent at all and they are never
+		// told; addressing the cancelled Contenders instead would notify two
+		// Teams about an Auction they already left.
+		const harness = emptied();
+
+		await closeAuction(harness.gateway, 'p-1');
+
+		const terminationSeq = String(harness.appendedEvents[1]?.['seq']);
+		const addressed = harness.outboxIntents
+			.filter((intent) => intent.eventSeq === terminationSeq)
+			.map((intent) => intent.recipient);
+
+		expect(addressed).toEqual(['discord-t-n']);
+		expect(addressed).not.toContain('discord-t-e');
+		expect(addressed).not.toContain('discord-t-f');
 	});
 });
