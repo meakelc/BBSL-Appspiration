@@ -169,11 +169,6 @@
 		<p class="section-label">BBSL offseason free agent auction</p>
 	</header>
 
-	<section class="panel">
-		<p class="section-label">Phase</p>
-		<p class="prose">{data.phase.sentence}</p>
-	</section>
-
 	<section class="commissioner-block">
 		<p class="commissioner-label">Roster import</p>
 		<p class="prose">

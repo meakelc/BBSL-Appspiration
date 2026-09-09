@@ -259,17 +259,18 @@
 		<p class="section-label">BBSL offseason free agent auction</p>
 	</header>
 
-	<section class="panel">
-		<p class="section-label">Phase</p>
-		<p class="prose">{data.phase.sentence}</p>
+	<!-- Every figure on this page carries its age in anything but Live
+	     (AD-29). The countdowns are exempt and keep running; the figures
+	     and the re-entry answers are what cannot be confirmed.
 
-		<!-- Every figure on this page carries its age in anything but Live
-		     (AD-29). The countdowns are exempt and keep running; the figures
-		     and the re-entry answers are what cannot be confirmed. -->
-		{#if figuresAge !== null}
+	     The panel is inside the guard rather than around it: in Live there is
+	     no age to state, and a bordered box with nothing in it reads as a
+	     figure that failed to load. -->
+	{#if figuresAge !== null}
+		<section class="panel">
 			<p class="prose" id="positions-figures-age">{figuresAge}</p>
-		{/if}
-	</section>
+		</section>
+	{/if}
 
 	{#if positions.empty}
 		<!-- The designed empty screen, not an edge case: it states what the

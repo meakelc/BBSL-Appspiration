@@ -64,11 +64,6 @@
 		<p class="section-label">BBSL offseason free agent auction</p>
 	</header>
 
-	<section class="panel">
-		<p class="section-label">Phase</p>
-		<p class="prose">{data.phase.sentence}</p>
-	</section>
-
 	{#if poolIsEmpty}
 		<!-- The designed empty state: nothing has been promoted, so there is
 		     nothing to flag and NO control is offered. What is outstanding is

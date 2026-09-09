@@ -235,9 +235,16 @@ describe('the Auction page — what it renders', () => {
 		expect(PAGE).not.toMatch(/nominatingTeam.*\b[A-Z]{3}\b/);
 	});
 
-	it('states the phase from the server-resolved source', () => {
-		expect(PAGE).toContain('data.phase.sentence');
+	it('leaves the phase to the chrome — the page states it nowhere', () => {
+		// The layout prints `data.phase.sentence` on every route, in the
+		// header menu or the persistent strip. A panel here was the same
+		// sentence a second time, on the page with the least room for one.
+		expect(PAGE).not.toContain('data.phase.sentence');
+		expect(PAGE).not.toContain('section-label">Phase');
+		// The phase is still SHIPPED and still server-resolved: the ninth
+		// gate reads it on every keystroke.
 		expect(SERVER).toContain('locals.phase');
+		expect(PAGE).toContain('phase: control.phase');
 	});
 
 	it('renders the price and the Leading Bidder from the fold, with an honest empty state — AC6', () => {

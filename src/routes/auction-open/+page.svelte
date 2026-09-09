@@ -58,11 +58,6 @@
 	</header>
 
 	<section class="panel">
-		<p class="section-label">Phase</p>
-		<p class="prose">{data.phase.sentence}</p>
-	</section>
-
-	<section class="panel">
 		<p class="section-label">What is outstanding</p>
 		{#if report.ready}
 			<p class="prose">

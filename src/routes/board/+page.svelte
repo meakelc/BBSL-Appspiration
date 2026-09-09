@@ -243,11 +243,6 @@
 		<p class="section-label">BBSL offseason free agent auction</p>
 	</header>
 
-	<section class="panel">
-		<p class="section-label">Phase</p>
-		<p class="prose">{data.phase.sentence}</p>
-	</section>
-
 	{#if board.cards.length === 0}
 		<!-- The designed empty screen, not an edge case: it explains the state
 		     and points at Nominate, which is the act that fills the board.

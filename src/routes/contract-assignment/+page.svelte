@@ -106,11 +106,6 @@
 		<p class="section-label">BBSL offseason free agent auction</p>
 	</header>
 
-	<section class="panel">
-		<p class="section-label">Phase</p>
-		<p class="prose">{data.phase.sentence}</p>
-	</section>
-
 	{#if board === null}
 		<section class="manager-block">
 			<p class="section-label">Your Team</p>
