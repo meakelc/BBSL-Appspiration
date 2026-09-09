@@ -191,5 +191,31 @@ secret = "env(DISCORD_CLIENT_SECRET)"
 # `npx supabase functions serve tick`.
 enabled = true
 
+[functions.tick]
+# **JWT verification OFF, because the caller is pg_cron and not a browser.**
+# The schedule in `20260831000000_tick.sql` POSTs through `net.http_post` with
+# exactly two headers — `Content-Type` and `x-tick-invocation-secret` — and no
+# `Authorization`. With the platform default (`verify_jwt = true`) that request
+# never reaches the function at all: the gateway refuses it with
+# `sb-error-code: UNAUTHORIZED_NO_AUTH_HEADER`, verified against the dev
+# project on 2026-09-09 by sending the cron's own request shape.
+#
+# That refusal is the worst possible one, which is why this line exists rather
+# than a bearer token in the job body. pg_net is asynchronous: the job queues
+# the request and succeeds, so `cron.job_run_details` records a healthy run
+# while every pass is rejected and `tick_heartbeats` stays empty. An enabled
+# schedule that closes nothing and reports no failure is precisely what AD-19's
+# heartbeat table exists to make impossible.
+#
+# **This does not widen the boundary; it uncovers the intended one.** The tick
+# authorises on `x-tick-invocation-secret` alone — `supabase/functions/tick/auth.ts`
+# calls it "the one security boundary the tick has" and compares it in constant
+# time, refusing identically when the variable is unset, when the header is
+# absent, and when the two differ. A JWT would have added nothing: every
+# `anon` key is public by construction, so `verify_jwt = true` here admits any
+# browser on the internet that also guesses the secret, and refuses the only
+# caller that holds it.
+verify_jwt = false
+
 [analytics]
 enabled = false
