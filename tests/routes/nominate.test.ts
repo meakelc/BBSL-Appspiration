@@ -727,6 +727,22 @@ describe('the nomination surface', () => {
 		expect(SOURCE).toMatch(/\.pool-table \.cell-state \{\s*flex: 0 1 auto;/);
 	});
 
+	it('recedes an unavailable Player’s name without making colour the message', () => {
+		// The name is what a Manager scans, so a row they cannot pick greys it.
+		expect(SOURCE).toContain('<tr class:unavailable={!player.available}>');
+		expect(SOURCE).toMatch(
+			/\.pool-table tr\.unavailable \.cell-player \{\s*color: var\(--color-text-secondary\);/
+		);
+		// `--color-text-disabled` is 2.7:1 and exempt from 1.4.3 only for a
+		// CONTROL's label. A Player's name is content and stays legible.
+		expect(MARKUP, 'a Player name is greyed to a disabled control’s contrast').not.toContain(
+			'--color-text-disabled'
+		);
+		// And the state is still said in words on the same row, so nothing is
+		// known only by being grey.
+		expect(SOURCE).toContain('player.status');
+	});
+
 	it('keeps every row target at the 46px control height for one-handed use', () => {
 		expect(SOURCE).toMatch(/\.row-select\s*\{[\s\S]*?min-height:\s*var\(--control-height\)/);
 		expect(SOURCE).toMatch(/\.confirm\s*\{[\s\S]*?min-height:\s*var\(--touch-min\)/);

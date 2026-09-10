@@ -362,7 +362,12 @@
 						</thead>
 						<tbody>
 							{#each shown as player (player.fantraxPlayerId)}
-								<tr>
+								<!-- The row carries the availability, not just the state cell:
+								     the NAME is what a Manager scans, and a name at full
+								     strength beside a disabled radio reads as a Player they
+								     may still pick. Greying it is the second half of what the
+								     state phrase says, in the place the eye actually lands. -->
+								<tr class:unavailable={!player.available}>
 									<td class="cell-select">
 										<label class="row-select" for={`player-${player.fantraxPlayerId}`}>
 											<input
@@ -956,6 +961,24 @@
 		color: var(--color-text);
 		font-size: var(--size-15);
 		font-weight: 400;
+	}
+
+	/*
+	 * A Player who cannot be nominated recedes, and `--color-text-secondary`
+	 * is how far: 7.1:1 on the ground, a clear step down from the 15.7:1 of
+	 * `--color-text` and still comfortably past AA. NOT
+	 * `--color-text-disabled` — that token is 2.7:1 and is exempt from 1.4.3
+	 * only because it labels a CONTROL that states its reason beside it. A
+	 * Player's name is content: it is the one thing on the row a Manager is
+	 * reading, and it stays legible whether or not they may pick them.
+	 *
+	 * Colour alone carries nothing here. The state cell says `Nominated`,
+	 * `In-Auction` or `Closed to <Team>` in words on the same row, and the
+	 * radio is disabled and described by it, so nothing is known only by
+	 * being grey (1.4.1).
+	 */
+	.pool-table tr.unavailable .cell-player {
+		color: var(--color-text-secondary);
 	}
 
 	.pool-table .cell-select,
