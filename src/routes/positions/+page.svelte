@@ -344,11 +344,6 @@
 								<span class="visually-hidden">{POSITIONS_WON_LABEL}</span>
 								{card.winningAmountLabel}
 							</p>
-							<!-- The placement and the Cap Hit in words: the two are
-							     independent (AD-23), and a card stating only the
-							     amount would let a $0 minors charge read as the
-							     winning figure. -->
-							<p class="prose">{card.sentence}</p>
 							<!-- The footnote line. `Closed` keeps a VISIBLE label: a
 							     bare stamp beneath a placement sentence that names no
 							     instant would be a date with nothing to attach it

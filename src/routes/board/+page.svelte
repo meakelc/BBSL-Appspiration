@@ -101,7 +101,6 @@
 		// The three a closed card carries and an open one does not, all
 		// pre-worded by the core exactly as every other field here is.
 		readonly wonBy: string | null;
-		readonly placementSentence: string | null;
 		readonly closedAt: string | null;
 	};
 
@@ -459,7 +458,6 @@
 								{card.wonBy}
 							</p>
 						</div>
-						<p class="prose">{card.placementSentence}</p>
 						<!-- ROW 4, CLOSED — the closed instant in the viewer's own
 						     timezone, on the footnote row the open card gives its own
 						     absolute stamp. Labelled, because a bare date on a card

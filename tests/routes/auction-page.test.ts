@@ -1856,7 +1856,8 @@ describe('the Auction page — the Closed state it renders', () => {
 		// shipping green.
 		expect(CLOSED_MARKUP).toMatch(/id="auction-final-amount"[^>]*>\s*\{closed\.winningAmount\}/);
 		expect(CLOSED_MARKUP).toMatch(/id="auction-winner"[\s\S]{0,120}?\{closed\.winner\}/);
-		expect(CLOSED_MARKUP).toMatch(/id="auction-placement"[^>]*>\s*\{closed\.placementSentence\}/);
+		// No placement line: removed as redundant beside the final amount.
+		expect(CLOSED_MARKUP).not.toContain('placementSentence');
 	});
 
 	it('states the closed instant TWICE — relative and absolute', () => {

@@ -13,7 +13,6 @@ import { describe, expect, it } from 'vitest';
 import { loadBoard } from '../../src/lib/server/board.ts';
 import { AUCTION_CLOSED_EVENT } from '../../src/lib/core/projection/nominations.ts';
 import { CONTENTION_DRAWN_EVENT } from '../../src/lib/core/projection/draws.ts';
-import { wonCardSentence } from '../../src/lib/core/projection/closed.ts';
 import { parseMoney } from '../../src/lib/core/money.ts';
 import { closedPayload } from '../fixtures/closed-event.ts';
 
@@ -221,7 +220,6 @@ describe('loadBoard — executed against a fake client', () => {
 		// An open card carries none of the closed fields, so a surface that
 		// printed one would print an absence rather than a wrong figure.
 		expect(card?.wonBy).toBeNull();
-		expect(card?.placementSentence).toBeNull();
 		expect(card?.closedAt).toBeNull();
 		// Every icon is non-empty, so no card can render a state as colour alone.
 		expect(card?.viewerStateIcon).not.toBe('');
@@ -336,9 +334,6 @@ describe('loadBoard — the closed cards, off the two folds that survive a close
 		// The winner, spelled out with the Manager the DRAW recorded — resolved
 		// in the statement that already resolves leaders and nominators.
 		expect(card?.wonBy).toBe('Rockets — Dana');
-		expect(card?.placementSentence).toBe(
-			wonCardSentence('active_bench', parseMoney(8_500_000))
-		);
 		expect(card?.closedAt).toBe(CLOSED_AT);
 		// The viewer holds the contract.
 		expect(card?.viewerState).toBe('won');

@@ -129,7 +129,6 @@ export type BoardCardView = {
 	 */
 	readonly wonBy: string | null;
 	/** Where the Player landed and what it charges — the core's own sentence. */
-	readonly placementSentence: string | null;
 	/** The Auction's own persisted expiry, `null` while it is still open. */
 	readonly closedAt: string | null;
 };
@@ -378,7 +377,6 @@ export async function loadBoard(
 									: (managerNames.get(pairKey(card.winningManagerId, card.winningTeamId ?? '')) ??
 										null)
 							),
-				placementSentence: card.placementSentence,
 				closedAt: card.closedAt
 			}))
 		};

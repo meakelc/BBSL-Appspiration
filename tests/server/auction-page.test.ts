@@ -24,7 +24,6 @@ import {
 import { AUCTION_CLOSED_EVENT, NOMINATION_PLACED_EVENT } from '../../src/lib/core/projection/nominations.ts';
 import { AUCTION_OPENED_EVENT } from '../../src/lib/core/projection/phase.ts';
 import { CONTENTION_DRAWN_EVENT } from '../../src/lib/core/projection/draws.ts';
-import { wonCardSentence } from '../../src/lib/core/projection/closed.ts';
 import { parseMoney } from '../../src/lib/core/money.ts';
 import {
 	BID_READY,
@@ -605,11 +604,11 @@ describe('loadAuctionPage — no open nomination', () => {
 		expect(closed?.kind).toBe('closed');
 		expect(closed?.playerName).toBe('Jalen Green');
 		expect(closed?.metadata).toEqual({ positions: 'SG', nbaTeam: 'HOU' });
-		// The winner, the final amount and the placement — the three
-		// `EXPERIENCE.md:168` asks a Closed state for.
+		// The winner and the final amount. The placement sentence beside them
+		// was removed as redundant — on a standard close its Cap Hit restates
+		// the amount directly above it.
 		expect(closed?.winner).toBe('Team W');
 		expect(closed?.winningAmount).toBe('$1.0M');
-		expect(closed?.placementSentence).toBe(wonCardSentence('active_bench', parseMoney(1_000_000)));
 		// The Auction's own persisted expiry, never the transaction clock.
 		expect(closed?.closedAt).toBe('2026-08-27T09:00:00.000Z');
 		// No draw: this close was a Standard one.

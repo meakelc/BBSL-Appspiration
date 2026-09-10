@@ -24,6 +24,7 @@ import {
 	EMPTY_POSITIONS_HEADING,
 	EMPTY_POSITIONS_STATEMENT,
 	GROUP_HEADINGS,
+	POSITIONS_WON_LABEL,
 	POSITIONS_GROUP_ORDER,
 	emptyPositionsSentence,
 	leadCommitmentSentence,
@@ -32,7 +33,6 @@ import {
 	reEntryFor,
 	reEntrySentence
 } from '../src/lib/core/positions.ts';
-import { wonCardSentence } from '../src/lib/core/projection/closed.ts';
 import type { ReEntry } from '../src/lib/core/positions.ts';
 import { AUCTION_PATH_PREFIX, auctionPathFor } from '../src/lib/core/auction-link.ts';
 import { VIEWER_STATE_ICONS, VIEWER_STATE_LABELS } from '../src/lib/core/board.ts';
@@ -307,10 +307,14 @@ describe('Won — every Auction the viewer’s Team has won this phase', () => {
 		expect(card?.href).toBe(`${AUCTION_PATH_PREFIX}p-1`);
 	});
 
-	it('states the placement AND the Cap Hit, because they are independent (AD-23)', () => {
+	it('carries the placement AND the Cap Hit as facts, independent of each other (AD-23)', () => {
 		// A minors placement carries a $0 Cap Hit while the winning amount
-		// stands unchanged, so a card stating only the amount would let a $0
-		// charge read as an $8.5M one.
+		// stands unchanged. The card no longer STATES the pair — the placement
+		// sentence was removed as redundant on a standard close, where the Cap
+		// Hit simply repeats the figure above it — so what is asserted here is
+		// that the two remain separate FIELDS on the card and neither was
+		// collapsed into the other. A surface that wants to say so again has
+		// both to say it from.
 		const minors = build(
 			[
 				nominated('p-2', 'Santi Aldama', RIVAL),
@@ -320,9 +324,11 @@ describe('Won — every Auction the viewer’s Team has won this phase', () => {
 		);
 		const card = minors.won[0];
 		expect(card?.winningAmountLabel).toBe('$8.5M');
-		expect(card?.sentence).toBe(wonCardSentence('minor_league', parseMoney(0)));
-		expect(card?.sentence).toContain('Minor League Slot');
-		expect(card?.sentence).toContain('$0.0M');
+		expect(card?.placement).toBe('minor_league');
+		expect(card?.capHit).toBe(parseMoney(0));
+		// The two are genuinely independent: the Cap Hit is $0 and the winning
+		// amount is not, and neither field was derived from the other.
+		expect(card?.winningAmount).toBe(parseMoney(8_500_000));
 	});
 
 	it('orders newest closedAt first, tie-broken totally on the Player id', () => {
@@ -346,7 +352,12 @@ describe('Won — every Auction the viewer’s Team has won this phase', () => {
 
 	it('states no celebration', () => {
 		const positions = build(events);
-		expect(positions.won[0]?.sentence).not.toMatch(/congratul|well done|nice|!/i);
+		// The won card prints a name, a figure and an instant, and the group
+		// above it is called `Won`. None of those may congratulate: the app
+		// states what happened.
+		expect(GROUP_HEADINGS.won).not.toMatch(/congratul|well done|nice|!/i);
+		expect(POSITIONS_WON_LABEL).not.toMatch(/congratul|well done|nice|!/i);
+		expect(positions.won[0]?.playerName).not.toMatch(/congratul|well done|!/i);
 	});
 });
 

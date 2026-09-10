@@ -47,11 +47,7 @@ import {
 	viewerStateFor
 } from '../src/lib/core/board.ts';
 import type { BoardCard, BoardCardState, BoardMetadata } from '../src/lib/core/board.ts';
-import {
-	CLOSED_LABEL,
-	CLOSED_LABEL_NARROW,
-	wonCardSentence
-} from '../src/lib/core/projection/closed.ts';
+import { CLOSED_LABEL, CLOSED_LABEL_NARROW } from '../src/lib/core/projection/closed.ts';
 import { MINIMUM_BID } from '../src/lib/core/constants.ts';
 import { parseMoney } from '../src/lib/core/money.ts';
 import {
@@ -855,11 +851,11 @@ describe('the closed card — the state a close used to delete off this board', 
 		const card = cardFor(cards, 'p-1');
 		expect(card.state).toBe('closed');
 		expect(card.playerName).toBe('Jalen Green');
-		// The winner, the final amount and the placement — the three
-		// `EXPERIENCE.md:168` asks a Closed state for, and the whole card.
+		// The winner and the final amount. The placement sentence that stood
+		// beside them was removed as redundant: on a standard close its Cap Hit
+		// repeats the figure above it word for word.
 		expect(card.winningTeamName).toBe('Rockets');
 		expect(card.price).toBe(parseMoney(8_500_000));
-		expect(card.placementSentence).toBe(wonCardSentence('active_bench', parseMoney(8_500_000)));
 		expect(card.closedAt).toBe(CLOSED_AT);
 	});
 

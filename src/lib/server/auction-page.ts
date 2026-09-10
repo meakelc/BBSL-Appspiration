@@ -133,11 +133,7 @@ import {
 import type { OpenNomination } from '../core/projection/nominations.ts';
 import { INITIAL_PHASE, phaseReducer } from '../core/projection/phase.ts';
 import type { LeaguePhase } from '../core/projection/phase.ts';
-import {
-	closedAuctionFor,
-	selectedPositionSentence,
-	wonCardSentence
-} from '../core/projection/closed.ts';
+import { closedAuctionFor, selectedPositionSentence } from '../core/projection/closed.ts';
 import type { ClosedAuction } from '../core/projection/closed.ts';
 import { INITIAL_CONTRACTS, contractsReducer } from '../core/projection/contracts.ts';
 import { INITIAL_DRAWS, drawsReducer } from '../core/projection/draws.ts';
@@ -495,8 +491,6 @@ export type ClosedAuctionPageState = {
 	readonly winner: string;
 	/** What the Player was won for, through the core's one money renderer. */
 	readonly winningAmount: string;
-	/** Where the Player landed and what it charges — `wonCardSentence`. */
-	readonly placementSentence: string;
 	/** The Auction's own persisted expiry, rendered twice by the surface. */
 	readonly closedAt: string;
 	/** The lottery that decided it, or `null` for a Standard close. */
@@ -718,7 +712,6 @@ async function readClosedAuction(
 		// The core's own sentence, the same one Your Positions' won card and the
 		// Team view's roster row print. Both facts always, because they are
 		// independent (AD-23).
-		placementSentence: wonCardSentence(contract.placement, contract.capHit),
 		// The Auction's own persisted NOMINAL expiry, never the transaction
 		// clock that recorded the close (`contracts.ts` says why).
 		closedAt: contract.closedAt,

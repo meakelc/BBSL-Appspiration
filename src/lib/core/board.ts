@@ -55,8 +55,7 @@ import type { Auction, ContentionState, OpenAuctions } from './projection/auctio
 import {
 	CLOSED_LABEL,
 	CLOSED_LABEL_NARROW,
-	closedAuctions,
-	wonCardSentence
+	closedAuctions
 } from './projection/closed.ts';
 import type { ClosedAuction } from './projection/closed.ts';
 import type { AuctionContracts } from './projection/contracts.ts';
@@ -203,16 +202,6 @@ export type BoardCard = {
 	readonly winningTeamId: string | null;
 	readonly winningTeamName: string | null;
 	readonly winningManagerId: string | null;
-	/**
-	 * Where the Player landed and what it charges, in words — `null` on every
-	 * card that is not closed.
-	 *
-	 * `wonCardSentence`, the same sentence Your Positions' won card and the
-	 * Team view's roster row already print. `EXPERIENCE.md:168` asks a Closed
-	 * state for the winner, the final amount and the Slot placement; with the
-	 * two fields above, this is the third and the card is complete.
-	 */
-	readonly placementSentence: string | null;
 	/** The Auction's own persisted expiry, `null` on every card still open. */
 	readonly closedAt: string | null;
 	readonly viewerState: BoardViewerState;
@@ -722,7 +711,6 @@ export function boardCardsFor(
 			winningTeamId: null,
 			winningTeamName: null,
 			winningManagerId: null,
-			placementSentence: null,
 			closedAt: null,
 			viewerState: viewerStateFor(auction, viewerTeamId)
 		});
@@ -764,7 +752,6 @@ export function boardCardsFor(
 			winningTeamId: closed.contract.teamId,
 			winningTeamName: closed.contract.teamName,
 			winningManagerId: closed.winningManagerId,
-			placementSentence: wonCardSentence(closed.contract.placement, closed.contract.capHit),
 			closedAt: closed.contract.closedAt,
 			viewerState: closedViewerStateFor(closed, viewerTeamId)
 		});

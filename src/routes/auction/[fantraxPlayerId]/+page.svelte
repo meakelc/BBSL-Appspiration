@@ -205,8 +205,8 @@
 	 * The Closed state of an Auction (`EXPERIENCE.md:168`).
 	 *
 	 * Every field is already worded or rendered by the core — the winner
-	 * spelled out with its Manager, the amount through the one money renderer,
-	 * the placement through `wonCardSentence`. What is NOT pre-worded is
+	 * spelled out with its Manager, the amount through the one money renderer.
+	 * What is NOT pre-worded is
 	 * anything depending on the reader's own clock, which is the same split the
 	 * open half takes.
 	 */
@@ -217,7 +217,6 @@
 		readonly metadata: AuctionMetadata | null;
 		readonly winner: string;
 		readonly winningAmount: string;
-		readonly placementSentence: string;
 		readonly closedAt: string;
 		readonly draw: ClosedDraw | null;
 		readonly figuresAt: string;
@@ -833,10 +832,6 @@
 			<span class="section-label">{BOARD_WON_BY_LABEL}</span>
 			{closed.winner}
 		</p>
-		<!-- Where the Player landed and what it charges — the core's own
-		     sentence, the same one Your Positions' won card prints. Both facts
-		     always, because they are independent (AD-23). -->
-		<p class="prose" id="auction-placement">{closed.placementSentence}</p>
 		<!-- The close instant, TWICE: the relative phrase and the absolute
 		     stamp in the viewer's own timezone, and the absolute is never
 		     dropped for space. -->

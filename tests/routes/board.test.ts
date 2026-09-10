@@ -500,15 +500,14 @@ describe('the board page — the Closed card', () => {
 		// `EXPERIENCE.md:168` asks a Closed state for the winner, the final
 		// amount and the Slot placement. All three are pre-worded fields; the
 		// surface prints them and words nothing.
-		// ANCHORED, for the reason the Auction page's own closed assertions are:
-		// three loose `toContain`s against one slice still pass when `card.wonBy`
-		// and `card.placementSentence` are swapped between their two lines,
-		// which would put the placement sentence under "Won by" and the winning
-		// Team's name in the bare prose line beneath it.
+		// ANCHORED to its own label rather than asserted as a loose substring of
+		// the arm: containment alone would still pass if `card.wonBy` drifted
+		// into some other line.
 		expect(CLOSED_ARM).toMatch(
 			/\{BOARD_WON_BY_LABEL\}<\/span>\s*\{card\.wonBy\}/
 		);
-		expect(CLOSED_ARM).toMatch(/<p class="prose">\{card\.placementSentence\}<\/p>/);
+		// No placement line: removed as redundant beside the final amount.
+		expect(CLOSED_ARM).not.toContain('placementSentence');
 		// The figure shares the price row, under a different WORD, because a
 		// price and a final amount are not the same claim about a number.
 		expect(PAGE).toContain('BOARD_FINAL_LABEL');

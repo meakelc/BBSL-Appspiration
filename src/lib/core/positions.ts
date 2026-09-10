@@ -71,7 +71,6 @@ import {
 	contenderCountSentence
 } from './projection/auctions.ts';
 import type { Auction, ContentionState, OpenAuctions } from './projection/auctions.ts';
-import { wonCardSentence } from './projection/closed.ts';
 import { contractsWonBy } from './projection/contracts.ts';
 import type { AuctionContract, AuctionContracts } from './projection/contracts.ts';
 import {
@@ -383,8 +382,6 @@ export type WonCard = {
 	/** What it charges against the Cap. `$0` on a minors placement (AD-23). */
 	readonly capHit: Money;
 	readonly placement: SlotPlacement;
-	/** The placement and the Cap Hit, in words. */
-	readonly sentence: string;
 	/** The Auction's own persisted expiry — the surface renders it absolutely. */
 	readonly closedAt: string;
 	/**
@@ -732,7 +729,6 @@ export function positionsFor(input: {
 			winningAmountLabel: describeAmount(contract.winningAmount),
 			capHit: contract.capHit,
 			placement: contract.placement,
-			sentence: wonCardSentence(contract.placement, contract.capHit),
 			closedAt: contract.closedAt,
 			// The Closed page, which exists now. `auctionPathFor` and never a
 			// literal — see `WonCard.href`.
