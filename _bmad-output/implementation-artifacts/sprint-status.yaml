@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 08-18-2026 13:11
-last_updated: 09-09-2026 14:55
+last_updated: 09-10-2026 00:00
 project: BBSL-Appspiration
 project_key: NOKEY
 tracking_system: file-system
@@ -100,6 +100,10 @@ development_status:
   7-3-the-remaining-overrides: backlog
   7-4-pause-and-resume-the-auction: backlog
   7-5-the-league-visible-audit-log: backlog
+  7-6-dead-money-and-the-rookie-scale-designation: backlog
+  7-7-record-a-roster-move: backlog
+  7-8-record-a-drop: backlog
+  7-9-detect-a-roster-divergence-from-fantrax: backlog
   epic-7-retrospective: optional
 
   epic-8: backlog

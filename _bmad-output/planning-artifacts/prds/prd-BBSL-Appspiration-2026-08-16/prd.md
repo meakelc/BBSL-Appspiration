@@ -2,7 +2,7 @@
 title: BBSL Offseason Free Agent Auction
 status: final
 created: 2026-08-16
-updated: 2026-09-08
+updated: 2026-09-10
 ---
 
 # PRD: BBSL Offseason Free Agent Auction
@@ -41,6 +41,14 @@ No prior design or research artifacts exist for this product. Technical mechanis
 > - **Unlimited lottery participation (FR-18).** A Minimum-Bid Contention entry no longer consumes roster capacity at all. A Team with one open Slot may enter as many lotteries as its **cap space** allows, on the reasoning that the expected outcome of a lottery is losing. Cap space remains the only quantitative limit.
 >
 > Two consequences a reader should not have to discover. First, **a Team at Roster Count 12 holds no Active/Bench-bound commitment at all** — the allowance requires at least one open Slot, because a Team with none could win its allowance bid with nothing available to cancel it first, landing on 13. Second, **`Overflow Count` split in two**: the money side still counts lottery entries, the slots side no longer does, so the Glossary now names **Active/Bench Overflow** separately. Examples **29–35** make all of it executable; **23–25** were rewritten against the new ceiling.
+>
+> **Amended 2026-09-10 (fifth pass)** when the commissioner recorded that managers **trade and drop players in Fantrax while the auction is running**. Both change Cap Space, Roster Count and slot occupancy — the inputs to Maximum Bid — so an unrecorded one leaves the app computing against a roster that stopped being true. Two non-goals gave way, and a second gap surfaced while specifying the first:
+>
+> - **Roster Moves (FR-41, new).** *"Not a trade machine"* becomes **"not a trade broker."** The app hosts no proposal or negotiation; a trade is agreed in Discord, executed in Fantrax, and its **effect on rosters** is recorded here. Both Existing and Auction Contracts may move, in both directions **as one act with one evaluation at the end**. **Committed capital never moves** — a leading Bid, a contention entry and Cap Space cannot be traded, and FR-15 is untouched.
+> - **Drops and Dead Money (FR-43, new).** A Drop frees the Roster Slot but **does not release the Cap Hit**, which carries as **Dead Money**. The governing rule is one sentence — *a Drop converts the Player's **charged** Cap Hit into Dead Money, at the same amount* — and all three Slot kinds fall out of it. The exception is a second-round rookie Contract of the current draft class, which clears entirely.
+> - **Roster Divergence (FR-42, new, contingent).** Fantrax has **no write path at all** — verified 2026-09-10, every documented method is a GET — but its `getTeamRosters` read returns membership, and membership is the only fact the app lacks, since it already holds every Cap Hit. So the app can **detect** a trade nobody reported. The read proposes and never writes.
+>
+> Three consequences a reader should not have to discover. First, **a Move can be refused because of the Team giving players up** — a freed Slot costs $1,000,000 of Roster Reserve against a Cap Hit that may be worth less. Second, **a Drop moves Maximum Bid in either direction**: down from Active/Bench, up from a Minor League Slot via Minors Exposure. Third, **a Move or Drop is refused, never cancelled around** — FR-40's cancellation trigger is still an Auction Close and nothing else. Examples **36–43** make all of it executable.
 
 ## 1. Vision
 
@@ -69,7 +77,7 @@ Thirty-one people: thirty team managers (one team is co-managed by two people) p
 
 - **Other dynasty leagues.** This is single-tenant and hard-wired to BBSL rules. Making the ruleset configurable is a v2 conversation, not a v1 constraint.
 - **Spectators / the public.** No anonymous read-only view of the board.
-- **In-season users.** This app runs the offseason auction and then goes quiet. Waivers, trades, lineups, and scoring all stay in Fantrax.
+- **In-season users.** This app runs the offseason auction and then goes quiet. Waivers, lineups, and scoring all stay in Fantrax — as does the *execution* of a trade. The app records a trade's effect on rosters (FR-41) because that effect changes what both Teams may bid, and detects one it was not told about (FR-42). It brokers none.
 
 ### 2.3 Key User Journeys
 
@@ -112,6 +120,11 @@ Thirty-one people: thirty team managers (one team is co-managed by two people) p
 - **Bid Cancellation** — the system standing down a Team's Bid, without that Team's consent and without a Commissioner acting, because an Auction Close has left the Bid with no Roster Slot to land in. Distinct from a Commissioner void (FR-32) in three ways: the cancelled Bid **was valid when placed**, it **remains** in the Auction's history rather than being erased from the fold, and it **keeps** its League Clock reset. See FR-40.
 - **Restored Leading Bidder** — the Team whose earlier Bid becomes the leading Bid again after a Bid Cancellation, and whose capital is re-committed at that moment. A Team is restored only if it still passes the money and capacity gates; otherwise the next Bid down is tried.
 - **Slot Placement** — the automatic assignment of a won Player to a Roster Slot at Auction Close. A Minor League Eligible Player is placed in a Minor League Slot if one is free, and in an Active/Bench Slot otherwise. Every Player who is not Minor League Eligible is placed in an Active/Bench Slot. No Manager or Commissioner choice is involved.
+- **Roster Move** — the Commissioner recording that one or more Contracts have changed hands between two Teams, as one act. **Both Existing Contracts and Auction Contracts may move.** The Contract itself travels unchanged — same value, same years; what changes is which Team holds it and, possibly, which Roster Slot receives it. **Slot Placement is re-evaluated against the receiving Team's occupancy at the moment of the move**, so a Minor League Eligible Player stashed at a $0 Cap Hit on the sending Team lands in an Active/Bench Slot on a receiving Team with no Free Minor League Slot — and charges his full amount there. Cap Hit follows placement, never the other way round. A Roster Move never transfers Committed Bids, a Minimum-Bid Contention entry, or Cap Space, and is **refused** outright if it would leave either Team failing a gate it currently passes. See FR-41.
+- **Roster Divergence** — a difference between the Team membership Fantrax reports and the membership the app holds, excluding Players won in this auction, who are not yet in Fantrax. A divergence is a **signal, not a change**: it raises a proposed Roster Move or Drop for the Commissioner to confirm or dismiss, and never alters app state on its own. See FR-42.
+- **Drop** — a Team releasing a Player in Fantrax. It frees the Roster Slot he occupied but **does not release his Cap Hit**, which continues to charge as **Dead Money**. A Drop from an Active/Bench Slot therefore *lowers* the Team's Maximum Bid: Roster Count falls, so Roster Reserve rises by $1,000,000 for the new hole, while Cap Space is unchanged. A Drop from a Minor League Slot moves it the other way. See FR-43.
+- **Dead Money** — the Cap Hit a dropped Player was **charging**, which continues to charge against the Salary Cap at that same amount. It occupies **no Roster Slot**, counts toward **no ceiling**, and can never receive a won Player. It is a fourth Roster Slot *kind* in the data and not a fourth *Slot*: Active/Bench, Injury Reserve and Minor League Slots are finite and allocable, and Dead Money is neither. Because a stashed Player charges $0 by placement, dropping him produces **no Dead Money at all**. Within this auction the charge is simply the charge; the Contract's remaining years are carried for the export and are **not** a future-year projection, which stays out of scope (§6).
+- **Rookie-Scale Contract** — a Contract carrying Fantrax's `NRK` designation, where `N` is the draft round and the year is the end year: `2RK31` is a second-round deal ending in 2031. **A second-round rookie Contract from the current draft class is the one Contract whose Cap Hit clears entirely on a Drop** — identified by the `2RK` designation *and* a full remaining term, meaning no year of the deal has yet elapsed. The second-round term is **5 years and invariant**, which is what makes the term test sound. Every other Contract, rookie-scale or not, becomes Dead Money. See FR-43.
 - **Projected Active/Bench Additions** — the number of Active/Bench Slots a Team's open bids will fill in the worst case, counting the bid being placed: its leading amounts on non-eligible Players, plus the **Active/Bench Overflow**, each computed as though the prospective bid were already placed. **Minimum-Bid Contention entries are excluded** — however many the Team holds. A contention entry is governed by FR-18's own capacity rule and contributes nothing to this count.
 - **Roster Reserve** — money a Team must hold back to fill its remaining Active/Bench holes at the minimum: `$1,000,000 × max(0, 12 − (Roster Count + Projected Active/Bench Additions))`.
 - **Maximum Bid** — the largest legal bid a Team may place **on a specific Auction** at this instant. For a Player who is not Minor League Eligible, and for a Minor League Eligible Player whose addition would push the Team into Overflow: `Available Cap Space − Roster Reserve`. For a Minor League Eligible Player the Team's Free Minor League Slots can absorb, the bid commits nothing and Maximum Bid is **unbounded**, provided Roster Reserve remains coverable. Maximum Bid is therefore a per-Auction figure, not a single per-Team number. **Maximum Bid governs money only; Roster Capacity is a separate gate a Bid must also pass (FR-37), and an unbounded Maximum Bid does not exempt a Bid from it.**
@@ -729,6 +742,119 @@ Commissioner can pause and resume the entire auction.
 - Pause and resume are announced to all Managers and posted to Discord.
 - `[ASSUMPTION: pause included as the escape hatch for outages and disputes even though the league runs clocks 24/7 by rule. It is an administrative tool, not a scheduled freeze.]`
 
+#### FR-41: Record a Roster Move
+
+*(Numbered after FR-40 because it was added on 2026-09-10, when the commissioner recorded that managers trade during the auction. It belongs to this feature: it is a Commissioner control, and it is the first one that changes the world rather than the auction's reading of it.)*
+
+Commissioner can record that one or more Contracts have changed hands between two Teams, in one act, and the system recomputes both Teams' positions from it.
+
+**Consequences (testable):**
+
+*What moves*
+- A Roster Move names **two Teams** and moves Contracts **in both directions in one act**. This is not a convenience: a trade sending three Players for two is a single event, and applying its halves in sequence would transiently push the receiving Team over a ceiling it never actually breaches — refusing a legal trade on a state that never existed.
+- **Either direction may be empty.** A salary dump is a Roster Move; the requirement is that a Move is one act, not that it is balanced.
+- **Existing Contracts and Auction Contracts may both move.** A Move may mix them freely; the two are distinguishable in the record but not in what the Commissioner may do with them.
+- A Contract travels **unchanged in value and in years**. A Roster Move is not a restructure, an extension, or a buyout, and no control on it edits an amount.
+- **Nothing else moves.** A Move never transfers Committed Bids, a Minimum-Bid Contention entry, a Nomination Slot, or Cap Space. A Move naming any of them is refused, not silently narrowed.
+- **Only a settled Contract moves.** A Move names a Player who is currently the subject of a **settled Contract** — Existing or Auction. A Player **contested in an open Auction is not eligible**, because he is neither kind yet: no Team holds him, and the Contract that would receive the transfer does not exist until that Auction closes. This is a **third refusal ground alongside the money and slots gates**, checked first, because the other two are meaningless for a Player nobody holds. The refusal is returned by the rules core, not left to the admin screen to filter.
+
+*Placement and Cap Hit*
+- **Slot Placement is re-evaluated for every moved Player against the receiving Team's occupancy** at the instant of the Move, under FR-21's ordinary rule: a Minor League Eligible Player takes a Free Minor League Slot if one exists, and an Active/Bench Slot otherwise.
+- **Cap Hit follows placement** (FR-35, and the winning-amount/Cap-Hit distinction of FR-21). A Player stashed at a $0 Cap Hit who lands in an Active/Bench Slot charges his **full amount** there. His winning amount is untouched, and no expression reads one from the other.
+- The reason sheet states this consequence **in words, before commit**, wherever a moved Player's Cap Hit changes. A Cap Hit rising from $0 to $14,000,000 by the act of moving is the least obvious thing in this requirement.
+- The sending Team's freed Minor League Slot raises its **M**, which recomputes **Minors Exposure** across every eligible Auction it still leads — so a Move can change a third Auction's Maximum Bid for a Team that was not party to it.
+
+*The refusal*
+- After the **whole** Move is applied — both directions, every Player — **both** Teams are re-evaluated against the money gate (FR-13) on every Auction they lead and the slots gate (FR-37). **If either Team fails either gate, the entire Move is refused** and nothing is written.
+- The Move is also refused if it would breach a slot ceiling on either side: more than 12 Active/Bench, more than 2 Injury Reserve, or more than 3 Minor League Players — the same ceilings FR-1 holds on import.
+- **A refusal can be caused by the sending Team, not only the receiving one.** Sending a Player away raises Available Cap Space by his Cap Hit but raises Roster Reserve by $1,000,000, so a Team that sends away a Player cheaper than $1,000,000 while leading an Auction at exactly its Maximum Bid is pushed over it. This is not an edge case to be discovered in production.
+- The refusal **names what must clear first** — the Team, the gate, the Auction, and the arithmetic — so the Commissioner can void a Bid or wait for a Close and retry. It never offers to cancel a Bid. **Cancellation is triggered only by an Auction Close (FR-40), and a Roster Move does not extend that list.**
+- The same re-evaluation governs a **Drop** under FR-43.
+
+*Phase and the Year Allotment*
+- Permitted during the **Auction Phase** and the **Contract Assignment Phase**; refused once **Archived**, like every other override.
+- Moving an Auction Contract that already carries an assigned contract length **clears that length**. The year returns to the sending Team's Year Allotment and the receiving Team assigns from its own under FR-28. The receiving Team can always satisfy this, because 1-year deals are unlimited.
+- A cleared length re-blocks the export under FR-30 until it is reassigned, and that is the intended behaviour rather than a side effect.
+
+*The record*
+- Every Move requires a free-text **reason** before it commits, like every override under FR-32.
+- The Move is written to the Audit Log with actor, timestamp, **before-state and after-state for both Teams** — Cap Space, Roster Count, and occupancy of all three Slot kinds — and the reason. One entry, not two.
+- **A Roster Move is not broadcast to Discord**, and is the only Commissioner act that is not. It is recorded in the league-visible Audit Log (FR-33), where it is filterable by Team like any other entry. `[ASSUMPTION: the commissioner chose audit-log-only on 2026-09-10. The accepted cost is that a Manager can see a rival's Cap Space and Maximum Bid change with no announcement explaining why, and must open the Log to learn the cause.]`
+
+*Atomicity*
+- A Move is **one transaction under the global write lock** (§5 concurrency), so it cannot interleave with an Auction Close. Either the whole Move lands or none of it does; a Move that moved three Players of five is never a reachable state.
+
+#### FR-42: Detect a Roster Divergence from Fantrax
+
+*(Numbered after FR-41, added the same day. It is the reconciliation half of FR-41 and unreadable apart from it.)*
+
+The system periodically reads Team membership from Fantrax and raises any difference from its own rosters to the Commissioner as a proposed Roster Move or Drop.
+
+**This requirement is contingent.** It depends on an undocumented Fantrax endpoint that has not been exercised against the BBSL league. **If the endpoint does not answer, or does not carry usable Team membership, FR-42 is dropped and FR-41 stands alone** — the Commissioner records Moves by hand and loses only the detection. Nothing else in the product depends on it.
+
+**Consequences (testable):**
+
+*The read*
+- The system reads `getTeamRosters` for the League **at most once per hour**, not on every tick. A Bid is time-critical to the second; a trade is not, and polling an undocumented third-party endpoint every minute for three weeks invites a rate limit or a block on the one integration that cannot be renegotiated.
+- **The read is never trusted for money.** Fantrax returns no salary, no contract value and no contract years on this endpoint, and the app does not want them: it already holds every moved Contract's Cap Hit and years from the FR-1 import, and a Contract travels unchanged under FR-41. **Membership is the only fact taken from Fantrax.**
+- Where Fantrax reports a Roster Slot kind, it is carried into the proposal as **advisory** and shown for confirmation. Where it does not, the Commissioner sets it. The requirement holds either way.
+- **A read never changes app state.** No projection, no reference table and no event is written by the reading of Fantrax. The only thing a read can produce is a proposal.
+
+*What is compared*
+- The comparison **excludes every Player won in this auction.** Auction Contracts do not exist in Fantrax until the FR-30 export is uploaded, so including them would report every win as a departure.
+- A divergence is classified as one of three kinds:
+  - **Paired** — a Player the app holds on Team A appears on Team B, and the reverse or a matching set exists. Raised as a **proposed Roster Move** (FR-41), pre-filled with both Teams, every affected Player, and the resulting before → after figures. The Commissioner confirms with a reason, or dismisses.
+  - **Unpaired departure** — a Player the app holds is on no Fantrax roster. This is a **Drop**, and it is raised as a proposed Drop under FR-43. It is a distinct act from a Move: one Team, one direction, and no cap relief except in the 2RK case FR-43 defines.
+  - **Unknown arrival** — a Player on a Fantrax roster whom the app does not hold and who is not in its Free Agent pool. **Reported as an error, prominently.** Every acquisition during the auction window goes through the auction itself, so this cannot legitimately occur; it signals a mis-set league id, a wrong period, or a genuine out-of-band change. It is surfaced as a fault rather than listed as a state needing a remedy, and the app never invents a Contract it has no Cap Hit for.
+
+*Behaviour*
+- A dismissed divergence is **suppressed until the underlying difference changes**, so a Move or Drop recorded in the app before it is executed in Fantrax — or the reverse — does not re-raise the same notice every hour.
+- Once recorded, the corresponding divergence resolves on the next read with no further action.
+- Divergences appear on the Commissioner's operational surface only. A divergence is an unconfirmed reading of a third-party system, and is not league-visible until it becomes a Move or a Drop.
+
+*Failure*
+- A Fantrax read that fails — unreachable, unauthorised, rate-limited, malformed, or shaped differently than expected — **never blocks or reverses any auction action**, exactly as a Discord delivery failure does not (FR-26). It is logged and surfaced to the Commissioner.
+- **Repeated failure degrades to FR-41 alone** and says so plainly on the Commissioner's surface, rather than presenting a silent all-clear. An integration that has stopped answering must not read as "no trades have happened."
+
+#### FR-43: Record a Drop, and carry Dead Money
+
+*(Numbered after FR-42, added the same day. It exists because FR-42 can detect a Drop, and a Drop the app records wrongly is worse than one it does not record.)*
+
+Commissioner can record that a Team has dropped a Player, and the system carries the released Contract's Cap Hit as Dead Money.
+
+**Consequences (testable):**
+
+*The governing rule*
+- A Drop names **one Team** and one or more Players. Unlike a Roster Move it has one direction and no counterparty.
+- **A Drop converts the Player's *charged* Cap Hit into Dead Money, at the same amount** — not the amount his Contract states. All three Slot kinds fall out of this one rule and none is a special case:
+
+| dropped from | was charging | Dead Money carried | Roster Count | net effect on Maximum Bid |
+|---|---|---|---|---|
+| Active/Bench | full | full | **falls** | **lower**, by the $1,000,000 reserve on the freed hole |
+| Injury Reserve | full | full | unchanged | unchanged |
+| Minor League | **$0** | **none — the row is removed** | unchanged | **higher**, via Minors Exposure |
+
+- **A Drop from Active/Bench lowers the Team's Maximum Bid.** Roster Reserve rises $1,000,000 for the freed hole with no offsetting release. The reason sheet states this before commit, because every manager's intuition says the opposite.
+- **A Drop from a Minor League Slot moves it the other way.** He was charging $0, so nothing is carried and Cap Space is unchanged — but the freed Slot raises **M**, lowering Overflow Count and recomputing **Minors Exposure** across every eligible Auction the Team still leads, which releases committed capital. Roster Count is untouched, because Minor League Players never counted toward the 12.
+- Dead Money charges for the remaining term of the Contract as established at import. **Within this auction that term computes nothing** — the charge is simply the charge — and the years are carried for the export only. Future-year cap projection stays out of scope (§6).
+
+*The one exception*
+- A **second-round rookie Contract from the current draft class** clears entirely: the Contract is **removed**, not reclassified, and its Cap Hit is released to the Team's Cap Space.
+- It is identified by **both** the `2RK` designation and a **full remaining term** — no year elapsed — which is what "drafted this year" means in data the app already holds. The second-round term is **5 years and invariant across every 2RK deal**, which is what makes the term test sound and removes any need for a per-offseason constant.
+- First-round (`1RK`) and every other Contract become Dead Money like any other.
+- **The designation must survive the import to be usable.** It does not today: the adapter's `CONTRACT_END_YEAR` pattern matches the `NRK` prefix in a non-capturing group and discards it, so `2RK31` and `2031` are currently indistinguishable. This requirement is unimplementable until that is corrected.
+
+*Visibility*
+- Dead Money is shown on the Team view (FR-25) and the Teams index (FR-39), **labelled and separate from the roster**, so a Manager can reconcile a Team's Cap Space against the players visibly on it. An unexplained gap between the two is precisely the arithmetic-doubt this product exists to remove.
+- Dead Money counts toward **no** slot ceiling and is never a Slot Placement destination.
+
+*Boundaries and the record*
+- A Drop is re-evaluated against both gates exactly as FR-41 requires, and **refused** if it leaves the Team failing one — naming the Auction.
+- **The import does not accept Dead Money in v1** (FR-1). No Team carries any today, and the shape Fantrax exports it in has never been seen. An unrecognised `Status` already refuses the file at content altitude, so this fails loudly on a future setup day rather than silently.
+- Dead Money is **excluded from both exports** (FR-30, FR-31). The Drop happened in Fantrax, which already carries its own accounting for it; exporting it back would double it.
+- Permitted during the Auction Phase and Contract Assignment Phase; refused once Archived.
+- Recorded in the Audit Log with actor, timestamp, before/after and reason, and **not broadcast to Discord**, consistent with FR-41.
+
 ## 5. Cross-Cutting NFRs
 
 - **Rule correctness is the product.** Every bid-validity, clock, and cap computation must be deterministic and covered by automated tests, with the §10 worked examples as executable cases. A rules bug is a worse failure than an outage.
@@ -748,9 +874,9 @@ Commissioner can pause and resume the entire auction.
 - **Not a Fantrax replacement.** Scoring, lineups, trades, waivers, and in-season roster management stay in Fantrax. This app is live for one offseason phase per year.
 - **Not enforcing activation.** Promoting a stashed player out of a Minor League Slot requires the team to absorb his full contract against the cap. That rule is what makes FR-35's unbounded bidding self-correcting, and it is enforced by Fantrax in-season. This app never models it, never warns about it, and never blocks a bid on account of it.
 - **Not multi-tenant.** One league, hard-wired rules. No league creation, no rule configuration UI, no other sports.
-- **Not writing to Fantrax.** v1 never mutates Fantrax state; the Commissioner uploads the export by hand.
+- **Not writing to Fantrax.** v1 never mutates Fantrax state; the Commissioner uploads the export by hand and executes any trade there by hand. This is a property of the integration and not only a preference — **Fantrax exposes no write endpoint at all.** *(Verified 2026-09-10: every method documented by both community wrappers is a GET; `fantrax.com/developer` remains gated.)* v1 **does** now read from Fantrax on one undocumented endpoint, for reconciliation only (FR-42). A read can raise a divergence for the Commissioner to act on; it can never itself change app state.
 - **Not a draft tool.** No rookie draft, no draft pick trading, no draft board.
-- **Not a trade machine.** No trades during the auction; committed capital and won players cannot be exchanged.
+- **Not a trade broker.** The app hosts no proposal, no negotiation, and no acceptance flow. A trade is agreed in Discord and executed in Fantrax by the Commissioner; the app records the resulting roster state under FR-41 and nothing more. **Committed capital is never exchanged** — a leading Bid and a Minimum-Bid Contention entry cannot move between Teams, and FR-15 stands unaltered. **Cap dollars are not a tradeable asset either:** FR-32's Cap Space adjustment exists to correct a wrong imported figure, and settling a trade through it would record the act as something it is not.
 - **Not a valuation engine.** No projections, rankings, ADP, or "suggested bid." The app enforces rules; it does not advise.
 - **Not a chat app.** Discussion stays in Discord. The app posts to Discord; it does not host conversation.
 - **No public/spectator access.** Authentication required for everything.
@@ -785,18 +911,20 @@ Commissioner can pause and resume the entire auction.
 
 **Primary**
 - **SM-1: Zero disputed outcomes.** No auction result is contested on grounds that the app computed a cap figure, clock, increment, or lottery draw incorrectly. Validates FR-11 – FR-22.
-- **SM-2: The commissioner plays their own league.** Commissioner time spent adjudicating the auction drops from hours to effectively zero — measured by Commissioner override count, targeting fewer than 5 overrides across the whole auction, none of them correcting an app error. Validates FR-1 – FR-3, FR-30, FR-32.
+- **SM-2: The commissioner plays their own league.** Commissioner time spent adjudicating the auction drops from hours to effectively zero — measured by **corrective** override count (FR-32), targeting fewer than 5 across the whole auction, none of them correcting an app error. **Roster Moves and Drops (FR-41, FR-43) are excluded from this count.** They record what the league did, not what the app got wrong; an offseason with a dozen trades is a busy league, not a failing product, and a metric that cannot tell those apart would pressure the Commissioner not to record them. Validates FR-1 – FR-3, FR-30, FR-32.
 - **SM-3: Nobody loses a player to inattention they weren't warned about.** Every outbid manager received a notification before the auction closed against them. Target: 100%. Validates FR-26, FR-27.
 
 **Secondary**
 - **SM-4: Mobile is the primary surface.** A majority of bids are placed from a phone — evidence the one-handed flow actually works. Validates FR-23, FR-24.
 - **SM-5: The auction completes without manual intervention.** Auction Phase ends by League Clock expiry, contract assignment completes, and export succeeds first-try with no cap or roster violations. Validates FR-22, FR-28 – FR-30.
 - **SM-6: Managers use the audit trail.** The Audit Log and randomizer seeds get looked at at least once by someone other than the Commissioner — evidence that verifiable fairness is real rather than decorative. Validates FR-20, FR-33.
+- **SM-7: The app's rosters stay true to the league of record.** No Manager discovers a wrong cap or roster figure caused by a trade or drop the app was never told about. Target: zero. Read alongside the count of divergences FR-42 raised that the Commissioner had **not** already recorded — which is the evidence the detector earns its place rather than duplicating a manual habit. Validates FR-41 – FR-43.
 
 **Counter-metrics (do not optimize)**
 - **SM-C1: Total bid volume.** More bidding is not better. A UI that nudges managers toward bidding — countdown urgency, one-tap raises without confirmation, suggested amounts — would raise this while degrading the auction. Counterbalances SM-4.
 - **SM-C2: Auction duration.** Do not optimize for a faster auction. The 24h and 48h clocks exist to give people time to think; shortening the effective auction would look like efficiency and feel like pressure. Counterbalances SM-5.
 - **SM-C3: Commissioner override count driven to zero by removing the tool.** SM-2 targets few overrides because few are *needed* — not because the escape hatch was made hard to reach. Counterbalances SM-2.
+- **SM-C4: Divergence count driven to zero by not looking.** A detector that has silently stopped answering reports no divergences, which is indistinguishable from a league that had none — and is the more dangerous state, because it displaces the manual check it exists to support. SM-7's zero is only meaningful beside a *live* FR-42; a stale one invalidates the metric rather than satisfying it. Counterbalances SM-7.
 
 ## 9. Risks and Mitigations
 
@@ -859,6 +987,17 @@ Commissioner can pause and resume the entire auction.
 34. **Unlimited lotteries, and the one win that ends them.** Team X has Roster Count 11 (Free Active/Bench Slots 1), no free Minor League Slots, and $9,000,000 of Available Cap Space. It joins six Minimum-Bid Contentions on non-eligible players, committing $1,000,000 to each. **Capacity is never consulted:** entries contribute nothing to Projected Active/Bench Additions and do not consume the allowance, so the only question asked of the sixth is whether $6,000,000 fits in $9,000,000. A seventh, eighth and ninth would also be permitted; a **tenth is refused on money** at $10,000,000 against $9,000,000 — cap space is the throttle, and the only one. Three of the six expire in the same sweep. The first is drawn and **Team X wins**: Roster Count 12, Free Active/Bench Slots 0. Before the second is drawn, the cascade cancels Team X's five remaining entries most-recent-first, releasing $5,000,000. The second lottery is therefore drawn from a Contender list that **does not include Team X**, and its recorded list contains exactly the teams that were eligible to win it. One of the five had Team X as its **only** Contender: it closes with no winner and that player returns to the pool. The sequential close ordering is what makes this safe — folding all three draws against one snapshot would have let Team X win two of them.
 35. **The trigger is a free slot, not a roster count.** Team Y has Roster Count 12 (Free Active/Bench Slots 0) and one Free Minor League Slot. It is a Contender in three Minimum-Bid Contentions on **Minor League Eligible** players. All three entries are permitted under FR-18's `M ≥ 1` branch despite the Team having no Active/Bench room, and each is an Eligible Leading Bid of $1,000,000 feeding Overflow Count on the money side. The first is drawn and **Team Y wins**: he takes the last Minor League Slot at a $0 Cap Hit, **Roster Count stays 12**, and `M` falls to 0. The close still fires the cascade, because it reduced a free slot — and Team Y's two remaining entries now have neither an Active/Bench slot nor a minors slot to land in, so **both are cancelled** before their lotteries draw. Had the trigger been written as *"a close that increases Roster Count"*, it would not have fired here at all: both remaining lotteries could have been won, each overflowing into Active/Bench, and Team Y would have finished the auction at **Roster Count 14**.
 
+*Added 2026-09-10 with Roster Moves (FR-41), Roster Divergence (FR-42) and Dead Money (FR-43):*
+
+36. **The trade that clears the room.** Team A has Roster Count 11, Cap Space $3,000,000, and leads nothing. It wants a $12,000,000 free agent and cannot come close. It sends Curry — Active/Bench, Cap Hit $14,000,000, 2 years — to Team B and receives nothing back. **An empty direction is legal:** a salary dump is a Roster Move with Contracts moving one way, and FR-41's bidirectionality permits a side to be empty, not merely to be balanced. Team A afterwards: Roster Count 10, Cap Space $17,000,000; bidding once, Projected Additions 1, Roster Reserve `$1,000,000 × max(0, 12 − 11) = $1,000,000`, **Maximum Bid $16,000,000**. Team B afterwards: Roster Count 9, Cap Space $16,000,000. Both pass both gates, so the Move commits. This is the case the requirement exists for.
+37. **The Team pushed over by giving something away.** Team C has Roster Count 11, Cap Space $6,700,000, and leads one Auction at $6,500,000. Today: Projected Additions 1, Roster Reserve `$1,000,000 × max(0, 12 − 12) = $0`, and it covers its own leading Bid with $200,000 to spare. It now sends away a Player whose Cap Hit is $500,000. Afterwards Cap Space is $7,200,000 — but Roster Count is 10, so Roster Reserve becomes `$1,000,000 × max(0, 12 − 11) = $1,000,000`, and `$7,200,000 − $6,500,000 − $1,000,000 = −$300,000`. **The Move is refused**, naming the Auction Team C leads and the $300,000 shortfall. Read what happened: Team C got $500,000 *richer* and became unable to afford a Bid it was already winning, because the freed Slot costs $1,000,000 to reserve. **A Roster Move can be refused because of the Team giving players up.** Team C's remedies are to wait for that Auction to close or to void the Bid under FR-32 — never for the Move to cancel it, since cancellation is triggered only by a Close (FR-40).
+38. **The stash that becomes expensive by moving.** Team D holds Ellis, Minor League Eligible, won at $18,000,000 and placed in a Minor League Slot at a **$0 Cap Hit**. It trades him to Team E, which already holds three Minor League Players and has no Free Minor League Slot. Slot Placement is re-evaluated on receipt (FR-41): Ellis lands in an **Active/Bench Slot**, and his Cap Hit becomes **$18,000,000**. His winning amount never changed and no expression read one from the other (FR-21, AD-23). Team E, at Roster Count 9 with $20,000,000 of Cap Space, finishes at Roster Count 10 and $2,000,000 — and is refused outright if it leads anything it can no longer cover. **The knock-on runs the other way too:** Team D's Free Minor League Slots rises from 0 to 1, its Overflow Count falls, and its **Minors Exposure recomputes across every eligible Auction it still leads** — so a trade can raise a third Auction's Maximum Bid for a Team that was not party to it.
+39. **One act, evaluated once.** Team F is at Roster Count 12 and Team G at 10. They agree a trade: F sends three Active/Bench Players and receives two. F finishes at `12 − 3 + 2 = 11` and G at `10 − 2 + 3 = 11`; both are legal and neither breaches a ceiling. Applied as two acts in the unlucky order — F receives its two first — F stands transiently at **14** Active/Bench Players and the ceiling refuses a perfectly legal trade **on a state that never existed**. This is why FR-41 makes a Move one act with one evaluation at the end, and it is not a convenience.
+40. **A Drop lowers the Maximum Bid.** Team H has Roster Count 10, Cap Space $5,000,000, and leads nothing; bidding once, Roster Reserve is `$1,000,000 × max(0, 12 − 11) = $1,000,000` and **Maximum Bid is $4,000,000**. It drops a Player whose Cap Hit is $2,000,000. Afterwards: Roster Count 9, and Cap Space **still $5,000,000** — the $2,000,000 is now Dead Money and charges exactly as it did before (FR-43). Roster Reserve becomes `$1,000,000 × max(0, 12 − 10) = $2,000,000`, so **Maximum Bid falls to $3,000,000**. The Team gained a Roster Slot, released no money, and lost $1,000,000 of bidding power. Every manager's intuition says a drop frees cap; in this league it does the opposite, which is why FR-43 requires the reason sheet to say so before the act commits.
+41. **The three characters worth $2,000,000.** Identical to example 40 in every figure, except that the dropped Player's `Contract` cell reads **`2RK31`** against a 2026 import — a second-round rookie deal with its full five-year term unelapsed, and therefore this year's draft class. His Cap Hit **clears** (FR-43): Cap Space rises to $7,000,000, no Dead Money is carried, Roster Reserve is $2,000,000 as before, and **Maximum Bid is $5,000,000** rather than $3,000,000. The same Player, the same amount, the same act, and a $2,000,000 difference decided entirely by a prefix the importer currently **discards** (`CONTRACT_END_YEAR` matches `NRK` in a non-capturing group). Until that prefix is captured, examples 40 and 41 are the same example and the app computes one of them wrongly.
+42. **A won Player traded after the Auction Phase.** Team J won Powell at $9,000,000 and assigned him a **3-year** length, spending its single 3-year allotment. During the Contract Assignment Phase it trades Powell to Team K. The assigned length is **cleared** (FR-41): Team J's 3-year returns to its Year Allotment, and Powell arrives on Team K unassigned. FR-30 blocks the export until every Auction Contract carries a length, so the export is blocked again — correctly, and it heals itself the moment Team K assigns. Team K has already spent its 4-year and 3-year, so it assigns a 1-year, which is always available because 1-year deals are unlimited. **A receiving Team can therefore never be trapped**, which is why FR-41 clears the length rather than refusing the Move.
+43. **A stashed Drop moves the Maximum Bid the other way.** Team L holds two of its three Minor League Slots (`M = 1`), has Roster Count 10 and Cap Space $20,000,000, and leads two eligible Auctions at $12,000,000 and $4,000,000. `N = 2, M = 1`, so Overflow Count is 1 and **Minors Exposure is $12,000,000** — the larger of the two — leaving Available Cap Space of $8,000,000. It now drops one of the stashed Players. He was charging **$0**, so **no Dead Money is carried and Cap Space is unchanged** at $20,000,000; the row is simply removed. But `M` rises to 2, `N = 2 ≤ M = 2`, Overflow Count falls to **0**, and **Minors Exposure falls to $0** — Available Cap Space rises to $20,000,000. Roster Count never moves, because Minor League Players never counted toward the 12, so Roster Reserve is untouched. **This is the mirror of example 40**, and the pair is what stops "a Drop lowers Maximum Bid" being implemented as an unconditional rule: the effect is derived from the Cap Hit the Player was *charging*, not applied as a flat adjustment.
+
 ## 11. Open Questions
 
 **All resolved by the commissioner on 2026-08-17.** None remain open. Retained with their answers so the reasoning behind each rule is traceable.
@@ -890,6 +1029,16 @@ Commissioner can pause and resume the entire auction.
 
 - **§3 Glossary / FR-39 — League Median is the lower of the two middle values, not their mean.** `[ASSUMPTION]` The commissioner asked for a median and did not specify the even-count rule. The conventional definition can produce a figure at $250,000 granularity, which falls off the $500,000 grid and is therefore not losslessly renderable at one decimal — and the losslessness of that rendering is what permits abbreviated money everywhere in the product, including in refusal arithmetic that must visibly sum. The lower middle value is always a real Team's figure and always on the grid. The alternatives were rejected as worse: rounding the mean to the grid publishes a number no Team holds and that no manager can reproduce, and rendering the median at two decimals would make it the only money figure in the app with its own format. §10 example 28 makes this executable. **Confirm if you would rather see the true mean-of-two-middles and accept a second money format for it.**
 - **§4.6 / FR-25 — every Team figure is public.** *(Decided by the commissioner, 2026-08-18.)* The previous own-team-only reservation on Free Minor League Slots and Minors Exposure was removed rather than extended, on the grounds that both were already derivable from published figures and FR-39 makes the derivation trivial. Recorded here because it is a deliberate widening of what rivals can see, not an oversight — a manager can now read another Team's exposure directly instead of computing it.
+
+*Added 2026-09-10 with FR-41 – FR-43:*
+
+- **§4.10 / FR-41 — a Roster Move is not broadcast to Discord.** `[ASSUMPTION]` The commissioner chose audit-log-only on 2026-09-10. This makes a Roster Move the **one Commissioner act the league is not told about**, in a product whose thesis is that nobody should have to wonder whether the app got it right. The accepted cost is that a Manager sees a rival's Cap Space and Maximum Bid change with no announcement, and must open the Audit Log (FR-33, filterable by Team) to learn why. **Confirm after the moderator pilot** — the failure to watch for is a manager reading an unexplained figure change as an app defect. **This is the one live inference introduced by the 2026-09-10 amendment.**
+
+*Raised and answered the same day, 2026-09-10, retained for provenance:*
+
+- **§4.10 / FR-43 — the second-round rookie term is 5 years, invariant.** Derived from the commissioner's own example, `2RK31` against a 2026 import, and **confirmed by the league** the same day: every 2RK deal is the same length. That invariance is what makes "full term unelapsed" a sound test for "drafted this year", and it removes any need for a per-offseason constant. §10 examples 40 and 41 make it executable, and differ by $2,000,000 on exactly this question.
+- **§4.10 / FR-43 — dropping a Minor League Slot player yields no Dead Money.** Initially specified as *refused in v1*, on the reasoning that a stashed Player's $0 Cap Hit comes from placement (FR-35) rather than from his Contract, so the app had not been told whether dropping him produced $0 or his full amount. **Confirmed by the league:** it produces nothing, because Dead Money carries the amount the Player was *charging*. The refusal was withdrawn, and the answer collapsed three special cases into one rule covering all three Slot kinds. §10 example 43 is that case.
+- **§4.10 / FR-42 — an unknown arrival cannot legitimately occur.** A Player appearing on a Fantrax roster whom the app has never seen was initially specified as reported-with-no-remedy, since the app knows his identity and no Cap Hit for him. **Confirmed by the league:** every acquisition during the auction window goes through the auction itself, so such an arrival is an **error** — a mis-set league id, a wrong period, or a genuine out-of-band change — and is surfaced as a fault rather than as a state needing a mechanism. Found while specifying FR-42; not raised by the commissioner.
 
 *Resolved during finalize, retained for provenance:*
 
