@@ -68,13 +68,21 @@ const TEAMS = Object.freeze([
 	['MIN', 'Minnesota Timberwolves'],
 	['NOP', 'New Orleans Pelicans'],
 	['NYK', 'New York Knicks'],
-	['OKC', 'Oklahoma City Thunder'],
 	['ORL', 'Orlando Magic'],
 	['PHI', 'Philadelphia 76ers'],
 	['PHX', 'Phoenix Suns'],
 	['POR', 'Portland Trail Blazers'],
 	['SAC', 'Sacramento Kings'],
 	['SAS', 'San Antonio Spurs'],
+	// This league plays SEA, not OKC — "Bring Back the Sonics" is the league's
+	// own name. Seeding the standard NBA thirty put an Oklahoma City Thunder row
+	// here on 2026-09-06, and because `resolveTeamByFileName` matches a renamed
+	// file to whatever Team bears that name, nine of thirty rosters imported
+	// against the wrong Team and nothing detected it. SEA sorts after SAS by
+	// abbreviation and after San Antonio by FULL NAME — the second of those is
+	// what any download-ordering scheme has to use, and getting it wrong is
+	// exactly how the first import shifted.
+	['SEA', 'Seattle SuperSonics'],
 	['TOR', 'Toronto Raptors'],
 	['UTA', 'Utah Jazz'],
 	['WAS', 'Washington Wizards']
