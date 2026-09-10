@@ -90,7 +90,14 @@ describe('parseRosterCsv — the real export shape', () => {
 		expect(result.kind).toBe('parsed');
 		if (result.kind !== 'parsed') return;
 		expect(Object.keys(result.rows[0] ?? {}).sort()).toEqual(
-			['capHit', 'contractYearsRemaining', 'fantraxPlayerId', 'playerName', 'rosterSlotKind'].sort()
+			[
+				'capHit',
+				'contractYearsRemaining',
+				'fantraxPlayerId',
+				'playerName',
+				'rookieScaleRound',
+				'rosterSlotKind'
+			].sort()
 		);
 	});
 });
@@ -140,6 +147,91 @@ describe('parseRosterCsv — Contract is an end year, not a count', () => {
 		if (result.kind !== 'refused') return;
 		expect(result.rowNumber).toBe(1);
 	});
+});
+
+/**
+ * The three characters worth $2,000,000 (Story 7.6, FR-43, PRD §10 ex 41).
+ *
+ * `2RK31` and `2031` are the same contract LENGTH and different contracts.
+ * Before the round was captured they produced byte-identical rows, so no test
+ * anywhere in this repository could have told them apart — which is why the
+ * regression is asserted here, at the parse, and not only at the rule that
+ * reads it.
+ */
+describe('parseRosterCsv — the rookie-scale designation survives the parse', () => {
+	/** Five years out, written both ways: `2RK31` and `2031` against 2026. */
+	const FIVE_OUT = String(CURRENT_CONTRACT_YEAR + 5);
+	const FIVE_OUT_SHORT = FIVE_OUT.slice(2);
+
+	it('makes a rookie deal and a plain deal of the same length DISTINGUISHABLE', () => {
+		const rookie = parseRosterCsv(csv(`*P1*,Alice,2000000,Act,2RK${FIVE_OUT_SHORT}`));
+		const plain = parseRosterCsv(csv(`*P1*,Alice,2000000,Act,${FIVE_OUT}`));
+		expect(rookie.kind).toBe('parsed');
+		expect(plain.kind).toBe('parsed');
+		if (rookie.kind !== 'parsed' || plain.kind !== 'parsed') return;
+
+		// Same length — the fact that made the two rows identical.
+		expect(rookie.rows[0]?.contractYearsRemaining).toBe(5);
+		expect(plain.rows[0]?.contractYearsRemaining).toBe(5);
+
+		// ...and now a difference FR-43's exception can read: the round.
+		expect(rookie.rows[0]?.rookieScaleRound).toBe(2);
+		expect(plain.rows[0]?.rookieScaleRound).toBeNull();
+		expect(rookie.rows[0]).not.toEqual(plain.rows[0]);
+	});
+
+	it('carries the round itself, not an is-rookie flag — the exception turns on it being 2', () => {
+		const first = parseRosterCsv(csv(`*P1*,Alice,0,Act,1RK${FIVE_OUT_SHORT}`));
+		expect(first.kind).toBe('parsed');
+		if (first.kind !== 'parsed') return;
+		expect(first.rows[0]?.rookieScaleRound).toBe(1);
+	});
+
+	it('accepts the lowercase spelling on the same terms, as it always did', () => {
+		const result = parseRosterCsv(csv(`*P1*,Alice,0,Act,2rk${FIVE_OUT_SHORT}`));
+		expect(result.kind).toBe('parsed');
+		if (result.kind !== 'parsed') return;
+		expect(result.rows[0]?.rookieScaleRound).toBe(2);
+		expect(result.rows[0]?.contractYearsRemaining).toBe(5);
+	});
+
+	it('still refuses an unrecognised shape, naming the row and the raw cell', () => {
+		// Capturing the round widened what the regex HANDS BACK, never what it
+		// accepts. `20X1` is not a year and not a rookie code, and the refusal
+		// is a returned value rather than a throw.
+		const result = parseRosterCsv(csv('*P1*,Alice,0,Act,20X1'));
+		expect(result.kind).toBe('refused');
+		if (result.kind !== 'refused') return;
+		expect(result.rowNumber).toBe(1);
+		expect(result.detail).toContain(ROSTER_COLUMNS.contractYearsRemaining);
+		expect(result.detail).toContain('20X1');
+	});
+
+	it('refuses a two-digit round, and a rookie code with no year at all', () => {
+		expect(parseRosterCsv(csv(`*P1*,Alice,0,Act,12RK${FIVE_OUT_SHORT}`)).kind).toBe('refused');
+		expect(parseRosterCsv(csv('*P1*,Alice,0,Act,2RK')).kind).toBe('refused');
+	});
+});
+
+/**
+ * Dead Money is NOT importable in v1 (Story 7.6). It is produced by a
+ * Commissioner Drop inside this product and never read off an export, so
+ * nothing was added to `ROSTER_SLOT_ALIASES` — an unrecognised Status refuses
+ * the row and names it, exactly as it did before the fourth slot kind existed.
+ * `import_staged_rosters`'s own three-value check constraint is the backstop
+ * underneath this refusal.
+ */
+describe('parseRosterCsv — Dead Money is not importable', () => {
+	for (const status of ['Dead Money', 'dead_money', 'DM', 'Dead']) {
+		it(`refuses a Status of "${status}", naming the row and the cell`, () => {
+			const result = parseRosterCsv(csv(`*P1*,Alice,2000000,${status},${TWO_YEARS_OUT}`));
+			expect(result.kind).toBe('refused');
+			if (result.kind !== 'refused') return;
+			expect(result.rowNumber).toBe(1);
+			expect(result.detail).toContain(ROSTER_COLUMNS.rosterSlot);
+			expect(result.detail).toContain(status);
+		});
+	}
 });
 
 describe('parseRosterCsv — file-shape refusals (rowNumber 0)', () => {

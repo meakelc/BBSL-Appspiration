@@ -23,7 +23,9 @@
  *      are stripped here, at the boundary, which is where format lives.
  *   4. **`Contract` is not a count of years.** It holds a contract *end year*
  *      (`2028`) or a rookie-scale code (`2RK29`). `contractYearsRemaining` is
- *      derived from it against `CURRENT_CONTRACT_YEAR` below.
+ *      derived from it against `CURRENT_CONTRACT_YEAR` below, and the rookie
+ *      code's leading DRAFT ROUND is carried out as `rookieScaleRound` —
+ *      `2RK31` and `2031` mean the same length and different things (FR-43).
  *
  * Rows join on the stable Fantrax player id, never on name (AD-24) — nothing
  * here reads a name for matching, only for display. The id is asterisk-wrapped
@@ -111,26 +113,58 @@ const ROSTER_SLOT_ALIASES: Readonly<Record<string, RosterSlotKind>> = Object.fre
 });
 
 /**
- * A contract end year (`2028`) or a rookie-scale code carrying a two-digit
- * end year (`2RK29`, `1RK30`). Nothing else is accepted: an unrecognised
- * shape refuses the row rather than guessing a length.
+ * A contract end year (`2028`) or a rookie-scale code carrying a draft round
+ * and a two-digit end year (`2RK29`, `1RK30`). Nothing else is accepted: an
+ * unrecognised shape refuses the row rather than guessing a length.
+ *
+ * **The round is CAPTURED, and that is the whole of Story 7.6's parse
+ * change.** It used to be matched in a non-capturing group and thrown away,
+ * which made `2RK31` and `2031` produce byte-identical rows against a 2026
+ * import — both five years remaining, and nothing else to tell them apart.
+ * FR-43's exception turns on exactly the digit that was discarded: released
+ * with its full term unelapsed, a SECOND-round rookie deal carries no Dead
+ * Money while the plain contract carries all of it (PRD §10 examples 40 and
+ * 41). The shapes the regex accepts and refuses are unchanged; only what it
+ * hands back is wider.
+ *
+ * The prefix is a DIGIT plus `RK`, not the literal `NRK` that `AR-43` and
+ * `prd.md:854` name — `N` was standing for the round all along.
  */
-const CONTRACT_END_YEAR = /^(?:\d(?:RK|rk))?(\d{2}|\d{4})$/;
+const CONTRACT_END_YEAR = /^(?:(\d)(?:RK|rk))?(\d{2}|\d{4})$/;
 
 /**
- * Resolve a `Contract` cell to a whole number of years remaining, or `null`
- * if the cell is not a shape this adapter recognises.
+ * What a `Contract` cell states, once parsed: a whole number of years
+ * remaining, and the draft round if the cell was a rookie-scale code.
+ *
+ * `rookieScaleRound` is `null` for an ordinary end-year cell. It is the round
+ * itself rather than an is-rookie flag because FR-43's exception is about the
+ * round being **2**, and a boolean would throw away the fact the exception
+ * reads.
+ */
+type ParsedContractCell = {
+	readonly contractYearsRemaining: number;
+	readonly rookieScaleRound: number | null;
+};
+
+/**
+ * Resolve a `Contract` cell, or `null` if the cell is not a shape this
+ * adapter recognises.
  *
  * A two-digit year is read as 2000-relative, which is safe for the lifetime
  * of a basketball contract and unambiguous for every value Fantrax emits.
  */
-function contractYearsRemainingFrom(raw: string): number | null {
+function contractCellFrom(raw: string): ParsedContractCell | null {
 	const match = CONTRACT_END_YEAR.exec(raw);
 	if (match === null) return null;
-	const digits = match[1] ?? '';
+	const round = match[1];
+	const digits = match[2] ?? '';
 	const endYear = digits.length === 2 ? 2000 + Number(digits) : Number(digits);
 	const remaining = endYear - CURRENT_CONTRACT_YEAR;
-	return remaining < 0 ? null : remaining;
+	if (remaining < 0) return null;
+	return {
+		contractYearsRemaining: remaining,
+		rookieScaleRound: round === undefined ? null : Number(round)
+	};
 }
 
 /**
@@ -301,8 +335,8 @@ export function parseRosterCsv(csvText: string): RosterParseResult {
 		// A cell that is neither a recognised year shape nor already expired
 		// refuses the row and names the cell, rather than being coerced into a
 		// length nobody chose.
-		const contractYearsRemaining = contractYearsRemainingFrom(rawYears);
-		if (contractYearsRemaining === null) {
+		const contract = contractCellFrom(rawYears);
+		if (contract === null) {
 			return refuse(
 				rowNumber,
 				`${ROSTER_COLUMNS.contractYearsRemaining} "${rawYears}" is not a contract end year (e.g. "2028") or a rookie-scale code (e.g. "2RK29") ending in or after ${String(CURRENT_CONTRACT_YEAR)}.`
@@ -321,7 +355,12 @@ export function parseRosterCsv(csvText: string): RosterParseResult {
 			playerName,
 			capHit,
 			rosterSlotKind,
-			contractYearsRemaining
+			contractYearsRemaining: contract.contractYearsRemaining,
+			// `null` for an ordinary contract, and the DRAFT ROUND for a
+			// rookie-scale code — the three characters FR-43's exception
+			// turns on, carried into the domain as structured data rather
+			// than left in a string only this adapter can read (AD-24).
+			rookieScaleRound: contract.rookieScaleRound
 		});
 	}
 

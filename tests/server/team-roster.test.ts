@@ -149,6 +149,31 @@ describe('loadTeamRoster — Cap Space, Roster Count and minors occupancy from o
 		});
 	});
 
+	/**
+	 * Dead Money frees a Slot and keeps the money, in ONE change (Story 7.6,
+	 * FR-43, PRD §10 example 40).
+	 *
+	 * `team-roster.ts`'s counting loop is two bare `if`s with no `else`, so a
+	 * `dead_money` row increments neither counter **by silence rather than by
+	 * design** — nothing in it failed to compile when the fourth slot kind
+	 * arrived. This is the test that turns that silence into a statement.
+	 */
+	it('counts Dead Money against the Cap IN FULL and against NEITHER occupancy', async () => {
+		const harness = fakeClient([
+			...Array.from({ length: 11 }, () => row('1000000', 'active_bench')),
+			row('2000000', 'dead_money')
+		]);
+
+		expect(await loadTeamRoster(harness.client, 't-7', INITIAL_CONTRACTS)).toEqual({
+			// Twelve contracts charge, the released one included.
+			capSpace: SALARY_CAP - 13_000_000,
+			// ...but only eleven occupy one of the twelve. The Team gained a
+			// Roster Slot and released no money.
+			rosterCount: 11,
+			minorLeagueOccupied: 0
+		});
+	});
+
 	it('brands the amount at the boundary, whichever shape the driver returns it in', async () => {
 		// The same `int8` arrives as a string through one client and a number
 		// through the other; `parseMoney` is what settles it (AD-8).

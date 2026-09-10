@@ -318,12 +318,113 @@ describe('the viewer’s own Team — Maximum Bid and the Auctions it holds capi
 // --- The roster listing ----------------------------------------------------
 
 describe('the roster listing — grouped by slot kind, IR outside the twelve', () => {
-	it('always renders all three groups, in the declared order', () => {
+	it('always renders every group, in the declared order', () => {
 		const view = viewFor();
 		expect(view.roster.map((group) => group.slotKind)).toEqual([...ROSTER_GROUP_ORDER]);
 		// An absent Minor League group and an empty one say different things,
 		// and only the second is true of a Team holding none.
 		expect(view.roster.every((group) => group.entries.length === 0)).toBe(true);
+	});
+
+	it('carries a dead_money GROUP, last and outside the roster proper (Story 7.6)', () => {
+		// `ROSTER_GROUP_ORDER` is an array rather than a total `Record`, so
+		// adding `dead_money` to `RosterSlotKind` did NOT make this file fail
+		// to compile — a Dead Money row omitted from the order would have
+		// vanished from the Team view while still charging the Cap Space at
+		// the head of the same page (AD-32). This is the test that stands in
+		// for the compiler.
+		expect(ROSTER_GROUP_ORDER).toContain('dead_money');
+		expect(ROSTER_GROUP_ORDER[ROSTER_GROUP_ORDER.length - 1]).toBe('dead_money');
+
+		const view = viewFor({
+			rosterRows: [
+				row({ fantraxPlayerId: 'p-live', playerName: 'Still Here' }),
+				row({
+					fantraxPlayerId: 'p-gone',
+					playerName: 'Released Player',
+					capHit: parseMoney(2_000_000),
+					rosterSlotKind: 'dead_money'
+				})
+			]
+		});
+
+		const group = view.roster.find((candidate) => candidate.slotKind === 'dead_money');
+		expect(group?.label).toBe('Dead Money');
+		expect(group?.entries.map((entry) => entry.playerName)).toEqual(['Released Player']);
+		// Charged in full — the same $2.0M `computeCapSpace` sums, so the
+		// listing and the Cap Space above it reconcile (UX-DR40).
+		expect(group?.entries[0]?.capHitLabel).toBe('$2.0M');
+		// And it says nothing about a placement: no close can produce one.
+		expect(group?.entries[0]?.wonSentence).toBeNull();
+	});
+
+	it('states no placement for a WON row that is Dead Money, even with `won: true` set', () => {
+		// **This is the assertion the `placementOf` narrowing exists for.**
+		// `entryFor` used to read `rosterSlotKind !== 'injury_reserve'` and
+		// then cast to `SlotPlacement` — true of a three-member union, and a
+		// lie the moment `dead_money` joined it. Under that cast this row
+		// would have been handed to `wonCardSentence` as a placement it cannot
+		// express, and the page would have printed a stashed-or-rostered
+		// sentence about a Player the Team no longer holds.
+		//
+		// The row sets `won: true` deliberately: with `won: false` the null
+		// comes from `row.won` and proves nothing about the narrowing. A close
+		// cannot in fact produce Dead Money — `SlotPlacement` is a two-member
+		// union and says so — but a Contract WON at auction can be released
+		// later, and the reclassified row keeps the `won` flag it was created
+		// with.
+		const view = viewFor({
+			rosterRows: [
+				row({
+					fantraxPlayerId: 'p-won-then-gone',
+					playerName: 'Won Then Released',
+					capHit: parseMoney(2_000_000),
+					rosterSlotKind: 'dead_money',
+					won: true
+				})
+			]
+		});
+
+		const entry = view.roster.find((group) => group.slotKind === 'dead_money')?.entries[0];
+		expect(entry?.playerName).toBe('Won Then Released');
+		expect(entry?.won).toBe(true);
+		expect(entry?.wonSentence).toBeNull();
+		// The same row on Injury Reserve — the other non-placement kind — has
+		// always behaved this way, and still does.
+		const onIr = viewFor({
+			rosterRows: [row({ rosterSlotKind: 'injury_reserve', won: true })]
+		});
+		expect(
+			onIr.roster.find((group) => group.slotKind === 'injury_reserve')?.entries[0]?.wonSentence
+		).toBeNull();
+	});
+
+	it('states Dead Money as MONEY beside the figures, and omits it for a Team carrying none', () => {
+		const none = viewFor();
+		expect(none.deadMoneySentence).toBeNull();
+		expect(none.deadMoneyHalves).toBeNull();
+
+		const view = viewFor({
+			rosterRows: [
+				row({
+					fantraxPlayerId: 'p-gone',
+					capHit: parseMoney(2_000_000),
+					rosterSlotKind: 'dead_money'
+				}),
+				row({
+					fantraxPlayerId: 'p-gone-2',
+					capHit: parseMoney(500_000),
+					rosterSlotKind: 'dead_money'
+				})
+			]
+		});
+
+		// Summed through `chargedCapHit`, the function `computeCapSpace` sums.
+		expect(view.deadMoneySentence).toBe(`Dead Money $2.5M, charged and outside the ${String(ACTIVE_BENCH_SLOTS)}`);
+		// No ceiling in the sentence, so the quiet half is empty and a surface
+		// may still render it unconditionally.
+		expect(view.deadMoneyHalves?.full).toBe(view.deadMoneySentence);
+		expect(view.deadMoneyHalves?.qualifier).toBe('');
 	});
 
 	it('puts a WON Player on the roster in his placement slot kind, with the placement stated', () => {

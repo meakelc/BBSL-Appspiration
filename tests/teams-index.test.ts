@@ -129,6 +129,7 @@ describe('the Teams index — every Team is a row', () => {
 		expect(row?.rosterCountHalves).toEqual(bucks?.rosterCountHalves);
 		expect(row?.minorLeagueHalves).toEqual(bucks?.minorLeagueOccupancyHalves);
 		expect(row?.injuryReserveHalves).toEqual(bucks?.injuryReserveHalves);
+		expect(row?.deadMoneyHalves).toEqual(bucks?.deadMoneyHalves);
 		expect(row?.freeActiveBenchSlots).toBe(bucks?.freeActiveBenchSlots);
 		expect(row?.nominationSlotSentence).toBe(bucks?.nominationSlot.sentence);
 	});
@@ -138,6 +139,44 @@ describe('the Teams index — every Team is a row', () => {
 		expect(row?.rosterCountHalves.full).toBe('Roster 12 of 12');
 		expect(row?.minorLeagueHalves.full).toContain('Minor League 0 of 3');
 		expect(row?.injuryReserveHalves.full).toContain('outside the 12');
+	});
+
+	/**
+	 * A card lists no rows, so a Cap Space quietly reduced by Contracts
+	 * belonging to players who are not on the Team has nothing on the card to
+	 * reconcile against — unless the money is stated (Story 7.6, UX-DR40).
+	 */
+	it('states Dead Money on the row that carries it, and nowhere else', () => {
+		const withDeadMoney: TeamsIndexInput = {
+			...teamViewFor({
+				teamName: 'Nets',
+				managerNames: ['Meakel'],
+				rosterRows: [
+					{
+						fantraxPlayerId: 'p-gone',
+						playerName: 'Released Player',
+						capHit: parseMoney(2_000_000),
+						rosterSlotKind: 'dead_money',
+						won: false
+					}
+				],
+				team: teamWith({ capSpace: parseMoney(SALARY_CAP - 2_000_000), rosterCount: 9 }),
+				phase: 'Auction',
+				nomination: null,
+				viewerIsThisTeam: false,
+				now: NOW
+			}),
+			teamId: 't-nets'
+		};
+
+		const index = teamsIndexFor({ views: [...THREE, withDeadMoney], viewerTeamId: null });
+		const nets = index.rows.find((entry) => entry.teamId === 't-nets');
+		const bulls = index.rows.find((entry) => entry.teamId === 't-bulls');
+
+		expect(nets?.deadMoneyHalves?.full).toContain('Dead Money $2.0M');
+		// Absent rather than $0.0M for a Team carrying none: a zero on thirty
+		// cards teaches a reader to stop seeing the line.
+		expect(bulls?.deadMoneyHalves).toBeNull();
 	});
 
 	/**

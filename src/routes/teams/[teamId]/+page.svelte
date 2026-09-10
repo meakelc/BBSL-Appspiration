@@ -93,6 +93,7 @@
 		readonly activeBenchHalves: SlotSentenceHalves;
 		readonly minorLeagueHalves: SlotSentenceHalves;
 		readonly injuryReserveHalves: SlotSentenceHalves;
+		readonly deadMoneyHalves: SlotSentenceHalves | null;
 		readonly roster: readonly RosterGroup[];
 		readonly nominationSlot: NominationSlotStatus;
 		readonly maximumBidLabel?: string;
@@ -218,6 +219,21 @@
 				>{team.injuryReserveHalves.qualifier}</span
 			>
 		</p>
+		<!-- Dead Money: money this Team still charges for Contracts it has
+		     released (FR-43). ABSENT rather than zero for a Team carrying
+		     none — the core decides which, and this file words nothing. It
+		     reads last in the band and in `text-tertiary`, beside Injury
+		     Reserve, because both are figures deliberately outside the twelve.
+		     The Dead Money GROUP at the foot of the page lists the contracts
+		     this figure sums, so Cap Space reconciles against what is on
+		     screen (UX-DR40). -->
+		{#if team.deadMoneyHalves !== null}
+			<p class="figure-tertiary" id="team-dead-money" aria-label={team.deadMoneyHalves.full}>
+				<span>{team.deadMoneyHalves.lead}</span><span class="figure-qualifier"
+					>{team.deadMoneyHalves.qualifier}</span
+				>
+			</p>
+		{/if}
 	</section>
 
 	<!-- Band three: money. Every figure is a field of one `CapGateOutcome`;
@@ -282,21 +298,34 @@
 
 	<section class="panel" id="team-roster">
 		<h2 class="section-label">{TEAM_VIEW_LABELS.roster}</h2>
+		<!-- Every group renders even when empty — an absent Minor League group
+		     and an empty one say different things — with ONE exception. Dead
+		     Money is not an occupancy every Team has some of; it is a
+		     consequence of an act most Teams never take, so an empty group
+		     would print a heading about nothing on thirty pages and teach a
+		     reader to skip the one page where it is real. Same reasoning as
+		     the core's null `deadMoneySentence`. -->
 		{#each team.roster as group (group.slotKind)}
-			<div class="group" id="roster-group-{group.slotKind}">
-				<h3 class="section-label">{group.label}</h3>
-				<ul class="rows">
-					{#each group.entries as entry (entry.fantraxPlayerId)}
-						<li class="row">
-							<span class="row-name">{entry.playerName}</span>
-							<span class="row-figure">{entry.capHitLabel}</span>
-							{#if entry.wonSentence !== null}
-								<span class="row-note">{entry.wonSentence}</span>
-							{/if}
-						</li>
-					{/each}
-				</ul>
-			</div>
+			{#if group.slotKind !== 'dead_money' || group.entries.length > 0}
+				<div
+					class="group"
+					class:group-apart={group.slotKind === 'dead_money'}
+					id="roster-group-{group.slotKind}"
+				>
+					<h3 class="section-label">{group.label}</h3>
+					<ul class="rows">
+						{#each group.entries as entry (entry.fantraxPlayerId)}
+							<li class="row">
+								<span class="row-name">{entry.playerName}</span>
+								<span class="row-figure">{entry.capHitLabel}</span>
+								{#if entry.wonSentence !== null}
+									<span class="row-note">{entry.wonSentence}</span>
+								{/if}
+							</li>
+						{/each}
+					</ul>
+				</div>
+			{/if}
 		{/each}
 	</section>
 </main>
@@ -339,6 +368,19 @@
 		flex-direction: column;
 		gap: var(--space-row-gap);
 		width: 100%;
+	}
+
+	/*
+	 * Dead Money is not part of the roster, and the layout says so before the
+	 * label is read (UX-DR40): a rule and a full row gap set it off from the
+	 * three groups above, the way Injury Reserve is set outside the twelve in
+	 * the band of figures. These Players are not on this Team; only their
+	 * money is.
+	 */
+	.group-apart {
+		margin-top: var(--space-row-gap);
+		padding-top: var(--space-row-gap);
+		border-top: var(--border-width) solid var(--color-border);
 	}
 
 	/*

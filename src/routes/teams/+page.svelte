@@ -223,6 +223,24 @@
 							>{row.injuryReserveHalves.qualifier}</span
 						>
 					</p>
+					<!-- Dead Money, in the same quiet register and for the same
+					     reason: money charged for Contracts the Team has
+					     released, outside the twelve (FR-43). ABSENT rather
+					     than zero for a Team carrying none — the core decides
+					     which. A card lists no rows, so this line is the only
+					     thing that reconciles a Cap Space reduced by players
+					     who are not on the Team (UX-DR40). -->
+					{#if row.deadMoneyHalves !== null}
+						<p
+							class="figure-tertiary"
+							id={`teams-dead-money-${row.teamId}`}
+							aria-label={row.deadMoneyHalves.full}
+						>
+							<span>{row.deadMoneyHalves.lead}</span><span class="figure-qualifier"
+								>{row.deadMoneyHalves.qualifier}</span
+							>
+						</p>
+					{/if}
 
 					<div class="money">
 						<div class="cell">

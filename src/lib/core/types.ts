@@ -135,13 +135,31 @@ export type AppendedEvent = {
 // --- Story 1.7: the Fantrax roster import's domain shape -------------------
 
 /**
- * The three roster slot kinds a Fantrax roster export's "Roster Slot" column
- * maps to (addendum.md B: "Active/Bench, IR, Minor League"). Written
- * snake_case, verbatim, to match `import_staged_rosters.roster_slot_kind`'s
- * database check constraint — the adapter and the database agree on the same
- * three literal strings rather than translating between two vocabularies.
+ * The four roster slot kinds a roster row can be in. Written snake_case,
+ * verbatim, to match the `roster_slot_kind` database check constraints — the
+ * adapter and the database agree on the same literal strings rather than
+ * translating between two vocabularies.
+ *
+ * **Three of the four are IMPORTABLE; the fourth is not, and the split is
+ * deliberate.** `active_bench`, `injury_reserve` and `minor_league` are what a
+ * Fantrax roster export's "Roster Slot" column maps to (addendum.md B:
+ * "Active/Bench, IR, Minor League"), and `import_staged_rosters`'s check
+ * constraint still admits exactly those three. `dead_money` (Story 7.6,
+ * FR-43) is produced only by an act inside this product — a released Contract
+ * that keeps charging the Cap — so it exists on `team_rosters` alone.
+ *
+ * **A closed union of exactly four members.** Every site in `core/` and
+ * `adapters/` that discriminates on it is exhaustive with no `default` and no
+ * catch-all `else`, so a fifth member would be a compile error at each rather
+ * than a silently mishandled row.
+ *
+ * Dead Money charges the Cap IN FULL and occupies NOTHING: it is Injury
+ * Reserve without the ceiling. `core/rules/roster-import.ts`'s `chargedCapHit`
+ * needs no branch for it — it zeroes `minor_league` and returns the stated hit
+ * for everything else — and Roster Count keeps counting `active_bench` alone,
+ * which is what lets a Drop free a Slot and keep the money in one change.
  */
-export type RosterSlotKind = 'active_bench' | 'injury_reserve' | 'minor_league';
+export type RosterSlotKind = 'active_bench' | 'injury_reserve' | 'minor_league' | 'dead_money';
 
 /**
  * Where a close puts the won Player (Story 3.4) — a NARROWING of
@@ -188,6 +206,27 @@ export type ParsedRosterRow = {
 	readonly capHit: Money;
 	readonly rosterSlotKind: RosterSlotKind;
 	readonly contractYearsRemaining: number;
+	/**
+	 * The DRAFT ROUND of a rookie-scale contract — `2` for a `2RK31` cell —
+	 * or `null` for an ordinary contract (Story 7.6).
+	 *
+	 * **Structured data rather than a re-readable string, because the string
+	 * does not survive.** `Contract` cells `2RK31` and `2031` both mean five
+	 * years remaining against a 2026 import, and until this field existed they
+	 * produced byte-identical rows — the round was matched in a NON-capturing
+	 * group and discarded. FR-43's exception turns on exactly that discarded
+	 * digit: a second-round rookie deal released with its full term unelapsed
+	 * carries no Dead Money, and an otherwise identical plain contract carries
+	 * all of it. A $2,000,000 difference decided by three characters (PRD §10
+	 * examples 40 and 41).
+	 *
+	 * The adapter parses it; nothing in `core/` knows the cell format it came
+	 * from (AD-24). It is not persisted through import staging in v1 — the
+	 * staging table has no column for it — so a row read back from the
+	 * database carries `null` here until the Drop command (Story 7.8) needs
+	 * otherwise.
+	 */
+	readonly rookieScaleRound: number | null;
 };
 
 // --- Story 1.8: the Free Agent pool's domain shape -------------------------

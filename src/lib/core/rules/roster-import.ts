@@ -58,6 +58,15 @@ export type CapHitRow = {
  * than an omission: an IR contract counts against the Cap in full, and only
  * against Roster Count does it drop out (PRD §3 "Roster Count", §10 ex 23).
  *
+ * **Dead Money is not zeroed either, and it arrived here by NOT writing
+ * code** (Story 7.6, FR-43). A released Contract keeps charging the Cap in
+ * full and occupies no Slot — Injury Reserve without the ceiling — which is
+ * exactly what the expression below already says for anything that is not
+ * `minor_league`. Adding `|| row.rosterSlotKind === 'dead_money'` would be a
+ * second spelling of a rule that has exactly one, and the first to drift. The
+ * fallthrough is sanctioned HERE and nowhere else: no other consumer may
+ * infer a Dead Money behaviour from the absence of a branch (AR-43).
+ *
  * **Exported since Story 4.5's code review.** The Team view LISTS the rows
  * this sum is taken over, and rendering the stored figure beside a Cap Space
  * that charged $0 for it made the two disagree on screen: an imported minors
@@ -96,7 +105,17 @@ export type SlotCeilingBreach = {
 const SLOT_CEILINGS: Readonly<Record<RosterSlotKind, number>> = Object.freeze({
 	active_bench: ACTIVE_BENCH_SLOTS,
 	injury_reserve: INJURY_RESERVE_SLOTS,
-	minor_league: MINOR_LEAGUE_SLOTS
+	minor_league: MINOR_LEAGUE_SLOTS,
+	// **Dead Money answers to no ceiling** (Story 7.6, FR-43): a Team may
+	// carry as many released Contracts as it has released, and there is no
+	// league rule bounding how many. `Number.POSITIVE_INFINITY` states that
+	// IN THE RECORD rather than in a skip-branch inside `checkSlotCeilings`
+	// below — `count > Infinity` is false for every count, so the loop reports
+	// Dead Money never, and it reports it never because of what is written
+	// here rather than because of a condition written somewhere else. The
+	// alternative, widening the type to `number | null`, would make every
+	// reader of this record handle an absence that means "unbounded".
+	dead_money: Number.POSITIVE_INFINITY
 });
 
 /**
@@ -110,7 +129,8 @@ export function checkSlotCeilings(rows: readonly ParsedRosterRow[]): readonly Sl
 	const counts: Record<RosterSlotKind, number> = {
 		active_bench: 0,
 		injury_reserve: 0,
-		minor_league: 0
+		minor_league: 0,
+		dead_money: 0
 	};
 	for (const row of rows) {
 		counts[row.rosterSlotKind] += 1;
@@ -139,7 +159,8 @@ export function checkSlotCeilings(rows: readonly ParsedRosterRow[]): readonly Sl
 export const SLOT_LABELS: Readonly<Record<RosterSlotKind, string>> = Object.freeze({
 	active_bench: 'Active/Bench',
 	injury_reserve: 'Injury Reserve',
-	minor_league: 'Minor League'
+	minor_league: 'Minor League',
+	dead_money: 'Dead Money'
 });
 
 /**

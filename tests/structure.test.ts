@@ -180,6 +180,19 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 	[
 		'example-35-the-trigger-is-a-free-slot.test.ts',
 		'35 — The trigger is a free slot, not a roster count'
+	],
+	// 36-39 are Epic 7's Roster Move examples and are not implemented yet, so
+	// the numbering below is deliberately NON-CONTIGUOUS. The pair belongs to
+	// Story 7.6, which delivers the rookie-scale designation the two examples
+	// differ by; the Drop command that produces the states they describe is
+	// Story 7.8.
+	[
+		'example-40-a-drop-lowers-the-maximum-bid.test.ts',
+		'40 — A Drop lowers the Maximum Bid'
+	],
+	[
+		'example-41-the-three-characters-worth-2000000.test.ts',
+		'41 — The three characters worth $2,000,000'
 	]
 ];
 
@@ -343,6 +356,38 @@ describe('the stack configuration', () => {
 		const list = readFileSync(at('src', 'lib', 'components', 'DestinationsList.svelte'), 'utf8');
 		expect(list).toContain('classified.hasNothingLive');
 		expect(list).toContain('Nothing is live for you right now.');
+	});
+
+	/**
+	 * Dead Money renders labelled and SEPARATE, and its two absences are
+	 * deliberate (Story 7.6, UX-DR40).
+	 *
+	 * Both claims live in markup a `.svelte` file cannot be rendered under
+	 * this suite's vite.config, so they are proven the way every other markup
+	 * claim in this file is proven — by reading source text. The behaviour
+	 * behind them is proven directly in tests/team-view.test.ts and
+	 * tests/teams-index.test.ts; what is at stake HERE is that the two
+	 * conditionals cannot be deleted, or quietly inverted into always-render,
+	 * without a test going red.
+	 */
+	it('suppresses the EMPTY Dead Money group and the absent Dead Money figure', () => {
+		const teamPage = readFileSync(at('src', 'routes', 'teams', '[teamId]', '+page.svelte'), 'utf8');
+		// `groupRoster` produces all four groups always — that is the AD-32
+		// fix and it must stay — so the page is what declines to print a
+		// heading over zero rows. The other three groups still render empty:
+		// an absent Minor League group and an empty one say different things.
+		expect(teamPage).toContain(
+			"{#if group.slotKind !== 'dead_money' || group.entries.length > 0}"
+		);
+		// And the figure beside Injury Reserve, absent rather than $0.0M.
+		expect(teamPage).toContain('{#if team.deadMoneyHalves !== null}');
+		expect(teamPage).toContain('id="team-dead-money"');
+
+		const index = readFileSync(at('src', 'routes', 'teams', '+page.svelte'), 'utf8');
+		// A card lists no rows, so this line is the only thing on it that
+		// reconciles a Cap Space reduced by released Contracts.
+		expect(index).toContain('{#if row.deadMoneyHalves !== null}');
+		expect(index).toContain('teams-dead-money-');
 	});
 
 	it('serves a real page from a layout that loads the design tokens', () => {

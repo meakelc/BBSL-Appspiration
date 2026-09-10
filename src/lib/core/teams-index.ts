@@ -292,6 +292,19 @@ export type TeamsIndexRow = {
 	readonly minorLeagueHalves: SlotSentenceHalves;
 	readonly injuryReserveHalves: SlotSentenceHalves;
 	/**
+	 * What this Team's released Contracts still charge — `Dead Money $2.0M,
+	 * charged and outside the 12` — or `null` for a Team carrying none
+	 * (Story 7.6, FR-43).
+	 *
+	 * **The card lists no rows, so this line is the only thing that can
+	 * reconcile it.** On `/teams/<id>` a Dead Money group is visible under the
+	 * roster and a reader can sum what they see; here there is nothing but
+	 * figures, and a Cap Space quietly reduced by contracts belonging to
+	 * players who are not on the Team is precisely the gap UX-DR40 exists to
+	 * close. Read off the `TeamView` like every other field on this row.
+	 */
+	readonly deadMoneyHalves: SlotSentenceHalves | null;
+	/**
 	 * Outstanding non-entry Bids against the allowance — `2 of 4 bids` — and
 	 * the open lottery entries beside it, as TWO figures (Story 10.6).
 	 *
@@ -470,6 +483,7 @@ function rowFor(view: TeamsIndexInput, viewerTeamId: string | null): TeamsIndexR
 		rosterCountHalves: view.rosterCountHalves,
 		minorLeagueHalves: view.minorLeagueOccupancyHalves,
 		injuryReserveHalves: view.injuryReserveHalves,
+		deadMoneyHalves: view.deadMoneyHalves,
 		outstandingBidsHalves: view.outstandingBidsHalves,
 		contentionEntriesHalves: view.contentionEntriesHalves,
 		outstandingBids: view.outstandingBids,

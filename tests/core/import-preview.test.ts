@@ -26,6 +26,7 @@ function row(
 		capHit: parseMoney(1_000_000),
 		rosterSlotKind: 'active_bench',
 		contractYearsRemaining: 1,
+		rookieScaleRound: null,
 		...overrides
 	};
 }

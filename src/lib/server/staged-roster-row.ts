@@ -20,12 +20,21 @@ import { parseMoney } from '../core/money.ts';
 import type { ParsedRosterRow, RosterSlotKind } from '../core/types.ts';
 
 /**
- * The three roster slot kinds at runtime, so a value read back from the
- * database is checked rather than cast. The column carries a check
+ * The three IMPORTABLE roster slot kinds at runtime, so a value read back from
+ * the database is checked rather than cast. The column carries a check
  * constraint admitting exactly these, but a bare `as RosterSlotKind` on a
  * database string asserts something TypeScript cannot know — and this one
  * feeds a slot-ceiling count, where a silently unrecognised kind would
  * simply vanish from the arithmetic.
+ *
+ * **Three, not four, and it stays at three** (Story 7.6). `RosterSlotKind`
+ * gained `dead_money`, and this array typechecks either way — it is a
+ * `readonly RosterSlotKind[]`, not a total record, so nothing here would have
+ * complained had the fourth been added. Adding it would make Dead Money
+ * importable, which is exactly what `import_staged_rosters`'s own
+ * three-value check constraint exists to forbid: Dead Money is produced by a
+ * Commissioner Drop, never read off an export. A staged row claiming it is
+ * corruption or a wiring mistake, and the throw below is the right answer.
  */
 export const KNOWN_SLOT_KINDS: readonly RosterSlotKind[] = Object.freeze([
 	'active_bench',
@@ -67,6 +76,14 @@ export function toParsedRosterRow(row: StagedRosterRowShape): ParsedRosterRow {
 		playerName: String(row['player_name']),
 		capHit: parseMoney(row['cap_hit']),
 		rosterSlotKind: slotKind,
-		contractYearsRemaining: Number(row['contract_years_remaining'])
+		contractYearsRemaining: Number(row['contract_years_remaining']),
+		// **`null`, and stated rather than omitted.** `import_staged_rosters`
+		// has no column for the rookie-scale round: the designation is parsed
+		// by the adapter and read by the import preview, and nothing between
+		// staging and the live roster consumes it in v1. Writing it out here
+		// makes the loss visible at the seam where it happens, so the story
+		// that needs it persisted (7.8's Drop) has one line to change rather
+		// than an absence to notice.
+		rookieScaleRound: null
 	};
 }
