@@ -43,10 +43,16 @@ import {
 	metadataLine,
 	priceLabel
 } from '../core/board.ts';
-import type { BoardCard, BoardMetadata, BoardViewerState } from '../core/board.ts';
+import type {
+	BoardCard,
+	BoardCardState,
+	BoardMetadata,
+	BoardViewerState
+} from '../core/board.ts';
 import { fold } from '../core/projection/fold.ts';
 import { INITIAL_AUCTIONS, auctionsReducer } from '../core/projection/auctions.ts';
-import type { ContentionState } from '../core/projection/auctions.ts';
+import { INITIAL_CONTRACTS, contractsReducer } from '../core/projection/contracts.ts';
+import { INITIAL_DRAWS, drawsReducer } from '../core/projection/draws.ts';
 import { INITIAL_NOMINATIONS, nominationsReducer } from '../core/projection/nominations.ts';
 import { formatTeamManager } from '../core/team-identity.ts';
 import { loadEventsViaClient } from './event-log.ts';
@@ -81,7 +87,11 @@ export type BoardCardView = {
 	 * plain integer and never a `Money`.
 	 */
 	readonly price: number | null;
-	/** `$8.5M`, or the statement that no Opening Bid has been placed. */
+	/**
+	 * `$8.5M`, the statement that no Opening Bid has been placed, or — on a
+	 * closed card — the amount it was won for. One renderer, one field; the
+	 * WORD beside it is what differs, and both words are the core's.
+	 */
 	readonly priceLabel: string;
 	/** `Lakers — Meakel`, the Team alone, or the no-leader statement. */
 	readonly leadingBidder: string;
@@ -91,16 +101,37 @@ export type BoardCardView = {
 	/** The same name for a narrow viewport — see `AUCTION_STATE_LABELS_NARROW`. */
 	readonly auctionStateLabelNarrow: string;
 	readonly auctionStateIcon: string;
-	/** The fold's own literal, for the one card treatment keyed on it. */
-	readonly contention: ContentionState;
+	/**
+	 * The card's own state literal — the three the fold can produce, plus
+	 * `closed`, which it cannot. The one card treatment keyed on it, and the
+	 * field the sort's closed tier and the two state filters read.
+	 */
+	readonly state: BoardCardState;
 	/** How many Teams have joined a Minimum-Bid Contention. */
 	readonly contenderCount: number;
 	readonly viewerState: BoardViewerState;
 	readonly viewerStateLabel: string;
 	readonly viewerStateIcon: string;
-	/** `Lakers — Meakel`, or the Team alone when the Manager is unresolved. */
-	readonly nominatedBy: string;
-	readonly nominatedAt: string;
+	/**
+	 * `Lakers — Meakel`, or the Team alone when the Manager is unresolved —
+	 * `null` on a closed card, whose nomination the close deleted.
+	 */
+	readonly nominatedBy: string | null;
+	readonly nominatedAt: string | null;
+	/**
+	 * The winning Team, spelled out with its Manager where one is recorded —
+	 * `null` on every card that is not closed.
+	 *
+	 * A Manager is named only for a lottery win, because only `DrawnDraw`
+	 * records one; a Standard close records the winning Team and no Manager, so
+	 * those cards take the same Team-alone fallback every other unresolved
+	 * pairing in this module takes.
+	 */
+	readonly wonBy: string | null;
+	/** Where the Player landed and what it charges — the core's own sentence. */
+	readonly placementSentence: string | null;
+	/** The Auction's own persisted expiry, `null` while it is still open. */
+	readonly closedAt: string | null;
 };
 
 /** The whole board, as the route returns it. */
@@ -215,7 +246,15 @@ function distinctManagerIds(cards: readonly BoardCard[]): readonly string[] {
 	const seen = new Set<string>();
 	const ids: string[] = [];
 	for (const card of cards) {
-		for (const managerId of [card.leadingManagerId, card.nominatedByManagerId]) {
+		// The winner rides the SAME statement as the leading bidder and the
+		// nominator — one question ("which Managers does this board name")
+		// asked once of one table, so a board carrying closed cards costs no
+		// extra round trip.
+		for (const managerId of [
+			card.leadingManagerId,
+			card.nominatedByManagerId,
+			card.winningManagerId
+		]) {
 			if (managerId === null || managerId === '' || seen.has(managerId)) continue;
 			seen.add(managerId);
 			ids.push(managerId);
@@ -253,6 +292,12 @@ export async function loadBoard(
 		const events = await loadEventsViaClient(client);
 		const nominations = fold(INITIAL_NOMINATIONS, events, nominationsReducer);
 		const auctions = fold(INITIAL_AUCTIONS, events, auctionsReducer);
+		// The two folds that SURVIVE a close, over the same array as the two
+		// that do not — so an Auction cannot be open in one half of this board
+		// and closed in the other. `projection/closed.ts` composes them; this
+		// module never joins a contract to a draw itself.
+		const contracts = fold(INITIAL_CONTRACTS, events, contractsReducer);
+		const draws = fold(INITIAL_DRAWS, events, drawsReducer);
 
 		// The DATABASE clock, read exactly once and with no lock — Postgres'
 		// transaction-start timestamp, so it is the same instant for every
@@ -265,14 +310,14 @@ export async function loadBoard(
 		// Built once WITHOUT metadata to learn which Players and which Managers
 		// the board names, then rebuilt with the reference rows in hand. Two
 		// passes over a list already in memory, rather than a statement per card.
-		const bare = boardCardsFor(nominations, auctions, new Map(), viewerTeamId);
+		const bare = boardCardsFor(nominations, auctions, contracts, draws, new Map(), viewerTeamId);
 		const metadata = await loadMetadata(
 			client,
 			bare.map((card) => card.fantraxPlayerId)
 		);
 		const managerNames = await loadManagerNames(client, distinctManagerIds(bare));
 
-		const cards = boardCardsFor(nominations, auctions, metadata, viewerTeamId);
+		const cards = boardCardsFor(nominations, auctions, contracts, draws, metadata, viewerTeamId);
 
 		await client.query('rollback');
 
@@ -300,22 +345,41 @@ export async function loadBoard(
 										null)
 							),
 				closesAt: card.closesAt,
-				auctionStateLabel: AUCTION_STATE_LABELS[card.contention],
-				auctionStateLabelNarrow: AUCTION_STATE_LABELS_NARROW[card.contention],
-				auctionStateIcon: AUCTION_STATE_ICONS[card.contention],
-				contention: card.contention,
+				auctionStateLabel: AUCTION_STATE_LABELS[card.state],
+				auctionStateLabelNarrow: AUCTION_STATE_LABELS_NARROW[card.state],
+				auctionStateIcon: AUCTION_STATE_ICONS[card.state],
+				state: card.state,
 				contenderCount: card.contenderCount,
 				viewerState: card.viewerState,
 				viewerStateLabel: VIEWER_STATE_LABELS[card.viewerState],
 				viewerStateIcon: VIEWER_STATE_ICONS[card.viewerState],
-				nominatedBy: nameTeam(
-					card.nominatedByTeamName,
-					card.nominatedByManagerId === null
+				// `null` rather than a stand-in on a closed card: the close
+				// DELETED the nomination, so there is no nominating Team to name
+				// and the surface omits the line rather than inventing one.
+				nominatedBy:
+					card.nominatedByTeamName === null
 						? null
-						: (managerNames.get(pairKey(card.nominatedByManagerId, card.nominatedByTeamId)) ??
-							null)
-				),
-				nominatedAt: card.nominatedAt
+						: nameTeam(
+								card.nominatedByTeamName,
+								card.nominatedByManagerId === null
+									? null
+									: (managerNames.get(
+											pairKey(card.nominatedByManagerId, card.nominatedByTeamId ?? '')
+										) ?? null)
+							),
+				nominatedAt: card.nominatedAt,
+				wonBy:
+					card.winningTeamName === null
+						? null
+						: nameTeam(
+								card.winningTeamName,
+								card.winningManagerId === null
+									? null
+									: (managerNames.get(pairKey(card.winningManagerId, card.winningTeamId ?? '')) ??
+										null)
+							),
+				placementSentence: card.placementSentence,
+				closedAt: card.closedAt
 			}))
 		};
 	} catch (error) {

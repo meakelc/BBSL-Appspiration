@@ -70,6 +70,45 @@ function stripComments(source: string): string {
 const PAGE_CODE = stripComments(PAGE);
 const SERVER_CODE = stripComments(SERVER);
 
+/**
+ * The OPEN half of the page's markup, and only that half.
+ *
+ * The read is discriminated now — `{#if closed !== null}` renders the Closed
+ * state and `{:else}` renders everything Stories 2.4 through 3.6 built — so
+ * the assertions about what an OPEN Auction must NOT show have to be made
+ * against the open branch. Run against the whole file they would fail on the
+ * Closed state's seed and `/verify` link, which are exactly what that state
+ * exists to render, and turning them off instead would stop guarding the page
+ * they were written for.
+ */
+const CLOSED_MARKUP = PAGE.slice(
+	PAGE.indexOf('{#if closed !== null}'),
+	PAGE.indexOf('<!-- The identity block:')
+);
+const OPEN_MARKUP = PAGE.slice(PAGE.indexOf('<!-- The identity block:'), PAGE.indexOf('</main>'));
+const OPEN_MARKUP_CODE = stripComments(OPEN_MARKUP);
+
+// **Both slices are keyed on literal source text, so both can go vacuous.**
+// Reword the `<!-- The identity block:` comment or the `{#if closed !== null}`
+// guard and `indexOf` returns -1, the slice collapses to '' or to the whole
+// file, and every branch-scoped NEGATIVE assertion below ("no Bid history",
+// "no countdown", "never congratulates") starts passing against an empty
+// string. A test that stops testing without failing is worse than no test, so
+// the boundaries are asserted here, once, before anything reads them.
+if (CLOSED_MARKUP.length === 0 || OPEN_MARKUP.length === 0) {
+	throw new Error(
+		'auction-page.test.ts: a markup slice is empty — the source text its ' +
+			'boundaries key on has been reworded. Fix the boundaries; do not ' +
+			'let the branch-scoped assertions run against an empty string.'
+	);
+}
+if (CLOSED_MARKUP.includes('<!-- The identity block:')) {
+	throw new Error(
+		'auction-page.test.ts: the closed slice has swallowed the open half — ' +
+			'the two slices must stay disjoint or the negative assertions are void.'
+	);
+}
+
 const stub = vi.hoisted(() => ({
 	auction: null as unknown,
 	outcome: { kind: 'accepted', events: [] as unknown[] } as Record<string, unknown>,
@@ -485,7 +524,7 @@ describe('the Auction page — the clock it counts down on (Story 3.1)', () => {
 		// NFR §5: a skewed client must neither see a different close time nor
 		// bid after expiry. Both hold only if the ORIGIN is the server's
 		// instant and the device contributes nothing but elapsed time.
-		expect(PAGE).toMatch(/parseInstant\(control\.figuresAt\)/);
+		expect(PAGE).toMatch(/parseInstant\(anchorAt\)/);
 		expect(PAGE).toMatch(/formatInstant\(anchor \+ elapsedMs\)/);
 		// The page used to derive `now` from the device, which froze at load
 		// because `$derived(new Date())` depends on nothing reactive. Neither
@@ -509,7 +548,7 @@ describe('the Auction page — the clock it counts down on (Story 3.1)', () => {
 		expect(intervals).toHaveLength(1);
 		// Inside an effect, so it never runs during SSR — and cleaned up by
 		// the function the effect returns, so a re-run cannot leave two.
-		const effectStart = PAGE.search(/\$effect\(\(\) => \{\s*void control\.figuresAt;/);
+		const effectStart = PAGE.search(/\$effect\(\(\) => \{\s*void anchorAt;/);
 		expect(effectStart).toBeGreaterThan(-1);
 		expect(PAGE.indexOf('setInterval(')).toBeGreaterThan(effectStart);
 		expect(PAGE).toMatch(/return \(\) => \{\s*clearInterval\(ticking\);\s*\}/);
@@ -522,7 +561,7 @@ describe('the Auction page — the clock it counts down on (Story 3.1)', () => {
 		// A refused submit reloads, and `figuresAt` moves with it. The effect
 		// depends on it and resets the measurement, so the page can never run
 		// ahead of the server by however long the tab had been open.
-		expect(PAGE).toMatch(/void control\.figuresAt;\s*elapsedMs = 0;/);
+		expect(PAGE).toMatch(/void anchorAt;\s*elapsedMs = 0;/);
 	});
 
 	it('feeds that one instant to both gate calls, and passes the empty string to neither', () => {
@@ -647,18 +686,22 @@ describe('the Auction page — the lottery it renders', () => {
 			'<summary',
 			'auction-contention-clock',
 			'auction-seed-commitment',
-			'auction-seed-hash',
 			'auction-seed-unverifiable',
-			'auction-verify-link',
 			'auction-contender-count',
 			'CONTENTION_CLOCK_UNMOVED',
-			'SEED_COMMITMENT',
 			'MINIMUM_LOTTERY_LABEL',
 			'contenderCountSentence',
 			'auction.contention',
 			'auction.contenderCount'
 		]) {
 			expect(PAGE_CODE, gone).not.toContain(gone);
+		}
+		// The commitment, the seed and the `/verify` link now exist in this
+		// FILE, on the Closed branch, which is the one state that has real
+		// values to print them against. They are still absent from the OPEN
+		// Auction, which is what Story 3.6 decided and what this asserts.
+		for (const gone of ['auction-seed-hash', 'auction-verify-link', 'SEED_COMMITMENT']) {
+			expect(OPEN_MARKUP_CODE, gone).not.toContain(gone);
 		}
 		// The revealed seed is not read at all. `seedHash` is — the next
 		// assertion — so this is matched on a boundary rather than a prefix.
@@ -716,7 +759,9 @@ describe('the Auction page — the sealed commitment it carries', () => {
 		expect(PAGE).not.toContain('wasDissolved');
 		expect(PAGE).not.toContain('CONTENTION_DISSOLVED');
 		expect(PAGE).not.toContain('formerContenderSentence');
-		expect(PAGE).not.toContain('SEED_REVEALED');
+		// Absent from the OPEN Auction. The Closed state prints a revealed seed,
+		// which is the whole of what AD-14 asks a finished lottery to show.
+		expect(OPEN_MARKUP).not.toContain('SEED_REVEALED');
 		expect(PAGE).not.toContain('auction.seed}');
 		for (const id of [
 			'auction-dissolved',
@@ -876,6 +921,11 @@ describe('the Auction page server load — gate, load, 404', () => {
 	it('404s on a null read rather than rendering an empty Auction', () => {
 		expect(SERVER).toMatch(/if \(auction === null\)/);
 		expect(SERVER).toMatch(/error\(404,/);
+		// The refusal no longer says "open". A closed Auction HAS a page now,
+		// so "no open Auction" would be a reason that is false of the one case
+		// this still refuses: a Player with no Auction of any kind.
+		expect(SERVER).toContain('There is no Auction for this Player.');
+		expect(SERVER).not.toContain('There is no open Auction for this Player.');
 	});
 
 	it('reaches the reader and the writer through writeGateway(), like every other route', () => {
@@ -1166,7 +1216,7 @@ describe('the Auction page — the absolute stamps resolve client-side', () => {
 		// Derived in effects, which run only in the browser — not in a
 		// `$derived`, which would also run during server rendering and ship
 		// the server's timezone in the delivered HTML.
-		expect(PAGE).toMatch(/\$effect\(\(\)\s*=>\s*\{\s*nominatedAbsolute\s*=\s*formatAbsolute\(/);
+		expect(PAGE).toMatch(/\$effect\(\(\)\s*=>\s*\{\s*nominatedAbsolute\s*=\s*closed !== null \? null : formatAbsolute\(/);
 		expect(PAGE).toMatch(/\$effect\(\(\)\s*=>\s*\{\s*closesAtAbsolute\s*=/);
 		expect(PAGE).not.toMatch(/\$derived\([^)]*Intl\.DateTimeFormat/);
 	});
@@ -1774,5 +1824,104 @@ describe('the refusal panel wraps rather than truncating (UX-DR33, inherited)', 
 		expect(PANEL).toContain('align-items: flex-start');
 		expect(PANEL).not.toContain('text-overflow');
 		expect(PANEL).not.toContain('white-space: nowrap');
+	});
+});
+
+describe('the Auction page — the Closed state it renders', () => {
+	it('branches on the discriminant at the top level, and only there', () => {
+		// One `{#if}` over the whole page. Every derivation the open half needs
+		// stays as it was and none of them runs on a closed page, because
+		// `$derived` is lazy.
+		// ONE cast at the wire boundary, then a narrowing the compiler checks.
+		// `Money` is a brand and does not survive JSON (AD-8), so a cast into
+		// the hand-declared mirror is unavoidable; a SECOND cast per arm is not,
+		// and probing an inline `{ kind?: string }` threw away exhaustiveness at
+		// exactly the seam this state introduced.
+		expect(PAGE).toContain('type AuctionRead = Auction | ClosedAuctionView;');
+		expect(PAGE).toContain('const read = $derived(data.auction as AuctionRead);');
+		expect(PAGE).toContain("const closed = $derived(read.kind === 'closed' ? read : null);");
+		expect(PAGE).not.toContain('as { readonly kind?: string }');
+		expect(PAGE).toContain('{#if closed !== null}');
+	});
+
+	it('states the winner, the final amount and the placement', () => {
+		// The three `EXPERIENCE.md:168` asks a Closed state for. Every one is a
+		// pre-worded field — the surface prints them and words nothing.
+		// ANCHORED to the element each belongs in, never asserted as six loose
+		// substrings of one slice: containment alone passes just as happily
+		// when `closed.winner` and `closed.winningAmount` are transposed
+		// between their two paragraphs, which would render a dollar figure
+		// under "Won by" and a Team name where the final amount goes — a
+		// copy-paste regression in the three most-read facts of this state,
+		// shipping green.
+		expect(CLOSED_MARKUP).toMatch(/id="auction-final-amount"[^>]*>\s*\{closed\.winningAmount\}/);
+		expect(CLOSED_MARKUP).toMatch(/id="auction-winner"[\s\S]{0,120}?\{closed\.winner\}/);
+		expect(CLOSED_MARKUP).toMatch(/id="auction-placement"[^>]*>\s*\{closed\.placementSentence\}/);
+	});
+
+	it('states the closed instant TWICE — relative and absolute', () => {
+		expect(CLOSED_MARKUP).toContain('id="auction-closed-relative"');
+		expect(CLOSED_MARKUP).toContain('id="auction-closed-absolute"');
+		// The absolute stamp resolves in an `$effect`, so it is the VIEWER's
+		// timezone and never the server's.
+		expect(PAGE).toMatch(/closedAtAbsolute = closed === null \? null : formatAbsolute\(/);
+	});
+
+	it('renders the lottery half: the commitment, the seed and the ordered list', () => {
+		// The only page in the product that prints a seed. Until it existed
+		// `/verify` stated a procedure with nothing real to run it against.
+		expect(CLOSED_MARKUP).toContain('id="auction-seed-hash"');
+		expect(CLOSED_MARKUP).toContain('id="auction-seed"');
+		expect(CLOSED_MARKUP).toContain('id="auction-draw-contenders"');
+		expect(CLOSED_MARKUP).toContain('id="auction-selection"');
+		expect(CLOSED_MARKUP).toContain('SEED_COMMITMENT_LABEL');
+		expect(CLOSED_MARKUP).toContain('SEED_REVEALED_LABEL');
+		// The list is printed in the order it arrives and is never re-sorted
+		// here: AD-14 makes ascending join `seq` an input to the winner.
+		expect(CLOSED_MARKUP).not.toMatch(/\.sort\(|\.reverse\(/);
+		// The selected position carries a WORD and a SHAPE, never colour alone.
+		expect(CLOSED_MARKUP).toContain('SELECTED_CONTENDER_LABEL');
+		// ...and the shape is the Closed state's OWN, never the won glyph.
+		//  claims something about the READER, and the
+		// Manager most likely to open a closed lottery is the one who LOST.
+		expect(CLOSED_MARKUP).toContain('SELECTED_CONTENDER_ICON');
+		expect(CLOSED_MARKUP).not.toContain('VIEWER_STATE_ICONS.won');
+	});
+
+	it('states an emptied lottery rather than hiding it, and links /verify either way', () => {
+		expect(CLOSED_MARKUP).toContain('EMPTIED_LOTTERY_STATEMENT');
+		expect(CLOSED_MARKUP).toContain('id="auction-emptied-lottery"');
+		// The link is outside the drawn/undrawn branch: the commitment is
+		// discharged whatever the list came out as.
+		expect(CLOSED_MARKUP).toContain('id="auction-verify-link"');
+		expect(CLOSED_MARKUP).toContain('href={VERIFY_PATH}');
+		expect(CLOSED_MARKUP.indexOf('{:else}')).toBeLessThan(
+			CLOSED_MARKUP.indexOf('id="auction-verify-link"')
+		);
+	});
+
+	it('shows NO Bid history, NO nominating Team and NO countdown', () => {
+		// `auctionsReducer` deletes the Auction at the close, so the Bids are
+		// not durable and a partial history would be an invented one.
+		// `nominationsReducer` deletes the nomination for the same reason.
+		for (const gone of [
+			'auction-history',
+			'auction-nominated-at',
+			'auction-nominating-team',
+			'closesInPhrase',
+			'AUCTION_EXPIRED',
+			'bid-form'
+		]) {
+			expect(CLOSED_MARKUP, gone).not.toContain(gone);
+		}
+	});
+
+	it('never congratulates — a win is stated', () => {
+		// `!==` is the language's, not the copy's, so it is taken out before
+		// the sentence-level check — an exclamation mark that survives this is
+		// one somebody typed at a Manager.
+		const prose = stripComments(CLOSED_MARKUP).replace(/!==?/g, '');
+		expect(prose).not.toMatch(/[!]/);
+		expect(prose.toLowerCase()).not.toMatch(/congratulat|trophy|celebrat/);
 	});
 });

@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { closedPayload } from '../fixtures/closed-event.ts';
+import { CLOSED_TEAM_ID, closedPayload } from '../fixtures/closed-event.ts';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -23,6 +23,8 @@ import {
 } from '../../src/lib/core/projection/auctions.ts';
 import { AUCTION_CLOSED_EVENT, NOMINATION_PLACED_EVENT } from '../../src/lib/core/projection/nominations.ts';
 import { AUCTION_OPENED_EVENT } from '../../src/lib/core/projection/phase.ts';
+import { CONTENTION_DRAWN_EVENT } from '../../src/lib/core/projection/draws.ts';
+import { wonCardSentence } from '../../src/lib/core/projection/closed.ts';
 import { parseMoney } from '../../src/lib/core/money.ts';
 import {
 	BID_READY,
@@ -32,6 +34,42 @@ import {
 	evaluate
 } from '../../src/lib/core/rules/bidding.ts';
 import { loadAuctionPage } from '../../src/lib/server/auction-page.ts';
+import type {
+	AuctionPageRead,
+	AuctionPageState,
+	ClosedAuctionPageState
+} from '../../src/lib/server/auction-page.ts';
+
+/**
+ * The OPEN half of the read, asserted rather than cast.
+ *
+ * `loadAuctionPage` returns a discriminated read now — an open Auction or a
+ * closed one — so every assertion about a price, a Bid history or a bid
+ * control is a test stating "and this read found an OPEN Auction". Throwing on
+ * the other case is the point: a test that silently narrowed would keep
+ * passing if the branch it exercises started answering `closed`.
+ *
+ * `null` passes straight through, because a null read is a real answer these
+ * tests assert on directly.
+ */
+function openPage(read: AuctionPageRead | null): AuctionPageState | null {
+	if (read === null) return null;
+	if (read.kind !== 'open') throw new Error(`expected an open Auction, received "${read.kind}"`);
+	return read;
+}
+
+/** The CLOSED half, asserted rather than cast — `openPage`'s mirror. */
+function closedPage(read: AuctionPageRead | null): ClosedAuctionPageState | null {
+	if (read === null) return null;
+	if (read.kind !== 'closed') {
+		throw new Error(`expected a closed Auction, received "${read.kind}"`);
+	}
+	return read;
+}
+
+/** A seed and the commitment it was published against — 64 hex, as recorded. */
+const SEED = '4d81f0b6a72c395e4d81f0b6a72c395e4d81f0b6a72c395e4d81f0b6a72c395e';
+const SEED_HASH = '0f1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a6978';
 import type { ConnectionGateway, QueryResultRow, TransactionalClient } from '../../src/lib/shell/write.ts';
 
 function logEvent(
@@ -149,6 +187,8 @@ function fakeGateway(options: {
 	managers?: ManagerRow[];
 	/** Team ids that exist in `teams`. Defaults to "every Team the events name". */
 	teams?: string[];
+	/** Team id -> name, for the Closed state's Contender-list lookup. */
+	teamNames?: Record<string, string>;
 	/** The viewer Team's `team_rosters` rows. Defaults to nine $1.0M contracts. */
 	roster?: QueryResultRow[];
 	/**
@@ -244,6 +284,19 @@ function fakeGateway(options: {
 			// (Story 2.5). A label, not a loosened fake: an unrecognised
 			// statement still throws, so a second query per Bid — or a read of
 			// a table this module has no business touching — fails the suite.
+			// The ONE statement that resolves a closed lottery's Contender NAMES
+			// (the Closed state). A label, not a loosened fake: a name-per-
+			// Contender read would be thirty queries and `order` is what proves
+			// it is one.
+			if (/^select id::text as id, name\s+from teams/i.test(sql)) {
+				order.push('read-team-names');
+				const wanted = (params[0] ?? []) as readonly string[];
+				return {
+					rows: Object.entries(options.teamNames ?? {})
+						.filter(([id]) => wanted.includes(id))
+						.map(([id, name]) => ({ id, name }))
+				};
+			}
 			if (/^select m\.id::text as id, m\.team_id::text as team_id, m\.display_name/i.test(sql)) {
 				order.push('read-bidders');
 				const wanted = (params[0] ?? []) as readonly string[];
@@ -312,9 +365,11 @@ describe('loadAuctionPage — an open Auction', () => {
 			managers: [{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' }]
 		});
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		expect(auction).toEqual({
+			// The read is discriminated: this one found an OPEN Auction.
+			kind: 'open',
 			fantraxPlayerId: 'p-1',
 			playerName: 'Jalen Green',
 			metadata: { positions: 'SG', nbaTeam: 'HOU' },
@@ -389,7 +444,7 @@ describe('loadAuctionPage — an open Auction', () => {
 			managers: [{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' }]
 		});
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		expect(auction?.playerName).toBe('Jalen Green');
 		expect(auction?.metadata).toBeNull();
@@ -407,7 +462,7 @@ describe('loadAuctionPage — an open Auction', () => {
 			managers: [{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' }]
 		});
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		expect(auction?.playerName).toBe('Jalen Green');
 	});
@@ -421,7 +476,7 @@ describe('loadAuctionPage — an open Auction', () => {
 			managers: []
 		});
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		// `Lakers — Lakers` would read as a Manager literally called
 		// "Lakers" — a name in neither the fold nor the reference table, and
@@ -441,7 +496,7 @@ describe('loadAuctionPage — an open Auction', () => {
 			managers: [{ id: 'm-2', teamId: 't-2', displayName: 'Someone Else' }]
 		});
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		expect(auction?.nominatingTeam).toBe('Lakers');
 	});
@@ -456,7 +511,7 @@ describe('loadAuctionPage — an open Auction', () => {
 			teams: []
 		});
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		expect(auction?.nominatingTeam).toBe('Lakers');
 	});
@@ -515,7 +570,7 @@ describe('loadAuctionPage — an open Auction', () => {
 describe('loadAuctionPage — no open nomination', () => {
 	it('returns null for a Player never nominated — AC4', async () => {
 		const harness = fakeGateway({ events: [] });
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 		expect(auction).toBeNull();
 	});
 
@@ -523,24 +578,173 @@ describe('loadAuctionPage — no open nomination', () => {
 		const harness = fakeGateway({
 			events: [nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1')]
 		});
-		const auction = await loadAuctionPage(harness.gateway, 'p-does-not-exist', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-does-not-exist', VIEWER_TEAM));
 		expect(auction).toBeNull();
 	});
 
-	// Matrix row "Closed / never nominated", the close half. Story 2.3 shipped
-	// the release fold (`nominations.ts:260-276`) and no producer, so a close is
-	// only ever synthetic until Story 3.4 — which is exactly how 2.3 proved it.
-	// Without this the row is covered on its never-nominated half only, and the
-	// page would keep rendering a Player whose Auction is over.
-	it('returns null once the Auction has closed, through the Story 2.3 release fold', async () => {
+	// Matrix row "Closed", INVERTED. Until the Closed state existed this
+	// asserted `null` and the route turned it into a 404, so an Auction with a
+	// winner, a final amount and — for a lottery — a seed and an ordered
+	// Contender list had no surface at all. It renders now, and what proves the
+	// close still happened is the DISCRIMINANT: the nomination and the Auction
+	// are gone from their folds, and the contract is what is left.
+	it('renders the CLOSED state once the Auction has closed, not a 404', async () => {
 		const harness = fakeGateway({
 			events: [
 				nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1'),
 				logEvent(2, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1' }))
+			],
+			teams: [CLOSED_TEAM_ID],
+			freeAgents: [
+				{ fantraxPlayerId: 'p-1', playerName: 'Jalen Green', positions: 'SG', nbaTeam: 'HOU' }
+			],
+			managers: [{ id: 'm-w', teamId: CLOSED_TEAM_ID, displayName: 'Sam' }]
+		});
+		const closed = closedPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
+
+		expect(closed?.kind).toBe('closed');
+		expect(closed?.playerName).toBe('Jalen Green');
+		expect(closed?.metadata).toEqual({ positions: 'SG', nbaTeam: 'HOU' });
+		// The winner, the final amount and the placement — the three
+		// `EXPERIENCE.md:168` asks a Closed state for.
+		expect(closed?.winner).toBe('Team W');
+		expect(closed?.winningAmount).toBe('$1.0M');
+		expect(closed?.placementSentence).toBe(wonCardSentence('active_bench', parseMoney(1_000_000)));
+		// The Auction's own persisted expiry, never the transaction clock.
+		expect(closed?.closedAt).toBe('2026-08-27T09:00:00.000Z');
+		// No draw: this close was a Standard one.
+		expect(closed?.draw).toBeNull();
+		// A Standard close records the winning TEAM and no Manager, so the page
+		// names the Team alone rather than borrowing a Manager id from
+		// somewhere else. `m-w` is on the payload and is deliberately not read.
+		expect(closed?.winner).not.toContain('Sam');
+	});
+
+	// Matrix row "Draw with no contract". A `ContentionDrawn` alone is not a
+	// closed Auction: it says a lottery selected somebody and the close was
+	// never recorded, which is a corrupt or half-written log. Inventing a
+	// winner from it would put a Player on a roster nothing says they are on.
+	it('404s on a draw with no close behind it — a draw alone is not a Closed Auction', async () => {
+		const harness = fakeGateway({
+			events: [
+				logEvent(1, CONTENTION_DRAWN_EVENT, {
+					fantraxPlayerId: 'p-1',
+					seed: SEED,
+					seedHash: SEED_HASH,
+					contenders: ['t-a', 't-b'],
+					selectedIndex: 1,
+					winningTeamId: 't-b',
+					winningTeamName: 'Rockets',
+					winningManagerId: 'm-b'
+				})
 			]
 		});
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
-		expect(auction).toBeNull();
+		expect(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM)).toBeNull();
+	});
+
+	it('renders the lottery half: the commitment, the seed and the ordered list', async () => {
+		const harness = fakeGateway({
+			events: [
+				nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1'),
+				logEvent(2, CONTENTION_DRAWN_EVENT, {
+					fantraxPlayerId: 'p-1',
+					seed: SEED,
+					seedHash: SEED_HASH,
+					contenders: ['t-a', 't-b', 't-c'],
+					selectedIndex: 1,
+					winningTeamId: 't-b',
+					winningTeamName: 'Rockets',
+					winningManagerId: 'm-b'
+				}),
+				logEvent(
+					3,
+					AUCTION_CLOSED_EVENT,
+					closedPayload({ fantraxPlayerId: 'p-1', teamId: 't-b', teamName: 'Rockets' })
+				)
+			],
+			teams: ['t-b'],
+			teamNames: { 't-a': 'Lakers', 't-b': 'Rockets' },
+			managers: [{ id: 'm-b', teamId: 't-b', displayName: 'Sam' }]
+		});
+		const closed = closedPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
+
+		expect(closed?.draw?.drawn).toBe(true);
+		expect(closed?.draw?.seed).toBe(SEED);
+		expect(closed?.draw?.seedHash).toBe(SEED_HASH);
+		expect(closed?.draw?.selectedIndex).toBe(1);
+		// The list is NAMES in the fold's own `seq` order and is never
+		// re-sorted: AD-14 makes that order an input to the winner, so a
+		// reordered list is not the list the draw ran over.
+		expect(closed?.draw?.contenders.map((entry) => entry.teamName)).toEqual([
+			'Lakers',
+			'Rockets',
+			// Matrix row "Contender id naming no Team": the id is printed AS
+			// itself rather than the Contender being dropped, because dropping
+			// one would shorten a list whose LENGTH decides the winner.
+			't-c'
+		]);
+		expect(closed?.draw?.contenders.map((entry) => entry.selected)).toEqual([false, true, false]);
+		// The sentence `/verify` is checked against, asserted for its VALUE and
+		// not merely for being non-null. The formatter is unit-tested in
+		// isolation, which proves it correct in the abstract; this is the only
+		// assertion that the server hands it the right two arguments. An
+		// off-by-one here — `selectedIndex + 1` on top of the formatter's own
+		// increment, or `contenders.length - 1` — prints a position a Manager
+		// running the published procedure would fail to reproduce, which is the
+		// one failure AD-14 cannot absorb.
+		expect(closed?.draw?.selectionSentence).toBe('The draw selected position 2 of 3.');
+		// The draw records the winning Manager, so this page can name one.
+		expect(closed?.winner).toBe('Rockets — Sam');
+		// One statement for the whole list, never one per Contender.
+		expect(harness.order.filter((label) => label === 'read-team-names')).toHaveLength(1);
+	});
+
+	// Matrix row "Emptied lottery" (Story 10.5). A real recorded outcome: the
+	// commitment is discharged whatever the list came out as, so the seed is
+	// revealed and the page states that no draw ran.
+	it('renders an EMPTIED lottery: seed and commitment, and no selection', async () => {
+		const harness = fakeGateway({
+			events: [
+				nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1'),
+				logEvent(2, CONTENTION_DRAWN_EVENT, {
+					fantraxPlayerId: 'p-1',
+					seed: SEED,
+					seedHash: SEED_HASH,
+					contenders: []
+				}),
+				logEvent(3, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1' }))
+			],
+			teams: [CLOSED_TEAM_ID]
+		});
+		const closed = closedPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
+
+		expect(closed?.draw?.drawn).toBe(false);
+		expect(closed?.draw?.seed).toBe(SEED);
+		expect(closed?.draw?.seedHash).toBe(SEED_HASH);
+		expect(closed?.draw?.contenders).toEqual([]);
+		// No position, because `drawIndex` was never reached. A `0` beside an
+		// empty list would name a place that does not exist.
+		expect(closed?.draw?.selectedIndex).toBeNull();
+		expect(closed?.draw?.selectionSentence).toBeNull();
+		// An empty list costs no `teams` statement at all.
+		expect(harness.order).not.toContain('read-team-names');
+	});
+
+	// Matrix row "Missing free_agent_players row", on the closed path. The
+	// close does NOT delete the reference row — only `import-promotion.ts`
+	// does — so this is the same fallback the open branch takes, proven on the
+	// branch that would otherwise never exercise it.
+	it('falls back to the contract own name when the reference row is absent', async () => {
+		const harness = fakeGateway({
+			events: [
+				nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1'),
+				logEvent(2, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1' }))
+			],
+			teams: [CLOSED_TEAM_ID]
+		});
+		const closed = closedPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
+		expect(closed?.playerName).toBe('A Won Player');
+		expect(closed?.metadata).toBeNull();
 	});
 
 	it('still renders a different Player whose Auction is still open', async () => {
@@ -549,10 +753,11 @@ describe('loadAuctionPage — no open nomination', () => {
 				nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1'),
 				nominated(2, 'p-2', 'Alperen Sengun', 't-2', 'Rockets', 'm-2'),
 				logEvent(3, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1' }))
-			]
+			],
+			teams: [CLOSED_TEAM_ID, 't-2']
 		});
-		expect(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM)).toBeNull();
-		expect(await loadAuctionPage(harness.gateway, 'p-2', VIEWER_TEAM)).not.toBeNull();
+		expect((await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM))?.kind).toBe('closed');
+		expect((await loadAuctionPage(harness.gateway, 'p-2', VIEWER_TEAM))?.kind).toBe('open');
 	});
 
 	it('rolls back rather than commits on a null read', async () => {
@@ -561,8 +766,28 @@ describe('loadAuctionPage — no open nomination', () => {
 		expect(harness.state.committed).toBe(false);
 		expect(harness.state.rolledBack).toBe(true);
 		expect(harness.state.released).toBe(1);
-		// No reference or manager lookup runs when there is nothing to look up.
-		expect(harness.order).toEqual(['begin', 'read-log', 'rollback']);
+		// ONE database clock, on this path as on every other — it is what the
+		// Closed state's relative phrase is measured from, so it is read above
+		// the branch rather than in one arm of it. No reference, manager or
+		// `teams` lookup runs when there is nothing to look up.
+		expect(harness.order).toEqual(['begin', 'read-log', 'read-clock', 'rollback']);
+	});
+
+	it('reads the log ONCE and the clock ONCE on the closed path too', async () => {
+		const harness = fakeGateway({
+			events: [
+				nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1'),
+				logEvent(2, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1' }))
+			],
+			teams: [CLOSED_TEAM_ID]
+		});
+		await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		expect(harness.order.filter((label) => label === 'read-log')).toHaveLength(1);
+		expect(harness.order.filter((label) => label === 'read-clock')).toHaveLength(1);
+		expect(harness.order.at(-1)).toBe('rollback');
+		expect(harness.state.committed).toBe(false);
+		// No lock: rendering a page is not a write, on either branch.
+		expect(harness.order.some((label) => /advisory/i.test(label))).toBe(false);
 	});
 });
 
@@ -648,7 +873,7 @@ describe('loadAuctionPage — the Auction with Bids on it (AC6)', () => {
 	it('renders the current price, the Leading Bidder and the absolute close instant', async () => {
 		const harness = contestedAuction();
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		expect(auction?.price).toBe('$8.5M');
 		expect(auction?.leadingBidder).toBe('Rockets — Sam');
@@ -661,7 +886,7 @@ describe('loadAuctionPage — the Auction with Bids on it (AC6)', () => {
 	it('renders every Bid in chronological order, each naming the acting Manager', async () => {
 		const harness = contestedAuction();
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		expect(auction?.bids).toEqual([
 			{
@@ -721,7 +946,7 @@ describe('loadAuctionPage — the Auction with Bids on it (AC6)', () => {
 			managers: [{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' }]
 		});
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		expect(auction?.leadingBidder).toBe('Rockets');
 		expect(auction?.bids[0]?.bidder).toBe('Rockets');
@@ -748,12 +973,12 @@ describe('loadAuctionPage — the Auction with Bids on it (AC6)', () => {
 			managers: [{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' }]
 		});
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		expect(auction?.leadingBidder).toBe('Rockets');
 	});
 
-	it('drops the Auction, price and all, once a close is folded', async () => {
+	it('drops the Auction, price and Bid history alike, once a close is folded', async () => {
 		const harness = fakeGateway({
 			events: [
 				nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1', NOMINATED_AT),
@@ -768,10 +993,27 @@ describe('loadAuctionPage — the Auction with Bids on it (AC6)', () => {
 					'2026-08-27T09:00:00.000Z'
 				),
 				logEvent(3, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1' }))
-			]
+			],
+			teams: [CLOSED_TEAM_ID]
 		});
 
-		expect(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM)).toBeNull();
+		// The Auction is gone from `auctionsReducer`, so the read no longer
+		// finds an OPEN one — it finds the Closed state, which carries the
+		// winner, the amount and the placement.
+		const closed = closedPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
+		expect(closed?.kind).toBe('closed');
+		// **And no Bid history, on purpose.** The Bids left with the Auction,
+		// so a history assembled from whatever survived would be an invented
+		// one — on the surface whose whole claim is that it can be checked.
+		// There is no `bids`, no `price` and no `leadingBidder` on this shape
+		// at all, which is what makes that structural rather than a rendering
+		// choice a later edit could reverse.
+		expect(Object.keys(closed ?? {})).not.toContain('bids');
+		expect(Object.keys(closed ?? {})).not.toContain('leadingBidder');
+		// And no nominating Team either: `nominationsReducer` deleted the
+		// nomination, so naming one would be naming a Team nothing in the log
+		// still says nominated this Player.
+		expect(Object.keys(closed ?? {})).not.toContain('nominatingTeam');
 	});
 });
 
@@ -779,7 +1021,7 @@ describe('loadAuctionPage — the bid control is evaluate() on the read path (AC
 	it('pre-fills the minimum legal raise: the current high plus $500,000', async () => {
 		const harness = contestedAuction();
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		expect(auction?.bidControl.minimumLegal).toBe(9_000_000);
 		expect(auction?.bidControl.minimumLegalSentence).toBe(
@@ -793,7 +1035,7 @@ describe('loadAuctionPage — the bid control is evaluate() on the read path (AC
 		const harness = contestedAuction();
 
 		// `t-2` holds the $8.5M leading Bid.
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', 't-2');
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', 't-2'));
 
 		expect(auction?.bidControl.available).toBe(false);
 		expect(auction?.bidControl.detail).toContain('does not bid against itself');
@@ -901,7 +1143,7 @@ describe('loadAuctionPage — the bid control is evaluate() on the read path (AC
 	it('ships the two gate facts, so the surface can re-evaluate a TYPED amount', async () => {
 		const harness = contestedAuction();
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		// Exactly `BidState`, serialised: the leading Team and the leading
 		// amount. Without these the control could only ever know about the
@@ -936,7 +1178,7 @@ describe('loadAuctionPage — the bid control is evaluate() on the read path (AC
 			managers: [{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' }]
 		});
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		expect(auction?.bidControl.minimumLegal).toBe(7_250_000);
 		expect(auction?.bidControl.minimumLegalSentence).toBeNull();
@@ -947,7 +1189,7 @@ describe('loadAuctionPage — the bid control is evaluate() on the read path (AC
 	it('disables the control for a Manager bound to no Team, with the unbound sentence', async () => {
 		const harness = contestedAuction();
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', null);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', null));
 
 		expect(auction?.bidControl.available).toBe(false);
 		// No gate ran at all: an unbound actor has no Team for a command to
@@ -958,7 +1200,7 @@ describe('loadAuctionPage — the bid control is evaluate() on the read path (AC
 	it('serialises no DERIVED money figure anywhere in what it returns (AD-7)', async () => {
 		const harness = contestedAuction();
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', 't-2');
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', 't-2'));
 
 		// Narrowed to the DERIVED money figures in Story 2.7. `Roster Count` is
 		// no longer forbidden here: a read path that refuses on capacity now
@@ -996,7 +1238,7 @@ describe('loadAuctionPage — the viewer Team money state (Story 2.6)', () => {
 			managers: [{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' }]
 		});
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', null);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', null));
 
 		// No Team, no roster to read and no arithmetic to show. A query keyed
 		// on `null` would be a statement asking nothing.
@@ -1013,7 +1255,7 @@ describe('loadAuctionPage — the viewer Team money state (Story 2.6)', () => {
 			managers: [{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' }]
 		});
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 		const control = auction?.bidControl as Record<string, unknown>;
 
 		expect(control['team']).toEqual({
@@ -1045,7 +1287,7 @@ describe('loadAuctionPage — the viewer Team money state (Story 2.6)', () => {
 			managers: [{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' }]
 		});
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		expect(Number.isNaN(Date.parse(String(auction?.bidControl.figuresAt)))).toBe(false);
 	});
@@ -1069,7 +1311,7 @@ describe('loadAuctionPage — the viewer Team money state (Story 2.6)', () => {
 			}))
 		});
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		expect(auction?.bidControl.available).toBe(false);
 		// Worded by the core, and it names the figure rather than saying "no".
@@ -1094,7 +1336,7 @@ describe('loadAuctionPage — the viewer Team money state (Story 2.6)', () => {
 			}))
 		});
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		expect(auction?.bidControl.available).toBe(false);
 		// Worded by the core, with the capacity arithmetic and no cap figure.
@@ -1115,7 +1357,7 @@ describe('loadAuctionPage — the viewer Team money state (Story 2.6)', () => {
 			managers: [{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' }]
 		});
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		expect(auction?.bidControl.available).toBe(true);
 	});
@@ -1139,7 +1381,7 @@ describe('loadAuctionPage — the clock the expiry gate is decided against (Stor
 	it('uses that ONE instant for both the caption and the gate', async () => {
 		const harness = contestedAuction();
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		// The caption's instant IS the database's, not Node's.
 		expect(auction?.bidControl.figuresAt).toBe(harness.now.toISOString());
@@ -1210,7 +1452,7 @@ describe('loadAuctionPage — the clock the expiry gate is decided against (Stor
 			now: '2026-08-27T11:00:00.000Z'
 		});
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		expect(auction?.bidControl.available).toBe(false);
 		// The core's sentence, and no other ground: the money and the roster
@@ -1243,7 +1485,7 @@ describe('loadAuctionPage — the clock the expiry gate is decided against (Stor
 			now: '2026-08-27T08:59:59.999Z'
 		});
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		expect(auction?.bidControl.available).toBe(true);
 		expect(auction?.bidControl.detail).toBe(BID_READY);
@@ -1275,7 +1517,7 @@ describe('loadAuctionPage — the clock the expiry gate is decided against (Stor
 			now: '2026-08-27T11:00:00.000Z'
 		});
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		// Checked as KEYS rather than as raw text, because the core's own
 		// refusal sentence legitimately contains the word "expired" — it is
@@ -1422,7 +1664,7 @@ describe('loadAuctionPage — a Minimum-Bid Contention (Story 3.2, AC7)', () => 
 	it('serialises the Contender list by NAME, in join order, with its count', async () => {
 		const harness = lotteryAuction();
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		expect(auction?.contention).toBe('Minimum-Bid Contention.');
 		// Ascending join `seq` (AD-14) — the fold's order, never re-sorted.
@@ -1433,7 +1675,7 @@ describe('loadAuctionPage — a Minimum-Bid Contention (Story 3.2, AC7)', () => 
 	it('serialises the published commitment and nothing else about the seed', async () => {
 		const harness = lotteryAuction();
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		expect(auction?.seedHash).toBe('a'.repeat(64));
 		// The read path issues no statement against the seed table at all —
@@ -1444,7 +1686,7 @@ describe('loadAuctionPage — a Minimum-Bid Contention (Story 3.2, AC7)', () => 
 	it('serialises the contention FACTS the gates decide from, and no derived flag', async () => {
 		const harness = lotteryAuction();
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		// The fold's own state literal, and the Contender Teams by id.
 		expect(auction?.bidControl.contention).toBe('minimum_bid');
@@ -1462,7 +1704,7 @@ describe('loadAuctionPage — a Minimum-Bid Contention (Story 3.2, AC7)', () => 
 	it('pre-fills the join amount, not a raise over it', async () => {
 		const harness = lotteryAuction();
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		expect(auction?.bidControl.minimumLegal).toBe(1_000_000);
 		expect(auction?.bidControl.minimumLegalSentence).toBe(
@@ -1480,7 +1722,7 @@ describe('loadAuctionPage — a Minimum-Bid Contention (Story 3.2, AC7)', () => 
 		// and the pre-fill follows the gates rather than being adjusted to
 		// match them. Story 3.2 disabled the control here, because there was
 		// no legal amount at all for a Team already in.
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', 't-2');
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', 't-2'));
 
 		expect(auction?.bidControl.minimumLegal).toBe(1_500_000);
 		expect(auction?.bidControl.available).toBe(true);
@@ -1495,7 +1737,7 @@ describe('loadAuctionPage — a Minimum-Bid Contention (Story 3.2, AC7)', () => 
 		// function the surface calls on every keystroke, and $1,000,000 from
 		// a Team already in is still `already_contending`.
 		const harness = lotteryAuction();
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', 't-2');
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', 't-2'));
 		const control = auction?.bidControl;
 		if (control === undefined) throw new Error('no bid control');
 
@@ -1530,7 +1772,7 @@ describe('loadAuctionPage — a Minimum-Bid Contention (Story 3.2, AC7)', () => 
 	it('renders the whole lottery for a viewer bound to NO Team', async () => {
 		const harness = lotteryAuction();
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', null);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', null));
 
 		// Accent bar, icon, word, count and list are all facts about the
 		// Auction, so they are here for every viewer.
@@ -1548,7 +1790,7 @@ describe('loadAuctionPage — a Minimum-Bid Contention (Story 3.2, AC7)', () => 
 	it('reports the close as the OPENING’s, unmoved by three joins', async () => {
 		const harness = lotteryAuction();
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		expect(auction?.closesAt).toBe('2026-08-27T09:00:00.000Z');
 		// The lead never moved either: a join is never strictly higher.
@@ -1559,7 +1801,7 @@ describe('loadAuctionPage — a Minimum-Bid Contention (Story 3.2, AC7)', () => 
 	it('carries an empty Contender list and a null commitment outside a lottery', async () => {
 		const harness = contestedAuction();
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		expect(auction?.contention).toBe('Standard Contention.');
 		expect(auction?.contenders).toEqual([]);
@@ -1576,7 +1818,7 @@ describe('loadAuctionPage — a Minimum-Bid Contention (Story 3.2, AC7)', () => 
 		// nothing to serialise.
 		const harness = lotteryAuction();
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		expect(auction?.seedHash).toBe('a'.repeat(64));
 		expect(auction?.seed).toBeNull();
@@ -1638,7 +1880,7 @@ function dissolvedAuction() {
 
 describe('loadAuctionPage — a dissolved Minimum-Bid Contention (Story 3.3)', () => {
 	it('serialises the revealed seed beside the commitment it answers', async () => {
-		const auction = await loadAuctionPage(dissolvedAuction().gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(dissolvedAuction().gateway, 'p-1', VIEWER_TEAM));
 
 		expect(auction?.seed).toBe('the-revealed-seed');
 		expect(auction?.seedHash).toBe('a'.repeat(64));
@@ -1654,7 +1896,7 @@ describe('loadAuctionPage — a dissolved Minimum-Bid Contention (Story 3.3)', (
 		// "The Contender list is discarded" is about commitment and the draw.
 		// The page names the Teams that were released beside the seed that
 		// will now never be drawn from.
-		const auction = await loadAuctionPage(dissolvedAuction().gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(dissolvedAuction().gateway, 'p-1', VIEWER_TEAM));
 
 		expect(auction?.contenders).toEqual(['Lakers', 'Rockets']);
 		expect(auction?.contenderCount).toBe(2);
@@ -1663,7 +1905,7 @@ describe('loadAuctionPage — a dissolved Minimum-Bid Contention (Story 3.3)', (
 	it('renders the whole thing for a viewer bound to NO Team', async () => {
 		// A dissolution is a fact about the Auction, not about who is looking
 		// at it. The control is the only thing their session changes.
-		const auction = await loadAuctionPage(dissolvedAuction().gateway, 'p-1', null);
+		const auction = openPage(await loadAuctionPage(dissolvedAuction().gateway, 'p-1', null));
 
 		expect(auction?.seed).toBe('the-revealed-seed');
 		expect(auction?.seedHash).toBe('a'.repeat(64));
@@ -1679,7 +1921,7 @@ describe('loadAuctionPage — a dissolved Minimum-Bid Contention (Story 3.3)', (
 		// Contender gets the identical figure — there is no lottery left for
 		// them to be already in.
 		for (const viewer of [VIEWER_TEAM, 't-1', 't-2']) {
-			const auction = await loadAuctionPage(dissolvedAuction().gateway, 'p-1', viewer);
+			const auction = openPage(await loadAuctionPage(dissolvedAuction().gateway, 'p-1', viewer));
 			expect(auction?.bidControl.minimumLegal, viewer).toBe(2_000_000);
 			expect(auction?.bidControl.contention, viewer).toBe('standard');
 			expect(auction?.bidControl.contenderTeamIds, viewer).toEqual(['t-1', 't-2']);
@@ -1737,7 +1979,7 @@ describe('loadAuctionPage — a won Player is in the viewer’s figures (AC4)', 
 			managers: [{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' }]
 		});
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		// The nine imported $1.0M contracts plus the $8.0M win.
 		expect(auction?.bidControl.team?.capSpace).toBe(156_000_000 - 8_000_000);
@@ -1759,7 +2001,7 @@ describe('loadAuctionPage — a won Player is in the viewer’s figures (AC4)', 
 			managers: [{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' }]
 		});
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		expect(auction?.bidControl.team?.capSpace).toBe(156_000_000);
 		expect(auction?.bidControl.team?.rosterCount).toBe(9);
@@ -1778,7 +2020,7 @@ describe('loadAuctionPage — a won Player is in the viewer’s figures (AC4)', 
 			managers: [{ id: 'm-1', teamId: 't-1', displayName: 'Meakel' }]
 		});
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		expect(auction?.bidControl.team?.capSpace).toBe(156_000_000);
 		expect(auction?.bidControl.team?.rosterCount).toBe(9);
@@ -1838,7 +2080,7 @@ describe('loadAuctionPage — a cancelled Bid carries its cause to the wire (Sto
 	it('names the causing PLAYER and reports a survivor, on the cancelled Bid alone', async () => {
 		const harness = cancelledAuction(SURVIVOR);
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		// The cancelled Bid — the causing Player by NAME, not by id, and a
 		// successor was seated.
@@ -1856,7 +2098,7 @@ describe('loadAuctionPage — a cancelled Bid carries its cause to the wire (Sto
 	it('reports no survivor when nothing was restored — the other sentence entirely', async () => {
 		const harness = cancelledAuction(null);
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		expect(auction?.bids.find((bid) => bid.seq === '3')?.cancellation).toEqual({
 			causePlayerName: 'Stephen Curry',
@@ -1867,7 +2109,7 @@ describe('loadAuctionPage — a cancelled Bid carries its cause to the wire (Sto
 	it('carries the cause NAME rather than the cause id — they are different strings', async () => {
 		const harness = cancelledAuction(SURVIVOR);
 
-		const auction = await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM);
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 
 		const cancellation = auction?.bids.find((bid) => bid.seq === '3')?.cancellation ?? null;
 		// `causeFantraxPlayerId` is `p-9` and the name is `Stephen Curry`. A

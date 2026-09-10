@@ -71,6 +71,7 @@ import {
 	contenderCountSentence
 } from './projection/auctions.ts';
 import type { Auction, ContentionState, OpenAuctions } from './projection/auctions.ts';
+import { wonCardSentence } from './projection/closed.ts';
 import { contractsWonBy } from './projection/contracts.ts';
 import type { AuctionContract, AuctionContracts } from './projection/contracts.ts';
 import {
@@ -387,23 +388,24 @@ export type WonCard = {
 	/** The Auction's own persisted expiry — the surface renders it absolutely. */
 	readonly closedAt: string;
 	/**
-	 * **`null` until a closed Auction has a page.**
+	 * The deep link to this Auction's Closed page.
 	 *
-	 * A close DELETES the Player from `auctionsReducer` and
-	 * `nominationsReducer` (`projection/auctions.ts:806-815`), and
-	 * `routes/auction/[fantraxPlayerId]/+page.server.ts:93` raises `error(404)`
-	 * on that null read — so `auctionPathFor(...)` on a won Player is a link
-	 * to a 404, and the Won group is the FIRST group on the landing page. A
-	 * card that names the Player, the amount, the placement and the Cap Hit
-	 * already carries everything the close produced; a link that refuses adds
-	 * nothing to it and costs the tap that discovers so.
+	 * **It was `null`, and the reason it was is gone.** A close DELETES the
+	 * Player from `auctionsReducer` and `nominationsReducer`
+	 * (`projection/auctions.ts:806-815`), so `/auction/<id>` answered 404 for
+	 * every won Player and a link here would have been a link to a refusal in
+	 * the FIRST group on the landing page. `projection/closed.ts` composes the
+	 * two folds that DO survive a close, and the route now renders that Closed
+	 * state instead of 404ing — so the link resolves, and it resolves to a page
+	 * carrying what this card cannot: the closed instant in full, and for a
+	 * lottery the revealed seed, the published commitment and the ordered
+	 * Contender list AD-14 makes an input to the winner.
 	 *
-	 * `deferred-work.md`'s spec-3-6 entry assigns the closed-Auction surface
-	 * (winner, amount, placement, and the lottery's seed and Contender list)
-	 * to Epic 4. When it exists this becomes `auctionPathFor(...)` and the
-	 * surface's `{#if}` falls away — the one place either changes.
+	 * Never a literal: `auctionPathFor` is the one place that shape is spelled,
+	 * so the link a Manager taps here and the link Discord emits are one shape
+	 * (`core/auction-link.ts`).
 	 */
-	readonly href: string | null;
+	readonly href: string;
 };
 
 /** What an Auction the viewer has been outbid on says. */
@@ -502,35 +504,6 @@ export type Positions = {
 };
 
 // --- The wording -----------------------------------------------------------
-
-/**
- * What each placement is called, in the glossary's own words.
- *
- * Exported since Story 4.5. A Team view lists a won Player as a roster row and
- * states where he landed, and `wonCardSentence` below is the sentence that
- * says it — but the Team view also groups its roster by slot kind, and the
- * headings for THAT come from `rules/roster-import.ts`'s `SLOT_LABELS`,
- * because this record is the article-form ("an Active/Bench Slot") a sentence
- * needs and holds no `injury_reserve` entry at all. Two spellings already
- * existed for two registers; Story 4.5 adds neither.
- */
-export const PLACEMENT_LABELS: Readonly<Record<SlotPlacement, string>> = Object.freeze({
-	active_bench: 'an Active/Bench Slot',
-	minor_league: 'a Minor League Slot'
-});
-
-/**
- * Where a won Player landed and what it charges, in words.
- *
- * Both facts, always, because they are independent (AD-23): a Minor League
- * placement carries a `$0` Cap Hit while the winning amount stands unchanged,
- * and a card that stated only the amount would let a Manager read a $0 charge
- * as an $11.0M one. No celebration and no exclamation — this is a statement
- * of what the roster now holds.
- */
-export function wonCardSentence(placement: SlotPlacement, capHit: Money): string {
-	return `Placed in ${PLACEMENT_LABELS[placement]} at a ${describeAmount(capHit)} Cap Hit.`;
-}
 
 /**
  * What a lead commits, and when it is released.
@@ -683,6 +656,13 @@ function groupFor(auction: Auction, viewerTeamId: string): PositionsGroup | null
 			return 'you_lead';
 		case 'outbid':
 			return 'outbid';
+		// `won` is unreachable from this call: `viewerStateFor` answers about a
+		// LIVE Auction and only `closedViewerStateFor` ever returns it. The
+		// case is stated rather than left to a default so the switch stays
+		// exhaustive — the Won group is built from `contractsWonBy` above, off
+		// the contracts fold, and never from an Auction row that no longer
+		// exists.
+		case 'won':
 		case 'not_involved':
 			return null;
 	}
@@ -754,9 +734,9 @@ export function positionsFor(input: {
 			placement: contract.placement,
 			sentence: wonCardSentence(contract.placement, contract.capHit),
 			closedAt: contract.closedAt,
-			// No link: a closed Auction has no page yet, and the Won group is
-			// the first thing on the landing. See `WonCard.href`.
-			href: null
+			// The Closed page, which exists now. `auctionPathFor` and never a
+			// literal — see `WonCard.href`.
+			href: auctionPathFor(contract.fantraxPlayerId)
 		})
 	);
 

@@ -52,8 +52,21 @@
 	import {
 		AUCTION_STATE_ICONS,
 		AUCTION_STATE_LABELS,
-		BOARD_LEADING_LABEL
+		BOARD_FINAL_LABEL,
+		BOARD_LEADING_LABEL,
+		BOARD_WON_BY_LABEL
 	} from '$lib/core/board.ts';
+	// The Closed state's own words, from the module that composes the two
+	// folds it renders. Nothing below spells one of them.
+	import {
+		EMPTIED_LOTTERY_STATEMENT,
+		SEED_COMMITMENT_LABEL,
+		SEED_REVEALED_LABEL,
+		SELECTED_CONTENDER_ICON,
+		SELECTED_CONTENDER_LABEL,
+		VERIFY_INVITATION,
+		VERIFY_PATH
+	} from '$lib/core/projection/closed.ts';
 	import { formatInstant, parseInstant, relativePhrase } from '$lib/core/instant.ts';
 	import { parseMoney } from '$lib/core/money.ts';
 	import {
@@ -166,7 +179,63 @@
 		readonly figuresAt: string;
 	};
 
+	/**
+	 * One Contender in a closed lottery, as the read path resolved it — the
+	 * Team's NAME — the raw id when the `teams` lookup missed — and whether
+	 * the draw selected it. The ORDER is the server's and is never touched
+	 * here: AD-14 makes ascending join `seq` an input to the winner.
+	 */
+	type ClosedContender = {
+		readonly teamId: string;
+		readonly teamName: string;
+		readonly selected: boolean;
+	};
+
+	/** The lottery half of a Closed Auction, or `null` on a Standard close. */
+	type ClosedDraw = {
+		readonly drawn: boolean;
+		readonly seed: string;
+		readonly seedHash: string | null;
+		readonly contenders: readonly ClosedContender[];
+		readonly selectedIndex: number | null;
+		readonly selectionSentence: string | null;
+	};
+
+	/**
+	 * The Closed state of an Auction (`EXPERIENCE.md:168`).
+	 *
+	 * Every field is already worded or rendered by the core — the winner
+	 * spelled out with its Manager, the amount through the one money renderer,
+	 * the placement through `wonCardSentence`. What is NOT pre-worded is
+	 * anything depending on the reader's own clock, which is the same split the
+	 * open half takes.
+	 */
+	type ClosedAuctionView = {
+		readonly kind: 'closed';
+		readonly fantraxPlayerId: string;
+		readonly playerName: string;
+		readonly metadata: AuctionMetadata | null;
+		readonly winner: string;
+		readonly winningAmount: string;
+		readonly placementSentence: string;
+		readonly closedAt: string;
+		readonly draw: ClosedDraw | null;
+		readonly figuresAt: string;
+	};
+
+	/**
+	 * What the read returned: an OPEN Auction or a CLOSED one, discriminated
+	 * on `kind` exactly as the server discriminates it.
+	 *
+	 * Declared so the page narrows ONCE and the compiler checks the rest.
+	 * A closed read carries no `bidControl` and an open one carries no
+	 * winner, so reading either field off the wrong arm is the mistake this
+	 * union exists to make impossible.
+	 */
+	type AuctionRead = Auction | ClosedAuctionView;
+
 	type Auction = {
+		readonly kind: 'open';
 		readonly fantraxPlayerId: string;
 		readonly playerName: string;
 		readonly metadata: AuctionMetadata | null;
@@ -218,8 +287,41 @@
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
-	const auction = $derived(data.auction as Auction);
+	/**
+	 * The read, discriminated. An Auction is open or it is closed, and the two
+	 * have almost nothing in common — one has a bid control, a clock and a Bid
+	 * history, the other a winner, a placement and possibly a draw.
+	 *
+	 * **The whole markup below is one `{#if}` on this.** Every derivation for
+	 * the open half stays exactly as it was, and none of them runs on a closed
+	 * page: `$derived` is lazy, so a value the closed branch never reads is a
+	 * value that is never computed. The handful of places that ARE eager — the
+	 * initial `amount` and the effects — are guarded explicitly, because an
+	 * effect runs whether or not its markup is on screen.
+	 */
+	/**
+	 * The ONE cast, at the wire boundary, and the only one on this page.
+	 *
+	 * `Money` is a brand and a brand does not survive JSON (AD-8), so the
+	 * two shapes above are hand-declared mirrors of what the server
+	 * serialised rather than the server's own types — importing those would
+	 * claim branded figures the browser cannot hold. That makes one cast
+	 * unavoidable; it does not make a SECOND one acceptable. Casting once
+	 * into the discriminated union and narrowing on `kind` after leaves the
+	 * compiler checking every field access below, where probing an inline
+	 * `{ kind?: string }` and re-casting each arm threw that away at exactly
+	 * the seam this state introduced.
+	 */
+	const read = $derived(data.auction as AuctionRead);
+	const closed = $derived(read.kind === 'closed' ? read : null);
+	const auction = $derived(read as Auction);
 	const control = $derived(auction.bidControl);
+	/**
+	 * The server instant every phrase on this page is anchored on, whichever
+	 * state the read found. One field on each shape, read once here so `nowIso`
+	 * below has one origin rather than a branch of its own.
+	 */
+	const anchorAt = $derived(closed !== null ? closed.figuresAt : control.figuresAt);
 	const bidForm = $derived(form as BidForm | undefined);
 	const appended = $derived(bidForm?.appended ?? null);
 
@@ -232,7 +334,7 @@
 	 * dollars" about a field the Manager has not touched.
 	 */
 	// svelte-ignore state_referenced_locally
-	let amount = $state(String((data.auction as Auction).bidControl.minimumLegal));
+	let amount = $state(String((data.auction as AuctionRead as Auction).bidControl?.minimumLegal ?? 0));
 
 	/** The confirmation. Ticking it is not bidding either. */
 	let confirmed = $state(false);
@@ -240,6 +342,10 @@
 	// Re-seed whenever the server's figure changes — a raise landed, or the
 	// page reloaded after a submit.
 	$effect(() => {
+		// A closed Auction has no bid control and no field to re-seed. The
+		// guard is here rather than in the markup because an effect runs
+		// regardless of what is rendered.
+		if (closed !== null) return;
 		amount = String(control.minimumLegal);
 	});
 
@@ -315,8 +421,8 @@
 	 * own stamp cannot be read.
 	 */
 	const nowIso = $derived.by(() => {
-		const anchor = parseInstant(control.figuresAt);
-		if (anchor === null) return control.figuresAt;
+		const anchor = parseInstant(anchorAt);
+		if (anchor === null) return anchorAt;
 		return formatInstant(anchor + elapsedMs);
 	});
 
@@ -333,7 +439,7 @@
 	// origin would be added to the old device measurement and the page would
 	// run ahead of the server by however long the tab had been open.
 	$effect(() => {
-		void control.figuresAt;
+		void anchorAt;
 		elapsedMs = 0;
 		const startedAt = Date.now();
 		const ticking = setInterval(() => {
@@ -553,6 +659,16 @@
 	// instant involved is UTC, and the arithmetic between two of them is the
 	// same wherever it runs.
 	const relative = $derived(relativePhrase(auction.nominatedAt, nowIso));
+	/**
+	 * How long ago the Auction closed, from the core's own phrase and the same
+	 * server-anchored `now` every other phrase on this page reads. Rendered
+	 * BESIDE the absolute stamp and never instead of it — a viewer who runs no
+	 * scripts still gets this one, which is honest, rather than a time in a
+	 * timezone that is not theirs.
+	 */
+	const closedRelative = $derived(
+		closed === null ? null : relativePhrase(closed.closedAt, nowIso)
+	);
 	// `closesInPhrase` rather than `relativePhrase`: a close time is ahead of
 	// the reader, and the "ago" phrasing would read a future instant as
 	// "moments ago".
@@ -616,6 +732,8 @@
 	// theirs, which is not.
 	let nominatedAbsolute = $state<string | null>(null);
 	let closesAtAbsolute = $state<string | null>(null);
+	/** The closed instant, in the viewer's own timezone. Closed pages only. */
+	let closedAtAbsolute = $state<string | null>(null);
 
 	// `Intl.DateTimeFormat.format` throws `RangeError` on an Invalid Date,
 	// so an unparseable instant is checked for rather than formatted. The
@@ -632,12 +750,20 @@
 		}).format(parsed);
 	}
 
+	// The three stamp effects are each guarded on which state the read found:
+	// an effect runs whether or not its markup is on screen, and a closed
+	// Auction carries neither a nomination nor a clock to stamp.
 	$effect(() => {
-		nominatedAbsolute = formatAbsolute(auction.nominatedAt);
+		nominatedAbsolute = closed !== null ? null : formatAbsolute(auction.nominatedAt);
 	});
 
 	$effect(() => {
-		closesAtAbsolute = auction.closesAt === null ? null : formatAbsolute(auction.closesAt);
+		closesAtAbsolute =
+			closed !== null || auction.closesAt === null ? null : formatAbsolute(auction.closesAt);
+	});
+
+	$effect(() => {
+		closedAtAbsolute = closed === null ? null : formatAbsolute(closed.closedAt);
 	});
 
 	// The arithmetic's timestamp, in the viewer's own timezone and therefore
@@ -649,373 +775,498 @@
 	let figuresAtAbsolute = $state<string | null>(null);
 
 	$effect(() => {
+		if (closed !== null) {
+			figuresAtAbsolute = null;
+			return;
+		}
 		const stamp = bidForm?.figuresAt ?? control.figuresAt;
 		figuresAtAbsolute = formatAbsolute(stamp);
 	});
 </script>
 
 <svelte:head>
-	<title>{auction.playerName} — Auction — Appspiration</title>
+	<title>{closed !== null ? closed.playerName : auction.playerName} — Auction — Appspiration</title>
 </svelte:head>
 
 <main class="page">
-	<!-- The identity block: the name, and the line that identifies the Player
-	     beneath it. The metadata had a `.panel` of its own — a background, a
-	     border, a `Player` label and twelve characters inside it — for two
-	     fields that belong to the name they sit under.
+	{#if closed !== null}
+	<!-- **The Closed state** (`EXPERIENCE.md:168`): the winner, the final
+	     amount, the Slot placement, and for a lottery the seed, the published
+	     commitment and the ordered Contender list.
 
-	     Rendered only when the reference row exists, and OMITTED rather than
-	     blanked when it does not: the matrix names a blank rendering as the
-	     wrong answer, and an absent line is absent, not empty. -->
+	     There is no Bid history here and its absence is deliberate:
+	     `auctionsReducer` deletes the Auction at the close, so the Bids are not
+	     durable past it and a partial history assembled from whatever survived
+	     would be an invented one — on the page whose whole claim is that it can
+	     be checked. There is no nominating Team either, for the same reason
+	     applied to `nominationsReducer`.
+
+	     Nothing here congratulates and nothing counts down. A settled Auction
+	     is stated. -->
 	<header class="masthead">
-		<h1 class="display">{auction.playerName}</h1>
-		{#if auction.metadata !== null}
+		<h1 class="display">{closed.playerName}</h1>
+		{#if closed.metadata !== null}
 			<p class="metadata" id="auction-metadata">
-				{auction.metadata.nbaTeam} &middot; {auction.metadata.positions}
+				{closed.metadata.nbaTeam} &middot; {closed.metadata.positions}
 			</p>
 		{/if}
 	</header>
 
-	<!-- The 3px `lottery` left bar marks a Minimum-Bid Contention and nothing
-	     else in the system (DESIGN.md:162) — the Bid Board card's own mark, on
-	     the panel that card's price links to. It never carries the state
-	     ALONE: the icon and the word at the head of this panel are what make a
-	     greyscale screenshot read identically. -->
-	<section class="panel" class:lottery={isContention}>
-		<!-- The label, with the Auction's own state at the trailing edge — the
-		     Bid Board card's identity row, on the page that card links to.
-		     Ambient and never a chip: it describes the Auction, not the reader,
-		     and the one attention colour marks Outbid and refusal alone.
-
-		     It carries an ICON and a WORD together, so a greyscale screenshot
-		     reads identically; `lottery` tints the pair the way the Board's own
-		     card does, and the colour is never the carrier. -->
+	<section class="panel">
+		<!-- The Auction's own state at the trailing edge, from the Bid Board's
+		     own record — one word and one shape for one state, on the card and
+		     on the page that card links to. Ambient and never a chip: it
+		     describes the Auction, not the reader. -->
 		<div class="section-head">
-			<p class="section-label">Price</p>
-			<p class="auction-state" class:lottery-text={isContention}>
-				<span class="auction-state-icon" aria-hidden="true"
-					>{AUCTION_STATE_ICONS[gateState.contention]}</span
-				>
-				<span>{AUCTION_STATE_LABELS[gateState.contention]}</span>
+			<p class="section-label">{BOARD_FINAL_LABEL}</p>
+			<p class="auction-state">
+				<span class="auction-state-icon" aria-hidden="true">{AUCTION_STATE_ICONS.closed}</span>
+				<span>{AUCTION_STATE_LABELS.closed}</span>
 			</p>
 		</div>
-		<!-- The current price and who holds it, both from the fold. The
-		     Leading Bidder is spelled out with the acting Manager: there is
-		     no anonymity at any point on this page.
-
-		     The price takes the money size DESIGN.md gives a figure on the
-		     surface that bids — it is the one number a Manager reads before
-		     anything else. "No bids yet." is a STATEMENT rather than a figure,
-		     so it stays at the prose size: what distinguishes an absent price
-		     from a small one is the weight it is set in. -->
-		{#if auction.price === null}
-			<p class="prose" id="auction-price">No bids yet.</p>
-		{:else}
-			<p class="price" id="auction-price">{auction.price}</p>
-		{/if}
-		<!-- The label is hidden rather than printed: a spelled-out
-		     `Team — Manager` on the line under a price identifies itself,
-		     which is the reading the Board and Your Positions cards have
-		     always taken. It stays a NAMED value for a screen reader, from
-		     the Board's own constant rather than respelled here — the same
-		     value goes by the same name on the card and on the page the card
-		     links to. -->
-		<p class="prose" id="auction-leading-bidder">
-			{#if auction.leadingBidder === null}
-				No Team leads this Auction yet.
-			{:else}
-				<span class="visually-hidden">{BOARD_LEADING_LABEL}</span>
-				{auction.leadingBidder}
-			{/if}
+		<!-- What the Player went for, at the money size this page gives the one
+		     figure a Manager reads before anything else. -->
+		<p class="price" id="auction-final-amount">{closed.winningAmount}</p>
+		<!-- Who won it, spelled out with the acting Manager where one was
+		     recorded. There is no anonymity at any point on this page. -->
+		<p class="prose" id="auction-winner">
+			<span class="section-label">{BOARD_WON_BY_LABEL}</span>
+			{closed.winner}
 		</p>
-		<!-- The rest of the Contender list, under the Team whose Bid opened the
-		     contention. In the fold's own join order — ascending `seq` — and
-		     never re-sorted here: AD-14 makes that order an input to the
-		     winner, so a surface that reordered it would be showing a list the
-		     draw will not run over.
-
-		     The leading Team is dropped rather than printed twice, matched by
-		     ID and never by the display string beside it: `contenderTeamIds`
-		     is the same fold array in the same order as the names, which is
-		     what makes the index safe to line up. -->
-		{#if otherContenders.length > 0}
-			<ul class="contenders" id="auction-contenders">
-				{#each otherContenders as contender, position (position)}
-					<li class="prose">{contender}</li>
-				{/each}
-			</ul>
-		{/if}
-		<!-- The Auction Clock, on the price panel rather than a panel of its
-		     own: what a Manager weighs is the standing price AND how long is
-		     left to answer it, and a border between the two made them two
-		     questions. Absent until the first Bid, because until then there is
-		     no clock to state — the server persists an ABSOLUTE close instant
-		     and this page counts down from it; "seconds remaining" is never
-		     sent (AD-3).
-
-		     Rendered TWICE on one ruled row, relative and absolute in the
-		     viewer's own timezone, and the absolute is never dropped. -->
-		{#if auction.closesAt !== null}
-			<p class="clock" id="auction-closes-at">
-				{#if closesAtAbsolute !== null}
-					<span class="clock-absolute" id="auction-closes-absolute">{closesAtAbsolute}</span>
-				{/if}
-				<span id="auction-closes-relative">{closesIn}</span>
-			</p>
-			<!-- The core's own sentence, printed. Not worded here, and not a
-			     second reading of the countdown beside it: both derive from
-			     the same absolute close instant and the same server-anchored
-			     now, so a tab left open with no update at all still crosses
-			     its own close (AD-29). -->
-			{#if expired}
-				<p class="prose" id="auction-expired">{AUCTION_EXPIRED}</p>
+		<!-- Where the Player landed and what it charges — the core's own
+		     sentence, the same one Your Positions' won card prints. Both facts
+		     always, because they are independent (AD-23). -->
+		<p class="prose" id="auction-placement">{closed.placementSentence}</p>
+		<!-- The close instant, TWICE: the relative phrase and the absolute
+		     stamp in the viewer's own timezone, and the absolute is never
+		     dropped for space. -->
+		<p class="clock" id="auction-closed-at">
+			{#if closedAtAbsolute !== null}
+				<span class="clock-absolute" id="auction-closed-absolute">{closedAtAbsolute}</span>
 			{/if}
-		{/if}
+			<span id="auction-closed-relative">{closedRelative}</span>
+		</p>
 	</section>
 
-	<!-- Maximum Bid, wherever bidding occurs (FR-12), and never as a bare
-	     number: the four components are broken out and the column sums
-	     exactly as displayed, which the $500,000 grid makes possible at one
-	     decimal. Every figure is `evaluate()`'s own output, recomputed on
-	     each keystroke and each reload — nothing is memoised, so there is no
-	     stale figure to invalidate. Omitted entirely for a viewer bound to no
-	     Team: there is no Maximum Bid, and a column of zeroes would read as a
-	     Team that is broke rather than one that does not exist. -->
-	{#if standingBreakdown.length > 0}
-		<section class="panel">
-			<!-- Labelled LAST-KNOWN in anything but Live (AD-29): in a non-Live
-			     state money either carries its age or the control it would
-			     authorise is disabled, and while the control is still enabled
-			     this label is the carrying half. The label is the core's, in
-			     every state including Live — the surface prints one field. The
-			     age itself is stated once, by the notice the layout mounts, so
-			     it is not repeated here. -->
-			<p class="section-label">{MAXIMUM_BID_LABELS[freshness.state]}</p>
-			<!-- Collapsible HERE and nowhere else: this column is read before a
-			     Manager types, when what they want is the answer and what they
-			     occasionally want is the ledger behind it. The refusal panel
-			     renders the same column whole — a breakdown a Manager has to
-			     ask for is a breakdown they will not check, which is the one
-			     thing a refusal may not be. -->
-			<CapBreakdown lines={standingBreakdown} id="auction-maximum-bid" collapsible />
+	{#if closed.draw !== null}
+		<!-- **The lottery half** (AD-14). The published commitment, the revealed
+		     seed and the list the draw ran over, in the fold's own join order
+		     and never re-sorted here — the order is an input to the winner, so a
+		     reordered list is not the list that was drawn from.
+
+		     This is the only page in the product that prints a seed. Until it
+		     existed `/verify` stated a procedure with nothing real to run it
+		     against, and `drawForPlayer` had no caller outside the test suite. -->
+		<section class="panel lottery">
+			<div class="section-head">
+				<p class="section-label">{AUCTION_STATE_LABELS.minimum_bid}</p>
+			</div>
+			<!-- The commitment first and the seed under it, in the order a
+			     Manager checks them: the hash was published when the lottery
+			     opened, and the seed is what it commits to. -->
+			{#if closed.draw.seedHash !== null}
+				<p class="prose" id="auction-seed-hash">
+					<span class="section-label">{SEED_COMMITMENT_LABEL}</span>
+					<span class="hex-value">{closed.draw.seedHash}</span>
+				</p>
+			{/if}
+			<p class="prose" id="auction-seed">
+				<span class="section-label">{SEED_REVEALED_LABEL}</span>
+				<span class="hex-value">{closed.draw.seed}</span>
+			</p>
+			{#if closed.draw.drawn}
+				<p class="prose" id="auction-selection">{closed.draw.selectionSentence}</p>
+				<!-- The ordered Contender list. The selected position is marked
+				     with a word AND a shape, never a colour alone, and the
+				     one-based position is printed beside each name because the
+				     number is what a Manager running the procedure has in hand. -->
+				<ol class="contenders" id="auction-draw-contenders">
+					{#each closed.draw.contenders as contender, position (contender.teamId)}
+						<li class="prose" class:contender-selected={contender.selected}>
+							<span class="contender-position">{position + 1}</span>
+							<span>{contender.teamName}</span>
+							{#if contender.selected}
+								<span class="contender-mark" aria-hidden="true"
+									>{SELECTED_CONTENDER_ICON}</span
+								>
+								<span class="section-label">{SELECTED_CONTENDER_LABEL}</span>
+							{/if}
+						</li>
+					{/each}
+				</ol>
+			{:else}
+				<!-- The emptied lottery (Story 10.5). A real recorded outcome, not
+				     a missing one: the commitment is discharged whatever the list
+				     came out as, so the seed above is printed either way. -->
+				<p class="prose" id="auction-emptied-lottery">{EMPTIED_LOTTERY_STATEMENT}</p>
+			{/if}
+			<!-- The link a losing Manager came for. `/verify` states the
+			     procedure and holds no league data at all, so it can only ever be
+			     run against values read here. -->
+			<p class="prose">
+				<a href={VERIFY_PATH} id="auction-verify-link">{VERIFY_INVITATION}</a>
+			</p>
 		</section>
 	{/if}
+	{:else}
+		<!-- The identity block: the name, and the line that identifies the Player
+		     beneath it. The metadata had a `.panel` of its own — a background, a
+		     border, a `Player` label and twelve characters inside it — for two
+		     fields that belong to the name they sit under.
 
-	<section class="manager-block">
-		<p class="section-label">Place a Bid</p>
-
-		<!-- The refusal panel, above the control it is about, ending with the
-		     disabled control that follows it. It appears only for a refusal
-		     that HAS arithmetic behind it; the three raised before any
-		     transaction opens carry none, and the control is simply off. -->
-		{#if refusalDelta !== null}
-			<RefusalPanel
-				delta={refusalDelta}
-				gates={refusalGateRows}
-				breakdown={refusalBreakdown}
-				caption={refusalBreakdown.length === 0 || figuresAtAbsolute === null
-					? null
-					: figuresAtCaption(figuresAtAbsolute)}
-			/>
-		{/if}
-
-		<form method="POST" action="?/bid">
-			<!-- The three parts of the act on one row, in the order they are
-			     performed: type an amount, tick the confirmation, press the
-			     submit. It is the only horizontal pairing on this page, and it
-			     wraps rather than shrinking any of the three below the touch
-			     floor at 375px.
-
-			     The confirmation sits BETWEEN the field and the submit rather
-			     than beneath them: it is the second half of a two-part act,
-			     and a Manager's hand travels amount → confirm → place without
-			     passing over the button that commits on the way. The act is
-			     unchanged — the submit is still disabled until the box is
-			     ticked, and the core is still what decides that.
-
-			     The field is pre-filled with the smallest LEGAL Bid — a rule,
-			     never a recommendation. -->
-			<!-- The allowance trade, once, before the confirm step and in
-			     plain prose (UX-DR34). Not a dialog, not a checkbox, and
-			     carrying no alarm treatment: the cancellation it names is
-			     automatic and ordinary, which is exactly why it is said before
-			     rather than discovered after. Worded by the core.
-
-			     The amount field points at this paragraph through
-			     `aria-describedby` ONLY while it exists — the reference is
-			     built from the same `allowanceTrade` the `{#if}` is, so it
-			     cannot dangle the way the always-present availability
-			     sentence below is arranged never to. -->
-			{#if allowanceTrade !== null}
-				<p class="prose" id="auction-bid-allowance">{allowanceTrade}</p>
+		     Rendered only when the reference row exists, and OMITTED rather than
+		     blanked when it does not: the matrix names a blank rendering as the
+		     wrong answer, and an absent line is absent, not empty. -->
+		<header class="masthead">
+			<h1 class="display">{auction.playerName}</h1>
+			{#if auction.metadata !== null}
+				<p class="metadata" id="auction-metadata">
+					{auction.metadata.nbaTeam} &middot; {auction.metadata.positions}
+				</p>
 			{/if}
+		</header>
 
-			<div class="bid-row">
-				<label class="visually-hidden" for="auction-bid-amount">
-					Your Bid, in whole dollars
-				</label>
-				<!-- The FIELD is disabled on the standing condition, not just the
-				     submit: when this Auction will take no Bid from your Team at
-				     any amount, there is nothing to type.
-				     `control.available` is the server's answer at LOAD, and it
-				     cannot change in place — so expiry is named beside it. A
-				     clock that has run out is exactly the kind of standing
-				     condition this binding is for: no amount will change it.
-				     Without this, a tab left open across its own close would
-				     grey the submit and leave the field typable, which is the
-				     one case AD-29 exempts countdowns from freezing FOR.
-				     Stale is the third such standing condition (Story 4.1): when
-				     the app cannot confirm the figures beside the field, there is
-				     nothing to type either — and unlike the two above, it clears
-				     by itself the moment the server is reachable again. -->
-				<input
-					id="auction-bid-amount"
-					class="bid-amount"
-					name="amount"
-					type="text"
-					inputmode="numeric"
-					autocomplete="off"
-					aria-describedby={allowanceTrade === null
-						? 'auction-bid-availability'
-						: 'auction-bid-availability auction-bid-allowance'}
-					disabled={!control.available || expired || staleBlocked}
-					bind:value={amount}
-				/>
-				<!-- The second part of the act, between the amount and the
-				     control that commits it. The consequence sentence that
-				     stood beside this box, and again as a paragraph above the
-				     form, is gone from both: it said one thing twice on the one
-				     surface that must read cleanly, and what it named — the
-				     amount — is in the field beside it, being typed.
+		<!-- The 3px `lottery` left bar marks a Minimum-Bid Contention and nothing
+		     else in the system (DESIGN.md:162) — the Bid Board card's own mark, on
+		     the panel that card's price links to. It never carries the state
+		     ALONE: the icon and the word at the head of this panel are what make a
+		     greyscale screenshot read identically. -->
+		<section class="panel" class:lottery={isContention}>
+			<!-- The label, with the Auction's own state at the trailing edge — the
+			     Bid Board card's identity row, on the page that card links to.
+			     Ambient and never a chip: it describes the Auction, not the reader,
+			     and the one attention colour marks Outbid and refusal alone.
 
-				     What now stands above this row is a DIFFERENT sentence and
-				     is not a return of that one (Story 10.6): it appears only
-				     when this prospective Bid is the allowance Bid, it names a
-				     consequence the amount cannot show — that a win elsewhere
-				     cancels this Bid — and it is stated once, here, and on no
-				     later view. -->
-				<label class="confirm" for="auction-bid-confirm">
-					<input
-						id="auction-bid-confirm"
-						name="confirm"
-						type="checkbox"
-						value="yes"
-						bind:checked={confirmed}
-					/>
-					<span class="prose">I confirm this Bid.</span>
-				</label>
-				<button
-					class="control-manager"
-					type="submit"
-					disabled={blocked}
-					aria-describedby="auction-bid-availability"
-				>
-					Place the Bid
-				</button>
+			     It carries an ICON and a WORD together, so a greyscale screenshot
+			     reads identically; `lottery` tints the pair the way the Board's own
+			     card does, and the colour is never the carrier. -->
+			<div class="section-head">
+				<p class="section-label">Price</p>
+				<p class="auction-state" class:lottery-text={isContention}>
+					<span class="auction-state-icon" aria-hidden="true"
+						>{AUCTION_STATE_ICONS[gateState.contention]}</span
+					>
+					<span>{AUCTION_STATE_LABELS[gateState.contention]}</span>
+				</p>
 			</div>
-		</form>
+			<!-- The current price and who holds it, both from the fold. The
+			     Leading Bidder is spelled out with the acting Manager: there is
+			     no anonymity at any point on this page.
 
-		<!-- The reason, BENEATH the control it is about and always in the DOM
-		     so the two `aria-describedby` references above can never dangle —
-		     but VISUALLY HIDDEN. The sentence it prints is every
-		     `bidRefusalDetail` framing ("No Bid was placed: …"), which read as
-		     explainer clutter on the one surface that must read cleanly: the
-		     panel above already states a refusal, and the control being off is
-		     the visible answer for the rest. It stays in the accessibility
-		     tree because a disabled control naming no reason is what WCAG
-		     1.4.3's exemption is conditioned on. Worded by the core in every
-		     branch, including the ready one — the surface prints one field. -->
-		<p class="visually-hidden" id="auction-bid-availability">{reason}</p>
-
-		<!-- The outcome of a submit is the only place a Manager learns whether
-		     the Bid landed, and after a form post the focus is still on the
-		     control that was pressed. `role="status"` announces it politely
-		     rather than leaving a screen reader user to go looking. -->
-		<div role="status">
-			<!-- The framed refusal sentence that stood here is gone, along with
-			     the availability line and the minimum-legal line that stood
-			     beneath the control: the panel above carries the headline, the
-			     delta, the reassurance and the arithmetic, and nothing on this
-			     screen restates them in prose. -->
-			{#if appended}
-				<p class="prose" id="auction-bid-appended">{bidAppendedSentence(appended.seq)}</p>
+			     The price takes the money size DESIGN.md gives a figure on the
+			     surface that bids — it is the one number a Manager reads before
+			     anything else. "No bids yet." is a STATEMENT rather than a figure,
+			     so it stays at the prose size: what distinguishes an absent price
+			     from a small one is the weight it is set in. -->
+			{#if auction.price === null}
+				<p class="prose" id="auction-price">No bids yet.</p>
+			{:else}
+				<p class="price" id="auction-price">{auction.price}</p>
 			{/if}
-		</div>
-	</section>
+			<!-- The label is hidden rather than printed: a spelled-out
+			     `Team — Manager` on the line under a price identifies itself,
+			     which is the reading the Board and Your Positions cards have
+			     always taken. It stays a NAMED value for a screen reader, from
+			     the Board's own constant rather than respelled here — the same
+			     value goes by the same name on the card and on the page the card
+			     links to. -->
+			<p class="prose" id="auction-leading-bidder">
+				{#if auction.leadingBidder === null}
+					No Team leads this Auction yet.
+				{:else}
+					<span class="visually-hidden">{BOARD_LEADING_LABEL}</span>
+					{auction.leadingBidder}
+				{/if}
+			</p>
+			<!-- The rest of the Contender list, under the Team whose Bid opened the
+			     contention. In the fold's own join order — ascending `seq` — and
+			     never re-sorted here: AD-14 makes that order an input to the
+			     winner, so a surface that reordered it would be showing a list the
+			     draw will not run over.
 
-	<section class="panel">
-		<p class="section-label">History</p>
-		<!-- Every Bid, oldest first, each naming the Team and the acting
-		     Manager. No anonymity at any point. Nothing here lets a Bid be
-		     taken back, revised or reduced — that whole class of control is
-		     absent from this page, not merely turned off. -->
-		{#if auction.bids.length === 0}
-			<p class="prose" id="auction-history">No bids have been placed yet.</p>
-		{:else}
-			<ul class="history" id="auction-history">
-				{#each auction.bids as bid (bid.seq)}
-					<!-- Who bid and when on the left, what they bid on the right —
-					     one row instead of three stacked lines, so a seven-Bid
-					     history is read rather than scrolled. The amounts share a
-					     trailing edge, which is what makes a column of tabular
-					     figures scannable. -->
-					<!-- A cancelled Bid is struck through and labelled, in
-					     unchanged `seq` order — never deleted, hidden or
-					     reordered (FR-40). The label is one word and the
-					     sentence beneath it names the win that caused it; both
-					     are the core's, and both are worded so the row cannot
-					     be read as a void, which would say somebody decided the
-					     Bid should not have stood. A Bid that was never
-					     cancelled renders exactly as before. -->
-					<li class="history-row" class:cancelled={bid.cancellation !== null}>
-						<span class="history-bidder">
-							<span class="prose">{bid.bidder}</span>
-							<span class="history-when">{relativePhrase(bid.occurredAt, nowIso)}</span>
-							{#if bid.cancellation !== null}
-								<span class="history-cancelled">
-									{bidCancelledSentence(bid.cancellation.causePlayerName, bid.cancellation.restored)}
-								</span>
-							{/if}
-						</span>
-						<!-- Whitespace-tight, and it has to be. `.history-row` is
-						     `justify-content: space-between`, so a newline before
-						     `{bid.amount}` or after the `{/if}` renders as a text
-						     node and walks every amount — cancelled or not — off
-						     the trailing edge that makes a column of tabular
-						     figures scannable. An uncancelled Bid must render with
-						     no layout shift at all. -->
-						<span class="history-amount"
-							>{bid.amount}{#if bid.cancellation !== null}<span class="history-cancelled-label"
-									>{BID_CANCELLED_LABEL}</span
-								>{/if}</span
-						>
-					</li>
-				{/each}
-			</ul>
+			     The leading Team is dropped rather than printed twice, matched by
+			     ID and never by the display string beside it: `contenderTeamIds`
+			     is the same fold array in the same order as the names, which is
+			     what makes the index safe to line up. -->
+			{#if otherContenders.length > 0}
+				<ul class="contenders" id="auction-contenders">
+					{#each otherContenders as contender, position (position)}
+						<li class="prose">{contender}</li>
+					{/each}
+				</ul>
+			{/if}
+			<!-- The Auction Clock, on the price panel rather than a panel of its
+			     own: what a Manager weighs is the standing price AND how long is
+			     left to answer it, and a border between the two made them two
+			     questions. Absent until the first Bid, because until then there is
+			     no clock to state — the server persists an ABSOLUTE close instant
+			     and this page counts down from it; "seconds remaining" is never
+			     sent (AD-3).
+
+			     Rendered TWICE on one ruled row, relative and absolute in the
+			     viewer's own timezone, and the absolute is never dropped. -->
+			{#if auction.closesAt !== null}
+				<p class="clock" id="auction-closes-at">
+					{#if closesAtAbsolute !== null}
+						<span class="clock-absolute" id="auction-closes-absolute">{closesAtAbsolute}</span>
+					{/if}
+					<span id="auction-closes-relative">{closesIn}</span>
+				</p>
+				<!-- The core's own sentence, printed. Not worded here, and not a
+				     second reading of the countdown beside it: both derive from
+				     the same absolute close instant and the same server-anchored
+				     now, so a tab left open with no update at all still crosses
+				     its own close (AD-29). -->
+				{#if expired}
+					<p class="prose" id="auction-expired">{AUCTION_EXPIRED}</p>
+				{/if}
+			{/if}
+		</section>
+
+		<!-- Maximum Bid, wherever bidding occurs (FR-12), and never as a bare
+		     number: the four components are broken out and the column sums
+		     exactly as displayed, which the $500,000 grid makes possible at one
+		     decimal. Every figure is `evaluate()`'s own output, recomputed on
+		     each keystroke and each reload — nothing is memoised, so there is no
+		     stale figure to invalidate. Omitted entirely for a viewer bound to no
+		     Team: there is no Maximum Bid, and a column of zeroes would read as a
+		     Team that is broke rather than one that does not exist. -->
+		{#if standingBreakdown.length > 0}
+			<section class="panel">
+				<!-- Labelled LAST-KNOWN in anything but Live (AD-29): in a non-Live
+				     state money either carries its age or the control it would
+				     authorise is disabled, and while the control is still enabled
+				     this label is the carrying half. The label is the core's, in
+				     every state including Live — the surface prints one field. The
+				     age itself is stated once, by the notice the layout mounts, so
+				     it is not repeated here. -->
+				<p class="section-label">{MAXIMUM_BID_LABELS[freshness.state]}</p>
+				<!-- Collapsible HERE and nowhere else: this column is read before a
+				     Manager types, when what they want is the answer and what they
+				     occasionally want is the ledger behind it. The refusal panel
+				     renders the same column whole — a breakdown a Manager has to
+				     ask for is a breakdown they will not check, which is the one
+				     thing a refusal may not be. -->
+				<CapBreakdown lines={standingBreakdown} id="auction-maximum-bid" collapsible />
+			</section>
 		{/if}
 
-		<!-- The nomination, in the footnote position the mock gives it: who put
-		     this Player up and when. It had two `.panel`s of its own above the
-		     price — a Team name and a timestamp, each with a heading, in the
-		     two most valuable inches on the page — and it belongs at the foot
-		     of the record it opens, which is what the history IS.
+		<section class="manager-block">
+			<p class="section-label">Place a Bid</p>
 
-		     The Team is spelled out with its acting Manager attached, from
-		     `formatTeamManager`'s one rendering, never re-worded here. Time
-		     appears TWICE: a relative phrase and an absolute stamp in the
-		     viewer's own timezone, and the absolute is never dropped for
-		     space. -->
-		<p class="footnote" id="auction-nominated-at">
-			<span class="section-label">Nominated by</span>
-			<span id="auction-nominating-team">{auction.nominatingTeam}</span>
-			&middot;
-			<span id="auction-nominated-relative">{relative}</span>
-			{#if nominatedAbsolute !== null}
-				&middot;
-				<span id="auction-nominated-absolute">{nominatedAbsolute}</span>
+			<!-- The refusal panel, above the control it is about, ending with the
+			     disabled control that follows it. It appears only for a refusal
+			     that HAS arithmetic behind it; the three raised before any
+			     transaction opens carry none, and the control is simply off. -->
+			{#if refusalDelta !== null}
+				<RefusalPanel
+					delta={refusalDelta}
+					gates={refusalGateRows}
+					breakdown={refusalBreakdown}
+					caption={refusalBreakdown.length === 0 || figuresAtAbsolute === null
+						? null
+						: figuresAtCaption(figuresAtAbsolute)}
+				/>
 			{/if}
-		</p>
-	</section>
+
+			<form method="POST" action="?/bid">
+				<!-- The three parts of the act on one row, in the order they are
+				     performed: type an amount, tick the confirmation, press the
+				     submit. It is the only horizontal pairing on this page, and it
+				     wraps rather than shrinking any of the three below the touch
+				     floor at 375px.
+
+				     The confirmation sits BETWEEN the field and the submit rather
+				     than beneath them: it is the second half of a two-part act,
+				     and a Manager's hand travels amount → confirm → place without
+				     passing over the button that commits on the way. The act is
+				     unchanged — the submit is still disabled until the box is
+				     ticked, and the core is still what decides that.
+
+				     The field is pre-filled with the smallest LEGAL Bid — a rule,
+				     never a recommendation. -->
+				<!-- The allowance trade, once, before the confirm step and in
+				     plain prose (UX-DR34). Not a dialog, not a checkbox, and
+				     carrying no alarm treatment: the cancellation it names is
+				     automatic and ordinary, which is exactly why it is said before
+				     rather than discovered after. Worded by the core.
+
+				     The amount field points at this paragraph through
+				     `aria-describedby` ONLY while it exists — the reference is
+				     built from the same `allowanceTrade` the `{#if}` is, so it
+				     cannot dangle the way the always-present availability
+				     sentence below is arranged never to. -->
+				{#if allowanceTrade !== null}
+					<p class="prose" id="auction-bid-allowance">{allowanceTrade}</p>
+				{/if}
+
+				<div class="bid-row">
+					<label class="visually-hidden" for="auction-bid-amount">
+						Your Bid, in whole dollars
+					</label>
+					<!-- The FIELD is disabled on the standing condition, not just the
+					     submit: when this Auction will take no Bid from your Team at
+					     any amount, there is nothing to type.
+					     `control.available` is the server's answer at LOAD, and it
+					     cannot change in place — so expiry is named beside it. A
+					     clock that has run out is exactly the kind of standing
+					     condition this binding is for: no amount will change it.
+					     Without this, a tab left open across its own close would
+					     grey the submit and leave the field typable, which is the
+					     one case AD-29 exempts countdowns from freezing FOR.
+					     Stale is the third such standing condition (Story 4.1): when
+					     the app cannot confirm the figures beside the field, there is
+					     nothing to type either — and unlike the two above, it clears
+					     by itself the moment the server is reachable again. -->
+					<input
+						id="auction-bid-amount"
+						class="bid-amount"
+						name="amount"
+						type="text"
+						inputmode="numeric"
+						autocomplete="off"
+						aria-describedby={allowanceTrade === null
+							? 'auction-bid-availability'
+							: 'auction-bid-availability auction-bid-allowance'}
+						disabled={!control.available || expired || staleBlocked}
+						bind:value={amount}
+					/>
+					<!-- The second part of the act, between the amount and the
+					     control that commits it. The consequence sentence that
+					     stood beside this box, and again as a paragraph above the
+					     form, is gone from both: it said one thing twice on the one
+					     surface that must read cleanly, and what it named — the
+					     amount — is in the field beside it, being typed.
+
+					     What now stands above this row is a DIFFERENT sentence and
+					     is not a return of that one (Story 10.6): it appears only
+					     when this prospective Bid is the allowance Bid, it names a
+					     consequence the amount cannot show — that a win elsewhere
+					     cancels this Bid — and it is stated once, here, and on no
+					     later view. -->
+					<label class="confirm" for="auction-bid-confirm">
+						<input
+							id="auction-bid-confirm"
+							name="confirm"
+							type="checkbox"
+							value="yes"
+							bind:checked={confirmed}
+						/>
+						<span class="prose">I confirm this Bid.</span>
+					</label>
+					<button
+						class="control-manager"
+						type="submit"
+						disabled={blocked}
+						aria-describedby="auction-bid-availability"
+					>
+						Place the Bid
+					</button>
+				</div>
+			</form>
+
+			<!-- The reason, BENEATH the control it is about and always in the DOM
+			     so the two `aria-describedby` references above can never dangle —
+			     but VISUALLY HIDDEN. The sentence it prints is every
+			     `bidRefusalDetail` framing ("No Bid was placed: …"), which read as
+			     explainer clutter on the one surface that must read cleanly: the
+			     panel above already states a refusal, and the control being off is
+			     the visible answer for the rest. It stays in the accessibility
+			     tree because a disabled control naming no reason is what WCAG
+			     1.4.3's exemption is conditioned on. Worded by the core in every
+			     branch, including the ready one — the surface prints one field. -->
+			<p class="visually-hidden" id="auction-bid-availability">{reason}</p>
+
+			<!-- The outcome of a submit is the only place a Manager learns whether
+			     the Bid landed, and after a form post the focus is still on the
+			     control that was pressed. `role="status"` announces it politely
+			     rather than leaving a screen reader user to go looking. -->
+			<div role="status">
+				<!-- The framed refusal sentence that stood here is gone, along with
+				     the availability line and the minimum-legal line that stood
+				     beneath the control: the panel above carries the headline, the
+				     delta, the reassurance and the arithmetic, and nothing on this
+				     screen restates them in prose. -->
+				{#if appended}
+					<p class="prose" id="auction-bid-appended">{bidAppendedSentence(appended.seq)}</p>
+				{/if}
+			</div>
+		</section>
+
+		<section class="panel">
+			<p class="section-label">History</p>
+			<!-- Every Bid, oldest first, each naming the Team and the acting
+			     Manager. No anonymity at any point. Nothing here lets a Bid be
+			     taken back, revised or reduced — that whole class of control is
+			     absent from this page, not merely turned off. -->
+			{#if auction.bids.length === 0}
+				<p class="prose" id="auction-history">No bids have been placed yet.</p>
+			{:else}
+				<ul class="history" id="auction-history">
+					{#each auction.bids as bid (bid.seq)}
+						<!-- Who bid and when on the left, what they bid on the right —
+						     one row instead of three stacked lines, so a seven-Bid
+						     history is read rather than scrolled. The amounts share a
+						     trailing edge, which is what makes a column of tabular
+						     figures scannable. -->
+						<!-- A cancelled Bid is struck through and labelled, in
+						     unchanged `seq` order — never deleted, hidden or
+						     reordered (FR-40). The label is one word and the
+						     sentence beneath it names the win that caused it; both
+						     are the core's, and both are worded so the row cannot
+						     be read as a void, which would say somebody decided the
+						     Bid should not have stood. A Bid that was never
+						     cancelled renders exactly as before. -->
+						<li class="history-row" class:cancelled={bid.cancellation !== null}>
+							<span class="history-bidder">
+								<span class="prose">{bid.bidder}</span>
+								<span class="history-when">{relativePhrase(bid.occurredAt, nowIso)}</span>
+								{#if bid.cancellation !== null}
+									<span class="history-cancelled">
+										{bidCancelledSentence(bid.cancellation.causePlayerName, bid.cancellation.restored)}
+									</span>
+								{/if}
+							</span>
+							<!-- Whitespace-tight, and it has to be. `.history-row` is
+							     `justify-content: space-between`, so a newline before
+							     `{bid.amount}` or after the `{/if}` renders as a text
+							     node and walks every amount — cancelled or not — off
+							     the trailing edge that makes a column of tabular
+							     figures scannable. An uncancelled Bid must render with
+							     no layout shift at all. -->
+							<span class="history-amount"
+								>{bid.amount}{#if bid.cancellation !== null}<span class="history-cancelled-label"
+										>{BID_CANCELLED_LABEL}</span
+									>{/if}</span
+							>
+						</li>
+					{/each}
+				</ul>
+			{/if}
+
+			<!-- The nomination, in the footnote position the mock gives it: who put
+			     this Player up and when. It had two `.panel`s of its own above the
+			     price — a Team name and a timestamp, each with a heading, in the
+			     two most valuable inches on the page — and it belongs at the foot
+			     of the record it opens, which is what the history IS.
+
+			     The Team is spelled out with its acting Manager attached, from
+			     `formatTeamManager`'s one rendering, never re-worded here. Time
+			     appears TWICE: a relative phrase and an absolute stamp in the
+			     viewer's own timezone, and the absolute is never dropped for
+			     space. -->
+			<p class="footnote" id="auction-nominated-at">
+				<span class="section-label">Nominated by</span>
+				<span id="auction-nominating-team">{auction.nominatingTeam}</span>
+				&middot;
+				<span id="auction-nominated-relative">{relative}</span>
+				{#if nominatedAbsolute !== null}
+					&middot;
+					<span id="auction-nominated-absolute">{nominatedAbsolute}</span>
+				{/if}
+			</p>
+		</section>
+	{/if}
 </main>
 
 <style>
@@ -1307,6 +1558,50 @@
 		flex-direction: column;
 		gap: var(--space-row-gap);
 		list-style: none;
+		padding: 0;
+		margin: 0;
+	}
+
+	/*
+	 * A seed and a hash are sixty-four hex characters a Manager compares
+	 * against something they wrote down.
+	 *
+	 * `overflow-wrap` rather than a scroller: the value must be readable WHOLE
+	 * at 375px, and a horizontally scrolling string is a string nobody checks.
+	 * The letter spacing is what separates the runs of identical characters
+	 * these values are full of. There is no monospace face here on purpose —
+	 * `tokens.css` declares exactly two families and DESIGN.md names two, so a
+	 * third would be a typographic decision made inside a read surface.
+	 */
+	.hex-value {
+		overflow-wrap: anywhere;
+		letter-spacing: 0.04em;
+	}
+
+	/*
+	 * The ordered Contender list. The POSITION is printed beside every name
+	 * because the number is what `/verify`'s procedure produces, and a reader
+	 * who has one in hand must not have to count rows to check it.
+	 */
+	.contender-position {
+		display: inline-block;
+		min-width: 2ch;
+		color: var(--color-text-secondary);
+		font-variant-numeric: tabular-nums;
+	}
+
+	/*
+	 * The selected Contender, marked by a SHAPE and a WORD together — the
+	 * greyscale rule this product applies to every state. The weight is the
+	 * third carrier and never the only one; there is no colour here at all,
+	 * because a settled draw is a fact rather than an outcome to celebrate.
+	 */
+	.contender-selected {
+		font-weight: 600;
+	}
+
+	.contender-mark {
+		color: var(--color-text-secondary);
 	}
 
 </style>

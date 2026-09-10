@@ -41,7 +41,7 @@
 import { auctionPathFor } from './auction-link.ts';
 import { ACTIVE_BENCH_SLOTS, INJURY_RESERVE_SLOTS, MINOR_LEAGUE_SLOTS } from './constants.ts';
 import type { Money } from './money.ts';
-import { wonCardSentence } from './positions.ts';
+import { wonCardSentence } from './projection/closed.ts';
 import type { OpenNomination } from './projection/nominations.ts';
 import type { LeaguePhase } from './projection/phase.ts';
 import { capBreakdown, describeAmount, outstandingBidFiguresFor } from './rules/bidding.ts';

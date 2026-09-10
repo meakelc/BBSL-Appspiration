@@ -317,18 +317,17 @@
 							     identify the Player, and a card that stacks every field
 							     costs vertical space this landing cannot spare.
 
-							     No link on a won Player: a closed Auction 404s until
-							     Epic 4's closed state exists, and this is the first
-							     group on the landing. The card already carries
-							     everything the close made. -->
+							     The name LINKS to the Auction's Closed page, which exists
+							     now: it carries the closed instant in full and, for a
+							     lottery, the revealed seed, the published commitment and
+							     the ordered Contender list — the things this card cannot
+							     hold and a Manager checking a draw came for. The path is
+							     `auctionPathFor`'s, from the core, exactly as every other
+							     card on this page links. -->
 							<div class="card-head">
-								{#if card.href !== null}
-									<a class="card-link" href={card.href}>
-										<span class="display card-player">{card.playerName}</span>
-									</a>
-								{:else}
+								<a class="card-link" href={card.href}>
 									<span class="display card-player">{card.playerName}</span>
-								{/if}
+								</a>
 								{#if card.metadata !== null}
 									<span class="card-metadata">{card.metadata}</span>
 								{/if}

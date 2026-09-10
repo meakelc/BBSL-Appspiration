@@ -30,11 +30,11 @@ import {
 	nominationSlotSentence,
 	positionsFor,
 	reEntryFor,
-	reEntrySentence,
-	wonCardSentence
+	reEntrySentence
 } from '../src/lib/core/positions.ts';
+import { wonCardSentence } from '../src/lib/core/projection/closed.ts';
 import type { ReEntry } from '../src/lib/core/positions.ts';
-import { AUCTION_PATH_PREFIX } from '../src/lib/core/auction-link.ts';
+import { AUCTION_PATH_PREFIX, auctionPathFor } from '../src/lib/core/auction-link.ts';
 import { VIEWER_STATE_ICONS, VIEWER_STATE_LABELS } from '../src/lib/core/board.ts';
 import type { BoardMetadata } from '../src/lib/core/board.ts';
 import { MINIMUM_BID, SALARY_CAP } from '../src/lib/core/constants.ts';
@@ -296,12 +296,15 @@ describe('Won — every Auction the viewer’s Team has won this phase', () => {
 		expect(card?.winningAmountLabel).toBe('$11.0M');
 		expect(card?.placement).toBe('active_bench');
 		expect(card?.closedAt).toBe(CLOSES);
-		// **No link.** A close DELETES the Player from `auctionsReducer`, and
-		// the Auction route 404s on that null read, so `auctionPathFor` on a
-		// won Player is a link to a refusal — in the FIRST group on the
-		// landing page. A review finding; `deferred-work.md`'s spec-3-6 entry
-		// owns the closed-Auction surface that will restore it.
-		expect(card?.href).toBeNull();
+		// **The link, restored.** It was `null` while a closed Auction 404'd:
+		// `auctionPathFor` on a won Player was a link to a refusal, in the
+		// FIRST group on the landing page. The route renders the Closed state
+		// now, so the link resolves — and it resolves to the one surface
+		// carrying what this card cannot, the revealed seed and the ordered
+		// Contender list of a lottery. Never a literal: `auctionPathFor` is the
+		// one place that path shape is spelled.
+		expect(card?.href).toBe(auctionPathFor('p-1'));
+		expect(card?.href).toBe(`${AUCTION_PATH_PREFIX}p-1`);
 	});
 
 	it('states the placement AND the Cap Hit, because they are independent (AD-23)', () => {

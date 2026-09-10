@@ -412,15 +412,14 @@ describe('the Positions page — what it renders', () => {
 		expect(empty).toMatch(/href=\{positions\.nominationSlot\.href\}/);
 	});
 
-	it('does not link a won Player to an Auction page that 404s', () => {
-		// A review finding. A close DELETES the Player from `auctionsReducer`
-		// and `nominationsReducer`, and the Auction route raises `error(404)`
-		// on that null read — so every card in the FIRST group on the landing
-		// page was a link to a refusal. `WonCard.href` is `null` until Epic
-		// 4's closed-Auction surface exists (`deferred-work.md`, spec-3-6).
+	it('links a won Player to the Closed state of their Auction', () => {
+		// The inverse of what this asserted while a closed Auction 404'd. The
+		// `{#if card.href !== null}` and its `{:else}` are GONE — the field is
+		// no longer nullable, and a branch on a value that cannot be null is a
+		// branch a later reader has to work out is dead.
 		const won = PAGE.slice(PAGE.indexOf('id="group-won"'), PAGE.indexOf('id="group-outbid"'));
-		expect(won).toMatch(/\{#if card\.href !== null\}/);
-		expect(won).toMatch(/\{:else\}[\s\S]*card-player[\s\S]*\{\/if\}/);
+		expect(won).not.toMatch(/\{#if card\.href !== null\}/);
+		expect(won).toMatch(/<a class="card-link" href=\{card\.href\}>/);
 	});
 
 	it('marks the Auction state on the cards, from the Board’s own record', () => {

@@ -7,9 +7,19 @@
  * (`destinations.ts:77`). Hiding a form is never the check, so the action is
  * gated in its own right rather than trusting that a render preceded it.
  *
- * A `null` read — closed, or never nominated — is a 404 (I/O matrix), not
- * an empty page: an Auction page with nothing to show is not "the Auction",
- * it is a Player who was never put on the board.
+ * **The read is discriminated, and only one of its outcomes is missing.**
+ * `loadAuctionPage` answers with an OPEN Auction, a CLOSED one, or `null`, and
+ * this file renders the first two and refuses the third. A close used to land
+ * in the null case — it deletes the nomination — and the page 404'd on an
+ * Auction that had a winner, a final amount and, for a lottery, a seed and an
+ * ordered Contender list somebody was owed a look at. It renders now.
+ *
+ * What is left in `null` is a Player with no Auction of any kind: never
+ * nominated, an id matching nothing anywhere, or a `ContentionDrawn` with no
+ * close behind it — a draw alone is not a closed Auction, and inventing a
+ * winner from one would put a Player on a roster nothing says they are on. All
+ * three arrive as ONE 404 rather than three distinguishable answers that would
+ * tell a prober which case they hit.
  *
  * **Nothing this file decides is a rules gate.** Three refusals are raised
  * here because none has anything to decide about inside a transaction: the
@@ -86,11 +96,11 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		actor?.teamId ?? null
 	);
 	if (auction === null) {
-		// Closed, or never nominated, or an id matching nothing anywhere —
-		// the I/O matrix's three "not an open Auction" rows all land here,
-		// as one 404 rather than three distinguishable answers that would
-		// tell a prober which case they hit.
-		error(404, 'There is no open Auction for this Player.');
+		// Never nominated, an id matching nothing anywhere, or a draw with no
+		// close behind it. The sentence no longer says "open": a closed Auction
+		// has a page now, so "no OPEN Auction" would be a refusal whose reason
+		// is false of the one case it still refuses.
+		error(404, 'There is no Auction for this Player.');
 	}
 
 	return {

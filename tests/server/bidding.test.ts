@@ -1604,11 +1604,14 @@ describe('placeBid — the lottery seed (AC5, AD-14)', () => {
 		expect(dissolved.seedHash).toBeNull();
 
 		// ...and the READ path, over the log this transaction produced.
-		const view = await loadAuctionPage(
+		const read = await loadAuctionPage(
 			pageGateway([nominated(), bidLogged(2, 1_000_000), ...harness.appendedEvents]),
 			'p-1',
 			null
 		);
+		// The read is discriminated now — an open Auction or a closed one — and
+		// this contention is still running, so the assertion states which.
+		const view = read !== null && read.kind === 'open' ? read : null;
 
 		expect(view?.seed).toBe(SEALED_SEED);
 		expect(view?.seedHash).toBeNull();

@@ -35,13 +35,17 @@
 	import {
 		ARCHIVED_EMPTY_BOARD_HEADING,
 		ARCHIVED_EMPTY_BOARD_STATEMENT,
+		BOARD_CLOSED_AT_LABEL,
 		BOARD_CLOSES_LABEL,
 		BOARD_FILTER_LEGEND,
+		BOARD_FINAL_LABEL,
 		BOARD_LEADING_LABEL,
 		BOARD_NOMINATED_LABEL,
+		BOARD_PANEL_HEADING,
 		BOARD_PRICE_LABEL,
 		BOARD_SORT_LEGEND,
 		BOARD_TITLE,
+		BOARD_WON_BY_LABEL,
 		DEFAULT_FILTER,
 		DEFAULT_SORT,
 		EMPTY_BOARD_ACTION,
@@ -54,15 +58,20 @@
 		boardCountSentence,
 		filterBoard,
 		filteredNoticeSentence,
+		openCardCount,
 		sortBoard,
 		unbidPhrase
 	} from '$lib/core/board.ts';
-	import type { BoardFilter, BoardSort, BoardViewerState } from '$lib/core/board.ts';
+	import type {
+		BoardCardState,
+		BoardFilter,
+		BoardSort,
+		BoardViewerState
+	} from '$lib/core/board.ts';
 	// The Auction deep-link shape is written ONCE, in the core, so `/board`,
 	// `/positions` and Story 5.3's Discord notification all emit one shape.
 	import { auctionPathFor } from '$lib/core/auction-link.ts';
 	import { closesInPhrase, contenderCountSentence } from '$lib/core/projection/auctions.ts';
-	import type { ContentionState } from '$lib/core/projection/auctions.ts';
 	import { figuresAgeSentence } from '$lib/core/freshness.ts';
 	import { freshness } from '$lib/client/freshness.svelte.ts';
 	import { formatInstant, parseInstant } from '$lib/core/instant.ts';
@@ -80,13 +89,20 @@
 		readonly auctionStateLabel: string;
 		readonly auctionStateLabelNarrow: string;
 		readonly auctionStateIcon: string;
-		readonly contention: ContentionState;
+		readonly state: BoardCardState;
 		readonly contenderCount: number;
 		readonly viewerState: BoardViewerState;
 		readonly viewerStateLabel: string;
 		readonly viewerStateIcon: string;
-		readonly nominatedBy: string;
-		readonly nominatedAt: string;
+		// Both `null` on a closed card: the close deleted the nomination, so
+		// there is no nominating Team and no nominated instant to render.
+		readonly nominatedBy: string | null;
+		readonly nominatedAt: string | null;
+		// The three a closed card carries and an open one does not, all
+		// pre-worded by the core exactly as every other field here is.
+		readonly wonBy: string | null;
+		readonly placementSentence: string | null;
+		readonly closedAt: string | null;
 	};
 
 	type Board = {
@@ -165,8 +181,15 @@
 	 */
 	const shown = $derived(sortBoard(filterBoard(board.cards, filter), sort, nowIso));
 
-	/** How many Auctions are open — the WHOLE board, never the filtered view. */
-	const countSentence = $derived(boardCountSentence(board.cards.length));
+	/**
+	 * How many Auctions are OPEN — the whole board, never the filtered view,
+	 * and never the closed cards either.
+	 *
+	 * The sentence says "are open", so the figure has to be the open ones. The
+	 * count is the core's, not a `filter` written here: the surface prints
+	 * fields and words nothing, and that includes counting nothing.
+	 */
+	const countSentence = $derived(boardCountSentence(openCardCount(board.cards)));
 
 	/** What the filter is hiding, or `null` for the unfiltered view. */
 	const filteredNotice = $derived(
@@ -208,6 +231,7 @@
 	 */
 	let closesAtAbsolute = $state<Record<string, string>>({});
 	let nominatedAbsolute = $state<Record<string, string>>({});
+	let closedAtAbsolute = $state<Record<string, string>>({});
 
 	// `Intl.DateTimeFormat.format` throws `RangeError` on an Invalid Date, so
 	// an unreadable instant is checked for rather than formatted — the pure
@@ -225,12 +249,17 @@
 	$effect(() => {
 		const closes: Record<string, string> = {};
 		const nominated: Record<string, string> = {};
+		const closed: Record<string, string> = {};
 		for (const card of board.cards) {
 			if (card.closesAt !== null) closes[card.fantraxPlayerId] = formatAbsolute(card.closesAt);
-			nominated[card.fantraxPlayerId] = formatAbsolute(card.nominatedAt);
+			if (card.nominatedAt !== null) {
+				nominated[card.fantraxPlayerId] = formatAbsolute(card.nominatedAt);
+			}
+			if (card.closedAt !== null) closed[card.fantraxPlayerId] = formatAbsolute(card.closedAt);
 		}
 		closesAtAbsolute = closes;
 		nominatedAbsolute = nominated;
+		closedAtAbsolute = closed;
 	});
 </script>
 
@@ -268,7 +297,7 @@
 		{/if}
 	{:else}
 		<section class="panel">
-			<p class="section-label">Open Auctions</p>
+			<p class="section-label">{BOARD_PANEL_HEADING}</p>
 			<p class="prose" id="board-count">{countSentence}</p>
 
 			<!-- Every price on this board carries its age in anything but Live
@@ -326,7 +355,7 @@
 				     nothing else in the system. It never carries the state ALONE:
 				     the icon and the word beside it are what make a greyscale
 				     screenshot read identically. -->
-				<li class="card" class:lottery={card.contention === 'minimum_bid'}>
+				<li class="card" class:lottery={card.state === 'minimum_bid'}>
 					<!-- ROW 1 — identity and the Auction's own state.
 					     The name, the NBA team and position beside it, and the state
 					     word pushed to the far edge. The metadata is not a fact owed a
@@ -381,8 +410,15 @@
 					     is a row of noise saying the reader has nothing to do here,
 					     which the absence of a marker already says. -->
 					<div class="card-figure">
+						<!-- One figure, two words. `Price` is what an Auction is
+						     asking; `Final amount` is what it went for, and the same
+						     number under the same word would leave a Manager scanning
+						     a mixed board unable to tell which they were reading.
+						     Both constants are the core's. -->
 						<p class="card-price" class:card-price-absent={card.price === null}>
-							<span class="visually-hidden">{BOARD_PRICE_LABEL}</span>
+							<span class="visually-hidden"
+								>{card.state === 'closed' ? BOARD_FINAL_LABEL : BOARD_PRICE_LABEL}</span
+							>
 							{card.priceLabel}
 						</p>
 						{#if card.viewerState !== 'not_involved'}
@@ -400,54 +436,87 @@
 						{/if}
 					</div>
 
-					{#if card.contention === 'minimum_bid'}
+					{#if card.state === 'minimum_bid'}
 						<!-- The Contender count, the fold's own sentence. -->
 						<p class="prose">{contenderCountSentence(card.contenderCount)}</p>
 					{/if}
 
-					<!-- ROW 3 — who leads, and how long is left. One row, because they
-					     are the two halves of the same question and a Manager reads
-					     them together. -->
-					<div class="card-line">
-						<p class="card-leader">
-							<span class="visually-hidden">{BOARD_LEADING_LABEL}</span>
-							{card.leadingBidder}
-						</p>
-						{#if card.closesAt === null}
-							<!-- No clock at all: no Opening Bid has started one. What the
-							     card states instead is how long the nomination has stood
-							     unbid, from the core's own phrase. -->
-							<p class="card-when">{unbidPhrase(card.nominatedAt, nowIso)}</p>
-						{:else}
-							<p class="card-when">
-								<span class="visually-hidden">{BOARD_CLOSES_LABEL}</span>
-								{closesInPhrase(card.closesAt, nowIso)}
-							</p>
-						{/if}
-					</div>
+					{#if card.state === 'closed'}
+						<!-- ROW 3, CLOSED — who won, and where the Player landed.
+						     `EXPERIENCE.md:168` asks a Closed state for the winner, the
+						     final amount and the Slot placement; the figure above and
+						     these two lines are the whole card.
 
-					<!-- ROW 4 — the footnote line: time TWICE, the absolute stamp in
-					     the viewer's own timezone beside the relative phrase above it,
-					     and never dropped to save space. The nominating Team rides the
-					     same row and keeps a VISIBLE label: two bare `Team — Manager`
-					     strings on one card would be indistinguishable from each other,
-					     and the Leading Bidder is the one the countdown beside it
-					     identifies. -->
-					<div class="card-line card-footnote">
-						<p class="card-when">
-							{#if card.closesAt === null}
-								{#if nominatedAbsolute[card.fantraxPlayerId] !== undefined}
-									{nominatedAbsolute[card.fantraxPlayerId]}
+						     There is NO countdown and no clock: the Auction is over, and
+						     a timer on it would be an urgency device pointed at nothing.
+						     There is no "Nominated by" either — `nominationsReducer`
+						     deletes the nomination at the close, so the nominating Team
+						     is not durable and must not be invented. And nothing here
+						     congratulates: a win is stated. -->
+						<div class="card-line">
+							<p class="card-leader">
+								<span class="section-label">{BOARD_WON_BY_LABEL}</span>
+								{card.wonBy}
+							</p>
+						</div>
+						<p class="prose">{card.placementSentence}</p>
+						<!-- ROW 4, CLOSED — the closed instant in the viewer's own
+						     timezone, on the footnote row the open card gives its own
+						     absolute stamp. Labelled, because a bare date on a card
+						     carrying no clock names nothing. -->
+						<div class="card-line card-footnote">
+							<p class="card-when">
+								{#if closedAtAbsolute[card.fantraxPlayerId] !== undefined}
+									<span class="section-label">{BOARD_CLOSED_AT_LABEL}</span>
+									{closedAtAbsolute[card.fantraxPlayerId]}
 								{/if}
-							{:else if closesAtAbsolute[card.fantraxPlayerId] !== undefined}
-								{closesAtAbsolute[card.fantraxPlayerId]}
+							</p>
+						</div>
+					{:else}
+						<!-- ROW 3 — who leads, and how long is left. One row, because they
+						     are the two halves of the same question and a Manager reads
+						     them together. -->
+						<div class="card-line">
+							<p class="card-leader">
+								<span class="visually-hidden">{BOARD_LEADING_LABEL}</span>
+								{card.leadingBidder}
+							</p>
+							{#if card.closesAt === null}
+								<!-- No clock at all: no Opening Bid has started one. What the
+								     card states instead is how long the nomination has stood
+								     unbid, from the core's own phrase. -->
+								<p class="card-when">{unbidPhrase(card.nominatedAt ?? '', nowIso)}</p>
+							{:else}
+								<p class="card-when">
+									<span class="visually-hidden">{BOARD_CLOSES_LABEL}</span>
+									{closesInPhrase(card.closesAt, nowIso)}
+								</p>
 							{/if}
-						</p>
-						<p class="card-when">
-							<span class="section-label">{BOARD_NOMINATED_LABEL}</span>
-							{card.nominatedBy}
-						</p>
-					</div>
+						</div>
+
+						<!-- ROW 4 — the footnote line: time TWICE, the absolute stamp in
+						     the viewer's own timezone beside the relative phrase above it,
+						     and never dropped to save space. The nominating Team rides the
+						     same row and keeps a VISIBLE label: two bare `Team — Manager`
+						     strings on one card would be indistinguishable from each other,
+						     and the Leading Bidder is the one the countdown beside it
+						     identifies. -->
+						<div class="card-line card-footnote">
+							<p class="card-when">
+								{#if card.closesAt === null}
+									{#if nominatedAbsolute[card.fantraxPlayerId] !== undefined}
+										{nominatedAbsolute[card.fantraxPlayerId]}
+									{/if}
+								{:else if closesAtAbsolute[card.fantraxPlayerId] !== undefined}
+									{closesAtAbsolute[card.fantraxPlayerId]}
+								{/if}
+							</p>
+							<p class="card-when">
+								<span class="section-label">{BOARD_NOMINATED_LABEL}</span>
+								{card.nominatedBy}
+							</p>
+						</div>
+					{/if}
 				</li>
 			{/each}
 		</ul>
