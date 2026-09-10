@@ -40,3 +40,9 @@ npm-debug.log*
 # src/lib/adapters/fantrax/ and tests/adapters/), never the data itself, and a
 # committed export would go stale the moment the league transacts.
 team_rosters/
+
+# Database snapshots taken before a dev wipe. Same reasoning as team_rosters/
+# above, plus one more: a dump of `managers` carries real Discord snowflakes,
+# and an archive is a SECOND place they would live forever in git history.
+# Keep the snapshot on disk, out of the repository.
+_bmad-output/pilot-*-archive/
