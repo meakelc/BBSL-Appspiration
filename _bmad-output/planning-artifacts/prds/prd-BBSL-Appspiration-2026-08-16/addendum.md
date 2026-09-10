@@ -28,7 +28,24 @@ LeagueRosters { Period, Rosters: map[teamId]TeamRosterInfo }
     RosterItem { ID, Position, Status }
 ```
 
-**Three fields per player: id, position, status.** No salary, no contract value, no contract years, no cap hit — confirming finding 1 against the struct itself rather than against a prose statement. And **every method exposed by either wrapper is a GET**, confirming finding 2: there is no write path to reverse-engineer, not merely no *documented* one.
+**That struct is wrong**, and the correction matters more than the original note. **Called against the real BBSL league on 2026-09-10**, unauthenticated, the endpoint returned all 30 Teams and 303 roster rows shaped like this:
+
+```json
+{"contract":{"smallId":"5","name":"2027"}, "id":"01eon",
+ "position":"F", "salary":2.25E7, "status":"ACTIVE"}
+```
+
+plus `teamName`, a Fantrax team id, and `salaryCap: 165000000.0` per Team. **Salary, contract designation and slot kind are all present.** `go-fantrax` models three fields of a payload that carries six; finding 1 above — *"salaries and contracts are absent from the documented read surface"* — is **false for this endpoint**, and was believed on the strength of a community wrapper rather than a live call. The lesson is the plainer one: a wrapper's struct is evidence about the wrapper, not about the API.
+
+**Finding 2 stands unchanged.** Every method exposed by either wrapper is still a GET; there is no write path to reverse-engineer, not merely no documented one.
+
+**Three integration hazards found in the live payload**, none of which the wrapper documentation would have revealed:
+
+1. **Money is float, and truncation corrupts it.** Salaries arrive as scientific-notation floats carrying representation error — `23499999.999999993`, `46499999.999999985`, `28499999.999999993`. `int()` puts 4 of 303 rows a dollar low and **off the $500,000 grid**; `round()` was clean on all 303. Anything reading this endpoint rounds, then asserts the grid. **The CSV is the safer source for setup** precisely because it carries exact integers (`25,000,000`) with no float in the path.
+2. **Player ids are unwrapped here** (`01eon`) and asterisk-wrapped in the CSV export (`*04ewu*`), which the importer stores verbatim. Compared unnormalised, every row reads simultaneously as a departure and an unknown arrival.
+3. **`status` carries all four slot kinds** — `ACTIVE`, `RESERVE`, `MINORS`, `INJURED_RESERVE` — but the underscore form does not match the CSV importer's `injured reserve` alias. Two mappings, not one.
+
+**One rule confirmed against live data:** `2RK31` appears exactly 30 times, one per Team — this year's second-round class — validating both the five-year term and the *"full term unelapsed"* test FR-43 relies on. The first-round ladder runs `1RK27`–`1RK30` with no `1RK31`, so **first-round scale is four years, not five**; the drop exception is `2RK`-only and unaffected, but nobody should generalise the five-year term to `1RK`.
 
 **Three findings drove the v1 decision:**
 

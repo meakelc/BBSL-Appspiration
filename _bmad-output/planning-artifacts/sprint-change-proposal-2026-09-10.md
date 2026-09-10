@@ -3,7 +3,7 @@
 **Date:** 2026-09-10
 **Author:** Correct Course workflow, with Meakel
 **Change scope classification:** **Moderate** — three new requirements and four stories in an epic that has not started, plus one enabling correction to shipped Epic 1 code (a discarded contract designation and a missing roster slot kind). No shipped rule is superseded and no §10 example is invalidated; the suite is added to, not rewritten.
-**Status:** **APPROVED by Meakel, 2026-09-10**, after the three open league-rule items were answered and folded in (§3.2). Three of the five open items in §5.3 are closed; the two remaining are a `curl` and a next-offseason concern, neither blocking.
+**Status:** **APPROVED by Meakel, 2026-09-10**, after the three open league-rule items were answered and folded in (§3.2). **Four of the five open items in §5.3 are now closed** — including the endpoint probe, which discharged FR-42's contingency and also **falsified a finding this proposal had relied on** (§5.4). The one remaining item is a next-offseason concern and is not blocking.
 
 ---
 
@@ -57,17 +57,13 @@ The commissioner asked whether `fantrax.com/developer`'s listed roster API could
 
 **On writes, the original premise holds exactly.** `fantrax.com/developer` still returns **403**. Every method exposed by either community wrapper — Go and Python — is a **GET**. There is no write endpoint to reverse-engineer, not merely no documented one. Trades will continue to be executed in Fantrax by hand.
 
-**On reads, the August assessment was aimed at the wrong job.** `getTeamRosters` returns three fields per player:
+**On reads, the August assessment was aimed at the wrong job — and, it later turned out, was also factually wrong.**
 
-```
-RosterItem { ID, Position, Status }
-```
+*Written 2026-09-10 from the community wrappers:* `getTeamRosters` returns `RosterItem { ID, Position, Status }` — no salary, no contract value, no contract years. Addendum §A concluded the read surface was useless, because salary is *"the single most load-bearing data the app needs."* That is correct **for setup**, and FR-1 remains a CSV import. It does not hold for **reconciliation**: a trade does not change a Contract, it changes who holds it, and the app already holds every Cap Hit from the FR-1 import. The only missing fact is which Team holds whom.
 
-No salary, no contract value, no contract years. Addendum §A concluded from this that the read surface was useless, because salary is *"the single most load-bearing data the app needs."* That is correct **for setup**, and FR-1 remains a CSV import.
+> **Corrected the same day, after the endpoint was actually called (§5.4).** The live payload carries **six** fields per player including `salary`, a `contract` designation and a per-Team `salaryCap`. `go-fantrax`'s struct models half of it. **The reasoning above survives; its premise does not.** Membership remains the only fact taken, but as a *choice* — the app is authoritative for money during the auction, and Fantrax's salaries arrive as lossy floats. Read §5.4 before relying on any sentence in this subsection.
 
-It does not hold for **reconciliation**. A trade does not change a Contract — it changes who holds it. The app already holds every Contract's Cap Hit, years and Slot kind from the FR-1 import, and under FR-41 those travel with the Player unchanged. **The only missing fact is which Team holds whom, and that is precisely what `getTeamRosters` returns.**
-
-The endpoint is worthless for establishing state and sufficient for detecting that state has drifted. Those are different jobs.
+The endpoint is the wrong source for establishing state and a good one for detecting that state has drifted. Those are different jobs, and the August note evaluated it against only the first.
 
 **This reframes the deliverable.** The commissioner asked for manual tools. The manual tool is still the write path — but the failure mode actually worth defending against is not that recording a trade is laborious, it is that **a trade happens and nobody tells the app**. Hand-entry cannot catch that. A detector can. Hence FR-42, deliberately shaped so the dependency can never do harm: it proposes and never writes, runs hourly, and its failure degrades to FR-41 alone.
 
@@ -356,14 +352,34 @@ Per `AGENTS.md`, `_bmad-output/` is not hand-edited — each owning skill applie
 | ~~1~~ | ~~Second-round rookie term~~ | **CLOSED 2026-09-10** — 5 years, invariant across all 2RK deals. The term test is sound; no per-offseason constant | — |
 | ~~2~~ | ~~Dropping a Minor League Slot player~~ | **CLOSED 2026-09-10** — permitted, no Dead Money, and it *raises* Maximum Bid via Minors Exposure. The v1 refusal is withdrawn and replaced by the rule | — |
 | ~~3~~ | ~~Unknown arrivals~~ | **CLOSED 2026-09-10** — cannot legitimately occur; every acquisition goes through the auction. Reported as an error, not remedied | — |
-| 4 | **The endpoint has never been called** — auth, and whether `Status` distinguishes slot kinds | One `curl` against the real league | Story 7.9 only |
+| ~~4~~ | ~~The endpoint has never been called~~ | **CLOSED 2026-09-10** — probed against the real league. Answers **unauthenticated**, 30 Teams, 303 rows, `status` distinguishes all four Slot kinds. **CAP-23 / FR-42 / Story 7.9 are viable**, contingency discharged. See §5.4 — the probe also falsified a documented finding and found three hazards | — |
 | 5 | **Dead Money on import** — the shape Fantrax exports it in has never been seen; refused loudly in v1 | A future setup day | Next offseason, not this one |
 
 Item 4 is one command:
 
     curl -s "https://www.fantrax.com/fxea/general/getTeamRosters?leagueId=<BBSL_ID>&period=1" | head -c 2000
 
-### 5.4 The risk worth restating
+### 5.4 The endpoint probe, and what it falsified
+
+Run 2026-09-10 against the real league. **The contingency is discharged: FR-42, CAP-23 and Story 7.9 are viable.** Unauthenticated, 30 Teams, 303 rows, 35KB, one call.
+
+**It also falsified a finding this proposal relied on.** The payload carries `salary`, a `contract` designation, `status` and a per-Team `salaryCap` — six fields, where `go-fantrax` models three. Addendum §A's *"salaries and contracts are absent from the documented read surface"*, and my own §1.6 restatement of it, were **believed on the strength of a community wrapper's struct rather than a live call**. The lesson is the plain one: a wrapper's struct is evidence about the wrapper, not about the API. Both documents are corrected.
+
+The decision is unchanged — **membership stays the only fact taken** — but it is now a *choice* rather than a limitation, and the reasoning is stronger than before: the app is authoritative for money while the auction runs, and Fantrax's figures are the less trustworthy of the two.
+
+**Three hazards the documentation would never have shown, each now an AC on Story 7.9:**
+
+| Hazard | Consequence if missed |
+|---|---|
+| **Money is float** — `23499999.999999993`, `46499999.999999985`, `28499999.999999993` in the live payload | `int()` puts **4 of 303** rows a dollar low **and off the $500,000 grid**; `round()` is clean on all 303. Round, then assert the grid |
+| **Player ids unwrapped here** (`01eon`), asterisk-wrapped in the CSV (`*04ewu*`) which the importer stores verbatim | Compared unnormalised, **all 303 rows read as a departure and an unknown arrival at once** — a silent total failure, not a loud one |
+| **`INJURED_RESERVE`** does not match the CSV importer's `injured reserve` alias | Two mappings needed, not one. Also: the `teams` table holds no Fantrax team id, so Team mapping must be explicit — AD-24 forbids name matching |
+
+**One rule confirmed against live data.** `2RK31` appears **exactly 30 times, one per Team** — this year's second-round class — validating both the five-year term and the "full term unelapsed" test FR-43 depends on. Separately, the first-round ladder runs `1RK27`–`1RK30` with no `1RK31`, so **first-round scale is four years, not five**; the drop exception is `2RK`-only and unaffected, but the five-year term must not be generalised to `1RK`.
+
+**And a v1.1 candidate logged, not scheduled.** This endpoint returns everything FR-1's thirty roster files establish, in one call. It is **not** being adopted for setup this offseason, because the CSV carries exact integers where the API carries lossy floats — swapping a lossless source for a lossy one to save thirty uploads is the wrong trade in the year the rules engine is first trusted. Full evidence and counter-evidence in `deferred-work.md`.
+
+### 5.5 The risk worth restating
 
 **A detector that has silently stopped reports no divergences, which is indistinguishable from a league that had none — and is the more dangerous state**, because it displaces the manual check it exists to support. FR-42, AD-32 and SM-C4 each carry a clause against this, deliberately and redundantly.
 

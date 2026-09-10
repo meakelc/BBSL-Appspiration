@@ -2396,14 +2396,29 @@ So that a trade nobody reported cannot quietly corrupt the arithmetic for a fort
 
 **Depends on:** Stories 7.7 and 7.8.
 
-**Contingent.** This story is gated on its first AC. If the endpoint does not answer usably it is closed as **not-viable**, FR-42 and CAP-23 are dropped, and Stories 7.6 – 7.8 stand alone.
+**Contingency discharged 2026-09-10.** The endpoint was called against the real BBSL league and **answered unauthenticated** with all 30 Teams and 303 roster rows. This story is viable and no longer gated. The live probe also found three integration hazards the wrapper documentation would never have shown, and each is now an AC below.
 
 **Acceptance Criteria:**
 
-**Given** `GET /fxea/general/getTeamRosters?leagueId=<id>&period=<n>`, never exercised against BBSL
-**When** it is called against the real league
-**Then** it is confirmed to answer, what authentication it requires, and **whether `RosterItem.Status` distinguishes Active/Bench, IR and minors**
-**And** if it does not answer usably, the story closes not-viable and **this is recorded rather than worked around** — no scraping, no undocumented alternative
+**Given** the live probe of 2026-09-10 — `GET /fxea/general/getTeamRosters?leagueId=…&period=1`, no authentication, 30 Teams, 303 rows, `status` ∈ {`ACTIVE`, `RESERVE`, `MINORS`, `INJURED_RESERVE`}
+**When** the reader is built
+**Then** it is built against that observed shape, not against `go-fantrax`'s `RosterItem { ID, Position, Status }`, which models three fields of a payload carrying six
+**And** the endpoint remains undocumented and may change between offseasons, which is what the failure-mode ACs below are for
+
+**Given** salaries arrive as scientific-notation floats carrying representation error — `23499999.999999993`, `46499999.999999985`, `28499999.999999993` in the live payload
+**When** any code reads `salary`
+**Then** it **rounds to the nearest dollar and asserts the $500,000 grid**, refusing the row if it fails — **never truncates**, which put 4 of 303 live rows a dollar low and off the grid the whole money rendering depends on (AD-8)
+**And** this holds even though this story takes no money from the endpoint, because the hazard goes live the moment anything reads the field
+
+**Given** the endpoint returns bare player ids (`01eon`) and the FR-1 importer stores the asterisk-wrapped form verbatim (`*04ewu*`)
+**When** membership is compared
+**Then** ids are **normalised inside the adapter** (AD-24) in both directions
+**And** an automated test proves an unnormalised comparison is caught — without it, all 303 rows read as a departure and an unknown arrival simultaneously, which is a silent total failure rather than a loud one
+
+**Given** the endpoint carries a Fantrax team id and the `teams` table stores none
+**When** API Teams are mapped to app Teams
+**Then** the mapping is **explicit**, not by `teamName` — AD-24 forbids name matching
+**And** `INJURED_RESERVE` is mapped separately from the CSV importer's `injured reserve` alias; the underscore form does not match it
 
 **Given** the endpoint answers
 **When** the app reads it

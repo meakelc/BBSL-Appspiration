@@ -149,7 +149,9 @@ All nine PRD open questions were answered on 2026-08-17 and are recorded with th
 | --- | --- | --- |
 | Outage recovery procedure (>15-minute outage → pause + compensating clock adjustment) | CAP-14, CAP-16 | **Yes — blocking on auction open.** Scheduled inside the build epics per OQ-9 |
 | Obtain a real Fantrax export and confirm the salary and roster-slot columns | CAP-1 | Before setup day |
-| Call `getTeamRosters` against the real league — does it answer, what auth, does `Status` distinguish Slot kinds | CAP-23 | **Gates CAP-23 alone.** A failure closes it as not-viable; CAP-22 is unaffected |
+| ~~Call `getTeamRosters` against the real league~~ | CAP-23 | **CLOSED 2026-09-10** — answers unauthenticated, 30 Teams, 303 rows, `status` distinguishes all four Slot kinds. CAP-23 viable. The probe falsified addendum §A finding 1 and surfaced three integration hazards, all now ACs on Story 7.9 |
+| Normalise player ids and establish an explicit Team mapping before the divergence diff runs | CAP-23 | **Yes — a silent total failure if missed.** Bare ids here vs asterisk-wrapped in the CSV; no Fantrax team id in the `teams` table |
+| Round-then-assert-the-grid on any read of the endpoint's `salary` | CAP-22, CAP-23 | Whenever anything reads that field. Truncation put 4 of 303 live rows off the $500,000 grid |
 | Confirm how Fantrax exports a Team carrying Dead Money | CAP-1, CAP-22 | Not this offseason — no Team carries any. An unrecognised `Status` refuses the file loudly on a future setup day |
 | Discord delivery shape (one message per event, or batched against 30 req/min) | CAP-11 | Decide at build time; revisit at rehearsal |
 | Outbox implementation (hand-rolled table vs Supabase Queues/pgmq) | CAP-11 | Decide at build time; AD-17's contract is unchanged either way |
