@@ -27,6 +27,7 @@ import { AUCTION_OPENED_EVENT } from '../../src/lib/core/projection/phase.ts';
 import {
 	NOMINATION_CONSEQUENCE,
 	nominationConsequenceSentence,
+	nominationPoolStatus,
 	nominationRefusalDetail,
 	nominationSlotStatus,
 	refuseNomination
@@ -858,5 +859,55 @@ describe('refuseNomination — a won Player is under contract (Story 3.4)', () =
 		);
 
 		expect(refusal?.kind).toBe('under_contract');
+	});
+});
+
+describe('nominationPoolStatus — what a pool row says about itself', () => {
+	it('says Available when nothing refuses the Player', () => {
+		expect(nominationPoolStatus(null, false)).toBe('Available');
+	});
+
+	it('separates a nomination nobody has bid on from an Auction in progress', () => {
+		const refusal: NominationRefusal = {
+			kind: 'already_nominated',
+			playerName: 'Jalen Green',
+			teamName: 'Celtics'
+		};
+		expect(nominationPoolStatus(refusal, false)).toBe('Nominated');
+		expect(nominationPoolStatus(refusal, true)).toBe('In-Auction');
+	});
+
+	it('names the Team holding a Player who is under contract', () => {
+		expect(
+			nominationPoolStatus(
+				{ kind: 'under_contract', playerName: 'Jalen Green', teamName: 'Rockets' },
+				false
+			)
+		).toBe('Closed to Rockets');
+	});
+
+	it('states the plain fact for a refusal that is not about the Player', () => {
+		// The phase refuses every row at once. That is the panel above the
+		// list’s sentence to tell, not a fact about this Player.
+		expect(nominationPoolStatus({ kind: 'phase', phase: 'Setup' }, false)).toBe('Not available');
+	});
+
+	it('never ends a row state in a sentence — a refusal paragraph is a submit’s', () => {
+		const states = [
+			nominationPoolStatus(null, false),
+			nominationPoolStatus(
+				{ kind: 'already_nominated', playerName: 'Jalen Green', teamName: 'Celtics' },
+				true
+			),
+			nominationPoolStatus(
+				{ kind: 'under_contract', playerName: 'Jalen Green', teamName: 'Rockets' },
+				false
+			)
+		];
+		for (const state of states) {
+			expect(state).not.toContain('.');
+			expect(state).not.toContain('Nothing was written');
+			expect(state.split(' ').length).toBeLessThanOrEqual(4);
+		}
 	});
 });

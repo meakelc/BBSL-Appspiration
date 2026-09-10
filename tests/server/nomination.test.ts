@@ -21,8 +21,10 @@ import {
 	AUCTION_CLOSED_EVENT,
 	NOMINATION_PLACED_EVENT
 } from '../../src/lib/core/projection/nominations.ts';
+import { BID_PLACED_EVENT } from '../../src/lib/core/projection/auctions.ts';
 import { AUCTION_OPENED_EVENT } from '../../src/lib/core/projection/phase.ts';
 import {
+	nominationPoolStatus,
 	nominationRefusalDetail,
 	nominationSlotStatus
 } from '../../src/lib/core/rules/nomination.ts';
@@ -773,7 +775,7 @@ describe('loadNominatablePool — the render path never writes', () => {
 		const harness = fakeGateway({ pool: [JALEN, SENGUN], events: [opened()] });
 		const pool = await loadNominatablePool(harness.gateway, 't-1');
 		expect(pool.players.every((p) => p.available)).toBe(true);
-		expect(pool.players.every((p) => p.unavailableDetail === null)).toBe(true);
+		expect(pool.players.every((p) => p.status === 'Available')).toBe(true);
 		expect(pool.slotAvailable).toBe(true);
 		expect(pool.slotDetail).toBeNull();
 		// The panel prints a STATUS at rest, not a refusal: nothing has been
@@ -792,9 +794,38 @@ describe('loadNominatablePool — the render path never writes', () => {
 
 		const jalen = pool.players.find((p) => p.fantraxPlayerId === 'p-1');
 		expect(jalen?.available).toBe(false);
-		expect(jalen?.unavailableDetail).toContain('Celtics');
+		// Nominated, and nobody has bid: the row says which stage the Auction
+		// has reached, not why a submit would be refused.
+		expect(jalen?.status).toBe('Nominated');
 		// The other Player is untouched.
 		expect(pool.players.find((p) => p.fantraxPlayerId === 'p-2')?.available).toBe(true);
+	});
+
+	it('separates a nominated Player from one whose Auction has a Bid', async () => {
+		const harness = fakeGateway({
+			pool: [JALEN, SENGUN],
+			events: [
+				opened(),
+				nominated(2, 'p-1', 'Jalen Green', 't-9', 'Celtics'),
+				nominated(3, 'p-2', 'Alperen Sengun', 't-8', 'Bulls'),
+				logEvent(4, BID_PLACED_EVENT, {
+					fantraxPlayerId: 'p-2',
+					teamId: 't-8',
+					teamName: 'Bulls',
+					managerId: 'm-8',
+					amount: '5',
+					closesAt: '2026-08-25T21:00:00.000Z'
+				})
+			]
+		});
+
+		const pool = await loadNominatablePool(harness.gateway, 't-1');
+
+		// Both are refused by the same gate; the row reports which stage the
+		// Auction has reached, and the Bid is the only thing separating them.
+		expect(pool.players.find((p) => p.fantraxPlayerId === 'p-1')?.status).toBe('Nominated');
+		expect(pool.players.find((p) => p.fantraxPlayerId === 'p-2')?.status).toBe('In-Auction');
+		expect(pool.players.every((p) => p.available)).toBe(false);
 	});
 
 	it('marks a Player under contract unavailable, naming the Team', async () => {
@@ -804,7 +835,7 @@ describe('loadNominatablePool — the render path never writes', () => {
 		});
 		const pool = await loadNominatablePool(harness.gateway, 't-1');
 		expect(pool.players[0]?.available).toBe(false);
-		expect(pool.players[0]?.unavailableDetail).toContain('Bulls');
+		expect(pool.players[0]?.status).toBe('Closed to Bulls');
 	});
 
 	it('reports a held Slot ONCE, not as every Player being unavailable', async () => {
@@ -1150,15 +1181,15 @@ describe('under contract, from the contracts fold (Story 3.4)', () => {
 		const sengun = pool.players.find((row) => row.fantraxPlayerId === 'p-2');
 
 		expect(jalen?.available).toBe(false);
-		expect(jalen?.unavailableDetail).toContain('under contract to Rockets');
-		// The render and the submit word one refusal, from one core function.
-		expect(jalen?.unavailableDetail).toBe(
-			nominationRefusalDetail({
-				kind: 'under_contract',
-				playerName: 'Jalen Green',
-				teamName: 'Rockets'
-			})
+		// The render states the Team holding them; the submit still refuses in
+		// `nominationRefusalDetail`'s words, and both come from one core.
+		expect(jalen?.status).toBe(
+			nominationPoolStatus(
+				{ kind: 'under_contract', playerName: 'Jalen Green', teamName: 'Rockets' },
+				false
+			)
 		);
+		expect(jalen?.status).toBe('Closed to Rockets');
 		// The Player nobody won is untouched.
 		expect(sengun?.available).toBe(true);
 	});

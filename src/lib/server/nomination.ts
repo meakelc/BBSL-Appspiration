@@ -59,6 +59,11 @@
  * transaction rolls it back, leaving no event and no clock reset.
  */
 
+import {
+	INITIAL_AUCTIONS,
+	auctionForPlayer,
+	auctionsReducer
+} from '../core/projection/auctions.ts';
 import { fold } from '../core/projection/fold.ts';
 import {
 	AUCTION_CLOSED_EVENT,
@@ -79,6 +84,7 @@ import {
 import { INITIAL_PHASE, phaseReducer } from '../core/projection/phase.ts';
 import {
 	nominationConsequenceSentence,
+	nominationPoolStatus,
 	nominationRefusalDetail,
 	nominationSlotStatus,
 	refuseNomination
@@ -199,10 +205,13 @@ export type NominatablePoolRow = {
 	/** Whether this Player is selectable right now, as the render saw it. */
 	readonly available: boolean;
 	/**
-	 * Why this Player is unavailable, worded by the pure core, or `null` when
-	 * they are available. Never re-worded by the surface.
+	 * What state this Player is in, in the core's words — `Available`,
+	 * `Nominated`, `In-Auction`, or `Closed to <Team>`. One phrase, printed in
+	 * the row's own state cell; the refusal PARAGRAPH belongs to a submit and
+	 * is not printed down a list of ~1,470 rows. Never re-worded by the
+	 * surface.
 	 */
-	readonly unavailableDetail: string | null;
+	readonly status: string;
 };
 
 /** Everything the nomination page renders, all worded by the core. */
@@ -268,6 +277,12 @@ export async function loadNominatablePool(
 		// the two are resolved per row below exactly as `loadNominationState`
 		// resolves them for the one Player it is asked about.
 		const contracts = fold(INITIAL_CONTRACTS, events, contractsReducer);
+		// A third fold over the SAME loaded events, for one distinction the
+		// row's state makes and the gate does not: whether a nominated
+		// Player's Auction has had a Bid yet. `auctionForPlayer` is `null`
+		// until one lands, which is exactly "Nominated" rather than
+		// "In-Auction". It gates nothing — `refuseNomination` is untouched.
+		const auctions = fold(INITIAL_AUCTIONS, events, auctionsReducer);
 
 		// One statement, left joined, rather than one query per Player: the
 		// contract holder is part of what makes a row unavailable, and asking
@@ -341,7 +356,10 @@ export async function loadNominatablePool(
 				positions: String(row.positions),
 				nbaTeam: String(row.nba_team),
 				available: playerRefusal === null,
-				unavailableDetail: playerRefusal === null ? null : nominationRefusalDetail(playerRefusal)
+				status: nominationPoolStatus(
+					playerRefusal,
+					auctionForPlayer(auctions, fantraxPlayerId) !== null
+				)
 			};
 		});
 

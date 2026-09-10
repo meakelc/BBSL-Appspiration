@@ -58,7 +58,7 @@
 		readonly positions: string;
 		readonly nbaTeam: string;
 		readonly available: boolean;
-		readonly unavailableDetail: string | null;
+		readonly status: string;
 	};
 
 	type Pool = {
@@ -373,7 +373,7 @@
 												disabled={!player.available}
 												aria-describedby={player.available
 													? undefined
-													: `unavailable-${player.fantraxPlayerId}`}
+													: `state-${player.fantraxPlayerId}`}
 												bind:group={selected}
 											/>
 											<span class="visually-hidden">Choose {player.playerName}</span>
@@ -394,17 +394,20 @@
 									<td class="cell-detail">
 										<span class="visually-hidden cell-label">NBA team: </span>{player.nbaTeam}
 									</td>
+									<!-- ONE phrase, and the disabled radio is described BY it:
+									     `Nominated`, `In-Auction` or `Closed to <Team>` says which
+									     state the row is in, which is what the reason paragraph
+									     underneath it used to spend a whole sentence saying. The
+									     paragraph was a submit's refusal — it ended in "Nothing was
+									     written" about a submit nobody had made — repeated down a
+									     pool of ~1,470 rows. Still worded by the core; the surface
+									     prints. -->
 									<td class="cell-state">
-										{#if player.available}
-											<span class="state-label">Available</span>
-										{:else}
-											<span class="state-label">Not available</span>
-											<!-- The disabled radio's own reason, carrying the id its
-											     `aria-describedby` points at. Worded by the core. -->
-											<span class="prose" id={`unavailable-${player.fantraxPlayerId}`}>
-												{player.unavailableDetail}
-											</span>
-										{/if}
+										<span class="visually-hidden cell-label">Availability: </span><span
+											class="state-label"
+											id={player.available ? undefined : `state-${player.fantraxPlayerId}`}
+											>{player.status}</span
+										>
 									</td>
 								</tr>
 							{/each}
@@ -961,17 +964,15 @@
 	}
 
 	/*
-	 * "Available" is two words and rides the same line. "Not available"
-	 * carries the disabled radio's REASON with it — a full sentence, and the
-	 * one this page may never hide — so a row that has one takes a line of
-	 * its own rather than squeezing a sentence into the gap after a name.
+	 * Every state is now a PHRASE, not a sentence: "Available", "Nominated",
+	 * "In-Auction", or "Closed to <Team>". The longest of them is a Team name
+	 * wide, so the cell rides the same line as the rest of the row and simply
+	 * wraps when the name is long — the whole-width row this used to take,
+	 * when it carried a refusal paragraph, has nothing left to carry.
 	 */
 	.pool-table .cell-state {
 		flex: 0 1 auto;
-	}
-
-	.pool-table .cell-state:has(.prose) {
-		flex: 1 0 100%;
+		min-width: 0;
 	}
 
 	@media (min-width: 640px) {

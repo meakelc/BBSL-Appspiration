@@ -3,7 +3,10 @@ import { readFileSync } from 'node:fs';
 import { isHttpError } from '@sveltejs/kit';
 
 import { classifyDeviceClass } from '../../src/lib/core/device-class.ts';
-import { nominationRefusalDetail } from '../../src/lib/core/rules/nomination.ts';
+import {
+	nominationPoolStatus,
+	nominationRefusalDetail
+} from '../../src/lib/core/rules/nomination.ts';
 import { LIVE_DESTINATION_REFUSAL_STATUS } from '../../src/lib/server/destinations.ts';
 import type { RegisteredManager, SessionState } from '../../src/lib/server/auth.ts';
 import type { ResolvedPhase } from '../../src/lib/server/phase.ts';
@@ -167,11 +170,10 @@ describe('load — a Manager destination, gated on the destination and NOT on th
 					positions: 'SG',
 					nbaTeam: 'HOU',
 					available: false,
-					unavailableDetail: nominationRefusalDetail({
-						kind: 'already_nominated',
-						playerName: 'Jalen Green',
-						teamName: 'Celtics'
-					})
+					status: nominationPoolStatus(
+						{ kind: 'already_nominated', playerName: 'Jalen Green', teamName: 'Celtics' },
+						false
+					)
 				}
 			],
 			slotAvailable: true,
@@ -604,8 +606,9 @@ describe('the nomination surface', () => {
 	});
 
 	it('gives every disabled control a reason that actually resolves', () => {
-		// Each disabled radio points at its own unavailability sentence, and
-		// that id is generated from the same expression.
+		// Each disabled radio points at its own state — `Nominated`,
+		// `In-Auction`, `Closed to <Team>` — and that id is generated from the
+		// same expression that stamps it on the label.
 		const controls = [...SOURCE.matchAll(/<(?:button|input)\b[\s\S]*?>/g)].map((m) => m[0]);
 		for (const control of controls) {
 			if (!/\bdisabled[=\s>]/.test(control)) continue;
@@ -613,8 +616,12 @@ describe('the nomination surface', () => {
 				/aria-describedby/
 			);
 		}
-		expect(SOURCE).toContain('id={`unavailable-${player.fantraxPlayerId}`}');
-		expect(SOURCE).toContain('`unavailable-${player.fantraxPlayerId}`');
+		expect(SOURCE).toContain('`state-${player.fantraxPlayerId}`');
+		// The id is stamped on the state label only when the row is disabled:
+		// an available row has no reason to describe and nothing points at it.
+		expect(SOURCE).toContain(
+			'id={player.available ? undefined : `state-${player.fantraxPlayerId}`}'
+		);
 	});
 
 	it('states the consequence in words, and states it exactly once', () => {
@@ -632,7 +639,7 @@ describe('the nomination surface', () => {
 	it('words no refusal of its own — every sentence comes from the server', () => {
 		expect(SOURCE).toContain('pool.slotDetail');
 		expect(SOURCE).toContain('pool.slotStatus');
-		expect(SOURCE).toContain('player.unavailableDetail');
+		expect(SOURCE).toContain('player.status');
 		expect(SOURCE, 'a refusal sentence is written in the surface').not.toContain(
 			'Nothing was written'
 		);
@@ -707,11 +714,17 @@ describe('the nomination surface', () => {
 		);
 	});
 
-	it('gives an unavailable row its own line, because it carries the reason', () => {
-		// "Available" is two words and rides the same line. "Not available"
-		// brings the disabled radio's reason with it — a full sentence, and
-		// the one thing on this page that may never be hidden.
-		expect(SOURCE).toMatch(/\.cell-state:has\(\.prose\) \{\s*flex: 1 0 100%;/);
+	it('states a row’s availability as a phrase, never a paragraph', () => {
+		// It used to print "Not available" and then the SUBMIT's refusal
+		// sentence under it — a paragraph ending in "Nothing was written"
+		// about a submit nobody had made, repeated down ~1,470 rows. The state
+		// is one phrase now, so the cell rides the row instead of claiming a
+		// line of its own.
+		expect(SOURCE, 'the refusal paragraph is back in the row').not.toContain(
+			'unavailableDetail'
+		);
+		expect(SOURCE).not.toMatch(/\.cell-state:has\(\.prose\)/);
+		expect(SOURCE).toMatch(/\.pool-table \.cell-state \{\s*flex: 0 1 auto;/);
 	});
 
 	it('keeps every row target at the 46px control height for one-handed use', () => {

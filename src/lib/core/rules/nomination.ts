@@ -112,6 +112,50 @@ export type NominationRefusal =
 	| { readonly kind: 'unrecorded' };
 
 /**
+ * The pool row's own state, in the fewest words that still say which of the
+ * ways a Player is out of reach applies to them.
+ *
+ * The pool page used to print "Not available" and then the whole refusal
+ * sentence underneath every blocked row. That sentence is written for a
+ * SUBMIT — it ends in "Nothing was written", because a refusal's job is to
+ * say the Slot was not spent — and nobody had submitted anything. On a pool
+ * of ~1,470 Players it was also a paragraph per row, repeated down the
+ * column, saying the same thing about a hundred rows in turn. What a Manager
+ * scanning the list needs is which state a row is IN, and that is one phrase.
+ *
+ * The distinction between the two nominated states is the Bid, not the
+ * nomination: `projection/auctions.ts` holds nothing at all for a nominated
+ * Player nobody has bid on, so `bidding` is that fold's answer and never a
+ * second rule about it. Both are still refused by the same
+ * `already_nominated` gate; the label reports which stage the Auction has
+ * reached, and changes nothing about who may be nominated.
+ *
+ * `Closed to <Team>` is the `under_contract` case, and covers both of its
+ * sources without distinguishing them, exactly as the refusal does: a Player
+ * imported onto a roster and a Player won in this auction are equally out of
+ * the pool, and the Team named is the one holding them.
+ *
+ * The last line is the fallback rather than an exhaustive switch on purpose.
+ * A pool row can also be refused for the phase — every row at once, when the
+ * auction is not running — and that is not a fact about the PLAYER, so it
+ * gets the plain state and the panel above the list says the rest.
+ */
+export function nominationPoolStatus(
+	refusal: NominationRefusal | null,
+	bidding: boolean
+): string {
+	if (refusal === null) return 'Available';
+	switch (refusal.kind) {
+		case 'already_nominated':
+			return bidding ? 'In-Auction' : 'Nominated';
+		case 'under_contract':
+			return `Closed to ${refusal.teamName}`;
+		default:
+			return 'Not available';
+	}
+}
+
+/**
  * The one refusal sentence for each case.
  *
  * Product voice: state the fact, name the Player or the Team it is about,
