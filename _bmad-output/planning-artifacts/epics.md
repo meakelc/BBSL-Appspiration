@@ -373,6 +373,8 @@ The Commissioner can void a Bid, adjust Cap Space, terminate an Auction, release
 
 **Standalone:** rules meet reality, visibly.
 
+**Build order is not story order.** Stories 7.6 – 7.9 are **everyday operations**, not break-glass — trades are frequent, and an auction without trade recording computes wrong cap figures for both sides of every one. The epic body carries an explicit *Implementation order* block: 7.6 runs in parallel from the start, then 7.1 → 7.7 (trades work here) → 7.5 → 7.8 → 7.2 → 7.9 → 7.3/7.4. Numbers were **not** reshuffled to match, because renumbering would churn every `sprint-status.yaml` key and every by-name citation in the spine and traceability.
+
 **Why the roster work belongs here and not in its own epic.** A Roster Move is a Commissioner control with a mandatory reason sheet and an Audit Log entry — the same shape as every other story in this epic, reaching the same `routes/admin` surface and reusing Story 7.1's control class. Splitting it out would duplicate that foundation. **But note the dependency shape is unusual for this file:** Story 7.6 depends on nothing and is independently valuable, 7.7 depends only on 7.1, 7.8 depends on 7.6, and 7.9 is contingent on a third party and explicitly killable. Unlike Epic 10, these four **are** separately shippable, and 7.7 alone is a complete increment.
 
 ### Epic 8: Ready to open — rehearsal, liveness, and restore
@@ -2021,7 +2023,32 @@ So that the record stays readable forever and nothing can be changed after the f
 
 ## Epic 7: The referee's controls and the record
 
-The Commissioner can void a Bid, adjust Cap Space, terminate an Auction, release a Nomination Slot, extend or expire any Clock, assign a length on a Team's behalf, and pause and resume the whole auction — every act carrying a mandatory free-text reason and a before/after — and any Manager can read the complete append-only Audit Log.
+The Commissioner can void a Bid, adjust Cap Space, terminate an Auction, release a Nomination Slot, extend or expire any Clock, assign a length on a Team's behalf, and pause and resume the whole auction — every act carrying a mandatory free-text reason and a before/after — and any Manager can read the complete append-only Audit Log. Since 2026-09-10 the Commissioner can also record a trade or a drop that happened in Fantrax, and be told when Fantrax and the app have drifted apart.
+
+### Implementation order — trade functions first
+
+*Added 2026-09-10 at the commissioner's direction. **Story numbers are NOT in build order**, and deliberately so: renumbering would churn every `sprint-status.yaml` key and every by-name citation in `ARCHITECTURE-SPINE.md` and `traceability.md`. Build in the order below; the numbers are identity, not sequence.*
+
+**Why this epic is not uniformly break-glass.** Stories 7.2, 7.3 and 7.4 exist for when something goes wrong — a bad import, a bid placed by the wrong co-manager, an outage. **Stories 7.6 – 7.9 are the opposite: they are everyday operations.** Managers trade frequently during an auction, to clear cap space or chase a secondary target once their first choice is gone. An auction running without trade recording is an auction whose cap arithmetic is wrong for both sides of every trade, for as long as the auction lasts.
+
+| Build | Story | Depends on | Note |
+| --- | --- | --- | --- |
+| **parallel, start now** | **7.6** Dead Money and the rookie-scale designation | **nothing** | The only story here with no dependency on 7.1. Pure core, adapter, migration and a display change; also fixes a latent import defect on its own merits |
+| **1** | **7.1** The Commissioner control class and the reason sheet | — | **Smaller than it reads.** `src/lib/styles/commissioner.css` and `src/lib/server/commissioner-guard.ts` shipped in Epic 1; what remains is the reason sheet, which nothing in `src/` implements yet |
+| **2** | **7.7** Record a Roster Move | 7.1 | **Trades work from here.** Two stories to a usable tool |
+| **3** | **7.5** The league-visible Audit Log | Story 1.5 only | On the critical path — see coupling A |
+| **4** | **7.8** Record a Drop | 7.1, 7.6 | 7.6 is already done on the parallel track |
+| **5** | **7.2** Void a Bid and restore the Auction | 7.1 | Promoted above 7.3/7.4 — see coupling B |
+| **6** | **7.9** Detect a Roster Divergence | 7.7, 7.8 | Contingent and killable; gated on its own first AC |
+| **7** | **7.3**, **7.4** The remaining overrides; pause and resume | 7.1 | Genuine break-glass. Last |
+
+**Coupling A — the audit-log-only decision puts 7.5 on the critical path.** FR-41 records a Roster Move to the Audit Log and **does not broadcast it to Discord**, which makes the Log the *only* channel by which the league learns a rival's Cap Space moved. Ship 7.7 without 7.5 and every recorded trade is invisible to all thirty managers: figures change with no announcement and no surface to look them up on. Confirmed as the intended trade-off on 2026-09-10 — broadcasting instead would take 7.5 off the critical path entirely, since Epic 5's outbox is already built. Revisit at Story 9.7 per the §12 assumption.
+
+**Coupling B — 7.2 is the remedy for a refused trade, not only a correction tool.** FR-41's refusal tells the Commissioner to void a Bid *or* wait for a Close. Without 7.2 only the second exists, so a refused trade stalls for up to 24 hours. Refusals are expected rather than rare: the Team *receiving* salary is the one that fails the money gate, and a Team can also be pushed over by **giving players up** (§10 example 37).
+
+**Deployment constraint — this block wants to land before auction open.** Stories 7.6, 7.7 and 7.8 all touch `src/lib/core/`, and **AD-20** fail-stops a `core/` deploy during a live Auction Phase: each one needs a pause (AD-13), a green §10 suite (AD-25) and a recorded reason. Landing them after the auction opens converts every fix into a league-wide freeze. They should therefore precede **Story 9.8** (prod setup day) and ideally **Story 9.7** (moderator pilot), so the pilot exercises trade recording against real managers — the same argument Epic 10 already carries in its own sequencing note.
+
+**Two smaller sequencing facts.** Finish **Story 10.6** first: it is in `review` and touches the same `core/rules/bidding.ts` gates that 7.7 reuses rather than reimplements (AR-42). And 7.7's Contract-Assignment-Phase criterion — a cleared length re-blocking the export — cannot be fully exercised until **Story 6.3** ships the export, so expect that one AC deferred rather than met.
 
 ### Story 7.1: The Commissioner control class and the reason sheet
 
