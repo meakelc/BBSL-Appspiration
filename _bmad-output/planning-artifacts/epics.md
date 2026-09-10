@@ -2439,9 +2439,24 @@ So that a trade nobody reported cannot quietly corrupt the arithmetic for a fort
 **And** a dismissed divergence stays suppressed until the underlying difference changes
 **And** divergences appear on the Commissioner's surface only, never a Manager's
 
+**Given** a payload that parses cleanly but is implausible — an HTTP 200 carrying 3 Teams instead of 30, from a transient upstream fault, a wrong `period`, or a deploy mid-flight
+**When** the comparison runs
+**Then** the **plausibility guard** refuses to raise anything: all 30 Teams must be present and **no Team's roster may be empty**
+**And** a read whose divergences would affect **more than a quarter of the League in one pass** is treated as a **fault, not as news**
+**And** the guard is what stops 27 Teams reading as having released every Player they hold — an interpretation that is arithmetically valid and obviously absurd, and which the ordinary failure ACs below do **not** catch, because the response is well-formed
+
+**Given** a tripped guard
+**Then** it renders as **stopped**, never as *"no divergences"*
+**And** it **never clears itself** — the Commissioner acknowledges it and can then see the proposals, so a genuinely busy trade day costs one extra confirmation while a bad payload costs nothing
+**And** the quarter-of-the-League fraction is tunable without a code change
+
 **Given** the reader fails — unreachable, unauthorised, rate-limited or malformed
 **Then** no auction action is blocked or reversed
 **And** repeated failure **renders as stopped, never as "no divergences"** (AD-32, AD-19), because that is the state that displaces the manual check
+
+**Given** this story in full
+**Then** it **detects and proposes only** — it never applies a Roster Move or a Drop itself
+**And** every write goes through Story 7.7 or 7.8 with the mandatory reason FR-32 requires, which is the rule an automatic apply would have to break
 
 ---
 

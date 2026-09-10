@@ -814,6 +814,13 @@ The system periodically reads Team membership from Fantrax and raises any differ
 - Once recorded, the corresponding divergence resolves on the next read with no further action.
 - Divergences appear on the Commissioner's operational surface only. A divergence is an unconfirmed reading of a third-party system, and is not league-visible until it becomes a Move or a Drop.
 
+*The plausibility guard*
+- **A well-formed response can still be wrong, and the ordinary failure rules do not catch it.** An HTTP 200 carrying three Teams instead of thirty — a transient upstream fault, a wrong `period`, a deploy mid-flight — parses cleanly and would otherwise read as twenty-seven Teams having released every player they hold. The guard exists because that reading is *arithmetically* valid and *obviously* absurd.
+- **Structural check:** a read raises nothing unless the payload carries **all 30 Teams** and **no Team's roster is empty**. A League of exactly 30 Teams is hard-wired (§2.2), and no real Team holds zero Players mid-auction.
+- **Volume check:** a read whose divergences would affect **more than a quarter of the League in one pass** is treated as a fault, not as news. Trades arrive a few at a time; a single read proposing changes across eight or more Teams is far likelier to be a bad payload than a busy afternoon. *[The fraction is a starting value, tunable by the Commissioner without a code change.]*
+- **A tripped guard renders as *stopped*, never as *no divergences*** — the same rule the failure clause below applies, and for the same reason: the dangerous state is the one that looks like health.
+- **The Commissioner can acknowledge a tripped guard and see the proposals anyway**, because a genuinely busy day must not be unreconcilable. The guard **never clears itself**: it is dismissed by a person who has looked at it, so a real mass change costs one extra confirmation and a bad payload costs nothing at all.
+
 *Failure*
 - A Fantrax read that fails — unreachable, unauthorised, rate-limited, malformed, or shaped differently than expected — **never blocks or reverses any auction action**, exactly as a Discord delivery failure does not (FR-26). It is logged and surfaced to the Commissioner.
 - **Repeated failure degrades to FR-41 alone** and says so plainly on the Commissioner's surface, rather than presenting a silent all-clear. An integration that has stopped answering must not read as "no trades have happened."
