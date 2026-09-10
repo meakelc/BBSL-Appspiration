@@ -123,6 +123,16 @@
 	let filter = $state<BoardFilter>(DEFAULT_FILTER);
 
 	/**
+	 * Whether either control is showing its choices. Presentation only — a
+	 * disclosure's own open flag, and the one thing on this page that is
+	 * neither a figure nor a view of one. Both start CLOSED: the board is what
+	 * the board's first screen is for, and the closed row still states which
+	 * sort and which filter are in force.
+	 */
+	let sortOpen = $state(false);
+	let filterOpen = $state(false);
+
+	/**
 	 * How often the page re-reads its own elapsed time. A named constant, and
 	 * a plain interval — no backoff, no visibility heuristic and no network of
 	 * any kind: this tick touches nothing but a number in this component.
@@ -308,38 +318,81 @@
 
 			<!-- Sorting and filtering are view state. Neither posts anything,
 			     neither reloads anything, and neither changes a figure on a
-			     card — the list is reordered and narrowed, and nothing else. -->
-			<fieldset class="controls">
-				<legend class="section-label">{BOARD_SORT_LEGEND}</legend>
-				{#each SORT_KEYS as key (key)}
-					<label class="choice" for={`board-sort-${key}`}>
-						<input
-							id={`board-sort-${key}`}
-							type="radio"
-							name="board-sort"
-							value={key}
-							bind:group={sort}
-						/>
-						<span class="prose">{SORT_LABELS[key]}</span>
-					</label>
-				{/each}
-			</fieldset>
+			     card — the list is reordered and narrowed, and nothing else.
 
-			<fieldset class="controls">
-				<legend class="section-label">{BOARD_FILTER_LEGEND}</legend>
-				{#each FILTER_KEYS as key (key)}
-					<label class="choice" for={`board-filter-${key}`}>
-						<input
-							id={`board-filter-${key}`}
-							type="radio"
-							name="board-filter"
-							value={key}
-							bind:group={filter}
-						/>
-						<span class="prose">{FILTER_LABELS[key]}</span>
-					</label>
-				{/each}
-			</fieldset>
+			     Both are CLOSED by default and each states its own current
+			     view on the closed row: the board's first screen is the board,
+			     not eight radios above it, and what a Manager needs to know
+			     without opening anything is which view they are looking at.
+			     The choices appear on a tap and the row that opened them keeps
+			     saying what is chosen, so the answer is never hidden by the
+			     control that holds it.
+
+			     `<details>`/`<summary>` and no script beyond the two flags:
+			     the disclosure opens on tap AND on Enter and is announced as
+			     expanded or collapsed, the same pattern `/nominate` already
+			     uses. Choosing closes it, because the choice is the whole
+			     reason it was opened and the list beneath is what the Manager
+			     came to read. -->
+			<details class="controls-disclosure" bind:open={sortOpen}>
+				<summary>
+					<span class="section-label">{BOARD_SORT_LEGEND}</span>
+					<span class="prose controls-current">{SORT_LABELS[sort]}</span>
+					<span class="controls-mark" aria-hidden="true">
+						<svg viewBox="0 0 16 16" width="16" height="16" focusable="false">
+							<path d="M4 6.5 8 10.5 12 6.5" />
+						</svg>
+					</span>
+				</summary>
+				<fieldset class="controls">
+					<!-- The legend still names the group for a screen reader
+					     reading the radios; the summary above is what names it
+					     on screen, and two visible copies would be the control
+					     titled twice. -->
+					<legend class="visually-hidden">{BOARD_SORT_LEGEND}</legend>
+					{#each SORT_KEYS as key (key)}
+						<label class="choice" for={`board-sort-${key}`}>
+							<input
+								id={`board-sort-${key}`}
+								type="radio"
+								name="board-sort"
+								value={key}
+								bind:group={sort}
+								onchange={() => (sortOpen = false)}
+							/>
+							<span class="prose">{SORT_LABELS[key]}</span>
+						</label>
+					{/each}
+				</fieldset>
+			</details>
+
+			<details class="controls-disclosure" bind:open={filterOpen}>
+				<summary>
+					<span class="section-label">{BOARD_FILTER_LEGEND}</span>
+					<span class="prose controls-current">{FILTER_LABELS[filter]}</span>
+					<span class="controls-mark" aria-hidden="true">
+						<svg viewBox="0 0 16 16" width="16" height="16" focusable="false">
+							<path d="M4 6.5 8 10.5 12 6.5" />
+						</svg>
+					</span>
+				</summary>
+				<fieldset class="controls">
+					<legend class="visually-hidden">{BOARD_FILTER_LEGEND}</legend>
+					{#each FILTER_KEYS as key (key)}
+						<label class="choice" for={`board-filter-${key}`}>
+							<input
+								id={`board-filter-${key}`}
+								type="radio"
+								name="board-filter"
+								value={key}
+								bind:group={filter}
+								onchange={() => (filterOpen = false)}
+							/>
+							<span class="prose">{FILTER_LABELS[key]}</span>
+						</label>
+					{/each}
+				</fieldset>
+			</details>
 
 			<!-- A filtered view is VISIBLY filtered and states its own count, so
 			     a short board is never mistaken for a quiet league. -->
@@ -535,14 +588,31 @@
 
 	/*
 	 * The controls are a plain wrapping row of radios at the touch floor, not
-	 * a select: three choices each, and a native menu would hide the current
-	 * view behind a tap on the one surface whose view state must be obvious.
+	 * a select: a native menu would hide the current view behind a tap, and
+	 * the radios are still radios — every choice visible at once, with the one
+	 * in force marked — once the row above is opened.
+	 *
+	 * The DISCLOSURE is what changed: eight radios stood permanently between
+	 * the masthead and the first card, which on a 375px screen is most of the
+	 * first screen spent on a view that is almost always the default one. The
+	 * closed row is not a hidden control — it prints the choice in force, so
+	 * the answer the radios used to give by which one is ticked is now given
+	 * in words, and the choices themselves are one tap away.
 	 */
 	.controls {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
-		gap: var(--space-row-gap);
+		/*
+		 * The two axes are NOT the same gap. Across, the gap is what keeps two
+		 * choices from reading as one phrase. Down — which is what happens at
+		 * 375px, where five filters stack — each choice already carries a
+		 * touch-floor box, so a gap between two of them adds to slack that is
+		 * there anyway and the stack drifts apart. The rows meet; their boxes
+		 * do the spacing.
+		 */
+		column-gap: var(--space-row-gap);
+		row-gap: 0;
 		border: 0;
 		padding: 0;
 		margin: 0;
@@ -559,6 +629,97 @@
 		width: 22px;
 		height: 22px;
 		accent-color: var(--color-border-interactive);
+	}
+
+	/*
+	 * The closed row: the control's name, the view in force, and the mark that
+	 * says there is more behind it.
+	 *
+	 * NO `--control-height` and no `--touch-min` — `/nominate`'s explainer made
+	 * the same call for the same reason. A touch-floor box around a body-size
+	 * line left most of its height empty above and below each of two rows, and
+	 * stacked they were a band of empty panel between the count and the board.
+	 *
+	 * The target is not lost with it: the summary spans the panel's full
+	 * width, so the row is a wide target however short it is, and this is a
+	 * control whose mis-tap costs nothing — it opens a list of radios, each of
+	 * which keeps the floor on its own row. The floor stays, untouched, on
+	 * every control that spends something.
+	 */
+	.controls-disclosure > summary {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--space-row-gap);
+		cursor: pointer;
+		/* The mark below carries the affordance; the default triangle beside
+		   it would be two of them stacked — `/nominate`'s own reasoning. */
+		list-style: none;
+	}
+
+	.controls-disclosure > summary::-webkit-details-marker {
+		display: none;
+	}
+
+	.controls-disclosure > summary:focus-visible {
+		outline: 2px solid var(--color-text);
+		outline-offset: 2px;
+	}
+
+	/*
+	 * The view in force, set at the body size against the small uppercase
+	 * label beside it: the LABEL says which control this is and the value is
+	 * the thing being read, so the value is the one that carries the weight.
+	 */
+	.controls-current {
+		color: var(--color-text);
+	}
+
+	/*
+	 * The chevron, pushed to the trailing edge, drawn in `em` off the summary's
+	 * own font and stroked from `currentColor` — the same construction as
+	 * `/nominate`'s explainer mark, so the two disclosures in this codebase
+	 * carry one affordance rather than two.
+	 */
+	.controls-mark {
+		display: flex;
+		flex-shrink: 0;
+		margin-left: auto;
+		color: var(--color-text-tertiary);
+	}
+
+	.controls-mark svg {
+		width: 1.1em;
+		height: 1.1em;
+		stroke: currentColor;
+		stroke-width: 1.5;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+		fill: none;
+	}
+
+	/* Open or closed, the same mark; it turns to point at what it opened. */
+	.controls-disclosure[open] > summary .controls-mark {
+		color: var(--color-text);
+		transform: rotate(180deg);
+	}
+
+	/*
+	 * Open, the row needs no margin of its own: the first radio below it
+	 * carries a full touch-floor box, which is already more separation than a
+	 * gap would add.
+	 *
+	 * The same box is why the open list is pulled back INTO the panel's row
+	 * gap at the bottom. Each choice keeps its touch floor — that is not
+	 * negotiable on a control — but the floor is a hit area, not spacing, and
+	 * the empty part of the last row's box already reads as the gap beneath
+	 * it. Adding the panel's own gap on top of it stacked two separations
+	 * where the eye sees one. The negative margin cancels the second; the
+	 * target it hangs off is untouched, the same way `/nominate`'s mark grows
+	 * its hit box without growing its row.
+	 */
+	.controls-disclosure[open] > .controls {
+		margin-bottom: calc(-1 * var(--space-row-gap));
 	}
 
 	/*
