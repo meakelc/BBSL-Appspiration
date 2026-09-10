@@ -94,8 +94,8 @@ development_status:
   6-5-archive-the-auction: backlog
   epic-6-retrospective: optional
 
-  epic-7: backlog
-  7-1-the-commissioner-control-class-and-the-reason-sheet: backlog
+  epic-7: in-progress
+  7-1-the-commissioner-control-class-and-the-reason-sheet: review
   7-2-void-a-bid-and-restore-the-auction: backlog
   7-3-the-remaining-overrides: backlog
   7-4-pause-and-resume-the-auction: backlog
