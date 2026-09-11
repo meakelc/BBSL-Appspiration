@@ -56,6 +56,7 @@ import {
 } from '../../src/lib/core/projection/phase.ts';
 import {
 	CONTRACT_LENGTH_ASSIGNED_EVENT,
+	DROP_RECORDED_EVENT,
 	ROSTER_MOVE_RECORDED_EVENT
 } from '../../src/lib/core/projection/contracts.ts';
 import { MINOR_LEAGUE_ELIGIBILITY_SET } from '../../src/lib/core/projection/eligibility.ts';
@@ -91,6 +92,7 @@ import type { AuctionOpenedPayload } from '../../src/lib/server/auction-open.ts'
 import type { ImportPromotedPayload } from '../../src/lib/server/import-promotion.ts';
 import type {
 	ContractLengthAssignedPayload,
+	DropRecordedPayload,
 	RosterMoveRecordedPayload,
 	RosterMoveTeamFigures,
 	RosterMoveTransfer
@@ -331,6 +333,43 @@ const ROSTER_MOVE: RosterMoveRecordedPayload = {
 	reason: 'Agreed in the league chat on 1 September.'
 };
 
+/**
+ * A Drop that releases two Contracts (Story 7.8, FR-43): one Active/Bench
+ * Player who leaves $2,000,000 of Dead Money behind, and one full-term
+ * second-round rookie-scale deal that clears entirely.
+ */
+const DROP: DropRecordedPayload = {
+	teamId: TEAM_A,
+	teamName: 'Lakers',
+	released: [
+		{
+			fantraxPlayerId: PLAYER_ONE,
+			playerName: 'Jalen Green',
+			fromPlacement: 'active_bench',
+			chargedCapHit: parseMoney(2_000_000),
+			value: parseMoney(2_000_000),
+			deadMoney: parseMoney(2_000_000),
+			removed: false,
+			contractYearsRemaining: 3,
+			rookieScaleRound: null
+		},
+		{
+			fantraxPlayerId: PLAYER_TWO,
+			playerName: 'Jalen Duren',
+			fromPlacement: 'active_bench',
+			chargedCapHit: parseMoney(2_000_000),
+			value: parseMoney(2_000_000),
+			deadMoney: parseMoney(0),
+			removed: true,
+			contractYearsRemaining: 5,
+			rookieScaleRound: 2
+		}
+	],
+	teamBefore: FIGURES(TEAM_A, 'Lakers', 5_000_000),
+	teamAfter: FIGURES(TEAM_A, 'Lakers', 7_000_000),
+	reason: 'Both released in Fantrax on the 11th.'
+};
+
 const ELIGIBILITY_SET: MinorLeagueEligibilitySetPayload = {
 	fantraxPlayerId: PLAYER_ONE,
 	playerName: 'Jalen Green',
@@ -394,6 +433,7 @@ function everyKnownEvent(): AppendedEvent[] {
 		}),
 		event(CONTRACT_LENGTH_ASSIGNED_EVENT, CONTRACT_LENGTH_ASSIGNED),
 		event(ROSTER_MOVE_RECORDED_EVENT, ROSTER_MOVE),
+		event(DROP_RECORDED_EVENT, DROP),
 		event(MINOR_LEAGUE_ELIGIBILITY_SET, ELIGIBILITY_SET),
 		event(ASSIGNMENTS_SUBMITTED_EVENT, ASSIGNMENTS_SUBMITTED),
 		event(ASSIGNMENT_DEADLINE_SET_EVENT, DEADLINE_SET),
@@ -524,6 +564,85 @@ describe('a Roster Move', () => {
 		// Both sides are parties, so either finds it under its own filter.
 		expect(entry.teams).toContain(TEAM_A);
 		expect(entry.teams).toContain(TEAM_B);
+	});
+});
+
+describe('a Drop', () => {
+	it('is one entry stating the reason, each released Player and the before → after', () => {
+		const entry = only([event(DROP_RECORDED_EVENT, DROP)]);
+		const text = rendered(entry);
+
+		expect(entry.headline).toContain('Lakers');
+		expect(entry.headline).toContain('Drop');
+		// The Commissioner's stated reason, verbatim and first — it is what
+		// FR-43 requires the record carry.
+		expect(text).toContain(DROP.reason);
+		expect(entry.details[0]?.label).toBe('Reason');
+		expect(entry.details[0]?.value).toBe(DROP.reason);
+		// The Team's five figures, before → after.
+		expect(text).toContain('Lakers — Cap Space');
+		expect(text).toContain('$5.0M → $7.0M');
+		// Both released Players are parties, so either finds the entry under
+		// its own filter, and the Team does too.
+		expect(entry.teams).toEqual([TEAM_A]);
+		expect(entry.players).toEqual([PLAYER_ONE, PLAYER_TWO]);
+	});
+
+	it('words the CARRIED release as Dead Money at the amount it was charging', () => {
+		const entry = only([event(DROP_RECORDED_EVENT, DROP)]);
+		const carried = entry.details.find((detail) => detail.label === 'Jalen Green');
+
+		expect(carried).not.toBeUndefined();
+		expect(carried?.value).toContain('Left Active/Bench');
+		expect(carried?.value).toContain('Was charging $2.0M');
+		expect(carried?.value).toContain('Dead Money $2.0M');
+		// The exception did not apply, so nothing claims it did.
+		expect(carried?.value).not.toContain('rookie scale');
+		expect(carried?.value).not.toContain('returned to Cap Space');
+		expect(carried?.value).toContain('3 years remaining');
+	});
+
+	it('words the CLEARED release as removed, and states the round and the term', () => {
+		const entry = only([event(DROP_RECORDED_EVENT, DROP)]);
+		const cleared = entry.details.find((detail) => detail.label === 'Jalen Duren');
+
+		expect(cleared).not.toBeUndefined();
+		expect(cleared?.value).toContain('Left Active/Bench');
+		expect(cleared?.value).toContain('Was charging $2.0M');
+		// Not "Dead Money $0.0M": the row was removed and the money went back.
+		expect(cleared?.value).toContain('No Dead Money carried');
+		expect(cleared?.value).toContain('returned to Cap Space');
+		expect(cleared?.value).not.toMatch(/Dead Money \$/);
+		// The two facts FR-43's exception turned on, so a later reading can see
+		// WHY rather than take it on trust.
+		expect(cleared?.value).toContain('Round 2 rookie scale');
+		expect(cleared?.value).toContain('5 years remaining');
+	});
+
+	it('never renders the two releases the same way — the ternary is not invertible in silence', () => {
+		const entry = only([event(DROP_RECORDED_EVENT, DROP)]);
+		const carried = entry.details.find((detail) => detail.label === 'Jalen Green');
+		const cleared = entry.details.find((detail) => detail.label === 'Jalen Duren');
+
+		// Both released the same amount from the same Slot; only their FATE
+		// differs, and it is the only thing on the entry that says so.
+		expect(carried?.value).not.toBe(cleared?.value);
+	});
+
+	it('states an absence rather than an invented $0 when a release carries no amount', () => {
+		// The defensive branch. `auction_events` is insert-only, so a payload
+		// written by an older or broken build cannot be corrected in place —
+		// the renderer states what it has and never repairs a missing figure
+		// into a zero somebody could read as "nothing was carried".
+		const malformed = {
+			...DROP,
+			released: [{ fantraxPlayerId: PLAYER_ONE, playerName: 'Jalen Green' }]
+		};
+		const entry = only([event(DROP_RECORDED_EVENT, malformed as unknown as DropRecordedPayload)]);
+		const row = entry.details.find((detail) => detail.label === 'Jalen Green');
+
+		expect(row?.value).toContain('Dead Money —');
+		expect(row?.value).not.toContain('$0');
 	});
 });
 

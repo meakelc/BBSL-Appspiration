@@ -376,6 +376,30 @@ export type TeamRosterRow = {
 	readonly rosterSlotKind: RosterSlotKind;
 	/** Whether this row came from an `AuctionClosed` rather than the import. */
 	readonly won: boolean;
+	/**
+	 * Years still to run on an IMPORTED Contract, as Fantrax stated them
+	 * (Story 7.8) — `null` for an Auction Contract, which has no imported
+	 * term and whose assigned length is `AuctionContract.contractYears`.
+	 *
+	 * Carried here for FR-43's one exception, which is the only rule in the
+	 * product that reads it: a Drop releases a second-round rookie-scale deal
+	 * to nothing only while its full term is UNELAPSED. Nothing else on this
+	 * type's own surface renders it — the Teams page states a Cap Hit and a
+	 * Slot, not a term.
+	 */
+	readonly contractYearsRemaining: number | null;
+	/**
+	 * The draft round of a rookie-scale Contract, or `null` for an ordinary
+	 * one (Story 7.8).
+	 *
+	 * The OTHER half of FR-43's exception, and it needs both: round 2 alone
+	 * is a rookie deal that may be part-served, and a full term alone is an
+	 * ordinary Contract that has simply not started. `null` for an Auction
+	 * Contract, and `null` for any row imported before the designation was
+	 * persisted — which is why a re-import, not a backfill, is the remedy for
+	 * those.
+	 */
+	readonly rookieScaleRound: number | null;
 };
 
 // --- The wording -----------------------------------------------------------

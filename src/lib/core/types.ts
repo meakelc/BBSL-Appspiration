@@ -1141,6 +1141,95 @@ export type RecordRosterMoveGateResults = {
 	readonly receivingSlots: MoveSlotsGateOutcome;
 };
 
+// --- Story 7.8: the RecordDrop command and its fixed gate set -------------
+
+/**
+ * The `RecordDrop` command (Story 7.8, FR-43, PRD §10 examples 40, 41 and 43).
+ *
+ * **A fourth command type, because a Drop is none of the other three.** A
+ * Team released a Player in Fantrax and the app has to hear about it: the
+ * Contract stops counting against the twelve, and — unless FR-43's one
+ * exception applies — keeps charging the Cap as Dead Money under nobody's
+ * name. It names ONE Team, it offers no amount, and it is judged once over
+ * the state the whole act produces.
+ *
+ * **Why not a `RecordRosterMove` with an empty receiving side.** A Move
+ * transfers a Contract from one Team to another and clears nothing; a Drop
+ * ENDS one, converting it to a charge or removing it outright. Routing a Drop
+ * through a Move would need a Team to receive what nobody receives, and the
+ * receiving Team's two gates would then judge a roster nobody is changing.
+ *
+ * `teamName` rides the command for the EVENT's sake, exactly as
+ * `RecordRosterMove`'s two names do: the Audit Log entry states the Team and
+ * an id is not a name. `RECORD_DROP_GATES` decides from the id and the id
+ * list alone.
+ *
+ * `reason` is on the command because FR-43 requires one before a Drop
+ * commits and `core/rules/override.ts` owns what makes a reason valid. The
+ * ENFORCEMENT is `server/override-guard.ts`'s, over what was submitted.
+ */
+export type RecordDrop = {
+	readonly kind: 'RecordDrop';
+	readonly teamId: string;
+	readonly teamName: string;
+	/** The Contracts being released. Empty is refused: the act names nothing. */
+	readonly fantraxPlayerIds: readonly string[];
+	/** The Commissioner's stated reason, already trimmed and non-blank. */
+	readonly reason: string;
+};
+
+/**
+ * The gate set for `RecordDrop`, **fixed per command type** (AD-1), and the
+ * FOURTH fixed gate set this codebase declares.
+ *
+ * **Three names, and the list is FLAT** for `RECORD_ROSTER_MOVE_GATES`'
+ * reason: `GateResults` is `Readonly<Record<string, GateOutcome>>` and
+ * `RecordDropGateResults` must stay assignable to it, so nothing may nest
+ * inside a gate — a nested record has no `passed` and would quietly stop
+ * being a gate. A Drop has one Team, so it needs one cap key and one slots
+ * key rather than the Move's two of each.
+ *
+ * **`contested` leads, exactly as it leads `RECORD_ROSTER_MOVE_GATES`.**
+ * Cap and slots are meaningless questions about a Player nobody holds:
+ * a Player being bid on has no settled Contract for a Drop to release.
+ * Reading order, not short-circuit order — all three outcomes are always
+ * returned (AD-7).
+ *
+ * **The money before the capacity**, matching the last two entries of
+ * `PLACE_BID_GATES`, both entries of `RESTORE_LEADING_BID_GATES` and each
+ * Team's pair in `RECORD_ROSTER_MOVE_GATES`, so a reader who knows one knows
+ * all four.
+ *
+ * Frozen at runtime as well as `as const`, for `PLACE_BID_GATES`' reason:
+ * this list is what `evaluateDrop()`'s totality is asserted against, and a
+ * caller that could splice an entry out of it could make a partial result
+ * look complete.
+ */
+export const RECORD_DROP_GATES = Object.freeze(['contested', 'cap', 'slots'] as const);
+
+/** One of the three gate names above. */
+export type RecordDropGate = (typeof RECORD_DROP_GATES)[number];
+
+/**
+ * What `evaluateDrop()` returns for a `RecordDrop`, in any state whose shape
+ * permits an evaluation at all.
+ *
+ * Three keys, one per name in `RECORD_DROP_GATES`, always all present. Adding
+ * or removing a name here makes every consumer a compile error until it
+ * handles the change — the one-edit property `PLACE_BID_GATES` has.
+ *
+ * **The outcome shapes are the Move's, reused rather than paralleled.** A
+ * Drop asks the identical two questions of the identical arithmetic
+ * (`rules/roster-act.ts`), so a `DropCapGateOutcome` would be a second
+ * spelling of one answer — and `gateFigure` and the refusal wording all
+ * already read these.
+ */
+export type RecordDropGateResults = {
+	readonly contested: ContestedGateOutcome;
+	readonly cap: MoveCapGateOutcome;
+	readonly slots: MoveSlotsGateOutcome;
+};
+
 /**
  * `decide()` authorised the command: here are the events to append.
  *

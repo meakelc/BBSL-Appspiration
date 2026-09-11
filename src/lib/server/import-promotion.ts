@@ -144,7 +144,7 @@ async function loadPromotionState(client: TransactionalClient): Promise<Promotio
 
 	const rosterResult = await client.query(
 		`select team_id, fantrax_player_id, player_name, cap_hit, roster_slot_kind,
-			contract_years_remaining
+			contract_years_remaining, rookie_scale_round
 		from import_staged_rosters`
 	);
 
@@ -385,15 +385,23 @@ async function writeLiveTables(client: TransactionalClient, state: PromotionStat
 				// the round trip as a float.
 				String(row.capHit),
 				row.rosterSlotKind,
-				row.contractYearsRemaining
+				row.contractYearsRemaining,
+				// **The rookie-scale round reaches the LIVE table here** (Story
+				// 7.8), which is the whole point of persisting it: FR-43's Drop
+				// exception reads `team_rosters`, and until this column existed
+				// the designation was discarded at staging and the exception was
+				// unreachable. `null` for an ordinary Contract, written as the
+				// adapter parsed it. Seven columns now, and the `at` stride and
+				// the `$n` run move with the tuple width.
+				row.rookieScaleRound
 			);
-			const at = i * 6;
-			return `($${String(at + 1)}, $${String(at + 2)}, $${String(at + 3)}, $${String(at + 4)}, $${String(at + 5)}, $${String(at + 6)})`;
+			const at = i * 7;
+			return `($${String(at + 1)}, $${String(at + 2)}, $${String(at + 3)}, $${String(at + 4)}, $${String(at + 5)}, $${String(at + 6)}, $${String(at + 7)})`;
 		});
 		await client.query(
 			`insert into team_rosters
 				(team_id, fantrax_player_id, player_name, cap_hit, roster_slot_kind,
-				 contract_years_remaining)
+				 contract_years_remaining, rookie_scale_round)
 			values ${tuples.join(', ')}`,
 			values
 		);

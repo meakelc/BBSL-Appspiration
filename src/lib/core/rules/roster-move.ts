@@ -35,73 +35,51 @@
  * stdlib only, relative .ts imports only so Deno can load it (AD-2).
  */
 
-import { ACTIVE_BENCH_SLOTS, INJURY_RESERVE_SLOTS, MINOR_LEAGUE_SLOTS } from '../constants.ts';
-import {
-	compareMoney,
-	formatExactDollars,
-	formatMoney,
-	isOnMoneyGrid,
-	parseMoney,
-	subtractMoney
-} from '../money.ts';
+import { compareMoney, formatExactDollars } from '../money.ts';
 import type { Money } from '../money.ts';
-import { auctionForPlayer } from '../projection/auctions.ts';
 import type { OpenAuctions } from '../projection/auctions.ts';
 import type {
 	ContractYears,
 	RosterMoveTeamFigures,
 	RosterMoveTransfer
 } from '../projection/contracts.ts';
-import { nominationForPlayer } from '../projection/nominations.ts';
 import type { OpenNominations } from '../projection/nominations.ts';
 import { RECORD_ROSTER_MOVE_GATES } from '../types.ts';
 import type {
 	ContestedGateOutcome,
 	ContestedPlayer,
-	MoveCapGateOutcome,
-	MoveLeadingAuction,
-	MoveSlotsGateOutcome,
 	RecordRosterMove,
 	RecordRosterMoveGateResults,
 	RosterSlotKind
 } from '../types.ts';
 import {
-	activeBenchCapacityHolds,
-	bidStateFor,
-	describeAmount,
-	slotCapacityFiguresFor,
-	teamMoneyStateFor,
-	teamSolvencyFiguresFor
-} from './bidding.ts';
-import type { TeamMoneyState } from './bidding.ts';
+	NO_MONEY,
+	auctionsInWords,
+	chargeOf,
+	contestOf,
+	describeActAmount,
+	evaluateActCap,
+	evaluateActSlots,
+	figuresFor,
+	inWords,
+	minorsOccupiedIn,
+	movable,
+	postActMoneyStateFor
+} from './roster-act.ts';
 import { slotPlacementFor } from './close.ts';
-import { SLOT_LABELS, chargedCapHit, computeCapSpace } from './roster-import.ts';
-
-/** $0, for the one comparison a Move's money gate makes. */
-const NO_MONEY: Money = parseMoney(0);
+import { SLOT_LABELS } from './roster-import.ts';
 
 /**
- * An amount, rendered for a sheet a Commissioner is about to commit against.
+ * `describeActAmount` under the name every Move call site already reads.
  *
- * **It never declines to state the figure**, and that is the whole difference
- * from `describeAmount`. That renderer answers "an amount that is not on the
- * grid" off the `$500,000` grid, which is the right answer inside a BID
- * refusal — the offered amount is the thing being refused and the granularity
- * sentence beside it already says what is wrong with it. It is the wrong
- * answer on a Roster Move: an imported Cap Hit is a real-world salary and
- * `rules/roster-import.ts` asserts no grid over it, so a Team's Cap Space
- * legitimately sits off the grid and a sheet that hedged would be asking for a
- * commitment against a number it would not print.
- *
- * **No third renderer is invented** (AD-8). It composes the two `core/money.ts`
- * already exports, choosing between them on `isOnMoneyGrid` — exactly the
- * decision that module's own header says a caller should make before calling
- * either: the abbreviated `$14.5M` where it is lossless, and grouped exact
- * dollars where it is not.
+ * The renderer itself is `rules/roster-act.ts`'s since Story 7.8, because a
+ * Drop's sheet needs the identical choice between the abbreviated `$14.5M`
+ * and grouped exact dollars — and two spellings of "never decline to state
+ * the figure" is precisely the drift AD-8 exists to prevent. Re-exported
+ * rather than re-declared so `reason-sheet-view.ts` and `/roster-move` reach
+ * the one definition.
  */
-export function describeMoveAmount(amount: Money): string {
-	return isOnMoneyGrid(amount) ? formatMoney(amount) : formatExactDollars(amount);
-}
+export const describeMoveAmount = describeActAmount;
 
 /**
  * One Contract as a Move can move it — the roster row and the fold's own
@@ -241,49 +219,6 @@ export type MoveOutcome =
 	  };
 
 /**
- * Whether a Contract may travel at all.
- *
- * Dead Money is a charge, not a Player: it occupies no Slot, nobody holds it,
- * and FR-43 keeps it with the Team that released the Contract. It is
- * therefore not movable, and it is stated HERE rather than by a branch in the
- * transfer loop so there is one answer to the question.
- */
-function movable(player: MovingPlayer): boolean {
-	return player.rosterSlotKind !== 'dead_money';
-}
-
-/** One Team's five figures, derived from the rows it holds and nothing else. */
-function figuresFor(team: MovingTeam, rows: readonly MovingPlayer[]): MoveTeamFigures {
-	let rosterCount = 0;
-	let injuryReserveOccupied = 0;
-	let minorLeagueOccupied = 0;
-	for (const row of rows) {
-		if (row.rosterSlotKind === 'active_bench') rosterCount += 1;
-		if (row.rosterSlotKind === 'injury_reserve') injuryReserveOccupied += 1;
-		if (row.rosterSlotKind === 'minor_league') minorLeagueOccupied += 1;
-	}
-	return {
-		teamId: team.teamId,
-		teamName: team.teamName,
-		// `computeCapSpace` is the ONE Cap Space expression, and `chargedCapHit`
-		// inside it is the one statement of "a Minor League row charges $0".
-		// Handing it `value` rather than a pre-charged figure is what makes a
-		// re-placed stash start charging without a second rule saying so.
-		capSpace: computeCapSpace(
-			rows.map((row) => ({ capHit: row.value, rosterSlotKind: row.rosterSlotKind }))
-		).capSpace,
-		rosterCount,
-		injuryReserveOccupied,
-		minorLeagueOccupied
-	};
-}
-
-/** What one row charges the Team it currently sits on. */
-function chargeOf(player: MovingPlayer): Money {
-	return chargedCapHit({ capHit: player.value, rosterSlotKind: player.rosterSlotKind });
-}
-
-/**
  * Where an arriving Contract lands (FR-41, FR-21).
  *
  * **Sitting in a Minor League Slot IS the eligibility statement.** A rostered
@@ -305,178 +240,6 @@ function arrivalPlacementFor(
 ): RosterSlotKind {
 	if (player.rosterSlotKind !== 'minor_league') return player.rosterSlotKind;
 	return slotPlacementFor(true, receivingMinorLeagueOccupied);
-}
-
-/** How many of `rows` sit in a Minor League Slot. */
-function minorsOccupiedIn(rows: readonly MovingPlayer[]): number {
-	return rows.filter((row) => row.rosterSlotKind === 'minor_league').length;
-}
-
-/**
- * One Team's committed capital, as it stands AFTER the Move.
- *
- * Built ONCE per Team and handed to both of that Team's gates, for
- * `evaluateSlots`' reason: two derivations from the same inputs cannot
- * disagree, but one derivation cannot even be asked to.
- */
-function postMoveMoneyStateFor(
-	team: MovingTeam,
-	after: MoveTeamFigures,
-	state: RosterMoveState
-): TeamMoneyState {
-	return teamMoneyStateFor({
-		teamId: team.teamId,
-		// **No Auction is excluded**, and that is the difference from a Bid: a
-		// Bid excludes the Auction it is being placed on because the post-bid
-		// basis adds it back once. A Move places no Bid, so every Auction this
-		// Team leads counts exactly as it stands. The empty id names no Player.
-		fantraxPlayerId: '',
-		capSpace: after.capSpace,
-		rosterCount: after.rosterCount,
-		minorLeagueOccupied: after.minorLeagueOccupied,
-		auctions: state.auctions,
-		isMinorLeagueEligible: state.isMinorLeagueEligible,
-		playerNameFor: state.playerNameFor
-	});
-}
-
-/** A Move's own $0-offer money gate, over one Team's post-Move figures. */
-function evaluateMoveCap(
-	team: MovingTeam,
-	money: TeamMoneyState
-): MoveCapGateOutcome {
-	const figures = teamSolvencyFiguresFor(
-		// No Auction, no prospective Player, and the phase is not a gate this
-		// evaluation reads — `requireOverridablePhase` and the destination
-		// catalog are what keep a Move inside the two phases FR-41 permits.
-		bidStateFor(null, money, false, 'Auction'),
-		'',
-		NO_MONEY,
-		// There is no prospective Bid, so nothing is projected for one. The
-		// Team's existing leads still project, which is the whole of §10
-		// example 37.
-		true
-	);
-	// Unreachable: `teamMoneyStateFor` always returns a Team, so the state's
-	// `team` is never `null` here. The guard gives TypeScript the narrowing
-	// rather than handling a reachable state.
-	if (figures === null) {
-		throw new Error('evaluateMoveCap: the solvency figures came back with no Team');
-	}
-
-	const passed = compareMoney(figures.maximumBid, NO_MONEY) >= 0;
-	const leadingAuctions: MoveLeadingAuction[] = [...money.leading, ...money.eligibleLeading]
-		.map((lead) => ({
-			fantraxPlayerId: lead.fantraxPlayerId,
-			playerName: lead.playerName,
-			amount: lead.amount
-		}))
-		// Two already-sorted lists concatenated are not a sorted list (AD-5).
-		.sort((left, right) =>
-			left.fantraxPlayerId === right.fantraxPlayerId
-				? 0
-				: left.fantraxPlayerId < right.fantraxPlayerId
-					? -1
-					: 1
-		);
-
-	return {
-		passed,
-		teamId: team.teamId,
-		teamName: team.teamName,
-		capSpace: figures.capSpace,
-		committedBids: figures.committedBids,
-		minorsExposure: figures.minorsExposure,
-		availableCapSpace: figures.availableCapSpace,
-		rosterCount: figures.rosterCount,
-		projectedAdditions: figures.projectedAdditions,
-		rosterReserve: figures.rosterReserve,
-		maximumBid: figures.maximumBid,
-		// Stated as a positive size rather than as a negative Maximum Bid, so
-		// no surface has to negate a Money to say "$300,000 short".
-		shortfall: passed ? null : subtractMoney(NO_MONEY, figures.maximumBid),
-		leadingAuctions,
-		exposingBids: figures.exposingBids
-	};
-}
-
-/** A Move's capacity gate, over one Team's post-Move figures. */
-function evaluateMoveSlots(
-	team: MovingTeam,
-	after: MoveTeamFigures,
-	money: TeamMoneyState
-): MoveSlotsGateOutcome {
-	// **`isContentionEntry: true`, and it is the same choice `prospectiveBidIsExempt`
-	// makes on the money side, for the same reason.** A Move places no Bid, so
-	// nothing may be projected for one — and `true` is what says so through this
-	// parameter. Read what it does on each derivation it reaches:
-	//
-	//  - `activeBenchOverflowFor(bound, true)` — the flag only ever suppresses a
-	//    `+ 1` guarded by `state.playerIsMinorLeagueEligible`, which is `false`
-	//    here, so Active/Bench Overflow is the Team's real eligible leads either
-	//    way. The value does not matter to this one.
-	//  - `projectedAdditionsFor(bound, true, counts)` — the flag DOES matter
-	//    here, and this is why the argument exists: `false` would add
-	//    `(eligible || entry ? 0 : 1)` = 1, inventing a prospective Bid the
-	//    Commissioner never placed, and refusing §10 example 39's Team F at
-	//    Roster Count 11 with an addition nobody asked for.
-	//
-	// The phase is not a gate this evaluation reads — `requireOverridablePhase`
-	// and the destination catalog keep a Move inside the two phases FR-41 permits.
-	const capacity = slotCapacityFiguresFor(bidStateFor(null, money, false, 'Auction'), true);
-	if (capacity === null) {
-		throw new Error('evaluateMoveSlots: the capacity figures came back with no Team');
-	}
-
-	const breaches: RosterSlotKind[] = [];
-	// **The explicit ceiling tests, and the Active/Bench one is load-bearing.**
-	// `unfilledSlots` clamps at zero, so a Team standing at 14 with nothing
-	// outstanding computes `projectedAdditions === 0` and would pass FR-37's
-	// first branch. §10 example 39 is that counterfactual, and this line is
-	// what makes it unreachable.
-	if (after.rosterCount > ACTIVE_BENCH_SLOTS) breaches.push('active_bench');
-	if (after.injuryReserveOccupied > INJURY_RESERVE_SLOTS) breaches.push('injury_reserve');
-	if (after.minorLeagueOccupied > MINOR_LEAGUE_SLOTS) breaches.push('minor_league');
-
-	return {
-		// FR-37's two branches — the ONE expression `evaluateSlots` reads too,
-		// called rather than copied — and then FR-41's three ceilings. A second
-		// spelling of it here is the only thing that could let a Move admit a
-		// roster a Bid would be refused for.
-		passed: breaches.length === 0 && activeBenchCapacityHolds(capacity),
-		teamId: team.teamId,
-		teamName: team.teamName,
-		rosterCount: after.rosterCount,
-		projectedAdditions: capacity.projectedAdditions,
-		freeActiveBenchSlots: capacity.freeActiveBenchSlots,
-		allowance: capacity.allowance,
-		injuryReserveOccupied: after.injuryReserveOccupied,
-		minorLeagueOccupied: after.minorLeagueOccupied,
-		activeBenchCeiling: ACTIVE_BENCH_SLOTS,
-		injuryReserveCeiling: INJURY_RESERVE_SLOTS,
-		minorLeagueCeiling: MINOR_LEAGUE_SLOTS,
-		breaches
-	};
-}
-
-/** Whichever open thing still contests a Player, or `null` if nothing does. */
-function contestOf(state: RosterMoveState, fantraxPlayerId: string): ContestedPlayer | null {
-	if (auctionForPlayer(state.auctions, fantraxPlayerId) !== null) {
-		return {
-			fantraxPlayerId,
-			playerName: state.playerNameFor(fantraxPlayerId),
-			contest: 'bid'
-		};
-	}
-	const nomination = nominationForPlayer(state.nominations, fantraxPlayerId);
-	if (nomination !== null) {
-		return {
-			fantraxPlayerId,
-			playerName: nomination.playerName,
-			contest: 'nomination'
-		};
-	}
-	return null;
 }
 
 /**
@@ -674,14 +437,14 @@ export function evaluateMove(state: RosterMoveState, command: RecordRosterMove):
 	const receivingAfter = figuresFor(state.receiving, receivingRows);
 
 	// **One evaluation, at the end, over the state the whole act produced.**
-	const sendingMoney = postMoveMoneyStateFor(state.sending, sendingAfter, state);
-	const receivingMoney = postMoveMoneyStateFor(state.receiving, receivingAfter, state);
+	const sendingMoney = postActMoneyStateFor(state.sending, sendingAfter, state);
+	const receivingMoney = postActMoneyStateFor(state.receiving, receivingAfter, state);
 	const gates: RecordRosterMoveGateResults = {
 		contested: contestedGate,
-		sendingCap: evaluateMoveCap(state.sending, sendingMoney),
-		sendingSlots: evaluateMoveSlots(state.sending, sendingAfter, sendingMoney),
-		receivingCap: evaluateMoveCap(state.receiving, receivingMoney),
-		receivingSlots: evaluateMoveSlots(state.receiving, receivingAfter, receivingMoney)
+		sendingCap: evaluateActCap(state.sending, sendingMoney),
+		sendingSlots: evaluateActSlots(state.sending, sendingAfter, sendingMoney),
+		receivingCap: evaluateActCap(state.receiving, receivingMoney),
+		receivingSlots: evaluateActSlots(state.receiving, receivingAfter, receivingMoney)
 	};
 
 	if (!allMoveGatesPassed(gates)) {
@@ -705,22 +468,6 @@ export function evaluateMove(state: RosterMoveState, command: RecordRosterMove):
  */
 export function allMoveGatesPassed(gates: RecordRosterMoveGateResults): boolean {
 	return RECORD_ROSTER_MOVE_GATES.every((gate) => gates[gate].passed);
-}
-
-/** A list of names, in words: "A", "A and B", "A, B and C". */
-function inWords(items: readonly string[]): string {
-	if (items.length === 0) return '';
-	if (items.length === 1) return items[0] ?? '';
-	return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1] ?? ''}`;
-}
-
-/** The Auctions a Team leads, named — or the stated absence of any. */
-function auctionsInWords(gate: MoveCapGateOutcome): string {
-	if (gate.leadingAuctions.length === 0) return 'It leads no open Auction.';
-	const named = gate.leadingAuctions.map(
-		(auction) => `${auction.playerName} at ${describeAmount(auction.amount)}`
-	);
-	return `It leads ${inWords(named)}.`;
 }
 
 /**

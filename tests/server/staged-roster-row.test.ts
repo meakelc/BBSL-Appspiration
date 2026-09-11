@@ -53,9 +53,23 @@ describe('toParsedRosterRow — the three importable slot kinds, and no fourth',
 		);
 	});
 
-	it('carries no rookie-scale round through staging — the column does not exist', () => {
-		// Stated rather than omitted, so the seam where the designation is
-		// lost is visible at the line that loses it (Story 7.8 persists it).
+	it('reads the rookie-scale round back off the staged row (Story 7.8)', () => {
+		// `import_staged_rosters.rookie_scale_round` arrived with
+		// `20260911000000_rookie_scale_round.sql`. Until then this was a
+		// hardcoded `null` and FR-43's exception was unreachable.
+		expect(toParsedRosterRow(staged({ rookie_scale_round: 2 })).rookieScaleRound).toBe(2);
+		expect(toParsedRosterRow(staged({ rookie_scale_round: 1 })).rookieScaleRound).toBe(1);
+	});
+
+	it('reads an absent or null round as "an ordinary Contract", never as 0', () => {
+		// `null` means exactly what the adapter emits for a plain `2031` cell.
+		// A `Number(null)` of `0` would invent a draft round nobody was drafted
+		// in — and a row staged before the migration reads `null` here, which
+		// is why the remedy for already-imported rosters is a re-import.
 		expect(toParsedRosterRow(staged()).rookieScaleRound).toBeNull();
+		expect(toParsedRosterRow(staged({ rookie_scale_round: null })).rookieScaleRound).toBeNull();
+		expect(
+			toParsedRosterRow(staged({ rookie_scale_round: 'not a round' })).rookieScaleRound
+		).toBeNull();
 	});
 });

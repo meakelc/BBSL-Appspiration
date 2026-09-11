@@ -157,7 +157,11 @@ describe('the Teams index — every Team is a row', () => {
 						playerName: 'Released Player',
 						capHit: parseMoney(2_000_000),
 						rosterSlotKind: 'dead_money',
-						won: false
+						won: false,
+						// Story 7.8's two columns. Dead Money is a charge and not a
+						// Contract, so neither is a fact about it.
+						contractYearsRemaining: null,
+						rookieScaleRound: null
 					}
 				],
 				team: teamWith({ capSpace: parseMoney(SALARY_CAP - 2_000_000), rosterCount: 9 }),

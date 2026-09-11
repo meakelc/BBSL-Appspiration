@@ -65,6 +65,7 @@ import { CONTENTION_DRAWN_EVENT } from './projection/draws.ts';
 import { AUCTION_OPENED_EVENT, CONTRACT_ASSIGNMENT_OPENED_EVENT } from './projection/phase.ts';
 import {
 	CONTRACT_LENGTH_ASSIGNED_EVENT,
+	DROP_RECORDED_EVENT,
 	ROSTER_MOVE_RECORDED_EVENT
 } from './projection/contracts.ts';
 import { MINOR_LEAGUE_ELIGIBILITY_SET } from './projection/eligibility.ts';
@@ -791,6 +792,72 @@ function renderRosterMove(payload: Payload, refs: AuditReferences): AuditRender 
 	};
 }
 
+/**
+ * One `DroppedContract` — `projection/contracts.ts`'s `DroppedContract`.
+ *
+ * NOT an event type of its own: it is an element of `DropRecorded`'s
+ * `released`. The Slot he LEFT is stated because the Drop freed it, and what
+ * is CARRIED is stated beside what he was charging — the two differ only for
+ * the two cases that leave nothing behind, and FR-43's whole subtlety is that
+ * they look identical on the Cap until you read this row.
+ *
+ * **"Released to nothing" is worded, never inferred from a `$0`.** A Minor
+ * League row was charging `$0` already and a full-term second-round rookie
+ * deal is released to `$0` by the exception; both leave no Dead Money, and
+ * the round and the term are printed so a later reading can see which of the
+ * two happened rather than guess.
+ */
+function releaseRow(release: Payload, refs: AuditReferences): AuditDetail {
+	const player = playerNamed(refs, text(release, 'fantraxPlayerId'), text(release, 'playerName'));
+	const from = wordToken(SLOT_KIND_WORDS, release['fromPlacement']);
+	const charged = amount(release, 'chargedCapHit');
+	const dead = amount(release, 'deadMoney');
+	const removed = flag(release, 'removed');
+	const round = count(release, 'rookieScaleRound');
+	const years = count(release, 'contractYearsRemaining');
+
+	const parts: string[] = [];
+	if (from !== null) parts.push(`Left ${from}`);
+	if (charged !== null) parts.push(`Was charging ${charged}`);
+	parts.push(
+		dead === null
+			? 'Dead Money —'
+			: removed === true
+				? `No Dead Money carried; the Contract was removed and ${charged ?? dead} returned to Cap Space`
+				: `Dead Money ${dead}`
+	);
+	if (round !== null) parts.push(`Round ${String(round)} rookie scale`);
+	if (years !== null) parts.push(`${String(years)} years remaining`);
+	return { label: player, value: parts.join(LIST_SEPARATOR) };
+}
+
+/**
+ * `DropRecorded` — `projection/contracts.ts`'s `DropRecordedPayload`.
+ *
+ * ONE entry however many Players were released, because a Drop is one act
+ * evaluated once. FR-43 does not broadcast a Drop to Discord, which makes
+ * this the only surface it can be looked up on — so the reason comes first
+ * and verbatim, then each Player, then the Team's before → after.
+ */
+function renderDrop(payload: Payload, refs: AuditReferences): AuditRender {
+	const teamId = text(payload, 'teamId');
+	const team = teamNamed(refs, teamId, text(payload, 'teamName'));
+	const released = payloadList(payload, 'released');
+
+	return {
+		headline: `${team} recorded a Drop.`,
+		details: [
+			// The Commissioner's stated reason, verbatim and first — it is what
+			// FR-43 requires the record carry, and the first thing a reader wants.
+			...rows(row('Reason', text(payload, 'reason'))),
+			...released.map((release) => releaseRow(release, refs)),
+			...figureRows(team, asPayload(payload['teamBefore']), asPayload(payload['teamAfter']))
+		],
+		teams: distinct([teamId]),
+		players: distinct(released.map((release) => text(release, 'fantraxPlayerId')))
+	};
+}
+
 /** `MinorLeagueEligibilitySet` — `projection/eligibility.ts:49`. */
 function renderEligibilitySet(payload: Payload, refs: AuditReferences): AuditRender {
 	const fantraxPlayerId = text(payload, 'fantraxPlayerId');
@@ -999,6 +1066,11 @@ const RENDERERS: Readonly<Record<string, AuditEntry>> = Object.freeze({
 		label: 'Roster Move recorded',
 		render: renderRosterMove
 	},
+	// `RENDERERS` is OPEN — an absent key falls back to the envelope plus the
+	// raw payload — so a missing entry here is not a compile error but a
+	// silently plain entry. Story 7.8's Drop is the record FR-43 requires, and
+	// it is the only surface the act appears on.
+	[DROP_RECORDED_EVENT]: { label: 'Drop recorded', render: renderDrop },
 	[MINOR_LEAGUE_ELIGIBILITY_SET]: {
 		label: 'Minor League Eligibility set',
 		render: renderEligibilitySet

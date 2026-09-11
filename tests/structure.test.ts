@@ -183,8 +183,8 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 	],
 	// 36-39 and 42 are Story 7.7's Roster Move examples (FR-41), landed with
 	// the `RecordRosterMove` command. 42 sits out of sequence below because
-	// 40 and 41 landed first with Story 7.6's rookie-scale designation; the
-	// Drop command those two describe is still Story 7.8.
+	// 40 and 41 landed first with Story 7.6's rookie-scale designation; Story
+	// 7.8 landed the `RecordDrop` command those two describe, and 43 with it.
 	[
 		'example-36-the-trade-that-clears-the-room.test.ts',
 		'36 — The trade that clears the room'
@@ -209,6 +209,14 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 	[
 		'example-42-a-won-player-traded-after-the-auction-phase.test.ts',
 		'42 — A won Player traded after the Auction Phase'
+	],
+	// Story 7.8's Drop command (FR-43). 43 is new with it, and 40 and 41 gain
+	// a command-driven derivation beside 7.6's hand-built fixtures — 43 is the
+	// one that moves Maximum Bid in the OPPOSITE direction from 40, which is
+	// the test that stops FR-43 being read as a flat rule.
+	[
+		'example-43-a-stashed-drop-moves-the-maximum-bid-the-other-way.test.ts',
+		'43 — A stashed Drop moves the Maximum Bid the other way'
 	]
 ];
 

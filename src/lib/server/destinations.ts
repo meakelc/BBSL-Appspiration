@@ -118,6 +118,11 @@ const CATALOG: Readonly<Record<LeaguePhase, readonly Destination[]>> = Object.fr
 		// Contract Assignment one below. It is deliberately absent from
 		// `Archived`, where `requireOverridablePhase` refuses it a second time.
 		destination('roster-move', 'Record a Roster Move', '/roster-move', true),
+		// Story 7.8: recording a release the Team made in Fantrax. Commissioner
+		// only, live in the same two phases the Move is, and deliberately absent
+		// from `Archived` where `requireOverridablePhase` refuses it a second
+		// time.
+		destination('roster-drop', 'Record a Drop', '/roster-drop', true),
 		destination('pause-resume', 'Pause/Resume', '/pause-resume', true),
 		destination('operational-health', 'Operational health', '/operational-health', true)
 	],
@@ -126,6 +131,7 @@ const CATALOG: Readonly<Record<LeaguePhase, readonly Destination[]>> = Object.fr
 		destination('teams', 'Teams', '/teams', false),
 		destination('audit-log', 'Audit Log', '/audit-log', false),
 		destination('roster-move', 'Record a Roster Move', '/roster-move', true),
+		destination('roster-drop', 'Record a Drop', '/roster-drop', true),
 		destination('assignment-monitoring', 'Assignment monitoring', '/assignment-monitoring', true),
 		destination('export-gate', 'Export gate', '/export-gate', true)
 	],

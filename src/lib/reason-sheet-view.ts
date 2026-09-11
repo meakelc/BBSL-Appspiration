@@ -38,6 +38,8 @@ import { OVERRIDE_REASON_FIELD } from './core/rules/override.ts';
 import { SLOT_LABELS } from './core/rules/roster-import.ts';
 import { describeMoveAmount, transferAttention } from './core/rules/roster-move.ts';
 import type { RosterMoveDelta } from './core/rules/roster-move.ts';
+import { dropAttention } from './core/rules/roster-drop.ts';
+import type { DropRelease, RosterDropDelta } from './core/rules/roster-drop.ts';
 
 /**
  * One before→after row, as the caller states it.
@@ -239,7 +241,7 @@ export function reasonSheetView(input: ReasonSheetInput): ReasonSheetView {
  * Every amount arrives through `describeAmount`, the core's one money
  * renderer (AD-8). This module formats nothing itself.
  */
-function teamFigureRows(
+export function teamFigureRows(
 	before: RosterMoveTeamFigures,
 	after: RosterMoveTeamFigures
 ): readonly ReasonSheetRow[] {
@@ -341,3 +343,54 @@ export function rosterMoveActSentence(delta: RosterMoveDelta): string {
 
 /** The commit control's own words. Never "Confirm" — it names the act. */
 export const ROSTER_MOVE_COMMIT_LABEL = 'Record the Roster Move';
+
+// --- Story 7.8: the one-Team Drop sheet -----------------------------------
+
+/**
+ * One released Player, named under the Team's figures (Story 7.8, FR-43,
+ * UX-DR40).
+ *
+ * `before` is where he was and what he was charging; `after` is what the Team
+ * is left carrying — Dead Money at the same amount, or the stated absence of
+ * any. The row is deliberately readable without the Slot arithmetic above it:
+ * "Active/Bench · $2.0M → Dead Money · $2.0M" is the whole of FR-43's rule for
+ * an ordinary release, and "→ Released, nothing carried" is the exception.
+ *
+ * The `attention` sentence is the pure core's (`dropAttention`), and it is
+ * the one FR-43 requires before a Drop commits: the Slot an Active/Bench
+ * release frees costs $1,000,000 to reserve, and the sentence then states the
+ * NET direction for that release — a fall of $1,000,000 where the Cap Hit is
+ * carried (§10 example 40), a rise where it is released back to Cap Space
+ * (§10 example 41). Everybody's intuition says a Drop frees money, which is
+ * exactly why the sentence exists — and why it is on the row rather than in a
+ * footnote. It states a direction it computed, never one it assumed: the two
+ * examples are the same Slot and the same amount and move opposite ways.
+ */
+function releaseRow(release: DropRelease): ReasonSheetRow {
+	return {
+		label: release.playerName,
+		before: `${SLOT_LABELS[release.fromPlacement]} · ${describeMoveAmount(release.chargedCapHit)}`,
+		after: release.removed
+			? 'Released — nothing carried'
+			: `${SLOT_LABELS.dead_money} · ${describeMoveAmount(release.deadMoney)}`,
+		attention: dropAttention(release)
+	};
+}
+
+/**
+ * Every row a Drop's sheet shows, in reading order.
+ *
+ * One Team's block, then one row per released Player — the Team's five
+ * figures first because the counterintuitive half of FR-43 is what they do
+ * NOT show: Cap Space stands still while Roster Count falls, and the released
+ * rows underneath are where the money went.
+ *
+ * `teamFigureRows` is the Move's, called rather than copied: a Drop's five
+ * figures are a Move's five figures asked of one Team.
+ */
+export function dropReasonRows(delta: RosterDropDelta): readonly ReasonSheetRow[] {
+	return [...teamFigureRows(delta.before, delta.after), ...delta.released.map(releaseRow)];
+}
+
+/** The commit control's own words. Never "Confirm" — it names the act. */
+export const DROP_COMMIT_LABEL = 'Record the Drop';

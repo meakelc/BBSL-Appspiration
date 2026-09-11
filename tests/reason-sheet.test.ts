@@ -327,7 +327,11 @@ describe('scope — exactly one override reaches for this mechanism', () => {
 			'src/lib/reason-sheet-view.ts',
 			'src/lib/components/ReasonSheet.svelte',
 			'src/routes/roster-move/+page.server.ts',
-			'src/routes/roster-move/+page.svelte'
+			'src/routes/roster-move/+page.svelte',
+			// Story 7.8's Drop — the second override to reach the mechanism, and
+			// it reaches exactly the same four names the Move does.
+			'src/routes/roster-drop/+page.server.ts',
+			'src/routes/roster-drop/+page.svelte'
 		];
 		const naming = sources().filter((path) =>
 			/buildOverrideRecord|requireOverrideReason|requireOverridablePhase|reasonSheetView|ReasonSheet/.test(
@@ -352,15 +356,20 @@ describe('scope — exactly one override reaches for this mechanism', () => {
 		);
 		expect(named).toEqual([]);
 
-		// Exactly one route reaches for the mechanism, and it is the Roster Move
-		// (Story 7.7, FR-41) — a global act, so it gets an admin destination of
-		// its own rather than a control placed on an object.
+		// Exactly two routes reach for the mechanism: the Roster Move (Story
+		// 7.7, FR-41) and the Drop (Story 7.8, FR-43). Both are global acts on
+		// a Team rather than on an object a Manager is looking at, so each gets
+		// an admin destination of its own rather than a control placed in
+		// context. The list stays exhaustive — a third override appearing
+		// without this test being edited is a third override nobody reviewed.
 		const reaching = routeFiles.filter((path) =>
 			/override-guard|rules\/override|reason-sheet-view|ReasonSheet/.test(
 				readFileSync(join(ROOT, ...path.split('/')), 'utf8')
 			)
 		);
 		expect(reaching.sort()).toEqual([
+			'src/routes/roster-drop/+page.server.ts',
+			'src/routes/roster-drop/+page.svelte',
 			'src/routes/roster-move/+page.server.ts',
 			'src/routes/roster-move/+page.svelte'
 		]);

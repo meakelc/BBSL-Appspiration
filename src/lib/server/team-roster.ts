@@ -165,13 +165,33 @@ export async function loadTeamRosterDetail(
 	contracts: AuctionContracts
 ): Promise<TeamRosterDetail> {
 	const result = await client.query(
-		`select fantrax_player_id::text as fantrax_player_id, player_name, cap_hit, roster_slot_kind
+		// **Six columns since Story 7.8**, and the last two are the Drop's
+		// exception: FR-43 releases a second-round rookie-scale Contract to
+		// nothing only while its full term is unelapsed, so the rule needs the
+		// round AND the years and cannot ask its question without either.
+		`select fantrax_player_id::text as fantrax_player_id, player_name, cap_hit, roster_slot_kind,
+			contract_years_remaining, rookie_scale_round
 		from ${TEAM_ROSTERS_TABLE}
 		where team_id = $1`,
 		[teamId]
 	);
 
 	return detailFor(teamId, importedRowsFrom(result.rows), contracts);
+}
+
+/**
+ * One nullable whole-number column, read rather than cast.
+ *
+ * **The test is `typeof`, not `Number()`.** `Number(null)`, `Number('')`,
+ * `Number(false)` and `Number([])` are all `0` and `Number.isInteger(0)` is
+ * `true`, so a `Number()`-first guard would state a draft round of zero and a
+ * term of zero years — both of them facts nobody imported. Anything that is
+ * not already a whole number reads as absent, which is what a nullable column
+ * means.
+ */
+function wholeNumberOf(value: unknown): number | null {
+	if (typeof value !== 'number') return null;
+	return Number.isInteger(value) ? value : null;
 }
 
 /**
@@ -188,7 +208,14 @@ function importedRowsFrom(rows: readonly Record<string, unknown>[]): TeamRosterE
 		playerName: String(row['player_name'] ?? ''),
 		capHit: parseMoney(row['cap_hit']),
 		rosterSlotKind: String(row['roster_slot_kind']) as RosterSlotKind,
-		won: false
+		won: false,
+		// FR-43's exception, carried rather than re-read (Story 7.8). Both are
+		// nullable on the table: `rookie_scale_round` is `null` for an ordinary
+		// Contract and for every row imported before the designation was
+		// persisted, and `contract_years_remaining` is `not null` but is read
+		// defensively for the same reason nothing else here is cast.
+		contractYearsRemaining: wholeNumberOf(row['contract_years_remaining']),
+		rookieScaleRound: wholeNumberOf(row['rookie_scale_round'])
 	}));
 }
 
@@ -222,7 +249,15 @@ function detailFor(
 			// field through to `computeCapSpace`.
 			capHit: contract.capHit,
 			rosterSlotKind: contract.placement as RosterSlotKind,
-			won: true
+			won: true,
+			// **Both `null`, and that is the honest answer rather than a gap.**
+			// An Auction Contract has no imported term and no draft round: it
+			// was won in this auction, it is not in Fantrax until the FR-30/31
+			// export, and FR-43's exception is about a Contract the League
+			// already had. A Drop refuses a won Player outright for the same
+			// reason, so nothing downstream ever reads these two off a won row.
+			contractYearsRemaining: null,
+			rookieScaleRound: null
 		}))
 	];
 
@@ -280,7 +315,7 @@ export async function loadLeagueRosterDetail(
 
 	const result = await client.query(
 		`select team_id::text as team_id, fantrax_player_id::text as fantrax_player_id,
-			player_name, cap_hit, roster_slot_kind
+			player_name, cap_hit, roster_slot_kind, contract_years_remaining, rookie_scale_round
 		from ${TEAM_ROSTERS_TABLE}
 		where team_id::text = any($1::text[])`,
 		[[...teamIds]]

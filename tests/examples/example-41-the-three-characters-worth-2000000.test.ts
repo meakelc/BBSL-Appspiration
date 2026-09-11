@@ -42,7 +42,11 @@ import { bidStateFor, evaluate } from '../../src/lib/core/rules/bidding.ts';
 import type { TeamMoneyState } from '../../src/lib/core/rules/bidding.ts';
 import { computeCapSpace } from '../../src/lib/core/rules/roster-import.ts';
 import type { CapHitRow } from '../../src/lib/core/rules/roster-import.ts';
-import type { PlaceBid } from '../../src/lib/core/types.ts';
+import type { PlaceBid, RecordDrop } from '../../src/lib/core/types.ts';
+import { INITIAL_AUCTIONS } from '../../src/lib/core/projection/auctions.ts';
+import { INITIAL_NOMINATIONS } from '../../src/lib/core/projection/nominations.ts';
+import { evaluateDrop } from '../../src/lib/core/rules/roster-drop.ts';
+import type { DroppablePlayer, RosterDropState } from '../../src/lib/core/rules/roster-drop.ts';
 
 const NOW = '2026-09-10T09:00:00.000Z';
 
@@ -183,5 +187,160 @@ describe('§10 example 41 — the three characters worth $2,000,000', () => {
 		// is five years, and five remain, so none of it has been served.
 		expect(plain.rows[0]?.rookieScaleRound).toBeNull();
 		expect(rookie.rows[0]).not.toEqual(plain.rows[0]);
+	});
+});
+
+// --- Story 7.8: the same example, driven through the command --------------
+
+/**
+ * The identical example, derived by `evaluateDrop` rather than by a fixture.
+ *
+ * **Added beside the hand-built states above, never in place of them** —
+ * Story 7.6's change log KEEPs those, and they are what proves the two INPUTS
+ * are distinguishable at all. What this block adds is that the COMMAND reads
+ * the designation and produces the state they assert: the same $5,000,000,
+ * reached by applying FR-43's exception rather than by writing down its
+ * result.
+ *
+ * **One field differs from example 40's block, and it is the whole story.**
+ * `rookieScaleRound: 2` against example 40's `null`, with the same five years
+ * remaining. Set it to `null` and this file computes $3,000,000.
+ */
+
+const KEPT_ROWS: readonly DroppablePlayer[] = [
+	...Array.from({ length: 8 }, (_unused, index) => ({
+		fantraxPlayerId: `p-keep-${String(index)}`,
+		playerName: `Kept ${String(index)}`,
+		rosterSlotKind: 'active_bench' as const,
+		value: parseMoney(17_500_000),
+		won: false,
+		contractYearsRemaining: 3,
+		rookieScaleRound: null
+	})),
+	{
+		fantraxPlayerId: 'p-keep-8',
+		playerName: 'Kept 8',
+		rosterSlotKind: 'active_bench' as const,
+		value: parseMoney(18_000_000),
+		won: false,
+		contractYearsRemaining: 3,
+		rookieScaleRound: null
+	}
+];
+
+/** The dropped Player, with the three characters that decide $2,000,000. */
+function droppedWith(rookieScaleRound: number | null): DroppablePlayer {
+	return {
+		fantraxPlayerId: 'p-dropped',
+		playerName: 'Dropped Player',
+		rosterSlotKind: 'active_bench',
+		value: parseMoney(DROPPED_CAP_HIT),
+		won: false,
+		// `2RK31` against a 2026 import: five years remaining, full term
+		// unelapsed. Example 40's cell is `2031` — the same five years, and no
+		// round at all.
+		contractYearsRemaining: 5,
+		rookieScaleRound
+	};
+}
+
+function dropStateWith(rookieScaleRound: number | null): RosterDropState {
+	return {
+		team: {
+			teamId: 't-h',
+			teamName: 'Team H',
+			rows: [...KEPT_ROWS, droppedWith(rookieScaleRound)]
+		},
+		auctions: INITIAL_AUCTIONS,
+		nominations: INITIAL_NOMINATIONS,
+		isMinorLeagueEligible: () => false,
+		playerNameFor: (id) => id
+	};
+}
+
+const DROP: RecordDrop = {
+	kind: 'RecordDrop',
+	teamId: 't-h',
+	teamName: 'Team H',
+	fantraxPlayerIds: ['p-dropped'],
+	reason: 'Released in Fantrax on the 10th.'
+};
+
+/**
+ * What Team H may offer on its next non-eligible Bid, after the act.
+ *
+ * `maximumBid` is nullable on the outcome — outside the Auction Phase there
+ * is no arithmetic to state — so the absence is thrown over here rather than
+ * silently coerced at each call site.
+ */
+function maximumBidAfter(rookieScaleRound: number | null): number {
+	const outcome = evaluateDrop(dropStateWith(rookieScaleRound), DROP);
+	if (outcome.kind !== 'permitted') throw new Error('refused');
+	const gates = evaluate(
+		bidStateFor(
+			null,
+			{
+				capSpace: outcome.delta.after.capSpace,
+				rosterCount: outcome.delta.after.rosterCount,
+				leading: [],
+				eligibleLeading: [],
+				minorLeagueOccupied: outcome.delta.after.minorLeagueOccupied
+			},
+			false,
+			'Auction'
+		),
+		bidOf(1_000_000),
+		NOW
+	);
+	if (gates.cap.maximumBid === null) throw new Error('no Maximum Bid');
+	return gates.cap.maximumBid;
+}
+
+describe('§10 example 41 — the same figures, derived through `RecordDrop`', () => {
+	it('releases the Contract to nothing and REMOVES the row', () => {
+		const outcome = evaluateDrop(dropStateWith(2), DROP);
+
+		expect(outcome.kind).toBe('permitted');
+		if (outcome.kind !== 'permitted') return;
+		const release = outcome.delta.released[0];
+		expect(release?.deadMoney).toBe(0);
+		expect(release?.removed).toBe(true);
+		// The two facts the exception turned on, recorded so a later reading
+		// can see WHY rather than take it on trust.
+		expect(release?.rookieScaleRound).toBe(2);
+		expect(release?.contractYearsRemaining).toBe(5);
+	});
+
+	it('reproduces the hand-built after-state: Cap Space rises to $7,000,000', () => {
+		const outcome = evaluateDrop(dropStateWith(2), DROP);
+		if (outcome.kind !== 'permitted') throw new Error('refused');
+
+		expect(outcome.delta.before.capSpace).toBe(5_000_000);
+		expect(outcome.delta.after.capSpace).toBe(7_000_000);
+		expect(outcome.delta.after.rosterCount).toBe(9);
+		// The same state the fixture above constructs by hand.
+		expect(outcome.delta.after.capSpace).toBe(gatesFor(AFTER).cap.capSpace);
+	});
+
+	it('lands Maximum Bid at $5,000,000 — and at $3,000,000 without the round', () => {
+		expect(maximumBidAfter(2)).toBe(5_000_000);
+		// The same Player, the same amount, the same act, and one field
+		// different: example 40's answer, computed by this file's own command.
+		expect(maximumBidAfter(null)).toBe(3_000_000);
+		expect(maximumBidAfter(2) - maximumBidAfter(null)).toBe(DROPPED_CAP_HIT);
+		// Identical to the hand-built fixtures' two answers.
+		expect(maximumBidAfter(2)).toBe(gatesFor(AFTER).cap.maximumBid);
+		expect(maximumBidAfter(null)).toBe(gatesFor(AFTER_AS_EXAMPLE_40).cap.maximumBid);
+	});
+
+	it('carries the full amount for a FIRST-round deal of the same length', () => {
+		const outcome = evaluateDrop(dropStateWith(1), DROP);
+		if (outcome.kind !== 'permitted') throw new Error('refused');
+
+		// The exception is second-round only: round 1 with five years left is
+		// an ordinary release.
+		expect(outcome.delta.released[0]?.deadMoney).toBe(DROPPED_CAP_HIT);
+		expect(outcome.delta.released[0]?.removed).toBe(false);
+		expect(maximumBidAfter(1)).toBe(3_000_000);
 	});
 });

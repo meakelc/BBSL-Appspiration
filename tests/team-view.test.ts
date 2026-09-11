@@ -72,6 +72,10 @@ function row(overrides: Partial<TeamRosterRow> = {}): TeamRosterRow {
 		capHit: parseMoney(4_000_000),
 		rosterSlotKind: 'active_bench',
 		won: false,
+		// Story 7.8 added both to the row. An ordinary imported Contract with
+		// no rookie-scale designation is the default the Team view is about.
+		contractYearsRemaining: 3,
+		rookieScaleRound: null,
 		...overrides
 	};
 }

@@ -45,7 +45,11 @@ import { bidStateFor, evaluate } from '../../src/lib/core/rules/bidding.ts';
 import type { TeamMoneyState } from '../../src/lib/core/rules/bidding.ts';
 import { computeCapSpace } from '../../src/lib/core/rules/roster-import.ts';
 import type { CapHitRow } from '../../src/lib/core/rules/roster-import.ts';
-import type { PlaceBid } from '../../src/lib/core/types.ts';
+import type { PlaceBid, RecordDrop } from '../../src/lib/core/types.ts';
+import { INITIAL_AUCTIONS } from '../../src/lib/core/projection/auctions.ts';
+import { INITIAL_NOMINATIONS } from '../../src/lib/core/projection/nominations.ts';
+import { evaluateDrop } from '../../src/lib/core/rules/roster-drop.ts';
+import type { DroppablePlayer, RosterDropState } from '../../src/lib/core/rules/roster-drop.ts';
 
 const NOW = '2026-09-10T09:00:00.000Z';
 
@@ -189,5 +193,140 @@ describe('§10 example 40 — a Drop lowers the Maximum Bid', () => {
 		expect(result.rows[0]?.capHit).toBe(DROPPED_CAP_HIT);
 		expect(result.rows[0]?.contractYearsRemaining).toBe(5);
 		expect(result.rows[0]?.rookieScaleRound).toBeNull();
+	});
+});
+
+// --- Story 7.8: the same example, driven through the command --------------
+
+/**
+ * The identical example, derived by `evaluateDrop` rather than by a fixture.
+ *
+ * **Added beside the hand-built states above, never in place of them** —
+ * Story 7.6's change log KEEPs those, and they are what proves the two INPUTS
+ * are distinguishable at all. What this block adds is that the COMMAND
+ * produces the state they assert: the same $3,000,000, reached by applying
+ * the act rather than by writing down its result.
+ */
+
+/** Team H's roster as the Drop sees it — ten Active/Bench Contracts. */
+const DROPPABLE: readonly DroppablePlayer[] = [
+	...Array.from({ length: 8 }, (_unused, index) => ({
+		fantraxPlayerId: `p-keep-${String(index)}`,
+		playerName: `Kept ${String(index)}`,
+		rosterSlotKind: 'active_bench' as const,
+		value: parseMoney(17_500_000),
+		won: false,
+		contractYearsRemaining: 3,
+		rookieScaleRound: null
+	})),
+	{
+		fantraxPlayerId: 'p-keep-8',
+		playerName: 'Kept 8',
+		rosterSlotKind: 'active_bench' as const,
+		value: parseMoney(18_000_000),
+		won: false,
+		contractYearsRemaining: 3,
+		rookieScaleRound: null
+	},
+	{
+		fantraxPlayerId: 'p-dropped',
+		playerName: 'Dropped Player',
+		rosterSlotKind: 'active_bench' as const,
+		value: parseMoney(DROPPED_CAP_HIT),
+		won: false,
+		// `2031` against a 2026 import: five years remaining and NO rookie-scale
+		// round. Example 41 varies exactly this one field.
+		contractYearsRemaining: 5,
+		rookieScaleRound: null
+	}
+];
+
+const DROP_STATE: RosterDropState = {
+	team: { teamId: 't-h', teamName: 'Team H', rows: DROPPABLE },
+	auctions: INITIAL_AUCTIONS,
+	nominations: INITIAL_NOMINATIONS,
+	isMinorLeagueEligible: () => false,
+	playerNameFor: (id) => id
+};
+
+const DROP: RecordDrop = {
+	kind: 'RecordDrop',
+	teamId: 't-h',
+	teamName: 'Team H',
+	fantraxPlayerIds: ['p-dropped'],
+	reason: 'Released in Fantrax on the 10th.'
+};
+
+describe('§10 example 40 — the same figures, derived through `RecordDrop`', () => {
+	it('carries the full $2,000,000 as Dead Money and keeps the row', () => {
+		const outcome = evaluateDrop(DROP_STATE, DROP);
+
+		expect(outcome.kind).toBe('permitted');
+		if (outcome.kind !== 'permitted') return;
+		const release = outcome.delta.released[0];
+		expect(release?.deadMoney).toBe(DROPPED_CAP_HIT);
+		expect(release?.removed).toBe(false);
+		expect(release?.fromPlacement).toBe('active_bench');
+	});
+
+	it('reproduces the hand-built after-state, figure for figure', () => {
+		const outcome = evaluateDrop(DROP_STATE, DROP);
+		if (outcome.kind !== 'permitted') throw new Error('refused');
+
+		expect(outcome.delta.before.capSpace).toBe(5_000_000);
+		expect(outcome.delta.before.rosterCount).toBe(10);
+		// Cap Space still $5,000,000 — the $2,000,000 is Dead Money and charges
+		// exactly as it did before — and one Roster Slot is free.
+		expect(outcome.delta.after.capSpace).toBe(5_000_000);
+		expect(outcome.delta.after.rosterCount).toBe(9);
+		// The same state the fixture above constructs by hand.
+		expect(outcome.delta.after.capSpace).toBe(gatesFor(AFTER).cap.capSpace);
+		expect(outcome.delta.after.rosterCount).toBe(rosterCountOf(AFTER));
+	});
+
+	it('lands Maximum Bid at $3,000,000 for the Team’s next Bid', () => {
+		const outcome = evaluateDrop(DROP_STATE, DROP);
+		if (outcome.kind !== 'permitted') throw new Error('refused');
+
+		// **The Drop's own cap gate offers no amount**, so it projects no
+		// addition and reserves all three free Slots: $3,000,000 of reserve
+		// against $5,000,000, leaving $2,000,000. That is the SOLVENCY question
+		// FR-43 asks of the act — "can this Team still cover what it is already
+		// committed to" — and it passes.
+		expect(outcome.gates.cap.capSpace).toBe(5_000_000);
+		expect(outcome.gates.cap.rosterReserve).toBe(3_000_000);
+		expect(outcome.gates.cap.passed).toBe(true);
+
+		// The example's $3,000,000 is the OTHER question: what Team H may offer
+		// on its next non-eligible Bid, which projects that one addition. Asked
+		// of the state the command produced rather than of a fixture, and it is
+		// the same $3,000,000 — and the same $1,000,000 loss of bidding power.
+		const afterDrop = evaluate(
+			bidStateFor(
+				null,
+				{
+					capSpace: outcome.delta.after.capSpace,
+					rosterCount: outcome.delta.after.rosterCount,
+					leading: [],
+					eligibleLeading: [],
+					minorLeagueOccupied: outcome.delta.after.minorLeagueOccupied
+				},
+				false,
+				'Auction'
+			),
+			bidOf(1_000_000),
+			NOW
+		);
+
+		expect(afterDrop.cap.rosterReserve).toBe(2_000_000);
+		expect(afterDrop.cap.maximumBid).toBe(3_000_000);
+		// Identical to the hand-built fixture's answer — one arithmetic, two
+		// routes to it (AR-42).
+		expect(afterDrop.cap.maximumBid).toBe(gatesFor(AFTER).cap.maximumBid);
+		// The gate figures are nullable on the outcome — outside the Auction
+		// Phase there is no arithmetic to state — so they are pinned to their
+		// literal values before any is subtracted from another.
+		expect(gatesFor(BEFORE).cap.maximumBid).toBe(4_000_000);
+		expect(4_000_000 - 3_000_000).toBe(1_000_000);
 	});
 });

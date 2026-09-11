@@ -476,6 +476,120 @@ export type RosterMoveRecordedPayload = {
 	readonly reason: string;
 };
 
+// --- Story 7.8: the Drop, recorded but never folded -----------------------
+
+/**
+ * The event type that records one Drop (Story 7.8, FR-43, PRD §10 examples
+ * 40, 41 and 43).
+ *
+ * Declared here, beside `ROSTER_MOVE_RECORDED_EVENT` and for the same reason,
+ * with its payload types alongside it — `rules/roster-drop.ts` builds exactly
+ * what the Audit Log reads, and two structurally identical declarations are
+ * the drift Story 4.5's review removed elsewhere.
+ *
+ * **It carries the WHOLE delta** — every released Player, the Slot he left,
+ * what he was charging, what is carried as Dead Money and whether his row
+ * survived, plus the Team's five figures before and after — so a replay from
+ * zero reproduces the world without reaching for `team_rosters`, which is
+ * mutable reference data nothing rebuilds from the log (AD-4).
+ *
+ * **There is deliberately NO `contractsReducer` case for it, and the absence
+ * is load-bearing.** `contractsReducer` folds Auction Contracts and nothing
+ * else, and a Player held by an Auction Contract CANNOT be dropped —
+ * `rules/roster-drop.ts` refuses him as a shape refusal, because he is not in
+ * Fantrax until the FR-30/31 export and so cannot have been released there.
+ * Every released Contract is therefore a `team_rosters` row that the same
+ * transaction `UPDATE`s or `DELETE`s. The event exists for replay and the
+ * Audit Log, not for a projection.
+ *
+ * **If the won refusal is ever lifted, THIS is what breaks.** A dropped
+ * Auction Contract would need a fold — it has no row to mutate — and its
+ * absence here is silent rather than a compile error. The dependency is
+ * stated on the payload below as well as here, so it is read at both ends.
+ */
+export const DROP_RECORDED_EVENT = 'DropRecorded';
+
+/**
+ * One Contract's release, as the record states it.
+ *
+ * **`deadMoney` and `removed` are ONE decision stated twice, not two.**
+ * `rules/roster-drop.ts` computes `deadMoney = releases2RK ? $0 : chargedCapHit(row)`
+ * and removes the row if and only if that amount is `$0`; both fields are
+ * written from that one expression, and nothing re-derives either from the
+ * Slot kind. A Minor League row was charging `$0` and so leaves nothing
+ * behind; a full-term second-round rookie deal is released to `$0` by FR-43's
+ * exception; everything else is reclassified at the amount it was already
+ * charging.
+ *
+ * `chargedCapHit` is what the row took off Cap Space the day before, and
+ * `value` stands unchanged beside it (AD-23) — a Minor League release reads
+ * `$0` against a `value` of whatever Fantrax stated, and the pair is readable
+ * off the record without anybody deriving one from the other.
+ *
+ * `contractYearsRemaining` and `rookieScaleRound` are the two facts FR-43's
+ * exception turned on, recorded so a later reading can see WHY a Contract was
+ * released to nothing rather than take it on trust. The remaining years also
+ * travel with Dead Money for the FR-30/31 export's sake; **within this
+ * auction the term computes nothing.**
+ */
+export type DroppedContract = {
+	readonly fantraxPlayerId: string;
+	readonly playerName: string;
+	/** The Slot the Contract occupied before the Drop. */
+	readonly fromPlacement: RosterSlotKind;
+	/** What the row was charging Cap Space before the Drop. */
+	readonly chargedCapHit: Money;
+	/** The full value of the Contract, unchanged by the act (AD-23). */
+	readonly value: Money;
+	/** What the Team keeps carrying. `$0` exactly when the row is removed. */
+	readonly deadMoney: Money;
+	/** `true` when the `team_rosters` row is DELETEd rather than reclassified. */
+	readonly removed: boolean;
+	/** Years still to run, as Fantrax stated them, or `null`. */
+	readonly contractYearsRemaining: number | null;
+	/** The draft round of a rookie-scale Contract, or `null` for an ordinary one. */
+	readonly rookieScaleRound: number | null;
+};
+
+/**
+ * The payload a `DropRecorded` carries — the whole act, in the log.
+ *
+ * FR-43's record IS this payload: AD-4 makes the Audit Log a read of
+ * `auction_events` rather than a second table, so everything a later reading
+ * needs is here. One entry however many Players were released, because a Drop
+ * is one act evaluated once.
+ *
+ * `teamBefore` and `teamAfter` are `RosterMoveTeamFigures`, reused unchanged:
+ * a Drop's five figures are a Move's five figures asked of one Team, and a
+ * parallel type would be a second name for one shape.
+ *
+ * **They are NOT called `before` and `after`, and the prefix is load-bearing.**
+ * `core/audit-log.ts`'s `mergeOverride` renders the `OverrideRecord` SHAPE off
+ * any payload that carries it, and that shape's own state pair is top-level
+ * `before`/`after`. A payload using those two names has its Team figures read
+ * a second time as an override state map and printed raw — `teamId team-a →
+ * team-a`, machine tokens and all. `RosterMoveRecordedPayload` avoids the
+ * collision by naming its four figure blocks per side; this avoids it the same
+ * way.
+ *
+ * **No reducer folds this.** See `DROP_RECORDED_EVENT` above: a won Contract
+ * cannot be dropped, so every release is a `team_rosters` row the same
+ * transaction mutates or removes. Lifting that refusal is what would make a
+ * fold necessary, and the fold is where it would break.
+ *
+ * The actor rides the envelope's `manager_id`/`team_id` as every other event's
+ * does; `reason` is on the payload because there is no column for it.
+ */
+export type DropRecordedPayload = {
+	readonly teamId: string;
+	readonly teamName: string;
+	readonly released: readonly DroppedContract[];
+	readonly teamBefore: RosterMoveTeamFigures;
+	readonly teamAfter: RosterMoveTeamFigures;
+	/** The Commissioner's stated reason — non-blank, trimmed, permanent. */
+	readonly reason: string;
+};
+
 /** Whether a value is one of the two Slot Placements an Auction Contract may hold. */
 function isSlotPlacement(value: unknown): value is SlotPlacement {
 	return value === 'active_bench' || value === 'minor_league';

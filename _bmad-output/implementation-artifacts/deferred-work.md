@@ -808,3 +808,33 @@
   evidence: During Story 7.5 an implementation agent ran `npx prettier --write` on new files; with no config present it pulled defaults and rewrote them to double quotes and 2-space indent, against the repo's tabs and single quotes. It was caught and reverted in-session and no pre-existing file was touched, but nothing in the repo would have failed on it — there is no formatter gate in `npm run check` or in the test suite. Either add a `.prettierrc` matching house style or a check that fails on drift.
   owner: Unassigned; a repo-hygiene change, not a story.
   status: open
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-8-record-a-drop.md`
+  summary: A fixed gate set's one-edit property holds when a name is ADDED but not when one is removed — true of `PLACE_BID_GATES`, `RESTORE_LEADING_BID_GATES`, `RECORD_ROSTER_MOVE_GATES` and now `RECORD_DROP_GATES` alike.
+  evidence: Each `*GateResults` type is declared independently of its frozen name list, so adding a name breaks `every((gate) => gates[gate].passed)` at compile time, while removing one leaves the orphaned key populated and silently unchecked. Story 7.8's spec instructed "copy this shape exactly" from the Move, so the hole was inherited rather than introduced. The fix is one shared derivation (`Record<(typeof GATES)[number], …>`) applied to all four command types at once, which is a cross-cutting change no single story should make alone.
+  owner: Unassigned; belongs with whoever next touches `core/types.ts`'s gate declarations.
+  status: open
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-8-record-a-drop.md`
+  summary: The Drop and Move pickers mark a won Contract inline but give no warning for a Player contested by an open Auction or nomination, though both are refused identically at commit.
+  evidence: `routes/roster-drop/+page.server.ts`'s `pickerRowsFor` carries `won` through to the markup; nothing carries the contested state, which the core checks first and refuses on. A Commissioner can tick a contested Player and only discover it after building the whole act. Not a correctness issue — the server refuses — but it costs a round trip on the surface whose entire design goal is stating consequences before commit.
+  owner: Whoever next touches the Commissioner override surfaces; applies to `roster-move` equally.
+  status: open
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-8-record-a-drop.md`
+  summary: `import-preview.ts` now selects `rookie_scale_round` but nothing renders it, so a Commissioner cannot see a rookie-scale designation before promoting an import.
+  evidence: Story 7.8 added the column to the PostgREST select and to `StagedRosterRow` so the preview's row shape matches the table, but added no surface for it. Either render it in the preview — it is the one fact that decides whether a future Drop clears or carries — or narrow the select back to what the preview actually shows.
+  owner: Whoever next touches the import preview.
+  status: open
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-8-record-a-drop.md`
+  summary: No Commissioner override route proves the reason sheet was shown for the exact selection being committed.
+  evidence: Both `roster-move` and `roster-drop` read the selection from the query string and the reason from the posted form, with nothing binding the commit to a preceding preview step — a direct POST with a reason is evaluated and can succeed. The gates and `requireOverrideReason` still run, so nothing unlawful commits; what is missing is the guarantee that the before/after the Commissioner saw is the one they committed. Applies to every destination built on Story 7.1's sheet.
+  owner: Whoever next touches `server/override-guard.ts` or the sheet.
+  status: open
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-8-record-a-drop.md`
+  summary: User-facing copy and docblocks across the codebase refer to every Player as "he"/"his".
+  evidence: These are real league players whose gender the app does not know and has no reason to assert. Story 7.8 removed the pronouns from the new reason-sheet copy it added, but the convention is repo-wide — `roster-move.ts`, `contracts.ts`, `team-view.ts` and the PRD itself all carry it. A sweep is a single mechanical pass, but it touches shipped surface strings and so needs its own change rather than riding along with a rules story.
+  owner: Unassigned; repo-wide copy change.
+  status: open
