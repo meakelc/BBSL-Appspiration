@@ -796,3 +796,15 @@
   evidence: Story 7.7 added `formatExactDollars` to `core/money.ts` for refusal prose. Two older private spellings remain — `teams-index.ts`'s grouped `exactDollars` and the ungrouped off-grid branch of `import-preview.ts`'s `renderCapSpace`. Folding them in changes rendered output on two shipped surfaces, so it needs its own story rather than a drive-by.
   owner: Whoever next revisits money rendering; no story depends on it.
   status: open
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-5-the-league-visible-audit-log.md`
+  summary: The Audit Log reads, renders and serialises the entire event log on every page view and every export, with no bound.
+  evidence: `event-log.ts:98-118` already warns that this read grows with the log and names the remedy — a bounded read in that module. Story 7.5 renders every row twice per request (once with no references to harvest party ids, once for real) and the export repeats the whole cost per download. Accepted for now because every page in the app already folds the full log and filters are the specified remedy; pagination was on the spec's Ask First list and was not taken. The fix belongs to the reader, not to this surface.
+  owner: Whoever adds the bounded read to `server/event-log.ts`; no story depends on it yet.
+  status: open
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-5-the-league-visible-audit-log.md`
+  summary: The repo has no Prettier config and no Prettier dependency, so any agent running `npx prettier` silently reformats files against house style.
+  evidence: During Story 7.5 an implementation agent ran `npx prettier --write` on new files; with no config present it pulled defaults and rewrote them to double quotes and 2-space indent, against the repo's tabs and single quotes. It was caught and reverted in-session and no pre-existing file was touched, but nothing in the repo would have failed on it — there is no formatter gate in `npm run check` or in the test suite. Either add a `.prettierrc` matching house style or a check that fails on drift.
+  owner: Unassigned; a repo-hygiene change, not a story.
+  status: open
