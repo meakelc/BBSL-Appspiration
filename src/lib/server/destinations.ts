@@ -113,6 +113,11 @@ const CATALOG: Readonly<Record<LeaguePhase, readonly Destination[]>> = Object.fr
 		destination('teams', 'Teams', '/teams', false),
 		destination('audit-log', 'Audit Log', '/audit-log', false),
 		destination('notification-settings', 'Notification settings', '/notifications', false),
+		// Story 7.7: recording a trade the League agreed elsewhere. Commissioner
+		// only, and live in the two phases FR-41 permits — this list and the
+		// Contract Assignment one below. It is deliberately absent from
+		// `Archived`, where `requireOverridablePhase` refuses it a second time.
+		destination('roster-move', 'Record a Roster Move', '/roster-move', true),
 		destination('pause-resume', 'Pause/Resume', '/pause-resume', true),
 		destination('operational-health', 'Operational health', '/operational-health', true)
 	],
@@ -120,6 +125,7 @@ const CATALOG: Readonly<Record<LeaguePhase, readonly Destination[]>> = Object.fr
 		destination('contract-assignment', 'Contract Assignment', '/contract-assignment', false),
 		destination('teams', 'Teams', '/teams', false),
 		destination('audit-log', 'Audit Log', '/audit-log', false),
+		destination('roster-move', 'Record a Roster Move', '/roster-move', true),
 		destination('assignment-monitoring', 'Assignment monitoring', '/assignment-monitoring', true),
 		destination('export-gate', 'Export gate', '/export-gate', true)
 	],

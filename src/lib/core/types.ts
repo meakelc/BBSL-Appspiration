@@ -936,6 +936,211 @@ export type RestoreLeadingBidGateResults = {
 	readonly slots: SlotsGateOutcome;
 };
 
+// --- Story 7.7: the RecordRosterMove command and its fixed gate set -------
+
+/**
+ * The `RecordRosterMove` command (Story 7.7, FR-41).
+ *
+ * **A third command type, because a Move is neither a Bid nor a restoration.**
+ * It names two Teams and moves Contracts in BOTH directions in one act, it
+ * offers no amount, and it is judged once over the state the whole act
+ * produces. Nothing in `PLACE_BID_GATES` asks either of its questions of two
+ * Teams at once, and synthesising a `PlaceBid` to borrow one would route two
+ * Teams' opposing deltas through a gate AD-7 defines as single-Team and
+ * incremental.
+ *
+ * **"Sending" and "receiving" name the two SIDES, not the two directions.**
+ * A Move is bidirectional: `sendingPlayerIds` leave the sending Team for the
+ * receiving Team, and `receivingPlayerIds` travel the other way. The labels
+ * are the Commissioner's own framing of the act — the Team the sheet is
+ * written from, and the Team it is written to — and either list may be
+ * EMPTY, because a salary dump is a Roster Move (§10 example 36). Both empty
+ * is refused: the act then names nothing.
+ *
+ * The two names ride the command for the EVENT's sake, exactly as
+ * `PlaceBid.teamName` does: the Audit Log entry states both Teams and an id
+ * is not a name. `RECORD_ROSTER_MOVE_GATES` decides from the two ids and the
+ * two id lists alone.
+ *
+ * `reason` is on the command because FR-41 requires one before a Move
+ * commits and `core/rules/override.ts` owns what makes a reason valid. The
+ * ENFORCEMENT is `server/override-guard.ts`'s, over what was submitted.
+ */
+export type RecordRosterMove = {
+	readonly kind: 'RecordRosterMove';
+	readonly sendingTeamId: string;
+	readonly sendingTeamName: string;
+	readonly receivingTeamId: string;
+	readonly receivingTeamName: string;
+	/** Players leaving the sending Team for the receiving Team. May be empty. */
+	readonly sendingPlayerIds: readonly string[];
+	/** Players leaving the receiving Team for the sending Team. May be empty. */
+	readonly receivingPlayerIds: readonly string[];
+	/** The Commissioner's stated reason, already trimmed and non-blank. */
+	readonly reason: string;
+};
+
+/**
+ * The gate set for `RecordRosterMove`, **fixed per command type** (AD-1), and
+ * the THIRD fixed gate set this codebase declares.
+ *
+ * **Five names, and the list is FLAT on purpose.** `GateResults` is
+ * `Readonly<Record<string, GateOutcome>>` and `RecordRosterMoveGateResults`
+ * must stay assignable to it, so a per-Team object cannot nest inside a gate
+ * — a nested record has no `passed` and would quietly stop being a gate. Two
+ * Teams therefore appear as two keys each, which also makes "one evaluation,
+ * both Teams" literally one returned record rather than two results a caller
+ * has to remember to combine.
+ *
+ * **`contested` leads, exactly as `phase` leads `PLACE_BID_GATES`.** It is
+ * the frame the other four sit inside: cap and slots are meaningless
+ * questions about a Player nobody holds, and FR-41 says so outright — "a
+ * third refusal ground alongside the money and slots gates, checked first".
+ * Reading order, not short-circuit order: all five outcomes are always
+ * returned (AD-7).
+ *
+ * **The money before the capacity, per Team**, matching the last two entries
+ * of `PLACE_BID_GATES` and both entries of `RESTORE_LEADING_BID_GATES`, so a
+ * reader who knows one knows all three.
+ *
+ * Frozen at runtime as well as `as const`, for `PLACE_BID_GATES`' reason:
+ * this list is what `evaluateMove()`'s totality is asserted against, and a
+ * caller that could splice an entry out of it could make a partial result
+ * look complete.
+ */
+export const RECORD_ROSTER_MOVE_GATES = Object.freeze([
+	'contested',
+	'sendingCap',
+	'sendingSlots',
+	'receivingCap',
+	'receivingSlots'
+] as const);
+
+/** One of the five gate names above. */
+export type RecordRosterMoveGate = (typeof RECORD_ROSTER_MOVE_GATES)[number];
+
+/** One Player a Move named whom an open Auction is still deciding. */
+export type ContestedPlayer = {
+	readonly fantraxPlayerId: string;
+	/** What he is called — the refusal names a Player, and an id is not a name. */
+	readonly playerName: string;
+	/**
+	 * Which open thing contests him.
+	 *
+	 * `bid` is an Auction with a Bid on it; `nomination` is a Player on the
+	 * Board nobody has bid on yet. Both are "contested in an open Auction" for
+	 * FR-41's purposes — neither Team holds a Contract on him — and the two
+	 * are distinguished because the refusal reads differently: one says wait
+	 * for the Auction to close, the other says wait for it to happen.
+	 */
+	readonly contest: 'bid' | 'nomination';
+};
+
+/**
+ * The contested gate: every Player a Move names is held under a SETTLED
+ * Contract (FR-41).
+ *
+ * `contested` is the whole list, never the first one found: a Commissioner
+ * who has to retry once per Player is a Commissioner who retries five times.
+ */
+export type ContestedGateOutcome = {
+	readonly passed: boolean;
+	readonly contested: readonly ContestedPlayer[];
+};
+
+/** One open Auction a Team leads, as a Move's refusal names it. */
+export type MoveLeadingAuction = {
+	readonly fantraxPlayerId: string;
+	readonly playerName: string;
+	readonly amount: Money;
+};
+
+/**
+ * One Team's money gate on a Move — solvency, asked with no amount (FR-41,
+ * AR-42).
+ *
+ * **The verdict is `maximumBid >= 0` and not a comparison**, because a Move
+ * offers nothing. What can fail is solvency: §10 example 37's Team is
+ * $500,000 richer after sending a Player away and $300,000 short, because the
+ * Slot it freed costs $1,000,000 to reserve. That is exactly the test
+ * `evaluateCap`'s `unbounded` branch already makes, and the figures below are
+ * `teamSolvencyFiguresFor`'s — this gate writes no arithmetic of its own.
+ *
+ * `shortfall` is the refusal's own number: `null` when the gate passes, and
+ * the positive size of a negative Maximum Bid when it does not. It exists so
+ * no surface has to negate a Money to say "$300,000 short".
+ *
+ * `leadingAuctions` is what the refusal must NAME — the open Auctions this
+ * Team is committed to and can no longer cover. Empty is a legitimate state:
+ * a Team that leads nothing can still be short, and the refusal then names
+ * only the arithmetic.
+ */
+export type MoveCapGateOutcome = {
+	readonly passed: boolean;
+	readonly teamId: string;
+	readonly teamName: string;
+	readonly capSpace: Money;
+	readonly committedBids: Money;
+	readonly minorsExposure: Money;
+	readonly availableCapSpace: Money;
+	readonly rosterCount: number;
+	readonly projectedAdditions: number;
+	readonly rosterReserve: Money;
+	readonly maximumBid: Money;
+	/** `null` when the gate passes; the size of the shortfall when it fails. */
+	readonly shortfall: Money | null;
+	readonly leadingAuctions: readonly MoveLeadingAuction[];
+	readonly exposingBids: readonly ExposingBid[];
+};
+
+/**
+ * One Team's capacity gate on a Move — FR-37's branches, plus the three
+ * ceilings FR-41 adds (FR-41, FR-1).
+ *
+ * **The explicit Active/Bench ceiling test is not redundant.**
+ * `unfilledSlots` clamps at zero, so a Team standing at Roster Count 14 and
+ * leading nothing computes `projectedAdditions === 0` and passes FR-37's
+ * first branch — which is precisely the transient state §10 example 39 says
+ * must never be reachable. `rosterCount <= ACTIVE_BENCH_SLOTS` is what makes
+ * the ceiling a ceiling for an act that adds rows without bidding for them.
+ *
+ * The Injury Reserve and Minor League ceilings are the same ceilings FR-1
+ * holds on import, asked here of the state a Move would produce.
+ */
+export type MoveSlotsGateOutcome = {
+	readonly passed: boolean;
+	readonly teamId: string;
+	readonly teamName: string;
+	readonly rosterCount: number;
+	readonly projectedAdditions: number;
+	readonly freeActiveBenchSlots: number;
+	readonly allowance: number;
+	readonly injuryReserveOccupied: number;
+	readonly minorLeagueOccupied: number;
+	/** The three league ceilings, stated on every evaluation, pass or fail. */
+	readonly activeBenchCeiling: number;
+	readonly injuryReserveCeiling: number;
+	readonly minorLeagueCeiling: number;
+	/** Every Slot kind this Team would stand above its ceiling in. */
+	readonly breaches: readonly RosterSlotKind[];
+};
+
+/**
+ * What `evaluateMove()` returns for a `RecordRosterMove`, in any state whose
+ * shape permits an evaluation at all.
+ *
+ * Five keys, one per name in `RECORD_ROSTER_MOVE_GATES`, always all present.
+ * Adding or removing a name here makes every consumer a compile error until
+ * it handles the change — the one-edit property `PLACE_BID_GATES` has.
+ */
+export type RecordRosterMoveGateResults = {
+	readonly contested: ContestedGateOutcome;
+	readonly sendingCap: MoveCapGateOutcome;
+	readonly sendingSlots: MoveSlotsGateOutcome;
+	readonly receivingCap: MoveCapGateOutcome;
+	readonly receivingSlots: MoveSlotsGateOutcome;
+};
+
 /**
  * `decide()` authorised the command: here are the events to append.
  *

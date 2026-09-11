@@ -790,3 +790,9 @@
   evidence: `src/lib/adapters/fantrax/roster-file.ts:133` is `/^(?:(\d)(?:RK|rk))?(\d{2}|\d{4})$/`; verified by probe that rounds 0 and 3-9 are accepted and reach `ParsedRosterRow.rookieScaleRound`. Acceptance is UNCHANGED from before Story 7.6 — the pre-story regex matched the same digit and merely discarded it — so this is not a regression the story introduced; what changed is that a nonsense round now becomes structured data a later story reads. Not patched because tightening the regex would narrow what the importer accepts, a behaviour change no acceptance criterion asked for and one that would land on a `core/`-adjacent deploy path governed by AD-20. Consequence is low: FR-43's exception tests for round **2** specifically, so an out-of-domain round falls through to the safe default of being treated as an ordinary contract.
   owner: Story 7.8, or whoever next revisits the Fantrax roster adapter.
   status: open
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-7-record-a-roster-move.md`
+  summary: Consolidate the three exact-dollar money renderers into one.
+  evidence: Story 7.7 added `formatExactDollars` to `core/money.ts` for refusal prose. Two older private spellings remain — `teams-index.ts`'s grouped `exactDollars` and the ungrouped off-grid branch of `import-preview.ts`'s `renderCapSpace`. Folding them in changes rendered output on two shipped surfaces, so it needs its own story rather than a drive-by.
+  owner: Whoever next revisits money rendering; no story depends on it.
+  status: open

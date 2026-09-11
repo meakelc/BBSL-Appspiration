@@ -181,11 +181,23 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 		'example-35-the-trigger-is-a-free-slot.test.ts',
 		'35 — The trigger is a free slot, not a roster count'
 	],
-	// 36-39 are Epic 7's Roster Move examples and are not implemented yet, so
-	// the numbering below is deliberately NON-CONTIGUOUS. The pair belongs to
-	// Story 7.6, which delivers the rookie-scale designation the two examples
-	// differ by; the Drop command that produces the states they describe is
-	// Story 7.8.
+	// 36-39 and 42 are Story 7.7's Roster Move examples (FR-41), landed with
+	// the `RecordRosterMove` command. 42 sits out of sequence below because
+	// 40 and 41 landed first with Story 7.6's rookie-scale designation; the
+	// Drop command those two describe is still Story 7.8.
+	[
+		'example-36-the-trade-that-clears-the-room.test.ts',
+		'36 — The trade that clears the room'
+	],
+	[
+		'example-37-the-team-pushed-over-by-giving-something-away.test.ts',
+		'37 — The Team pushed over by giving something away'
+	],
+	[
+		'example-38-the-stash-that-becomes-expensive-by-moving.test.ts',
+		'38 — The stash that becomes expensive by moving'
+	],
+	['example-39-one-act-evaluated-once.test.ts', '39 — One act, evaluated once'],
 	[
 		'example-40-a-drop-lowers-the-maximum-bid.test.ts',
 		'40 — A Drop lowers the Maximum Bid'
@@ -193,6 +205,10 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 	[
 		'example-41-the-three-characters-worth-2000000.test.ts',
 		'41 — The three characters worth $2,000,000'
+	],
+	[
+		'example-42-a-won-player-traded-after-the-auction-phase.test.ts',
+		'42 — A won Player traded after the Auction Phase'
 	]
 ];
 

@@ -79,11 +79,14 @@ const EXPECTED: Record<
 			'audit-log',
 			'notification-settings'
 		],
-		commissionerOnly: ['pause-resume', 'operational-health']
+		// Story 7.7 adds `roster-move` ahead of the two Epic 1 admin entries, in
+		// the catalog's own order: FR-41 permits a Move in the Auction Phase and
+		// the Contract Assignment Phase, and nowhere else.
+		commissionerOnly: ['roster-move', 'pause-resume', 'operational-health']
 	},
 	'Contract Assignment': {
 		manager: ['contract-assignment', 'teams', 'audit-log'],
-		commissionerOnly: ['assignment-monitoring', 'export-gate']
+		commissionerOnly: ['roster-move', 'assignment-monitoring', 'export-gate']
 	},
 	Archived: {
 		manager: ['bid-board', 'teams', 'audit-log', 'export'],

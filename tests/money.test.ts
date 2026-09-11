@@ -8,6 +8,7 @@ import ts from 'typescript';
 import {
 	addMoney,
 	compareMoney,
+	formatExactDollars,
 	formatMoney,
 	isOnMoneyGrid,
 	medianCount,
@@ -363,5 +364,39 @@ describe('the League Median — the lower of two middles, never their mean', () 
 		expect(isOnMoneyGrid(answer as Money)).toBe(true);
 		expect(() => formatMoney(answer as Money)).not.toThrow();
 		expect(values).toContain(answer);
+	});
+});
+
+describe('formatExactDollars — the diagnostic renderer', () => {
+	const money = (value: number): Money => parseMoney(value);
+
+	it('groups thousands and keeps every digit, on the grid or off it', () => {
+		expect(formatExactDollars(money(300_000))).toBe('$300,000');
+		expect(formatExactDollars(money(6_700_000))).toBe('$6,700,000');
+		expect(formatExactDollars(money(1_000_000))).toBe('$1,000,000');
+		expect(formatExactDollars(money(0))).toBe('$0');
+		expect(formatExactDollars(money(999))).toBe('$999');
+		expect(formatExactDollars(money(1_000))).toBe('$1,000');
+	});
+
+	it('renders an off-grid amount that formatMoney refuses outright', () => {
+		const offGrid = money(6_700_000);
+		expect(isOnMoneyGrid(offGrid)).toBe(false);
+		expect(() => formatMoney(offGrid)).toThrow(RangeError);
+		expect(formatExactDollars(offGrid)).toBe('$6,700,000');
+	});
+
+	it('carries a negative with the same minus sign formatMoney uses', () => {
+		// Not a hyphen: `formatMoney` renders U+2212, and two renderings of one
+		// figure that differ by a character are two figures to a reader.
+		expect(formatExactDollars(money(-300_000))).toBe('\u2212$300,000');
+		expect(formatMoney(money(-1_500_000))).toBe('\u2212$1.5M');
+	});
+
+	it('is lossless — the digits round-trip back to the amount', () => {
+		for (const value of [1, 999, 300_000, 6_700_000, 90_000_000]) {
+			const rendered = formatExactDollars(money(value));
+			expect(Number(rendered.replace(/[$,]/g, ''))).toBe(value);
+		}
 	});
 });

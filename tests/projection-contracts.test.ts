@@ -18,6 +18,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	CONTRACT_LENGTH_ASSIGNED_EVENT,
 	INITIAL_CONTRACTS,
+	ROSTER_MOVE_RECORDED_EVENT,
 	contractForPlayer,
 	contractRowsFor,
 	contractsReducer,
@@ -462,5 +463,262 @@ describe('isContractYears — the four legal lengths, stated once', () => {
 		for (const value of [0, 5, -1, 1.5, '4', null, undefined, NaN, true, {}]) {
 			expect(isContractYears(value), JSON.stringify(value ?? null)).toBe(false);
 		}
+	});
+});
+
+describe('contractsReducer — a Roster Move (Story 7.7, FR-41)', () => {
+	/** One well-formed transfer, as `evaluateMove` builds one. */
+	function transfer(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+		return {
+			fantraxPlayerId: 'p-1',
+			playerName: 'Ausar Bright',
+			fromTeamId: 't-1',
+			fromTeamName: 'Team M',
+			toTeamId: 't-2',
+			toTeamName: 'Team N',
+			won: true,
+			fromPlacement: 'active_bench',
+			toPlacement: 'active_bench',
+			capHitBefore: 8_000_000,
+			capHitAfter: 8_000_000,
+			winningAmount: 8_000_000,
+			clearedContractYears: null,
+			...overrides
+		};
+	}
+
+	/** An assignment, as `assignContractLength` builds one. */
+	function assign(seq: number, overrides: Record<string, unknown> = {}): AppendedEvent {
+		return event(seq, CONTRACT_LENGTH_ASSIGNED_EVENT, {
+			fantraxPlayerId: 'p-1',
+			playerName: 'Ausar Bright',
+			teamId: 't-1',
+			teamName: 'Team M',
+			managerId: 'm-1',
+			contractYears: 4,
+			...overrides
+		});
+	}
+
+	function move(seq: number, transfers: readonly unknown[]): AppendedEvent {
+		return event(seq, ROSTER_MOVE_RECORDED_EVENT, {
+			sendingTeamId: 't-1',
+			sendingTeamName: 'Team M',
+			receivingTeamId: 't-2',
+			receivingTeamName: 'Team N',
+			transfers,
+			sendingBefore: {
+				teamId: 't-1',
+				teamName: 'Team M',
+				capSpace: 100_000_000,
+				rosterCount: 1,
+				injuryReserveOccupied: 0,
+				minorLeagueOccupied: 0
+			},
+			sendingAfter: {
+				teamId: 't-1',
+				teamName: 'Team M',
+				capSpace: 108_000_000,
+				rosterCount: 0,
+				injuryReserveOccupied: 0,
+				minorLeagueOccupied: 0
+			},
+			receivingBefore: {
+				teamId: 't-2',
+				teamName: 'Team N',
+				capSpace: 100_000_000,
+				rosterCount: 0,
+				injuryReserveOccupied: 0,
+				minorLeagueOccupied: 0
+			},
+			receivingAfter: {
+				teamId: 't-2',
+				teamName: 'Team N',
+				capSpace: 92_000_000,
+				rosterCount: 1,
+				injuryReserveOccupied: 0,
+				minorLeagueOccupied: 0
+			},
+			reason: 'Agreed in the league channel.'
+		});
+	}
+
+	it('rewrites the Team, re-derives the placement and Cap Hit, and clears the length', () => {
+		const contracts = foldClosures(
+			close(1, { winningAmount: 18_000_000, capHit: 0, placement: 'minor_league' }),
+			assign(2, { contractYears: 3 }),
+			move(3, [
+				transfer({
+					fromPlacement: 'minor_league',
+					toPlacement: 'active_bench',
+					capHitBefore: 0,
+					capHitAfter: 18_000_000,
+					winningAmount: 18_000_000,
+					clearedContractYears: 3
+				})
+			])
+		);
+
+		expect(contractForPlayer(contracts, 'p-1')).toEqual({
+			fantraxPlayerId: 'p-1',
+			playerName: 'Ausar Bright',
+			teamId: 't-2',
+			teamName: 'Team N',
+			// Unchanged by the Move: a Move is not a restructure (AD-23).
+			winningAmount: 18_000_000,
+			// ...while the charge follows the new placement.
+			capHit: 18_000_000,
+			placement: 'active_bench',
+			contractYears: null,
+			closedAt: '2026-08-27T09:00:00.000Z'
+		});
+	});
+
+	it('folds the LATEST transfer, not the first — a Player may be traded twice', () => {
+		// **Two DIFFERENT Moves for one Player**, which is the only shape that
+		// can tell latest-wins from first-wins. Folding one Move twice cannot:
+		// identical events converge whichever rule is in force.
+		const contracts = foldClosures(
+			close(1, { winningAmount: 9_000_000, capHit: 9_000_000 }),
+			move(2, [
+				transfer({
+					toTeamId: 't-2',
+					toTeamName: 'Team N',
+					toPlacement: 'active_bench',
+					capHitAfter: 9_000_000
+				})
+			]),
+			move(3, [
+				transfer({
+					fromTeamId: 't-2',
+					fromTeamName: 'Team N',
+					toTeamId: 't-3',
+					toTeamName: 'Team P',
+					toPlacement: 'minor_league',
+					capHitBefore: 9_000_000,
+					capHitAfter: 0,
+					winningAmount: 9_000_000
+				})
+			])
+		);
+
+		const contract = contractForPlayer(contracts, 'p-1');
+		// Where he is NOW, not where the first Move put him.
+		expect(contract?.teamId).toBe('t-3');
+		expect(contract?.teamName).toBe('Team P');
+		expect(contract?.placement).toBe('minor_league');
+		expect(contract?.capHit).toBe(0);
+		// The value never moved through either Move (AD-23).
+		expect(contract?.winningAmount).toBe(9_000_000);
+	});
+
+	it('lands the good transfers in a Move whose array also holds a malformed one', () => {
+		const contracts = foldClosures(
+			close(1, { fantraxPlayerId: 'p-1' }),
+			close(2, { fantraxPlayerId: 'p-2', playerName: 'Somebody Else' }),
+			move(3, [
+				transfer({ fantraxPlayerId: 'p-1' }),
+				// `capHitAfter` that is a string but not a number: the old guard
+				// admitted it on TYPE and `parseMoney` threw inside the fold,
+				// which does not lose one transfer — it makes every future fold of
+				// the whole log raise.
+				transfer({ fantraxPlayerId: 'p-2', capHitAfter: 'abc' })
+			])
+		);
+
+		expect(contractForPlayer(contracts, 'p-1')?.teamId).toBe('t-2');
+		// The malformed one is SKIPPED: p-2 stays where the close put him.
+		expect(contractForPlayer(contracts, 'p-2')?.teamId).toBe('t-1');
+	});
+
+	it('never throws on a malformed money field, whatever shape it takes', () => {
+		for (const bad of [
+			'abc',
+			'',
+			'  ',
+			'1.5',
+			'1e9',
+			1.5,
+			Number.NaN,
+			Number.POSITIVE_INFINITY,
+			Number.MAX_SAFE_INTEGER + 2,
+			'99999999999999999999',
+			null,
+			undefined,
+			{},
+			[],
+			true
+		]) {
+			const label = JSON.stringify(bad ?? null);
+			expect(() =>
+				foldClosures(close(1), move(2, [transfer({ capHitAfter: bad })])),
+				`capHitAfter ${label}`
+			).not.toThrow();
+			expect(() =>
+				foldClosures(close(1), move(2, [transfer({ capHitBefore: bad })])),
+				`capHitBefore ${label}`
+			).not.toThrow();
+			expect(() =>
+				foldClosures(close(1), move(2, [transfer({ winningAmount: bad })])),
+				`winningAmount ${label}`
+			).not.toThrow();
+
+			// ...and the contract is left exactly where the close put it.
+			expect(
+				contractForPlayer(foldClosures(close(1), move(2, [transfer({ capHitAfter: bad })])), 'p-1')
+					?.teamId
+			).toBe('t-1');
+		}
+	});
+
+	it('SKIPS a transfer with no valid winningAmount rather than reading one out of the Cap Hit', () => {
+		// AD-23: the two money fields are distinct and neither is derived from
+		// the other. Falling back to `capHitAfter` would make a $0 stash's value
+		// $0 — silently erasing exactly the distinction this fold exists to keep.
+		const contracts = foldClosures(
+			close(1),
+			move(2, [transfer({ winningAmount: undefined, capHitAfter: 8_000_000 })])
+		);
+
+		expect(contractForPlayer(contracts, 'p-1')?.teamId).toBe('t-1');
+		expect(contractForPlayer(contracts, 'p-1')?.winningAmount).toBe(8_000_000);
+	});
+
+	it('SKIPS a transfer with no valid capHitBefore rather than defaulting it to $0', () => {
+		const contracts = foldClosures(close(1), move(2, [transfer({ capHitBefore: undefined })]));
+
+		expect(contractForPlayer(contracts, 'p-1')?.teamId).toBe('t-1');
+	});
+
+	it('ignores a transfer for an Existing Contract — it has no row in this fold', () => {
+		const contracts = foldClosures(close(1), move(2, [transfer({ won: false })]));
+
+		expect(contractForPlayer(contracts, 'p-1')?.teamId).toBe('t-1');
+	});
+
+	it('ignores a transfer naming a Player who holds no Auction Contract', () => {
+		const contracts = foldClosures(move(1, [transfer({ fantraxPlayerId: 'p-nobody' })]));
+
+		expect(contractForPlayer(contracts, 'p-nobody')).toBeNull();
+		expect(Object.keys(contracts.byPlayer)).toEqual([]);
+	});
+
+	it('refuses a placement outside the two legal ones — a moved win never lands on IR', () => {
+		const contracts = foldClosures(
+			close(1),
+			move(2, [transfer({ toPlacement: 'injury_reserve' })])
+		);
+
+		expect(contractForPlayer(contracts, 'p-1')?.teamId).toBe('t-1');
+		expect(contractForPlayer(contracts, 'p-1')?.placement).toBe('active_bench');
+	});
+
+	it('survives a payload with no transfers array at all', () => {
+		expect(() =>
+			foldClosures(close(1), event(2, ROSTER_MOVE_RECORDED_EVENT, { transfers: 'nonsense' }))
+		).not.toThrow();
+		expect(() =>
+			foldClosures(close(1), event(2, ROSTER_MOVE_RECORDED_EVENT, null))
+		).not.toThrow();
 	});
 });

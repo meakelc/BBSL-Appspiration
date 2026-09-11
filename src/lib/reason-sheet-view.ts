@@ -25,7 +25,19 @@
  * 7.2 renders the first sheet.
  */
 
+import {
+	ACTIVE_BENCH_SLOTS,
+	INJURY_RESERVE_SLOTS,
+	MINOR_LEAGUE_SLOTS
+} from './core/constants.ts';
+import type {
+	RosterMoveTeamFigures,
+	RosterMoveTransfer
+} from './core/projection/contracts.ts';
 import { OVERRIDE_REASON_FIELD } from './core/rules/override.ts';
+import { SLOT_LABELS } from './core/rules/roster-import.ts';
+import { describeMoveAmount, transferAttention } from './core/rules/roster-move.ts';
+import type { RosterMoveDelta } from './core/rules/roster-move.ts';
 
 /**
  * One before→after row, as the caller states it.
@@ -198,3 +210,134 @@ export function reasonSheetView(input: ReasonSheetInput): ReasonSheetView {
 		auditFooter: REASON_SHEET_AUDIT_FOOTER
 	};
 }
+
+// --- Story 7.7: the two-Team Roster Move sheet ----------------------------
+
+/**
+ * A Roster Move's before → after, as ROWS (Story 7.7, FR-41, UX-DR39).
+ *
+ * **Rows, not a second component.** `ReasonSheet.svelte` already renders a
+ * list of labelled before → after pairs with an optional consequence sentence
+ * on each, which is exactly what a two-Team sheet is — one row per figure per
+ * Team, labelled with the Team. A parallel two-column component would be a
+ * second sheet to keep in step with the first, and the first is the one the
+ * repo-wide Commissioner-block guard reads.
+ *
+ * **Five figures per Team, in FR-41's own order**: Cap Space, Roster Count,
+ * and the occupancy of all three Slot kinds. Roster Count and Active/Bench
+ * occupancy are the same number by definition (PRD §3) and are both stated
+ * anyway, because the requirement names both and a Commissioner checking a
+ * trade against Fantrax is reading two different columns there.
+ *
+ * **The moved Players are named BETWEEN the two Teams**, which is the whole
+ * reason the sheet is a list rather than a table: the rows read top to bottom
+ * as "this Team, these Players, that Team", and a Player who changes Slot on
+ * arrival carries the consequence sentence FR-41 requires in words before
+ * commit — a Cap Hit rising from $0 to $18,000,000 by the act of moving is
+ * the least obvious thing in this requirement.
+ *
+ * Every amount arrives through `describeAmount`, the core's one money
+ * renderer (AD-8). This module formats nothing itself.
+ */
+function teamFigureRows(
+	before: RosterMoveTeamFigures,
+	after: RosterMoveTeamFigures
+): readonly ReasonSheetRow[] {
+	const label = (figure: string): string => `${after.teamName} · ${figure}`;
+	const occupancy = (held: number, ceiling: number): string =>
+		`${String(held)} of ${String(ceiling)}`;
+	return [
+		{
+			label: label('Cap Space'),
+			// `describeMoveAmount`, never `describeAmount`: an imported Cap Hit is
+			// a real-world salary and the roster importer asserts no money grid
+			// over it, so a Team's Cap Space legitimately sits off the $500,000
+			// grid — and a sheet that answered "an amount that is not on the grid"
+			// would be asking for a commitment against a figure it declines to
+			// print.
+			before: describeMoveAmount(before.capSpace),
+			after: describeMoveAmount(after.capSpace),
+			attention: null
+		},
+		{
+			label: label('Roster Count'),
+			before: String(before.rosterCount),
+			after: String(after.rosterCount),
+			attention: null
+		},
+		{
+			label: label(SLOT_LABELS.active_bench),
+			before: occupancy(before.rosterCount, ACTIVE_BENCH_SLOTS),
+			after: occupancy(after.rosterCount, ACTIVE_BENCH_SLOTS),
+			attention: null
+		},
+		{
+			label: label(SLOT_LABELS.injury_reserve),
+			before: occupancy(before.injuryReserveOccupied, INJURY_RESERVE_SLOTS),
+			after: occupancy(after.injuryReserveOccupied, INJURY_RESERVE_SLOTS),
+			attention: null
+		},
+		{
+			label: label(SLOT_LABELS.minor_league),
+			before: occupancy(before.minorLeagueOccupied, MINOR_LEAGUE_SLOTS),
+			after: occupancy(after.minorLeagueOccupied, MINOR_LEAGUE_SLOTS),
+			attention: null
+		}
+	];
+}
+
+/** One moved Player, named between the two Teams' figures. */
+function transferRow(transfer: RosterMoveTransfer): ReasonSheetRow {
+	return {
+		label: transfer.playerName,
+		before: `${transfer.fromTeamName} · ${SLOT_LABELS[transfer.fromPlacement]}`,
+		after: `${transfer.toTeamName} · ${SLOT_LABELS[transfer.toPlacement]}`,
+		// Every consequence the two states do not show, in one string —
+		// `transferAttention` joins the re-placed Cap Hit and the cleared
+		// contract length, either, both or neither. `null` where there is none:
+		// the amber marker is the product's single attention colour, and a
+		// sheet that marks every row marks nothing.
+		attention: transferAttention(transfer)
+	};
+}
+
+/** Every row a Roster Move's sheet shows, in reading order. */
+export function rosterMoveReasonRows(delta: RosterMoveDelta): readonly ReasonSheetRow[] {
+	return [
+		...teamFigureRows(delta.sendingBefore, delta.sendingAfter),
+		...delta.transfers.map(transferRow),
+		...teamFigureRows(delta.receivingBefore, delta.receivingAfter)
+	];
+}
+
+/**
+ * The act, as one finished sentence — never assembled from a template the
+ * sheet itself holds.
+ *
+ * It names both Teams and counts the Contracts in each direction, because
+ * either direction may be empty and "sends nothing" is the sentence a salary
+ * dump needs to see before it commits (§10 example 36).
+ */
+export function rosterMoveActSentence(delta: RosterMoveDelta): string {
+	const sendingTeam = delta.sendingAfter.teamName;
+	const receivingTeam = delta.receivingAfter.teamName;
+	const out = delta.transfers.filter(
+		(transfer) => transfer.fromTeamId === delta.sendingAfter.teamId
+	);
+	const back = delta.transfers.filter(
+		(transfer) => transfer.fromTeamId === delta.receivingAfter.teamId
+	);
+	const names = (transfers: readonly RosterMoveTransfer[]): string =>
+		transfers.map((transfer) => transfer.playerName).join(', ');
+
+	if (back.length === 0) {
+		return `Record that ${sendingTeam} sends ${names(out)} to ${receivingTeam} and receives nothing back.`;
+	}
+	if (out.length === 0) {
+		return `Record that ${receivingTeam} sends ${names(back)} to ${sendingTeam} and receives nothing back.`;
+	}
+	return `Record that ${sendingTeam} sends ${names(out)} to ${receivingTeam} and receives ${names(back)}.`;
+}
+
+/** The commit control's own words. Never "Confirm" — it names the act. */
+export const ROSTER_MOVE_COMMIT_LABEL = 'Record the Roster Move';

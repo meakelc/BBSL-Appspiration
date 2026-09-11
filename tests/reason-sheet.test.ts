@@ -302,7 +302,7 @@ describe('ReasonSheet.svelte — the surface, asserted against its source', () =
 	});
 });
 
-describe('scope — this story ships the mechanism and no override', () => {
+describe('scope — exactly one override reaches for this mechanism', () => {
 	/** Every source file under `src/`, recursively. */
 	function sources(dir = 'src', found: string[] = []): string[] {
 		for (const entry of readdirSync(join(ROOT, ...dir.split('/')), { withFileTypes: true })) {
@@ -313,15 +313,21 @@ describe('scope — this story ships the mechanism and no override', () => {
 		return found;
 	}
 
-	it('places no override control and emits no override event', () => {
-		// The mechanism ships with ZERO call sites, exactly as
-		// `commissioner-guard.ts` did. The four files this story adds are the
-		// only ones that may name the override guard, the record or the sheet.
+	it('is reached for by the mechanism itself and by one override', () => {
+		// The mechanism shipped with ZERO call sites in Story 7.1, exactly as
+		// `commissioner-guard.ts` did, and Story 7.7 is the first override to
+		// use it (FR-41's Roster Move). The list below is therefore the four
+		// files that OWN the mechanism plus the two that make up that one
+		// override — and it is still an exhaustive list, which is the whole
+		// point: a second override appearing without this test being edited is
+		// a second override nobody reviewed.
 		const owners = [
 			'src/lib/core/rules/override.ts',
 			'src/lib/server/override-guard.ts',
 			'src/lib/reason-sheet-view.ts',
-			'src/lib/components/ReasonSheet.svelte'
+			'src/lib/components/ReasonSheet.svelte',
+			'src/routes/roster-move/+page.server.ts',
+			'src/routes/roster-move/+page.svelte'
 		];
 		const naming = sources().filter((path) =>
 			/buildOverrideRecord|requireOverrideReason|requireOverridablePhase|reasonSheetView|ReasonSheet/.test(
@@ -333,7 +339,7 @@ describe('scope — this story ships the mechanism and no override', () => {
 		expect(naming.sort()).toEqual(owners.sort());
 	});
 
-	it('adds no override route, wherever somebody might have put one', () => {
+	it('adds no override route but the one, wherever somebody might have put it', () => {
 		// Checking only `src/routes/override` proves nothing: the story's own
 		// placement rule is "in place, on the object acted on", so the route an
 		// override would actually get is `/board/void-bid` or
@@ -346,13 +352,18 @@ describe('scope — this story ships the mechanism and no override', () => {
 		);
 		expect(named).toEqual([]);
 
-		// And no route FILE reaches for the mechanism, whatever it is called.
+		// Exactly one route reaches for the mechanism, and it is the Roster Move
+		// (Story 7.7, FR-41) — a global act, so it gets an admin destination of
+		// its own rather than a control placed on an object.
 		const reaching = routeFiles.filter((path) =>
 			/override-guard|rules\/override|reason-sheet-view|ReasonSheet/.test(
 				readFileSync(join(ROOT, ...path.split('/')), 'utf8')
 			)
 		);
-		expect(reaching).toEqual([]);
+		expect(reaching.sort()).toEqual([
+			'src/routes/roster-move/+page.server.ts',
+			'src/routes/roster-move/+page.svelte'
+		]);
 	});
 
 	it('leaves the Epic 1 Commissioner stylesheet free of reason-sheet text', () => {
