@@ -30,7 +30,22 @@
 
 import pg from 'pg';
 
-/** The 13 migrations, in the order `supabase db push` applies them. */
+/**
+ * Every migration this checkout expects, in the order `supabase db push`
+ * applies them.
+ *
+ * Transcribed deliberately rather than read from `supabase/migrations/`: the
+ * point is an INDEPENDENT statement of what should be there, so a file
+ * deleted from the repository still shows up as missing from the database.
+ * Reading the directory would compare the database to itself.
+ *
+ * No count is stated here on purpose. This comment said "13" while three
+ * later migrations existed, and the check passed anyway -- `missing` is
+ * `EXPECTED_MIGRATIONS` minus `applied`, so a version absent from this array
+ * is not required of the database AT ALL. A database missing two migrations
+ * the checkout needed reported PASS and named neither. Add the version here
+ * in the same commit that adds the file.
+ */
 const EXPECTED_MIGRATIONS = [
 	'20260821000000',
 	'20260821010000',
@@ -44,7 +59,10 @@ const EXPECTED_MIGRATIONS = [
 	'20260901000000',
 	'20260902000000',
 	'20260903000000',
-	'20260904000000'
+	'20260904000000',
+	'20260907000000',
+	'20260910000000',
+	'20260911000000'
 ];
 
 /**
@@ -193,7 +211,11 @@ async function checkMigrations(client) {
 		);
 		applied = rows.map((row) => String(row['version']));
 	} catch {
-		record(false, 'All 13 migrations applied', 'supabase_migrations.schema_migrations is unreadable');
+		record(
+			false,
+			`All ${String(EXPECTED_MIGRATIONS.length)} migrations applied`,
+			'supabase_migrations.schema_migrations is unreadable'
+		);
 		return;
 	}
 
