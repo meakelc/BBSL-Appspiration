@@ -28,7 +28,7 @@ The app changes shape four times. Destinations are filtered by phase and role, a
 | Phase | Live destinations |
 |---|---|
 | **Setup** | Sign-in · Import · Minor League Eligibility · Manager registration · Auction-open gate |
-| **Auction** | Your Positions · Bid Board · Auction · Nominate · Teams · Audit Log · Notification settings · *(Commissioner: admin, overrides in place)* |
+| **Auction** | Your Positions · Bid Board · Auction · Nominate · Rearrange roster · Teams · Audit Log · Notification settings · *(Commissioner: admin, overrides in place)* |
 | **Contract Assignment** | Contract Assignment · Teams · Audit Log · *(Commissioner: assignment monitoring, export gate)* |
 | **Archived** | Bid Board (frozen, readable) · Teams · Audit Log · Export (re-downloadable) |
 
@@ -131,6 +131,8 @@ Present on every surface. Recomputes within one second of any Bid, Auction Close
 Visible only to the Commissioner, attached to the object being acted on. Distinguished from Manager controls by four independent differences — never filled, dashed border, its own recessed ground behind a dashed rule, and a persistent *"visible only to you"* label. See [mockups/Commissioner.dc.html](./mockups/Commissioner.dc.html).
 
 **No Commissioner act is ever a single tap.** Every one opens a reason sheet that shows before → after for each affected value including both Clocks, states any non-obvious downstream consequence in words, and requires free text with no default and no skip. The commit control on that sheet is itself dashed — even the confirmation is not a Manager button.
+
+**The converse is not true: not every sheet is a Commissioner act.** The Roster Move (FR-44) is a **Manager** act on their own Team, and it carries a confirmation sheet of its own — same before → after, same consequence-in-words, no reason field, solid commit control. See DESIGN.md's *Manager confirmation sheet*. Conflating the two would put a dashed referee control in the middle of a Manager's ordinary flow, which is exactly what the four differences exist to prevent.
 
 Overrides are refused once the auction is archived. The Commissioner's own Team is subject to every ordinary rule, and the ordinary Manager controls on it behave exactly as they do for anyone else.
 

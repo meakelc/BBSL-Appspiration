@@ -233,10 +233,17 @@ Distinguished from Manager controls by **form, not colour** — colour alone wou
 | Label | None | Persistent *"Commissioner · visible only to you"* in `{colors.admin-text}` |
 | Commit | Confirm step | **Always** a reason sheet — free text, no default, no skip |
 
+*The Manager confirmation sheet below is a different object, not a variant of this row: it confirms without demanding a reason.*
+
 Four independent differences — fill, border style, ground, and a mandatory interstitial. Any one alone would be a colour variant; together they are a different object. See [mockups/Commissioner.dc.html](./mockups/Commissioner.dc.html).
 
 ### Override reason sheet
 Names the act in Georgia. Shows **before → after** for every affected value including both Clocks. States the downstream consequence in words where one exists — voiding a Bid removes its League Clock reset and can end the Auction Phase sooner. Carries an `{colors.attention}` note where the consequence is non-obvious. The reason field is empty on open with no placeholder suggestion. The commit control is itself dashed — even the confirmation is not a Manager button.
+
+### Manager confirmation sheet
+The Manager-side counterpart, and the only sheet in the product that is **not** a Commissioner control. Introduced for the Roster Move (FR-44), which a Manager performs on their own Team. Shows **before → after** for that one Team — Cap Space, Roster Count and all three Slot occupancies — names every moved Contract with both placements and both Cap Hits, and states **the direction Maximum Bid moved, in words**, with an `{colors.attention}` note where it is counterintuitive, which for this act is most of the time. **No reason field:** a Manager's strategic decision is not a referee intervention, and demanding a justification for it would be the product asking a manager to explain himself to himself. The commit control is a **solid** Manager control.
+
+**The two sheets are two components.** A single sheet that grows a dashed border and a reason field when the actor is the Commissioner would collapse the four independent differences the table above exists to maintain — and it would collapse them at the exact moment they matter, when the Commissioner is acting on somebody else's Team.
 
 ### Paused banner
 `{colors.attention}` border on a warm ground, present on every surface, stating that Clocks are stopped, that Bids and Nominations are refused, and that each Clock resumes with exactly the time it held. Carries who paused it, when, and their reason. An outage that looks like an ordinary quiet period is worse than one that announces itself.
