@@ -181,8 +181,8 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 		'example-35-the-trigger-is-a-free-slot.test.ts',
 		'35 — The trigger is a free slot, not a roster count'
 	],
-	// 36-39 and 42 are Story 7.7's Roster Move examples (FR-41), landed with
-	// the `RecordRosterMove` command. 42 sits out of sequence below because
+	// 36-39 and 42 are Story 7.7's Roster Trade examples (FR-41), landed with
+	// the `RecordRosterTrade` command. 42 sits out of sequence below because
 	// 40 and 41 landed first with Story 7.6's rookie-scale designation; Story
 	// 7.8 landed the `RecordDrop` command those two describe, and 43 with it.
 	[

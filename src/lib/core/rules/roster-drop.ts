@@ -27,7 +27,7 @@
  * is exactly what makes the term test a sound proxy for "unelapsed".
  *
  * **It does no arithmetic of its own** (AR-42). Cap and capacity come from
- * `rules/roster-act.ts`, which is the evaluation a Move already runs; this
+ * `rules/roster-act.ts`, which is the evaluation a Trade already runs; this
  * file writes no third statement of solvency, capacity, Cap Space or the
  * charged-Cap-Hit rule.
  *
@@ -43,7 +43,7 @@ import { MINIMUM_BID } from '../constants.ts';
 import { compareMoney, formatExactDollars, parseMoney, subtractMoney } from '../money.ts';
 import type { Money } from '../money.ts';
 import type { OpenAuctions } from '../projection/auctions.ts';
-import type { DroppedContract, RosterMoveTeamFigures } from '../projection/contracts.ts';
+import type { DroppedContract, RosterActTeamFigures } from '../projection/contracts.ts';
 import type { OpenNominations } from '../projection/nominations.ts';
 import { RECORD_DROP_GATES } from '../types.ts';
 import type {
@@ -96,7 +96,7 @@ export const ROOKIE_SCALE_EXEMPT_TERM = 5;
  * One Contract as a Drop can release it.
  *
  * **`value` is the full amount, never the charged one** (AD-23), exactly as
- * a Move's `MovingPlayer` carries it — an imported row stores its salary in
+ * a Trade's `TradingPlayer` carries it — an imported row stores its salary in
  * full whatever Slot it sits in, and what it CHARGES is `chargedCapHit`'s
  * answer about that Slot.
  *
@@ -162,7 +162,7 @@ export type RosterDropState = {
 };
 
 /** One Team's five figures, declared in `projection/contracts.ts` beside the event. */
-export type DropTeamFigures = RosterMoveTeamFigures;
+export type DropTeamFigures = RosterActTeamFigures;
 export type DropRelease = DroppedContract;
 
 /** The whole delta: every released Player, and the Team before and after. */
@@ -176,7 +176,7 @@ export type RosterDropDelta = {
  * Why a Drop was refused.
  *
  * **Four of the five are about the SHAPE of the act and one is about the
- * gates**, which is `RosterMoveRefusal`'s own split: a malformed act has no
+ * gates**, which is `RosterTradeRefusal`'s own split: a malformed act has no
  * arithmetic to show, so the gate results come back `null` rather than as
  * figures computed over a state that could not be built.
  */
@@ -349,7 +349,7 @@ export function evaluateDrop(state: RosterDropState, command: RecordDrop): DropO
 	const before = figuresFor(state.team, state.team.rows);
 
 	// **Releases applied SORTED by `fantraxPlayerId`** (AD-5), exactly as a
-	// Move sorts its arrivals. Nothing in the gates depends on the order — the
+	// Trade sorts its arrivals. Nothing in the gates depends on the order — the
 	// act is evaluated once over the state it produces — but `released[]` is
 	// written verbatim into a permanent `DropRecorded` payload and read back by
 	// the Audit Log, so an order that came from the caller's field order would
@@ -415,7 +415,7 @@ export function evaluateDrop(state: RosterDropState, command: RecordDrop): DropO
  * Whether every gate in `RECORD_DROP_GATES` passed.
  *
  * Iterates the frozen NAME LIST rather than the result object's own keys, for
- * `allMoveGatesPassed`'s reason: a result that somehow lost a key would
+ * `allTradeGatesPassed`'s reason: a result that somehow lost a key would
  * otherwise pass by having nothing to fail, and adding a fourth gate name
  * would silently go unchecked.
  */
@@ -429,7 +429,7 @@ export function allDropGatesPassed(gates: RecordDropGateResults): boolean {
  *
  * **It never offers to cancel a Bid.** FR-40's cancellation trigger is a
  * Close and only a Close, so the remedies this wording states are the two
- * FR-41 allows a Move: wait for the Auction to close, or void the Bid under
+ * FR-41 allows a Trade: wait for the Auction to close, or void the Bid under
  * FR-32.
  *
  * Every failing gate is reported, not the first: a Commissioner told about a

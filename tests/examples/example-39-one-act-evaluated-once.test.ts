@@ -7,10 +7,10 @@
  * > breaches a ceiling. Applied as two acts in the unlucky order — F receives
  * > its two first — F stands transiently at **14** Active/Bench Players and
  * > the ceiling refuses a perfectly legal trade **on a state that never
- * > existed**. This is why FR-41 makes a Move one act with one evaluation at
+ * > existed**. This is why FR-41 makes a Trade one act with one evaluation at
  * > the end, and it is not a convenience.
  *
- * **The counterfactual is the test.** The Move is permitted, and the second
+ * **The counterfactual is the test.** The Trade is permitted, and the second
  * half of this file shows what the other implementation would have done: the
  * arrivals applied before the departures put Team F at Roster Count 14, and
  * that state is refused by the very gate the real evaluation passes. Both
@@ -32,12 +32,12 @@ import { ACTIVE_BENCH_SLOTS } from '../../src/lib/core/constants.ts';
 import { parseMoney } from '../../src/lib/core/money.ts';
 import { INITIAL_AUCTIONS } from '../../src/lib/core/projection/auctions.ts';
 import { INITIAL_NOMINATIONS } from '../../src/lib/core/projection/nominations.ts';
-import { evaluateMove } from '../../src/lib/core/rules/roster-move.ts';
-import type { MovingPlayer, RosterMoveState } from '../../src/lib/core/rules/roster-move.ts';
-import type { RecordRosterMove } from '../../src/lib/core/types.ts';
+import { evaluateTrade } from '../../src/lib/core/rules/roster-trade.ts';
+import type { TradingPlayer, RosterTradeState } from '../../src/lib/core/rules/roster-trade.ts';
+import type { RecordRosterTrade } from '../../src/lib/core/types.ts';
 
 /** `count` Active/Bench Players at $1,000,000 each — the money is not the point. */
-function roster(prefix: string, count: number): MovingPlayer[] {
+function roster(prefix: string, count: number): TradingPlayer[] {
 	return Array.from({ length: count }, (_unused, index) => ({
 		fantraxPlayerId: `${prefix}-${String(index)}`,
 		playerName: `${prefix} ${String(index)}`,
@@ -51,7 +51,7 @@ function roster(prefix: string, count: number): MovingPlayer[] {
 const TEAM_F_ROWS = roster('f', 12);
 const TEAM_G_ROWS = roster('g', 10);
 
-const STATE: RosterMoveState = {
+const STATE: RosterTradeState = {
 	sending: { teamId: 't-f', teamName: 'Team F', rows: TEAM_F_ROWS },
 	receiving: { teamId: 't-g', teamName: 'Team G', rows: TEAM_G_ROWS },
 	// Neither Team leads anything: the example is entirely about capacity.
@@ -62,8 +62,8 @@ const STATE: RosterMoveState = {
 };
 
 /** Three out, two back — one act. */
-const TRADE: RecordRosterMove = {
-	kind: 'RecordRosterMove',
+const TRADE: RecordRosterTrade = {
+	kind: 'RecordRosterTrade',
 	sendingTeamId: 't-f',
 	sendingTeamName: 'Team F',
 	receivingTeamId: 't-g',
@@ -75,7 +75,7 @@ const TRADE: RecordRosterMove = {
 
 describe('§10 example 39 — one act, evaluated once', () => {
 	it('permits the trade: F finishes at 11 and G at 11', () => {
-		const outcome = evaluateMove(STATE, TRADE);
+		const outcome = evaluateTrade(STATE, TRADE);
 
 		expect(outcome.kind).toBe('permitted');
 		if (outcome.kind !== 'permitted') return;
@@ -86,7 +86,7 @@ describe('§10 example 39 — one act, evaluated once', () => {
 	});
 
 	it('moves all five Contracts in ONE act', () => {
-		const outcome = evaluateMove(STATE, TRADE);
+		const outcome = evaluateTrade(STATE, TRADE);
 		expect(outcome.kind).toBe('permitted');
 		if (outcome.kind !== 'permitted') return;
 
@@ -103,7 +103,7 @@ describe('§10 example 39 — one act, evaluated once', () => {
 	});
 
 	it('passes both capacity gates against the state the WHOLE act produced', () => {
-		const outcome = evaluateMove(STATE, TRADE);
+		const outcome = evaluateTrade(STATE, TRADE);
 		expect(outcome.kind).toBe('permitted');
 		if (outcome.kind !== 'permitted') return;
 
@@ -120,7 +120,7 @@ describe('§10 example 39 — one act, evaluated once', () => {
 		// The counterfactual, constructed directly: Team F having received its
 		// two before sending its three. Roster Count 14 — the state the PRD says
 		// a per-direction implementation would judge.
-		const transient: RosterMoveState = {
+		const transient: RosterTradeState = {
 			...STATE,
 			sending: {
 				teamId: 't-f',
@@ -128,10 +128,10 @@ describe('§10 example 39 — one act, evaluated once', () => {
 				rows: [...TEAM_F_ROWS, ...roster('g', 2)]
 			}
 		};
-		// Judged at that moment, even a Move that sends one Player AWAY is
+		// Judged at that moment, even a Trade that sends one Player AWAY is
 		// refused: 13 is still above the ceiling. A perfectly legal trade,
 		// refused on a state that never existed.
-		const judged = evaluateMove(transient, {
+		const judged = evaluateTrade(transient, {
 			...TRADE,
 			sendingPlayerIds: ['f-0'],
 			receivingPlayerIds: []
@@ -144,18 +144,18 @@ describe('§10 example 39 — one act, evaluated once', () => {
 		expect(judged.gates?.sendingSlots.breaches).toEqual(['active_bench']);
 
 		// And the real evaluation of the real act never sees 14 or 13 at all.
-		const real = evaluateMove(STATE, TRADE);
+		const real = evaluateTrade(STATE, TRADE);
 		expect(real.kind).toBe('permitted');
 		if (real.kind !== 'permitted') return;
 		expect(real.gates.sendingSlots.rosterCount).toBe(11);
 	});
 
-	it('refuses a Move that genuinely WOULD leave a Team above the ceiling', () => {
+	it('refuses a Trade that genuinely WOULD leave a Team above the ceiling', () => {
 		// Team G at 10 receiving three while sending nothing finishes at 13.
 		// `unfilledSlots` clamps at zero and `projectedAdditions` is 0, so
 		// FR-37's first branch would admit it: the explicit ceiling test is the
 		// only thing that refuses it.
-		const overFull = evaluateMove(STATE, { ...TRADE, receivingPlayerIds: [] });
+		const overFull = evaluateTrade(STATE, { ...TRADE, receivingPlayerIds: [] });
 
 		expect(overFull.kind).toBe('refused');
 		if (overFull.kind !== 'refused') return;

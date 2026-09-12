@@ -1597,8 +1597,8 @@ function evaluateCap(state: BidState, fantraxPlayerId: string, amount: Money): C
  * the only gate that decides from an amount; every figure below it —
  * Committed Bids, Minors Exposure, Available Cap Space, Projected
  * Active/Bench Additions, Roster Reserve and Maximum Bid — answers "what can
- * this Team still carry", which is a question a Roster Move asks with no
- * amount at all (FR-41). `rules/roster-move.ts` reads `maximumBid` from here
+ * this Team still carry", which is a question a Roster Trade asks with no
+ * amount at all (FR-41). `rules/roster-trade.ts` reads `maximumBid` from here
  * and compares it to nothing but zero, which is the identical test the
  * `unbounded` branch below already makes.
  *
@@ -1609,7 +1609,7 @@ function evaluateCap(state: BidState, fantraxPlayerId: string, amount: Money): C
  * `prospectiveBidIsExempt` is `projectedAdditionsFor`'s `thisBidIsEntry`,
  * widened in DOCUMENTATION and not in behaviour. It is `true` for a
  * Minimum-Bid Contention entry, which projects no Active/Bench addition
- * (FR-18) — and `true` for a Roster Move, which projects none because there
+ * (FR-18) — and `true` for a Roster Trade, which projects none because there
  * is no prospective Bid to project. `evaluateCap` passes `false` and is
  * unchanged.
  */
@@ -1826,7 +1826,7 @@ function evaluateSlots(state: BidState, entry: ContentionGateOutcome['entry']): 
 			? figures.freeActiveBenchSlots >= 1 ||
 				(state.playerIsMinorLeagueEligible && figures.freeMinorLeagueSlots >= 1)
 			: // FR-37's two branches, in the ONE expression `activeBenchCapacityHolds`
-				// holds — read here and read again by `rules/roster-move.ts`, so the
+				// holds — read here and read again by `rules/roster-trade.ts`, so the
 				// two commands cannot drift apart about what a full roster is.
 				activeBenchCapacityHolds(figures),
 		...figures,
@@ -1878,10 +1878,10 @@ export type SlotCapacityFigures = {
  * to cancel the surplus first. §10 example 30 is that counterfactual as
  * arithmetic and §10 example 24 is it in play.
  *
- * **Extracted because a Roster Move asks the identical question** (FR-41).
- * `rules/roster-move.ts` judges two Teams against this expression with no Bid
+ * **Extracted because a Roster Trade asks the identical question** (FR-41).
+ * `rules/roster-trade.ts` judges two Teams against this expression with no Bid
  * anywhere in sight, and a character-for-character second copy of it is the
- * one thing that could let a Move admit a roster a Bid would be refused for.
+ * one thing that could let a Trade admit a roster a Bid would be refused for.
  * The cap side avoided the same duplication by reading `maximumBid` off
  * `teamSolvencyFiguresFor`; this is the capacity side's equivalent.
  *

@@ -1,14 +1,14 @@
 /**
- * The post-act evaluation a Roster Move and a Drop share (Stories 7.7, 7.8,
+ * The post-act evaluation a Roster Trade and a Drop share (Stories 7.7, 7.8,
  * FR-41, FR-43, AR-42).
  *
- * **One act, two commands, one judgement.** A Move and a Drop are different
+ * **One act, two commands, one judgement.** A Trade and a Drop are different
  * acts — two Teams against one, a transfer against a release — but they are
  * judged the identical way: apply the whole act, derive one Team's five
  * figures from the rows it is left holding, and hand that state to the SAME
  * two derivations the bidding gates read (`teamSolvencyFiguresFor` for the
  * money and `slotCapacityFiguresFor` for the capacity). Everything in this
- * module was `rules/roster-move.ts`'s when a Move was the only such act; it
+ * module was `rules/roster-trade.ts`'s when a Trade was the only such act; it
  * moved here the moment a second one needed it, which is the same extraction
  * Story 7.7 made on `bidding.ts` rather than write a parallel copy.
  *
@@ -19,13 +19,14 @@
  * judged by a rule no Bid is judged by.
  *
  * **The extraction moved code and changed no gate's answer.** Every
- * expression below is verbatim what `evaluateMoveCap` and `evaluateMoveSlots`
- * held, down to the `isContentionEntry: true` argument and the three explicit
- * ceiling tests, and the Move's own tests are the statement of that.
+ * expression below is verbatim what the Trade's own cap and slots gates held
+ * before the extraction, down to the `isContentionEntry: true` argument and
+ * the three explicit ceiling tests, and the Trade's own tests are the
+ * statement of that.
  *
  * **The shapes are structural and minimal on purpose.** `ActingRow` asks for
- * the four facts the figures and the charge are computed from, so a Move's
- * `MovingPlayer` and a Drop's `DroppablePlayer` both satisfy it while each
+ * the four facts the figures and the charge are computed from, so a Trade's
+ * `TradingPlayer` and a Drop's `DroppablePlayer` both satisfy it while each
  * keeps the extra fields only its own act reads. Nothing here knows which
  * command it is serving, which is what stops a per-command branch from ever
  * appearing in a shared gate.
@@ -46,14 +47,14 @@ import {
 import type { Money } from '../money.ts';
 import { auctionForPlayer } from '../projection/auctions.ts';
 import type { OpenAuctions } from '../projection/auctions.ts';
-import type { RosterMoveTeamFigures } from '../projection/contracts.ts';
+import type { RosterActTeamFigures } from '../projection/contracts.ts';
 import { nominationForPlayer } from '../projection/nominations.ts';
 import type { OpenNominations } from '../projection/nominations.ts';
 import type {
 	ContestedPlayer,
-	MoveCapGateOutcome,
-	MoveLeadingAuction,
-	MoveSlotsGateOutcome,
+	ActCapGateOutcome,
+	ActLeadingAuction,
+	ActSlotsGateOutcome,
 	RosterSlotKind
 } from '../types.ts';
 import {
@@ -81,7 +82,7 @@ export const NO_MONEY: Money = parseMoney(0);
  * Contract is worth — and what it CHARGES is `chargedCapHit`'s answer about
  * the Slot it is in.
  *
- * Structural and minimal, so each act's own row type can carry more: a Move
+ * Structural and minimal, so each act's own row type can carry more: a Trade
  * needs `won` and an assigned length, a Drop needs the imported term and the
  * rookie-scale round, and neither belongs to this module.
  */
@@ -149,7 +150,7 @@ export function movable(row: { readonly rosterSlotKind: RosterSlotKind }): boole
 }
 
 /** One Team's five figures, derived from the rows it holds and nothing else. */
-export function figuresFor(team: ActingTeam, rows: readonly ActingRow[]): RosterMoveTeamFigures {
+export function figuresFor(team: ActingTeam, rows: readonly ActingRow[]): RosterActTeamFigures {
 	let rosterCount = 0;
 	let injuryReserveOccupied = 0;
 	let minorLeagueOccupied = 0;
@@ -193,14 +194,14 @@ export function minorsOccupiedIn(rows: readonly ActingRow[]): number {
  */
 export function postActMoneyStateFor(
 	team: ActingTeam,
-	after: RosterMoveTeamFigures,
+	after: RosterActTeamFigures,
 	state: ActMoneyInputs
 ): TeamMoneyState {
 	return teamMoneyStateFor({
 		teamId: team.teamId,
 		// **No Auction is excluded**, and that is the difference from a Bid: a
 		// Bid excludes the Auction it is being placed on because the post-bid
-		// basis adds it back once. A Move places no Bid and neither does a
+		// basis adds it back once. A Trade places no Bid and neither does a
 		// Drop, so every Auction this Team leads counts exactly as it stands.
 		// The empty id names no Player.
 		fantraxPlayerId: '',
@@ -222,7 +223,7 @@ export function postActMoneyStateFor(
  * Slot it freed costs $1,000,000 to reserve — and §10 example 40 is the same
  * arithmetic reached by releasing a Player rather than trading one.
  */
-export function evaluateActCap(team: ActingTeam, money: TeamMoneyState): MoveCapGateOutcome {
+export function evaluateActCap(team: ActingTeam, money: TeamMoneyState): ActCapGateOutcome {
 	const figures = teamSolvencyFiguresFor(
 		// No Auction, no prospective Player, and the phase is not a gate this
 		// evaluation reads — `requireOverridablePhase` and the destination
@@ -243,7 +244,7 @@ export function evaluateActCap(team: ActingTeam, money: TeamMoneyState): MoveCap
 	}
 
 	const passed = compareMoney(figures.maximumBid, NO_MONEY) >= 0;
-	const leadingAuctions: MoveLeadingAuction[] = [...money.leading, ...money.eligibleLeading]
+	const leadingAuctions: ActLeadingAuction[] = [...money.leading, ...money.eligibleLeading]
 		.map((lead) => ({
 			fantraxPlayerId: lead.fantraxPlayerId,
 			playerName: lead.playerName,
@@ -281,9 +282,9 @@ export function evaluateActCap(team: ActingTeam, money: TeamMoneyState): MoveCap
 /** A roster act's capacity gate, over one Team's post-act figures. */
 export function evaluateActSlots(
 	team: ActingTeam,
-	after: RosterMoveTeamFigures,
+	after: RosterActTeamFigures,
 	money: TeamMoneyState
-): MoveSlotsGateOutcome {
+): ActSlotsGateOutcome {
 	// **`isContentionEntry: true`, and it is the same choice `prospectiveBidIsExempt`
 	// makes on the money side, for the same reason.** A roster act places no
 	// Bid, so nothing may be projected for one — and `true` is what says so
@@ -366,7 +367,7 @@ export function inWords(items: readonly string[]): string {
 }
 
 /** The Auctions a Team leads, named — or the stated absence of any. */
-export function auctionsInWords(gate: MoveCapGateOutcome): string {
+export function auctionsInWords(gate: ActCapGateOutcome): string {
 	if (gate.leadingAuctions.length === 0) return 'It leads no open Auction.';
 	const named = gate.leadingAuctions.map(
 		(auction) => `${auction.playerName} at ${describeAmount(auction.amount)}`

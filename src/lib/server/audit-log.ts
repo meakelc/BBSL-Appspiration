@@ -168,7 +168,7 @@ async function loadManagerNames(
  *
  * A Player nominated out of the pool and won moves from `free_agent_players`
  * to `team_rosters`, so neither table alone answers for a whole Log: the
- * nomination names a Player the roster now holds, and a Roster Move names a
+ * nomination names a Player the roster now holds, and a Roster Trade names a
  * Player who was never in this offseason's pool. A `union all` asks both in
  * one round trip, and the pool row wins on a collision only because it is read
  * first — the two tables carry the same `player_name` for the same id.

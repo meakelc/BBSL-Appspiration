@@ -57,7 +57,7 @@ import {
 import {
 	CONTRACT_LENGTH_ASSIGNED_EVENT,
 	DROP_RECORDED_EVENT,
-	ROSTER_MOVE_RECORDED_EVENT
+	ROSTER_TRADE_RECORDED_EVENT
 } from '../../src/lib/core/projection/contracts.ts';
 import { MINOR_LEAGUE_ELIGIBILITY_SET } from '../../src/lib/core/projection/eligibility.ts';
 import { ASSIGNMENTS_SUBMITTED_EVENT } from '../../src/lib/core/projection/assignments.ts';
@@ -93,9 +93,9 @@ import type { ImportPromotedPayload } from '../../src/lib/server/import-promotio
 import type {
 	ContractLengthAssignedPayload,
 	DropRecordedPayload,
-	RosterMoveRecordedPayload,
-	RosterMoveTeamFigures,
-	RosterMoveTransfer
+	RosterTradeRecordedPayload,
+	RosterActTeamFigures,
+	RosterTradeTransfer
 } from '../../src/lib/core/projection/contracts.ts';
 import type { MinorLeagueEligibilitySetPayload } from '../../src/lib/core/projection/eligibility.ts';
 import type { AssignmentsSubmittedPayload } from '../../src/lib/core/projection/assignments.ts';
@@ -295,7 +295,7 @@ const CONTRACT_LENGTH_ASSIGNED: ContractLengthAssignedPayload = {
 	contractYears: 3
 };
 
-const FIGURES = (teamId: string, teamName: string, capSpace: number): RosterMoveTeamFigures => ({
+const FIGURES = (teamId: string, teamName: string, capSpace: number): RosterActTeamFigures => ({
 	teamId,
 	teamName,
 	capSpace: money(capSpace),
@@ -304,7 +304,7 @@ const FIGURES = (teamId: string, teamName: string, capSpace: number): RosterMove
 	minorLeagueOccupied: 2
 });
 
-const TRANSFER: RosterMoveTransfer = {
+const TRANSFER: RosterTradeTransfer = {
 	fantraxPlayerId: PLAYER_ONE,
 	playerName: 'Jalen Green',
 	fromTeamId: TEAM_A,
@@ -320,7 +320,7 @@ const TRANSFER: RosterMoveTransfer = {
 	clearedContractYears: 2
 };
 
-const ROSTER_MOVE: RosterMoveRecordedPayload = {
+const ROSTER_TRADE: RosterTradeRecordedPayload = {
 	sendingTeamId: TEAM_A,
 	sendingTeamName: 'Lakers',
 	receivingTeamId: TEAM_B,
@@ -432,7 +432,7 @@ function everyKnownEvent(): AppendedEvent[] {
 			team: null
 		}),
 		event(CONTRACT_LENGTH_ASSIGNED_EVENT, CONTRACT_LENGTH_ASSIGNED),
-		event(ROSTER_MOVE_RECORDED_EVENT, ROSTER_MOVE),
+		event(ROSTER_TRADE_RECORDED_EVENT, ROSTER_TRADE),
 		event(DROP_RECORDED_EVENT, DROP),
 		event(MINOR_LEAGUE_ELIGIBILITY_SET, ELIGIBILITY_SET),
 		event(ASSIGNMENTS_SUBMITTED_EVENT, ASSIGNMENTS_SUBMITTED),
@@ -543,14 +543,18 @@ describe('a draw', () => {
 	});
 });
 
-describe('a Roster Move', () => {
+describe('a Roster Trade', () => {
 	it('is one entry carrying both Teams’ figures, the Players and the reason', () => {
-		const entry = only([event(ROSTER_MOVE_RECORDED_EVENT, ROSTER_MOVE)]);
+		const entry = only([event(ROSTER_TRADE_RECORDED_EVENT, ROSTER_TRADE)]);
 		const text = rendered(entry);
 
+		// Story 7.10: the renderer is keyed by `ROSTER_TRADE_RECORDED_EVENT`,
+		// whose value is still the pre-rename wire string — so an entry folded
+		// from history written before the rename renders under the NEW label.
+		expect(entry.typeLabel).toBe('Roster Trade recorded');
 		expect(entry.headline).toContain('Lakers');
 		expect(entry.headline).toContain('Celtics');
-		expect(text).toContain(ROSTER_MOVE.reason);
+		expect(text).toContain(ROSTER_TRADE.reason);
 		expect(text).toContain('Jalen Green');
 		// The `won` distinction FR-41 requires be visible.
 		expect(text).toContain('Auction Contract');

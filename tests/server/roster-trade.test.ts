@@ -1,5 +1,5 @@
 /**
- * `recordRosterMove` — the one transaction, the `UPDATE`, and the silence
+ * `recordRosterTrade` — the one transaction, the `UPDATE`, and the silence
  * (Story 7.7, FR-41).
  *
  * Three claims this file exists to hold, none of which is visible from the
@@ -12,10 +12,10 @@
  *     all — and a failure between them leaves him there permanently.
  *  2. **One transaction, under the global lock.** Lock before any read (AD-6),
  *     event and rows inside the same `begin`…`commit`, and a refusal rolls
- *     back with nothing written — FR-41's "a Move that moved three Players of
+ *     back with nothing written — FR-41's "a Trade that moved three Players of
  *     five is never a reachable state".
- *  3. **Nothing on the outbox.** A Roster Move is the one Commissioner act
- *     that is not broadcast, and `recordRosterMove` passes no `enqueue` at
+ *  3. **Nothing on the outbox.** A Roster Trade is the one Commissioner act
+ *     that is not broadcast, and `recordRosterTrade` passes no `enqueue` at
  *     all — so the claim is structural rather than a setting.
  *
  * The stateful fake `ConnectionGateway` is `tests/server/auction-open.test.ts`'s:
@@ -30,10 +30,10 @@ import { describe, expect, it } from 'vitest';
 
 import { CORE_VERSION } from '../../src/lib/core/constants.ts';
 import { AUCTION_CLOSED_EVENT } from '../../src/lib/core/projection/nominations.ts';
-import { ROSTER_MOVE_RECORDED_EVENT } from '../../src/lib/core/projection/contracts.ts';
-import type { RosterMoveRecordedPayload } from '../../src/lib/core/projection/contracts.ts';
-import { MOVE_ROSTER_ROW_SQL, recordRosterMove } from '../../src/lib/server/roster-move.ts';
-import type { RosterMoveRejection } from '../../src/lib/server/roster-move.ts';
+import { ROSTER_TRADE_RECORDED_EVENT } from '../../src/lib/core/projection/contracts.ts';
+import type { RosterTradeRecordedPayload } from '../../src/lib/core/projection/contracts.ts';
+import { TRADE_ROSTER_ROW_SQL, recordRosterTrade } from '../../src/lib/server/roster-trade.ts';
+import type { RosterTradeRejection } from '../../src/lib/server/roster-trade.ts';
 import type {
 	ConnectionGateway,
 	QueryResultRow,
@@ -198,11 +198,11 @@ const INPUT = {
 	reason: 'Agreed in the league channel on the 10th.'
 };
 
-describe('recordRosterMove — one transaction, one UPDATE per row, and no outbox', () => {
+describe('recordRosterTrade — one transaction, one UPDATE per row, and no outbox', () => {
 	it('moves an Existing Contract by UPDATE, never by delete-then-insert', async () => {
 		const harness = fakeGateway({ rosters: ROSTERS, teams: TEAMS });
 
-		const outcome = await recordRosterMove(harness.gateway, ACTOR, INPUT, 'desktop');
+		const outcome = await recordRosterTrade(harness.gateway, ACTOR, INPUT, 'desktop');
 
 		expect(outcome.kind).toBe('accepted');
 		const moves = harness.statements.filter((statement) =>
@@ -211,7 +211,7 @@ describe('recordRosterMove — one transaction, one UPDATE per row, and no outbo
 		expect(moves).toHaveLength(2);
 		// The statement itself, verbatim — one `UPDATE`, keyed on the Player,
 		// setting the Team and the Slot and nothing else.
-		expect(moves[0]?.sql).toBe(MOVE_ROSTER_ROW_SQL);
+		expect(moves[0]?.sql).toBe(TRADE_ROSTER_ROW_SQL);
 		expect(moves[0]?.sql).toMatch(
 			/^update team_rosters set team_id = \$2, roster_slot_kind = \$3 where fantrax_player_id = \$1$/
 		);
@@ -231,7 +231,7 @@ describe('recordRosterMove — one transaction, one UPDATE per row, and no outbo
 	it('runs ONE transaction: lock before any read, rows inside, then commit', async () => {
 		const harness = fakeGateway({ rosters: ROSTERS, teams: TEAMS });
 
-		await recordRosterMove(harness.gateway, ACTOR, INPUT, 'desktop');
+		await recordRosterTrade(harness.gateway, ACTOR, INPUT, 'desktop');
 
 		expect(harness.order).toEqual([
 			'begin',
@@ -248,15 +248,15 @@ describe('recordRosterMove — one transaction, one UPDATE per row, and no outbo
 		]);
 		expect(harness.state.committed).toBe(true);
 		expect(harness.state.released).toBe(1);
-		// Exactly one `begin` and one `commit`: a Move is never two transactions.
+		// Exactly one `begin` and one `commit`: a Trade is never two transactions.
 		expect(harness.order.filter((step) => step === 'begin')).toHaveLength(1);
 		expect(harness.order.filter((step) => step === 'commit')).toHaveLength(1);
 	});
 
-	it('writes NO outbox row — a Roster Move is not broadcast', async () => {
+	it('writes NO outbox row — a Roster Trade is not broadcast', async () => {
 		const harness = fakeGateway({ rosters: ROSTERS, teams: TEAMS });
 
-		const outcome = await recordRosterMove(harness.gateway, ACTOR, INPUT, 'desktop');
+		const outcome = await recordRosterTrade(harness.gateway, ACTOR, INPUT, 'desktop');
 
 		expect(outcome.kind).toBe('accepted');
 		// The fake throws on any statement it does not recognise, and
@@ -270,17 +270,17 @@ describe('recordRosterMove — one transaction, one UPDATE per row, and no outbo
 	it('appends ONE event carrying the whole delta — both Teams, before and after', async () => {
 		const harness = fakeGateway({ rosters: ROSTERS, teams: TEAMS });
 
-		await recordRosterMove(harness.gateway, ACTOR, INPUT, 'desktop');
+		await recordRosterTrade(harness.gateway, ACTOR, INPUT, 'desktop');
 
 		expect(harness.appendedEvents).toHaveLength(1);
 		const appended = harness.appendedEvents[0];
-		expect(appended?.['event_type']).toBe(ROSTER_MOVE_RECORDED_EVENT);
+		expect(appended?.['event_type']).toBe(ROSTER_TRADE_RECORDED_EVENT);
 		expect(appended?.['core_version']).toBe(CORE_VERSION);
 		// The actor rides the envelope, never the payload's own field.
 		expect(appended?.['manager_id']).toBe('m-commissioner');
 		expect(appended?.['device_class']).toBe('desktop');
 
-		const payload = appended?.['payload'] as RosterMoveRecordedPayload;
+		const payload = appended?.['payload'] as RosterTradeRecordedPayload;
 		expect(payload.sendingTeamName).toBe('Team J');
 		expect(payload.receivingTeamName).toBe('Team K');
 		expect(payload.reason).toBe(INPUT.reason);
@@ -312,7 +312,7 @@ describe('recordRosterMove — one transaction, one UPDATE per row, and no outbo
 		];
 		const harness = fakeGateway({ rosters: full, teams: TEAMS });
 
-		const outcome = await recordRosterMove(
+		const outcome = await recordRosterTrade(
 			harness.gateway,
 			ACTOR,
 			{ ...INPUT, receivingPlayerIds: [] },
@@ -321,7 +321,7 @@ describe('recordRosterMove — one transaction, one UPDATE per row, and no outbo
 
 		expect(outcome.kind).toBe('rejected');
 		if (outcome.kind !== 'rejected') return;
-		const rejection = outcome.reason as RosterMoveRejection;
+		const rejection = outcome.reason as RosterTradeRejection;
 		expect(rejection.refusal.kind).toBe('gates');
 		expect(rejection.gates?.receivingSlots.passed).toBe(false);
 		// The Team, the gate and the arithmetic, in the sentence the core wrote.
@@ -361,7 +361,7 @@ describe('recordRosterMove — one transaction, one UPDATE per row, and no outbo
 		};
 		const harness = fakeGateway({ rosters: [], teams: TEAMS, events: [close] });
 
-		const outcome = await recordRosterMove(
+		const outcome = await recordRosterTrade(
 			harness.gateway,
 			ACTOR,
 			{ ...INPUT, sendingPlayerIds: ['p-won'], receivingPlayerIds: [] },
@@ -371,7 +371,7 @@ describe('recordRosterMove — one transaction, one UPDATE per row, and no outbo
 		expect(outcome.kind).toBe('accepted');
 		expect(harness.order.filter((step) => step === 'move-row')).toHaveLength(0);
 
-		const payload = harness.appendedEvents[0]?.['payload'] as RosterMoveRecordedPayload;
+		const payload = harness.appendedEvents[0]?.['payload'] as RosterTradeRecordedPayload;
 		expect(payload.transfers[0]?.won).toBe(true);
 		expect(payload.transfers[0]?.toTeamId).toBe('t-k');
 	});

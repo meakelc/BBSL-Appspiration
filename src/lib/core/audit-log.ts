@@ -66,7 +66,7 @@ import { AUCTION_OPENED_EVENT, CONTRACT_ASSIGNMENT_OPENED_EVENT } from './projec
 import {
 	CONTRACT_LENGTH_ASSIGNED_EVENT,
 	DROP_RECORDED_EVENT,
-	ROSTER_MOVE_RECORDED_EVENT
+	ROSTER_TRADE_RECORDED_EVENT
 } from './projection/contracts.ts';
 import { MINOR_LEAGUE_ELIGIBILITY_SET } from './projection/eligibility.ts';
 import { ASSIGNMENTS_SUBMITTED_EVENT } from './projection/assignments.ts';
@@ -343,7 +343,7 @@ function playersNamed(refs: AuditReferences, playerIds: readonly string[]): stri
  * names, whether or not the sentence spells them out. They are what the two
  * id filters match on, which is why a Team released by a dissolution finds
  * that row under its own filter exactly as a Team on either side of a Roster
- * Move finds that one.
+ * Trade finds that one.
  */
 type AuditRender = {
 	readonly headline: string;
@@ -682,7 +682,7 @@ function renderContractLengthAssigned(payload: Payload, refs: AuditReferences): 
 }
 
 /**
- * One `RosterMoveTeamFigures` pair — `projection/contracts.ts:444-463`.
+ * One `RosterActTeamFigures` pair — `projection/contracts.ts:452-471`.
  *
  * FR-41's "before-state and after-state for both Teams" is these figures per
  * side, and every one of them renders as `before → after` on one row so nobody
@@ -713,7 +713,7 @@ function figureRows(label: string, before: Payload, after: Payload): readonly Au
 }
 
 /**
- * One `RosterMoveTransfer` — `projection/contracts.ts:418`.
+ * One `RosterTradeTransfer` — `projection/contracts.ts:426`.
  *
  * NOT an event type of its own: it is an element of `RosterMoveRecorded`'s
  * `transfers`, and the Code Map lists it separately because its fields must
@@ -721,7 +721,7 @@ function figureRows(label: string, before: Payload, after: Payload): readonly Au
  * distinction the epic requires be visible, so it is WORDED rather than shown
  * as a boolean; `fromPlacement`/`toPlacement` are `RosterSlotKind` tokens and
  * are worded; `winningAmount` stands beside the two CHARGED cap hits unchanged
- * (AD-23), and `clearedContractYears` states what the Move cleared.
+ * (AD-23), and `clearedContractYears` states what the Trade cleared.
  */
 function transferRow(transfer: Payload, refs: AuditReferences): AuditDetail {
 	const player = playerNamed(refs, text(transfer, 'fantraxPlayerId'), text(transfer, 'playerName'));
@@ -751,14 +751,14 @@ function transferRow(transfer: Payload, refs: AuditReferences): AuditDetail {
 }
 
 /**
- * `RosterMoveRecorded` — `projection/contracts.ts:465`.
+ * `RosterMoveRecorded` — `projection/contracts.ts:473`.
  *
- * ONE entry, not two: `projection/contracts.ts:453-463` states that this
+ * ONE entry, not two: `projection/contracts.ts:461-471` states that this
  * payload IS the audit entry, and both Teams' figures sit on it precisely so a
- * Move reads as one act. FR-41 deliberately does not broadcast a Move to
+ * Trade reads as one act. FR-41 deliberately does not broadcast a Trade to
  * Discord, which is what makes this the only surface it can be looked up on.
  */
-function renderRosterMove(payload: Payload, refs: AuditReferences): AuditRender {
+function renderRosterTrade(payload: Payload, refs: AuditReferences): AuditRender {
 	const sendingTeamId = text(payload, 'sendingTeamId');
 	const receivingTeamId = text(payload, 'receivingTeamId');
 	const sending = teamNamed(refs, sendingTeamId, text(payload, 'sendingTeamName'));
@@ -766,7 +766,7 @@ function renderRosterMove(payload: Payload, refs: AuditReferences): AuditRender 
 	const transfers = payloadList(payload, 'transfers');
 
 	return {
-		headline: `${sending} and ${receiving} recorded a Roster Move.`,
+		headline: `${sending} and ${receiving} recorded a Roster Trade.`,
 		details: [
 			// The Commissioner's stated reason, verbatim and first — it is what
 			// FR-41 requires the record carry, and the first thing a reader wants.
@@ -1062,9 +1062,9 @@ const RENDERERS: Readonly<Record<string, AuditEntry>> = Object.freeze({
 		label: 'Contract length assigned',
 		render: renderContractLengthAssigned
 	},
-	[ROSTER_MOVE_RECORDED_EVENT]: {
-		label: 'Roster Move recorded',
-		render: renderRosterMove
+	[ROSTER_TRADE_RECORDED_EVENT]: {
+		label: 'Roster Trade recorded',
+		render: renderRosterTrade
 	},
 	// `RENDERERS` is OPEN — an absent key falls back to the envelope plus the
 	// raw payload — so a missing entry here is not a compile error but a
@@ -1136,7 +1136,7 @@ const OVERRIDE_FIELD_COLLISION_SUFFIX = ' (overridden field)';
  * labels.
  *
  * `RosterMoveRecorded` is the case that makes this load-bearing:
- * `RosterMoveRecordedPayload` declares a top-level `reason`, the Roster Move
+ * `RosterTradeRecordedPayload` declares a top-level `reason`, the Roster Trade
  * renderer files it as its first row, and this merge reads the SAME key off the
  * same payload. Without this check the Commissioner's reason prints twice on
  * the one event type FR-41 makes this whole surface exist for — and twice in

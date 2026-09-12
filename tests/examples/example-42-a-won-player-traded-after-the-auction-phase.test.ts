@@ -12,7 +12,7 @@
  * > its 4-year and 3-year, so it assigns a 1-year, which is always available
  * > because 1-year deals are unlimited. **A receiving Team can therefore
  * > never be trapped**, which is why FR-41 clears the length rather than
- * > refusing the Move.
+ * > refusing the Trade.
  *
  * **The fold is the test.** An Auction Contract has no row anywhere — it is
  * `contractsReducer`'s output — so this file drives the reducer over a log
@@ -38,7 +38,7 @@ import { parseMoney } from '../../src/lib/core/money.ts';
 import {
 	CONTRACT_LENGTH_ASSIGNED_EVENT,
 	INITIAL_CONTRACTS,
-	ROSTER_MOVE_RECORDED_EVENT,
+	ROSTER_TRADE_RECORDED_EVENT,
 	contractForPlayer,
 	contractsReducer,
 	contractsWonBy
@@ -91,8 +91,8 @@ const ASSIGN = event(CONTRACT_LENGTH_ASSIGNED_EVENT, {
 	contractYears: 3
 });
 
-/** The Move: Powell to Team K, who has an Active/Bench Slot for him. */
-const MOVE = event(ROSTER_MOVE_RECORDED_EVENT, {
+/** The Trade: Powell to Team K, who has an Active/Bench Slot for him. */
+const TRADE = event(ROSTER_TRADE_RECORDED_EVENT, {
 	sendingTeamId: 't-j',
 	sendingTeamName: 'Team J',
 	receivingTeamId: 't-k',
@@ -149,7 +149,7 @@ const MOVE = event(ROSTER_MOVE_RECORDED_EVENT, {
 	reason: 'J and K agreed the trade in the league channel.'
 });
 
-const LOG: readonly AppendedEvent[] = [CLOSE, ASSIGN, MOVE];
+const LOG: readonly AppendedEvent[] = [CLOSE, ASSIGN, TRADE];
 
 /** How many of a Team's folded lengths are 3-year deals. */
 function threeYearsSpentBy(
@@ -162,7 +162,7 @@ function threeYearsSpentBy(
 }
 
 describe('§10 example 42 — a won Player traded after the Auction Phase', () => {
-	it('spends the 3-year allotment before the Move', () => {
+	it('spends the 3-year allotment before the Trade', () => {
 		const before = fold(INITIAL_CONTRACTS, [CLOSE, ASSIGN], contractsReducer);
 		const powell = contractForPlayer(before, 'p-powell');
 
@@ -171,7 +171,7 @@ describe('§10 example 42 — a won Player traded after the Auction Phase', () =
 		expect(threeYearsSpentBy(before, 't-j')).toBe(1);
 	});
 
-	it('CLEARS the assigned length on the Move', () => {
+	it('CLEARS the assigned length on the Trade', () => {
 		const after = fold(INITIAL_CONTRACTS, LOG, contractsReducer);
 		const powell = contractForPlayer(after, 'p-powell');
 
@@ -196,7 +196,7 @@ describe('§10 example 42 — a won Player traded after the Auction Phase', () =
 		expect(powell?.teamName).toBe('Team K');
 		expect(powell?.placement).toBe('active_bench');
 		expect(powell?.capHit).toBe(parseMoney(9_000_000));
-		// A Move is not a restructure: the Contract travels unchanged in value.
+		// A Trade is not a restructure: the Contract travels unchanged in value.
 		expect(powell?.winningAmount).toBe(parseMoney(9_000_000));
 		expect(powell?.contractYears).toBeNull();
 		expect(contractsWonBy(after, 't-k')).toHaveLength(1);
@@ -222,12 +222,12 @@ describe('§10 example 42 — a won Player traded after the Auction Phase', () =
 		const once = fold(INITIAL_CONTRACTS, LOG, contractsReducer);
 		const twice = fold(INITIAL_CONTRACTS, [...LOG, ...LOG], contractsReducer);
 
-		// Latest-transfer-wins, so a repeated Move lands him on the same Team
+		// Latest-transfer-wins, so a repeated Trade lands him on the same Team
 		// rather than bouncing him back.
 		expect(contractForPlayer(twice, 'p-powell')).toEqual(contractForPlayer(once, 'p-powell'));
 	});
 
-	it('folds an assignment the sending Team makes AFTER the Move onto nobody', () => {
+	it('folds an assignment the sending Team makes AFTER the Trade onto nobody', () => {
 		// The guard `contractsReducer` already holds: a length may only land on
 		// a contract the naming Team holds, and Team J does not hold this one.
 		const lateAssign = event(CONTRACT_LENGTH_ASSIGNED_EVENT, {

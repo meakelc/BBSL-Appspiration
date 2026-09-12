@@ -26,7 +26,7 @@
  * at both ends.
  *
  * **No `enqueue`.** A Drop is not broadcast to Discord — it is recorded in
- * the league-visible Audit Log instead, exactly as a Roster Move is. Being
+ * the league-visible Audit Log instead, exactly as a Roster Trade is. Being
  * off Discord is therefore a property of this file's shape rather than a
  * setting somebody could flip.
  *
@@ -114,7 +114,7 @@ export type RosterDropInput = {
  * and — for a gate refusal — the figures it was judged against.
  *
  * `gates` is `null` for the refusals decided outside the gate set, exactly as
- * `RosterMoveRejection.gates` is: a malformed act has no arithmetic to show.
+ * `RosterTradeRejection.gates` is: a malformed act has no arithmetic to show.
  */
 export type RosterDropRejection = {
 	readonly refusal: RosterDropRefusal;
@@ -142,7 +142,7 @@ function rejectionFor(outcome: Extract<DropOutcome, { kind: 'refused' }>): Roste
  * One Team's rows as the core drops them — the roster read, with the won
  * rows marked so the core can refuse them.
  *
- * **A Drop does NOT need the contracts join a Move needs.** A Move recovers
+ * **A Drop does NOT need the contracts join a Trade needs.** A Trade recovers
  * `winningAmount` because a won stash charging `$0` must arrive on the next
  * Team charging its full value; a Drop releases a won Player over nothing at
  * all, because `evaluateDrop` refuses him outright. `row.capHit` is therefore
@@ -178,7 +178,7 @@ function droppingTeamFor(teamId: string, teamName: string, detail: TeamRosterDet
  * about which events they saw.
  *
  * The same function serves the route's own `load` and the locked transaction,
- * `loadRosterMoveState`'s discipline: the sheet and the gate cannot disagree
+ * `loadRosterTradeState`'s discipline: the sheet and the gate cannot disagree
  * about what the log says, only about when they read it.
  */
 export async function loadRosterDropState(
@@ -209,7 +209,7 @@ export async function loadRosterDropState(
 			nominations,
 			isMinorLeagueEligible: (playerId) => isEligible(eligibility, playerId),
 			// The Player's name from the fold that already holds it, exactly as
-			// `loadRosterMoveState` sources it. A Player under contract has no
+			// `loadRosterTradeState` sources it. A Player under contract has no
 			// open nomination, so the id is the honest fallback rather than an
 			// invented name.
 			playerNameFor: (playerId) =>

@@ -1,5 +1,5 @@
 <script lang="ts">
-	// The Commissioner-only Roster Move surface (Story 7.7, FR-41, UX-DR39).
+	// The Commissioner-only Roster Trade surface (Story 7.7, FR-41, UX-DR39).
 	//
 	// **Three steps, each of them ordinary navigation.** Pick the two Teams,
 	// pick the Players from each roster, then read the sheet and commit. The
@@ -12,12 +12,12 @@
 	// **It words nothing.** The act sentence, every before → after row and
 	// every consequence sentence arrive already worded by `reason-sheet-view`
 	// and the pure core; the refusal sentence arrives from
-	// `rosterMoveRefusalDetail` through the server. `vite.config.ts` pins
+	// `rosterTradeRefusalDetail` through the server. `vite.config.ts` pins
 	// `environment: 'node'` and no `.svelte` file renders under the suite, so
 	// words asserted in a component are words asserted by reading source text
 	// — which is another reason none of them are here.
 	//
-	// **No control on this page cancels a Bid.** A refused Move states what
+	// **No control on this page cancels a Bid.** A refused Trade states what
 	// must clear first and offers a way back to the picker, and that is all:
 	// FR-40's cancellation trigger is a Close and only a Close.
 	//
@@ -66,17 +66,17 @@
 	// in the action's own query string rather than as hidden fields, because
 	// the sheet's `<form>` is `ReasonSheet.svelte`'s and nesting a second form
 	// inside it is invalid HTML the browser silently drops — which would post a
-	// Move naming no Players at all.
+	// Trade naming no Players at all.
 	const commitAction = $derived((data.commitAction as string | null) ?? '?/record');
 </script>
 
 <svelte:head>
-	<title>Record a Roster Move — Appspiration</title>
+	<title>Record a Roster Trade — Appspiration</title>
 </svelte:head>
 
 <main class="page">
 	<header class="masthead">
-		<h1>Record a Roster Move</h1>
+		<h1>Record a Roster Trade</h1>
 		<p class="section-label">BBSL offseason free agent auction</p>
 	</header>
 
@@ -90,7 +90,7 @@
 		<section class="commissioner-block">
 			<p class="commissioner-label">Choose the two Teams</p>
 			<p class="prose">
-				A Roster Move is one act between two Teams, and Contracts may travel in both
+				A Roster Trade is one act between two Teams, and Contracts may travel in both
 				directions or in one. Choose the Team the trade is written from and the Team it is
 				written to; either side may end up sending nothing. Nothing is recorded until you
 				have read the sheet and given a reason.
@@ -98,7 +98,7 @@
 
 			{#if data.sameTeam}
 				<p class="prose" role="status">
-					A Roster Move is between two different Teams. Choose a second Team.
+					A Roster Trade is between two different Teams. Choose a second Team.
 				</p>
 			{/if}
 
@@ -109,7 +109,7 @@
 				is not one here either — two radio lists say the same thing and
 				stay operable at 375px.
 			-->
-			<form method="GET" action="/roster-move">
+			<form method="GET" action="/roster-trade">
 				<fieldset class="team-choice">
 					<legend class="section-label">Sending Team</legend>
 					{#each teams as team (team.id)}
@@ -149,7 +149,7 @@
 				<p class="prose refusal" role="status">{refusal.detail}</p>
 			{/if}
 
-			<form method="GET" action="/roster-move">
+			<form method="GET" action="/roster-trade">
 				<input type="hidden" name="from" value={sending.teamId} />
 				<input type="hidden" name="to" value={receiving.teamId} />
 				<input type="hidden" name="confirm" value="yes" />
@@ -199,8 +199,8 @@
 				</fieldset>
 
 				<div class="controls">
-					<a class="back" href="/roster-move">Choose different Teams</a>
-					<button class="control-commissioner" type="submit">Review this Move</button>
+					<a class="back" href="/roster-trade">Choose different Teams</a>
+					<button class="control-commissioner" type="submit">Review this Trade</button>
 				</div>
 			</form>
 		</section>

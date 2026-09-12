@@ -18,7 +18,7 @@
  *     passes no `enqueue` at all — so the claim is structural rather than a
  *     setting.
  *
- * The stateful fake `ConnectionGateway` is `tests/server/roster-move.test.ts`'s:
+ * The stateful fake `ConnectionGateway` is `tests/server/roster-trade.test.ts`'s:
  * it records every statement in order, keeps the appended events in memory and
  * discards them on a `rollback`, so "nothing was written" is observable rather
  * than assumed. It THROWS on any statement it does not recognise, which is what

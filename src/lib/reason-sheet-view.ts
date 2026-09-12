@@ -31,13 +31,14 @@ import {
 	MINOR_LEAGUE_SLOTS
 } from './core/constants.ts';
 import type {
-	RosterMoveTeamFigures,
-	RosterMoveTransfer
+	RosterActTeamFigures,
+	RosterTradeTransfer
 } from './core/projection/contracts.ts';
 import { OVERRIDE_REASON_FIELD } from './core/rules/override.ts';
 import { SLOT_LABELS } from './core/rules/roster-import.ts';
-import { describeMoveAmount, transferAttention } from './core/rules/roster-move.ts';
-import type { RosterMoveDelta } from './core/rules/roster-move.ts';
+import { describeActAmount } from './core/rules/roster-act.ts';
+import { transferAttention } from './core/rules/roster-trade.ts';
+import type { RosterTradeDelta } from './core/rules/roster-trade.ts';
 import { dropAttention } from './core/rules/roster-drop.ts';
 import type { DropRelease, RosterDropDelta } from './core/rules/roster-drop.ts';
 
@@ -213,10 +214,10 @@ export function reasonSheetView(input: ReasonSheetInput): ReasonSheetView {
 	};
 }
 
-// --- Story 7.7: the two-Team Roster Move sheet ----------------------------
+// --- Story 7.7: the two-Team Roster Trade sheet ----------------------------
 
 /**
- * A Roster Move's before → after, as ROWS (Story 7.7, FR-41, UX-DR39).
+ * A Roster Trade's before → after, as ROWS (Story 7.7, FR-41, UX-DR39).
  *
  * **Rows, not a second component.** `ReasonSheet.svelte` already renders a
  * list of labelled before → after pairs with an optional consequence sentence
@@ -242,8 +243,8 @@ export function reasonSheetView(input: ReasonSheetInput): ReasonSheetView {
  * renderer (AD-8). This module formats nothing itself.
  */
 export function teamFigureRows(
-	before: RosterMoveTeamFigures,
-	after: RosterMoveTeamFigures
+	before: RosterActTeamFigures,
+	after: RosterActTeamFigures
 ): readonly ReasonSheetRow[] {
 	const label = (figure: string): string => `${after.teamName} · ${figure}`;
 	const occupancy = (held: number, ceiling: number): string =>
@@ -251,14 +252,14 @@ export function teamFigureRows(
 	return [
 		{
 			label: label('Cap Space'),
-			// `describeMoveAmount`, never `describeAmount`: an imported Cap Hit is
+			// `describeActAmount`, never `describeAmount`: an imported Cap Hit is
 			// a real-world salary and the roster importer asserts no money grid
 			// over it, so a Team's Cap Space legitimately sits off the $500,000
 			// grid — and a sheet that answered "an amount that is not on the grid"
 			// would be asking for a commitment against a figure it declines to
 			// print.
-			before: describeMoveAmount(before.capSpace),
-			after: describeMoveAmount(after.capSpace),
+			before: describeActAmount(before.capSpace),
+			after: describeActAmount(after.capSpace),
 			attention: null
 		},
 		{
@@ -289,7 +290,7 @@ export function teamFigureRows(
 }
 
 /** One moved Player, named between the two Teams' figures. */
-function transferRow(transfer: RosterMoveTransfer): ReasonSheetRow {
+function transferRow(transfer: RosterTradeTransfer): ReasonSheetRow {
 	return {
 		label: transfer.playerName,
 		before: `${transfer.fromTeamName} · ${SLOT_LABELS[transfer.fromPlacement]}`,
@@ -303,8 +304,8 @@ function transferRow(transfer: RosterMoveTransfer): ReasonSheetRow {
 	};
 }
 
-/** Every row a Roster Move's sheet shows, in reading order. */
-export function rosterMoveReasonRows(delta: RosterMoveDelta): readonly ReasonSheetRow[] {
+/** Every row a Roster Trade's sheet shows, in reading order. */
+export function rosterTradeReasonRows(delta: RosterTradeDelta): readonly ReasonSheetRow[] {
 	return [
 		...teamFigureRows(delta.sendingBefore, delta.sendingAfter),
 		...delta.transfers.map(transferRow),
@@ -320,7 +321,7 @@ export function rosterMoveReasonRows(delta: RosterMoveDelta): readonly ReasonShe
  * either direction may be empty and "sends nothing" is the sentence a salary
  * dump needs to see before it commits (§10 example 36).
  */
-export function rosterMoveActSentence(delta: RosterMoveDelta): string {
+export function rosterTradeActSentence(delta: RosterTradeDelta): string {
 	const sendingTeam = delta.sendingAfter.teamName;
 	const receivingTeam = delta.receivingAfter.teamName;
 	const out = delta.transfers.filter(
@@ -329,7 +330,7 @@ export function rosterMoveActSentence(delta: RosterMoveDelta): string {
 	const back = delta.transfers.filter(
 		(transfer) => transfer.fromTeamId === delta.receivingAfter.teamId
 	);
-	const names = (transfers: readonly RosterMoveTransfer[]): string =>
+	const names = (transfers: readonly RosterTradeTransfer[]): string =>
 		transfers.map((transfer) => transfer.playerName).join(', ');
 
 	if (back.length === 0) {
@@ -342,7 +343,7 @@ export function rosterMoveActSentence(delta: RosterMoveDelta): string {
 }
 
 /** The commit control's own words. Never "Confirm" — it names the act. */
-export const ROSTER_MOVE_COMMIT_LABEL = 'Record the Roster Move';
+export const ROSTER_TRADE_COMMIT_LABEL = 'Record the Roster Trade';
 
 // --- Story 7.8: the one-Team Drop sheet -----------------------------------
 
@@ -369,10 +370,10 @@ export const ROSTER_MOVE_COMMIT_LABEL = 'Record the Roster Move';
 function releaseRow(release: DropRelease): ReasonSheetRow {
 	return {
 		label: release.playerName,
-		before: `${SLOT_LABELS[release.fromPlacement]} · ${describeMoveAmount(release.chargedCapHit)}`,
+		before: `${SLOT_LABELS[release.fromPlacement]} · ${describeActAmount(release.chargedCapHit)}`,
 		after: release.removed
 			? 'Released — nothing carried'
-			: `${SLOT_LABELS.dead_money} · ${describeMoveAmount(release.deadMoney)}`,
+			: `${SLOT_LABELS.dead_money} · ${describeActAmount(release.deadMoney)}`,
 		attention: dropAttention(release)
 	};
 }
@@ -385,8 +386,8 @@ function releaseRow(release: DropRelease): ReasonSheetRow {
  * NOT show: Cap Space stands still while Roster Count falls, and the released
  * rows underneath are where the money went.
  *
- * `teamFigureRows` is the Move's, called rather than copied: a Drop's five
- * figures are a Move's five figures asked of one Team.
+ * `teamFigureRows` is the Trade's, called rather than copied: a Drop's five
+ * figures are a Trade's five figures asked of one Team.
  */
 export function dropReasonRows(delta: RosterDropDelta): readonly ReasonSheetRow[] {
 	return [...teamFigureRows(delta.before, delta.after), ...delta.released.map(releaseRow)];

@@ -316,7 +316,7 @@ describe('scope — exactly one override reaches for this mechanism', () => {
 	it('is reached for by the mechanism itself and by one override', () => {
 		// The mechanism shipped with ZERO call sites in Story 7.1, exactly as
 		// `commissioner-guard.ts` did, and Story 7.7 is the first override to
-		// use it (FR-41's Roster Move). The list below is therefore the four
+		// use it (FR-41's Roster Trade). The list below is therefore the four
 		// files that OWN the mechanism plus the two that make up that one
 		// override — and it is still an exhaustive list, which is the whole
 		// point: a second override appearing without this test being edited is
@@ -326,10 +326,10 @@ describe('scope — exactly one override reaches for this mechanism', () => {
 			'src/lib/server/override-guard.ts',
 			'src/lib/reason-sheet-view.ts',
 			'src/lib/components/ReasonSheet.svelte',
-			'src/routes/roster-move/+page.server.ts',
-			'src/routes/roster-move/+page.svelte',
+			'src/routes/roster-trade/+page.server.ts',
+			'src/routes/roster-trade/+page.svelte',
 			// Story 7.8's Drop — the second override to reach the mechanism, and
-			// it reaches exactly the same four names the Move does.
+			// it reaches exactly the same four names the Trade does.
 			'src/routes/roster-drop/+page.server.ts',
 			'src/routes/roster-drop/+page.svelte'
 		];
@@ -356,7 +356,7 @@ describe('scope — exactly one override reaches for this mechanism', () => {
 		);
 		expect(named).toEqual([]);
 
-		// Exactly two routes reach for the mechanism: the Roster Move (Story
+		// Exactly two routes reach for the mechanism: the Roster Trade (Story
 		// 7.7, FR-41) and the Drop (Story 7.8, FR-43). Both are global acts on
 		// a Team rather than on an object a Manager is looking at, so each gets
 		// an admin destination of its own rather than a control placed in
@@ -370,8 +370,8 @@ describe('scope — exactly one override reaches for this mechanism', () => {
 		expect(reaching.sort()).toEqual([
 			'src/routes/roster-drop/+page.server.ts',
 			'src/routes/roster-drop/+page.svelte',
-			'src/routes/roster-move/+page.server.ts',
-			'src/routes/roster-move/+page.svelte'
+			'src/routes/roster-trade/+page.server.ts',
+			'src/routes/roster-trade/+page.svelte'
 		]);
 	});
 

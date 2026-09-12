@@ -18,7 +18,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	CONTRACT_LENGTH_ASSIGNED_EVENT,
 	INITIAL_CONTRACTS,
-	ROSTER_MOVE_RECORDED_EVENT,
+	ROSTER_TRADE_RECORDED_EVENT,
 	contractForPlayer,
 	contractRowsFor,
 	contractsReducer,
@@ -466,8 +466,22 @@ describe('isContractYears — the four legal lengths, stated once', () => {
 	});
 });
 
-describe('contractsReducer — a Roster Move (Story 7.7, FR-41)', () => {
-	/** One well-formed transfer, as `evaluateMove` builds one. */
+describe('the Roster Trade event type (Story 7.10)', () => {
+	it('still spells the WIRE name `RosterMoveRecorded`, whatever the constant is called', () => {
+		// The act was renamed from Roster Move to Roster Trade in Story 7.10,
+		// but AD-4 makes `auction_events` insert-only: rows written before that
+		// story carry `'RosterMoveRecorded'` and always will. The constant moved
+		// to Trade; the string did not. This assertion is what makes a later
+		// rename of the VALUE a test failure rather than a fold that silently
+		// stops matching history — `audit-log.ts` keys `RENDERERS` off this
+		// constant, and that record is `Readonly<Record<string, AuditEntry>>`,
+		// so a drifted key compiles cleanly and renders nothing.
+		expect(ROSTER_TRADE_RECORDED_EVENT).toBe('RosterMoveRecorded');
+	});
+});
+
+describe('contractsReducer — a Roster Trade (Story 7.7, FR-41)', () => {
+	/** One well-formed transfer, as `evaluateTrade` builds one. */
 	function transfer(overrides: Record<string, unknown> = {}): Record<string, unknown> {
 		return {
 			fantraxPlayerId: 'p-1',
@@ -501,7 +515,7 @@ describe('contractsReducer — a Roster Move (Story 7.7, FR-41)', () => {
 	}
 
 	function move(seq: number, transfers: readonly unknown[]): AppendedEvent {
-		return event(seq, ROSTER_MOVE_RECORDED_EVENT, {
+		return event(seq, ROSTER_TRADE_RECORDED_EVENT, {
 			sendingTeamId: 't-1',
 			sendingTeamName: 'Team M',
 			receivingTeamId: 't-2',
@@ -564,7 +578,7 @@ describe('contractsReducer — a Roster Move (Story 7.7, FR-41)', () => {
 			playerName: 'Ausar Bright',
 			teamId: 't-2',
 			teamName: 'Team N',
-			// Unchanged by the Move: a Move is not a restructure (AD-23).
+			// Unchanged by the Trade: a Trade is not a restructure (AD-23).
 			winningAmount: 18_000_000,
 			// ...while the charge follows the new placement.
 			capHit: 18_000_000,
@@ -576,7 +590,7 @@ describe('contractsReducer — a Roster Move (Story 7.7, FR-41)', () => {
 
 	it('folds the LATEST transfer, not the first — a Player may be traded twice', () => {
 		// **Two DIFFERENT Moves for one Player**, which is the only shape that
-		// can tell latest-wins from first-wins. Folding one Move twice cannot:
+		// can tell latest-wins from first-wins. Folding one Trade twice cannot:
 		// identical events converge whichever rule is in force.
 		const contracts = foldClosures(
 			close(1, { winningAmount: 9_000_000, capHit: 9_000_000 }),
@@ -603,16 +617,16 @@ describe('contractsReducer — a Roster Move (Story 7.7, FR-41)', () => {
 		);
 
 		const contract = contractForPlayer(contracts, 'p-1');
-		// Where he is NOW, not where the first Move put him.
+		// Where he is NOW, not where the first Trade put him.
 		expect(contract?.teamId).toBe('t-3');
 		expect(contract?.teamName).toBe('Team P');
 		expect(contract?.placement).toBe('minor_league');
 		expect(contract?.capHit).toBe(0);
-		// The value never moved through either Move (AD-23).
+		// The value never moved through either Trade (AD-23).
 		expect(contract?.winningAmount).toBe(9_000_000);
 	});
 
-	it('lands the good transfers in a Move whose array also holds a malformed one', () => {
+	it('lands the good transfers in a Trade whose array also holds a malformed one', () => {
 		const contracts = foldClosures(
 			close(1, { fantraxPlayerId: 'p-1' }),
 			close(2, { fantraxPlayerId: 'p-2', playerName: 'Somebody Else' }),
@@ -715,10 +729,10 @@ describe('contractsReducer — a Roster Move (Story 7.7, FR-41)', () => {
 
 	it('survives a payload with no transfers array at all', () => {
 		expect(() =>
-			foldClosures(close(1), event(2, ROSTER_MOVE_RECORDED_EVENT, { transfers: 'nonsense' }))
+			foldClosures(close(1), event(2, ROSTER_TRADE_RECORDED_EVENT, { transfers: 'nonsense' }))
 		).not.toThrow();
 		expect(() =>
-			foldClosures(close(1), event(2, ROSTER_MOVE_RECORDED_EVENT, null))
+			foldClosures(close(1), event(2, ROSTER_TRADE_RECORDED_EVENT, null))
 		).not.toThrow();
 	});
 });

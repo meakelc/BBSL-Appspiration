@@ -4,7 +4,7 @@
  *
  * **Three guards, in order, on `load` AND on the action** — a Commissioner
  * only, this destination live for this phase and this role, and the League
- * not Archived. `/roster-move` is the template for all three, and this route
+ * not Archived. `/roster-trade` is the template for all three, and this route
  * copies it rather than inventing a second shape. Hiding a form is never the
  * check, and neither is rendering a sheet.
  *
@@ -33,7 +33,7 @@ import { fail } from '@sveltejs/kit';
 
 import { classifyDeviceClass } from '$lib/core/device-class.ts';
 import { SLOT_LABELS, chargedCapHit } from '$lib/core/rules/roster-import.ts';
-import { describeMoveAmount } from '$lib/core/rules/roster-move.ts';
+import { describeActAmount } from '$lib/core/rules/roster-act.ts';
 import { dropActSentence, dropRefusalDetail } from '$lib/core/rules/roster-drop.ts';
 import type { DroppingTeam } from '$lib/core/rules/roster-drop.ts';
 import {
@@ -107,11 +107,11 @@ function pickerRowsFor(team: DroppingTeam) {
 				slotLabel: SLOT_LABELS[row.rosterSlotKind],
 				// The CHARGED figure, which is what the Team's Cap Space counted
 				// — a stash reads $0 here, and that is also exactly what a Drop
-				// would leave behind for it. `describeMoveAmount` for the sheet's
+				// would leave behind for it. `describeActAmount` for the sheet's
 				// reason: an imported Cap Hit need not sit on the $500,000 grid,
 				// and a picker that hedged would ask the Commissioner to choose a
 				// Contract by a figure it would not state.
-				capHit: describeMoveAmount(
+				capHit: describeActAmount(
 					chargedCapHit({ capHit: row.value, rosterSlotKind: row.rosterSlotKind })
 				),
 				won: row.won

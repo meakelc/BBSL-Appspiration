@@ -1,13 +1,13 @@
 /**
- * The `/roster-move` handlers, driven as MODULES (Story 7.7, FR-41).
+ * The `/roster-trade` handlers, driven as MODULES (Story 7.7, FR-41).
  *
- * **Source-text assertion is not enough here, and `tests/roster-move.test.ts`
+ * **Source-text assertion is not enough here, and `tests/roster-trade.test.ts`
  * says so in its own header.** A `.svelte` file cannot be rendered under
  * `environment: 'node'`, so its claims have to be read out of the source; a
  * `+page.server.ts` is an ordinary importable module, and a regex over it
  * would pass unchanged if the three-step branching inverted, if the sheet
- * rendered for a Move the core refused, or if `commitAction` dropped a
- * `send`/`recv` parameter and committed a different Move from the one
+ * rendered for a Trade the core refused, or if `commitAction` dropped a
+ * `send`/`recv` parameter and committed a different Trade from the one
  * reviewed. This file calls `load` and `actions.record` instead.
  *
  * The REAL `requireCommissioner`, `requireLiveDestination` and
@@ -15,7 +15,7 @@
  * what makes "the guards are called on `load` AND on the action" a proof
  * rather than a claim. Only the I/O-touching layer is faked:
  * `$lib/shell/db.ts` answers a synthetic log, Team list and two rosters, and
- * the whole of `server/roster-move.ts` and the pure core run for real.
+ * the whole of `server/roster-trade.ts` and the pure core run for real.
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -110,7 +110,7 @@ vi.mock('$lib/shell/db.ts', () => ({
 	})
 }));
 
-const route = await import('../../src/routes/roster-move/+page.server.ts');
+const route = await import('../../src/routes/roster-trade/+page.server.ts');
 
 const COMMISSIONER: RegisteredManager = {
 	id: 'm-1',
@@ -158,7 +158,7 @@ async function loadAt(
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	return (await route.load({
 		locals: locals(manager, phase),
-		url: new URL(`http://localhost/roster-move${query}`)
+		url: new URL(`http://localhost/roster-trade${query}`)
 	} as any)) as unknown as LoadResult;
 }
 
@@ -174,8 +174,8 @@ async function commit(
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	return await (route.actions as any).record({
 		locals: locals(manager, phase),
-		url: new URL(`http://localhost/roster-move${query}`),
-		request: new Request('http://localhost/roster-move', {
+		url: new URL(`http://localhost/roster-trade${query}`),
+		request: new Request('http://localhost/roster-trade', {
 			method: 'POST',
 			headers: { 'user-agent': 'Mozilla/5.0 (Macintosh)' },
 			body: form
@@ -195,7 +195,7 @@ async function expectRefusal(run: () => unknown, status: number): Promise<void> 
 	if (isHttpError(thrown)) expect(thrown.status).toBe(status);
 }
 
-describe('/roster-move — the three guards, on load AND on the action', () => {
+describe('/roster-trade — the three guards, on load AND on the action', () => {
 	it('refuses a Manager who is not the Commissioner, both ways', async () => {
 		await expectRefusal(() => loadAt('', MANAGER), COMMISSIONER_ONLY_STATUS);
 		await expectRefusal(
@@ -235,13 +235,13 @@ describe('/roster-move — the three guards, on load AND on the action', () => {
 
 	it('keeps the archived override refusal reachable for its own gate', () => {
 		// `requireOverridablePhase` is the third guard and has its own status.
-		// The catalog hides `/roster-move` in Archived, so this asserts the
+		// The catalog hides `/roster-trade` in Archived, so this asserts the
 		// constant the route imports rather than a reachable route state.
 		expect(OVERRIDE_ARCHIVED_STATUS).toBe(403);
 	});
 });
 
-describe('/roster-move — the three steps', () => {
+describe('/roster-trade — the three steps', () => {
 	it('step one: no Teams chosen, so the Team list and nothing else', async () => {
 		const data = await loadAt('');
 
@@ -272,7 +272,7 @@ describe('/roster-move — the three steps', () => {
 		expect(data.commitAction).toBeNull();
 	});
 
-	it('step three: a permitted Move renders the sheet, with both Teams in it', async () => {
+	it('step three: a permitted Trade renders the sheet, with both Teams in it', async () => {
 		const data = await loadAt('?from=t-1&to=t-2&send=p-1&recv=p-3&confirm=yes');
 
 		expect(data.step).toBe('sheet');
@@ -296,7 +296,7 @@ describe('/roster-move — the three steps', () => {
 			'Team Two · Minor League'
 		]);
 		// The commit control names the act; the reason field is the guard's.
-		expect(data.sheet?.commitLabel).toBe('Record the Roster Move');
+		expect(data.sheet?.commitLabel).toBe('Record the Roster Trade');
 		expect(data.sheet?.reasonFieldName).toBe('reason');
 	});
 
@@ -307,7 +307,7 @@ describe('/roster-move — the three steps', () => {
 
 		expect(data.step).toBe('sheet');
 		// The whole point of asserting this rather than a regex: a dropped
-		// `send` or `recv` here would commit a DIFFERENT Move from the one the
+		// `send` or `recv` here would commit a DIFFERENT Trade from the one the
 		// Commissioner read.
 		const action = new URLSearchParams((data.commitAction ?? '').replace(/^\?\/record&/, ''));
 		expect(action.get('from')).toBe('t-1');
@@ -323,7 +323,7 @@ describe('/roster-move — the three steps', () => {
 		expect(cancel.searchParams.get('confirm')).toBeNull();
 	});
 
-	it('renders NO sheet for a Move the core refuses — it returns to the picker', async () => {
+	it('renders NO sheet for a Trade the core refuses — it returns to the picker', async () => {
 		// `p-nobody` is on neither roster, so the act is malformed.
 		const data = await loadAt('?from=t-1&to=t-2&send=p-nobody&confirm=yes');
 
@@ -336,8 +336,8 @@ describe('/roster-move — the three steps', () => {
 	});
 });
 
-describe('/roster-move — committing', () => {
-	it('records the Move and returns the appended event', async () => {
+describe('/roster-trade — committing', () => {
+	it('records the Trade and returns the appended event', async () => {
 		world.statements.length = 0;
 
 		const result = (await commit(
@@ -354,7 +354,7 @@ describe('/roster-move — committing', () => {
 		expect(world.statements.join('\n')).not.toMatch(/notification_outbox/i);
 	});
 
-	it('commits the Move the URL names, not one the form could restate', async () => {
+	it('commits the Trade the URL names, not one the form could restate', async () => {
 		world.statements.length = 0;
 
 		await commit('?from=t-1&to=t-2&send=p-2', 'Sending the stashed Player only.');
@@ -381,7 +381,7 @@ describe('/roster-move — committing', () => {
 		expect(world.statements).toContain('rollback');
 	});
 
-	it('refuses a Move naming nothing, with the core sentence', async () => {
+	it('refuses a Trade naming nothing, with the core sentence', async () => {
 		const result = (await commit('?from=t-1&to=t-2', 'A reason.')) as {
 			status: number;
 			data: { notice: string };

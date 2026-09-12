@@ -79,16 +79,16 @@ const EXPECTED: Record<
 			'audit-log',
 			'notification-settings'
 		],
-		// Story 7.7 adds `roster-move` ahead of the two Epic 1 admin entries, in
-		// the catalog's own order: FR-41 permits a Move in the Auction Phase and
+		// Story 7.7 adds `roster-trade` ahead of the two Epic 1 admin entries, in
+		// the catalog's own order: FR-41 permits a Trade in the Auction Phase and
 		// the Contract Assignment Phase, and nowhere else. Story 7.8 adds
 		// `roster-drop` beside it, in the same two phases and absent from
 		// Archived for the same reason.
-		commissionerOnly: ['roster-move', 'roster-drop', 'pause-resume', 'operational-health']
+		commissionerOnly: ['roster-trade', 'roster-drop', 'pause-resume', 'operational-health']
 	},
 	'Contract Assignment': {
 		manager: ['contract-assignment', 'teams', 'audit-log'],
-		commissionerOnly: ['roster-move', 'roster-drop', 'assignment-monitoring', 'export-gate']
+		commissionerOnly: ['roster-trade', 'roster-drop', 'assignment-monitoring', 'export-gate']
 	},
 	Archived: {
 		manager: ['bid-board', 'teams', 'audit-log', 'export'],

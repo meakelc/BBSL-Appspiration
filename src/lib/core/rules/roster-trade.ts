@@ -1,20 +1,20 @@
 /**
- * Recording a Roster Move: one act, two Teams, one evaluation at the end
+ * Recording a Roster Trade: one act, two Teams, one evaluation at the end
  * (Story 7.7, FR-41, §10 examples 36–39 and 42).
  *
- * **One evaluator, and it does no arithmetic of its own.** `evaluateMove`
- * applies the whole Move — every departure on both sides first, then every
+ * **One evaluator, and it does no arithmetic of its own.** `evaluateTrade`
+ * applies the whole Trade — every departure on both sides first, then every
  * arrival, re-placed against the receiving Team's occupancy — and hands the
  * resulting state to the SAME two derivations the bidding gates read:
  * `teamSolvencyFiguresFor` for the money and `slotCapacityFiguresFor` for the
  * capacity (AR-42). There is no affordability check in this file, no second
  * Roster Reserve, no second Free Active/Bench Slots and no second Minors
- * Exposure. A Move that could be refused by arithmetic this module wrote
- * itself would be a Move judged by a rule no Bid is judged by.
+ * Exposure. A Trade that could be refused by arithmetic this module wrote
+ * itself would be a Trade judged by a rule no Bid is judged by.
  *
  * **Why not a synthetic `PlaceBid`.** AD-7 defines the cap gate as
  * single-Team and incremental — it answers "may THIS Team offer THIS amount"
- * — and a Move has two Teams whose deltas point in opposite directions and
+ * — and a Trade has two Teams whose deltas point in opposite directions and
  * no amount at all. Forcing one through that gate would either invent an
  * offer or evaluate one Team at a time, and evaluating one Team at a time is
  * exactly the defect §10 example 39 exists to name.
@@ -26,7 +26,7 @@
  * one free Minor League Slot must land the same way on every replay, and a
  * sequence is the only thing that makes that true.
  *
- * **Refuse, never cancel.** A failing gate refuses the WHOLE Move and this
+ * **Refuse, never cancel.** A failing gate refuses the WHOLE Trade and this
  * module produces nothing to write. No Bid is stood down anywhere: FR-40's
  * cancellation trigger is a Close and only a Close, and nothing here appends,
  * cancels or restores.
@@ -40,16 +40,16 @@ import type { Money } from '../money.ts';
 import type { OpenAuctions } from '../projection/auctions.ts';
 import type {
 	ContractYears,
-	RosterMoveTeamFigures,
-	RosterMoveTransfer
+	RosterActTeamFigures,
+	RosterTradeTransfer
 } from '../projection/contracts.ts';
 import type { OpenNominations } from '../projection/nominations.ts';
-import { RECORD_ROSTER_MOVE_GATES } from '../types.ts';
+import { RECORD_ROSTER_TRADE_GATES } from '../types.ts';
 import type {
 	ContestedGateOutcome,
 	ContestedPlayer,
-	RecordRosterMove,
-	RecordRosterMoveGateResults,
+	RecordRosterTrade,
+	RecordRosterTradeGateResults,
 	RosterSlotKind
 } from '../types.ts';
 import {
@@ -70,19 +70,7 @@ import { slotPlacementFor } from './close.ts';
 import { SLOT_LABELS } from './roster-import.ts';
 
 /**
- * `describeActAmount` under the name every Move call site already reads.
- *
- * The renderer itself is `rules/roster-act.ts`'s since Story 7.8, because a
- * Drop's sheet needs the identical choice between the abbreviated `$14.5M`
- * and grouped exact dollars — and two spellings of "never decline to state
- * the figure" is precisely the drift AD-8 exists to prevent. Re-exported
- * rather than re-declared so `reason-sheet-view.ts` and `/roster-move` reach
- * the one definition.
- */
-export const describeMoveAmount = describeActAmount;
-
-/**
- * One Contract as a Move can move it — the roster row and the fold's own
+ * One Contract as a Trade can move it — the roster row and the fold's own
  * output stated in ONE shape.
  *
  * **`value` is the full amount, never the charged one**, and the distinction
@@ -100,11 +88,11 @@ export const describeMoveAmount = describeActAmount;
  * alone (AR-41). Nothing in this module's arithmetic reads it.
  *
  * `contractYears` is the length an Auction Contract currently carries, which
- * a Move CLEARS (§10 example 42). An imported row's remaining years are not
+ * a Trade CLEARS (§10 example 42). An imported row's remaining years are not
  * this field and are not cleared: they are the world Fantrax already knows
  * about.
  */
-export type MovingPlayer = {
+export type TradingPlayer = {
 	readonly fantraxPlayerId: string;
 	readonly playerName: string;
 	/** The Slot this Contract occupies on the Team that holds it today. */
@@ -117,7 +105,7 @@ export type MovingPlayer = {
 };
 
 /**
- * One side of a Move: who they are and everything they hold.
+ * One side of a Trade: who they are and everything they hold.
  *
  * **The whole roster, Dead Money included.** Cap Space is a sum over every
  * row a Team carries, so handing this module only the movable ones would
@@ -125,18 +113,18 @@ export type MovingPlayer = {
  * appears in a transfer — `movable` below is what says so, in one place.
  *
  * No figures are carried. Cap Space, Roster Count and all three occupancies
- * are DERIVED from `rows` on every evaluation, before the Move and after it,
+ * are DERIVED from `rows` on every evaluation, before the Trade and after it,
  * which is what makes the before/after pair structurally incapable of being
  * computed two different ways.
  */
-export type MovingTeam = {
+export type TradingTeam = {
 	readonly teamId: string;
 	readonly teamName: string;
-	readonly rows: readonly MovingPlayer[];
+	readonly rows: readonly TradingPlayer[];
 };
 
 /**
- * Everything a Move is judged against — one snapshot, so no two Teams and no
+ * Everything a Trade is judged against — one snapshot, so no two Teams and no
  * two gates can be judged against different moments.
  *
  * `auctions` and `nominations` are the folds the contested ground reads: a
@@ -147,9 +135,9 @@ export type MovingTeam = {
  * two functions, threaded straight through — this module asks neither
  * question itself.
  */
-export type RosterMoveState = {
-	readonly sending: MovingTeam;
-	readonly receiving: MovingTeam;
+export type RosterTradeState = {
+	readonly sending: TradingTeam;
+	readonly receiving: TradingTeam;
 	readonly auctions: OpenAuctions;
 	readonly nominations: OpenNominations;
 	readonly isMinorLeagueEligible: (fantraxPlayerId: string) => boolean;
@@ -160,26 +148,26 @@ export type RosterMoveState = {
  * One Team's five figures, and one Contract's whole journey — both declared
  * in `projection/contracts.ts`, beside the event that carries them.
  *
- * Aliased here rather than restated, because `evaluateMove` builds exactly
+ * Aliased here rather than restated, because `evaluateTrade` builds exactly
  * what `contractsReducer` folds: two structurally identical declarations are
  * the drift Story 4.5's review removed elsewhere in this codebase, and a
- * Move's delta is the one thing in this story that MUST mean the same on
+ * Trade's delta is the one thing in this story that MUST mean the same on
  * both sides of the log.
  */
-export type MoveTeamFigures = RosterMoveTeamFigures;
-export type MoveTransfer = RosterMoveTransfer;
+export type TradeTeamFigures = RosterActTeamFigures;
+export type TradeTransfer = RosterTradeTransfer;
 
 /** The whole delta: every Player, both Teams, before and after. */
-export type RosterMoveDelta = {
-	readonly transfers: readonly MoveTransfer[];
-	readonly sendingBefore: MoveTeamFigures;
-	readonly sendingAfter: MoveTeamFigures;
-	readonly receivingBefore: MoveTeamFigures;
-	readonly receivingAfter: MoveTeamFigures;
+export type RosterTradeDelta = {
+	readonly transfers: readonly TradeTransfer[];
+	readonly sendingBefore: TradeTeamFigures;
+	readonly sendingAfter: TradeTeamFigures;
+	readonly receivingBefore: TradeTeamFigures;
+	readonly receivingAfter: TradeTeamFigures;
 };
 
 /**
- * Why a Move was refused.
+ * Why a Trade was refused.
  *
  * **Three of the four are about the SHAPE of the act and one is about the
  * gates**, which is the same split `server/bidding.ts` draws between
@@ -187,7 +175,7 @@ export type RosterMoveDelta = {
  * show, so the gate results come back `null` rather than as figures computed
  * over a state that could not be built.
  */
-export type RosterMoveRefusal =
+export type RosterTradeRefusal =
 	| { readonly kind: 'same_team'; readonly teamId: string; readonly teamName: string }
 	| { readonly kind: 'names_nothing' }
 	| {
@@ -204,18 +192,18 @@ export type RosterMoveRefusal =
 	  }
 	| { readonly kind: 'gates' };
 
-/** What `evaluateMove` decided. A rejection is a RETURNED value, never a throw. */
-export type MoveOutcome =
+/** What `evaluateTrade` decided. A rejection is a RETURNED value, never a throw. */
+export type TradeOutcome =
 	| {
 			readonly kind: 'refused';
-			readonly refusal: RosterMoveRefusal;
+			readonly refusal: RosterTradeRefusal;
 			/** The five gates, or `null` when the act's shape stopped them running. */
-			readonly gates: RecordRosterMoveGateResults | null;
+			readonly gates: RecordRosterTradeGateResults | null;
 	  }
 	| {
 			readonly kind: 'permitted';
-			readonly gates: RecordRosterMoveGateResults;
-			readonly delta: RosterMoveDelta;
+			readonly gates: RecordRosterTradeGateResults;
+			readonly delta: RosterTradeDelta;
 	  };
 
 /**
@@ -235,7 +223,7 @@ export type MoveOutcome =
  * IR row would be this app inventing a medical opinion.
  */
 function arrivalPlacementFor(
-	player: MovingPlayer,
+	player: TradingPlayer,
 	receivingMinorLeagueOccupied: number
 ): RosterSlotKind {
 	if (player.rosterSlotKind !== 'minor_league') return player.rosterSlotKind;
@@ -243,7 +231,7 @@ function arrivalPlacementFor(
 }
 
 /**
- * Evaluate one Roster Move: apply the whole act, then judge the result once.
+ * Evaluate one Roster Trade: apply the whole act, then judge the result once.
  *
  * The order inside is the rule (FR-41):
  *
@@ -258,10 +246,10 @@ function arrivalPlacementFor(
  * A contested Player is excluded from the delta rather than moved: there is
  * no Contract to move, and constructing one out of an open Auction would
  * manufacture a Player nobody has won. The other four gates still run, and
- * still report what the rest of the Move would have done — no gate
+ * still report what the rest of the Trade would have done — no gate
  * short-circuits another (AD-7).
  */
-export function evaluateMove(state: RosterMoveState, command: RecordRosterMove): MoveOutcome {
+export function evaluateTrade(state: RosterTradeState, command: RecordRosterTrade): TradeOutcome {
 	if (command.sendingTeamId === command.receivingTeamId) {
 		return {
 			kind: 'refused',
@@ -281,11 +269,11 @@ export function evaluateMove(state: RosterMoveState, command: RecordRosterMove):
 	// act it is rather than silently resolved into a different one.**
 	//
 	// He cannot travel both ways, and picking one of them for the Commissioner
-	// would commit a Move nobody agreed: a Contract that appears on both sides
+	// would commit a Trade nobody agreed: a Contract that appears on both sides
 	// means the two lists disagree about who holds him, which is a mistake in
 	// the act and not a preference to be settled by iteration order. Refused
 	// here with the shape grounds, BEFORE `contested`, because there is no
-	// coherent post-Move state to evaluate any gate against.
+	// coherent post-Trade state to evaluate any gate against.
 	//
 	// Note what this does NOT refuse: the same Player named twice in the SAME
 	// direction, which says one thing twice. That is deduplicated below.
@@ -317,8 +305,8 @@ export function evaluateMove(state: RosterMoveState, command: RecordRosterMove):
 	// directions disagree about who holds him, was refused outright above.
 	const named: Array<{
 		readonly fantraxPlayerId: string;
-		readonly from: MovingTeam;
-		readonly to: MovingTeam;
+		readonly from: TradingTeam;
+		readonly to: TradingTeam;
 	}> = [];
 	const alreadyNamed = new Set<string>();
 	for (const entry of [
@@ -351,9 +339,9 @@ export function evaluateMove(state: RosterMoveState, command: RecordRosterMove):
 	const moving = named.filter((entry) => !contestedIds.has(entry.fantraxPlayerId));
 
 	type Departure = {
-		readonly player: MovingPlayer;
-		readonly from: MovingTeam;
-		readonly to: MovingTeam;
+		readonly player: TradingPlayer;
+		readonly from: TradingTeam;
+		readonly to: TradingTeam;
 	};
 	const departures: Departure[] = [];
 	for (const entry of moving) {
@@ -384,10 +372,10 @@ export function evaluateMove(state: RosterMoveState, command: RecordRosterMove):
 	// holds both what it kept and what it is about to receive is never
 	// constructed, so it can never be judged.
 	const leavingIds = new Set(departures.map((departure) => departure.player.fantraxPlayerId));
-	const sendingRows: MovingPlayer[] = state.sending.rows.filter(
+	const sendingRows: TradingPlayer[] = state.sending.rows.filter(
 		(row) => !leavingIds.has(row.fantraxPlayerId)
 	);
-	const receivingRows: MovingPlayer[] = state.receiving.rows.filter(
+	const receivingRows: TradingPlayer[] = state.receiving.rows.filter(
 		(row) => !leavingIds.has(row.fantraxPlayerId)
 	);
 
@@ -403,11 +391,11 @@ export function evaluateMove(state: RosterMoveState, command: RecordRosterMove):
 				: 1
 	);
 
-	const transfers: MoveTransfer[] = [];
+	const transfers: TradeTransfer[] = [];
 	for (const arrival of arrivals) {
 		const landing = arrival.to.teamId === state.sending.teamId ? sendingRows : receivingRows;
 		const toPlacement = arrivalPlacementFor(arrival.player, minorsOccupiedIn(landing));
-		const arrived: MovingPlayer = { ...arrival.player, rosterSlotKind: toPlacement };
+		const arrived: TradingPlayer = { ...arrival.player, rosterSlotKind: toPlacement };
 		landing.push(arrived);
 		transfers.push({
 			fantraxPlayerId: arrival.player.fantraxPlayerId,
@@ -439,7 +427,7 @@ export function evaluateMove(state: RosterMoveState, command: RecordRosterMove):
 	// **One evaluation, at the end, over the state the whole act produced.**
 	const sendingMoney = postActMoneyStateFor(state.sending, sendingAfter, state);
 	const receivingMoney = postActMoneyStateFor(state.receiving, receivingAfter, state);
-	const gates: RecordRosterMoveGateResults = {
+	const gates: RecordRosterTradeGateResults = {
 		contested: contestedGate,
 		sendingCap: evaluateActCap(state.sending, sendingMoney),
 		sendingSlots: evaluateActSlots(state.sending, sendingAfter, sendingMoney),
@@ -447,7 +435,7 @@ export function evaluateMove(state: RosterMoveState, command: RecordRosterMove):
 		receivingSlots: evaluateActSlots(state.receiving, receivingAfter, receivingMoney)
 	};
 
-	if (!allMoveGatesPassed(gates)) {
+	if (!allTradeGatesPassed(gates)) {
 		return { kind: 'refused', refusal: { kind: 'gates' }, gates };
 	}
 
@@ -459,19 +447,19 @@ export function evaluateMove(state: RosterMoveState, command: RecordRosterMove):
 }
 
 /**
- * Whether every gate in `RECORD_ROSTER_MOVE_GATES` passed.
+ * Whether every gate in `RECORD_ROSTER_TRADE_GATES` passed.
  *
  * Iterates the frozen NAME LIST rather than the result object's own keys, for
  * `allRestoreGatesPassed`'s reason: a result that somehow lost a key would
  * otherwise pass by having nothing to fail, and adding a sixth gate name
  * would silently go unchecked.
  */
-export function allMoveGatesPassed(gates: RecordRosterMoveGateResults): boolean {
-	return RECORD_ROSTER_MOVE_GATES.every((gate) => gates[gate].passed);
+export function allTradeGatesPassed(gates: RecordRosterTradeGateResults): boolean {
+	return RECORD_ROSTER_TRADE_GATES.every((gate) => gates[gate].passed);
 }
 
 /**
- * The one sentence a refused Move is reported by — the Team, the gate, the
+ * The one sentence a refused Trade is reported by — the Team, the gate, the
  * Auction and the arithmetic (FR-41).
  *
  * **It never offers to cancel a Bid.** FR-40's cancellation trigger is a
@@ -482,21 +470,21 @@ export function allMoveGatesPassed(gates: RecordRosterMoveGateResults): boolean 
  * one Team's shortfall who then hits the other Team's ceiling has been made
  * to retry for no reason.
  */
-export function rosterMoveRefusalDetail(
-	refusal: RosterMoveRefusal,
-	gates: RecordRosterMoveGateResults | null
+export function rosterTradeRefusalDetail(
+	refusal: RosterTradeRefusal,
+	gates: RecordRosterTradeGateResults | null
 ): string {
 	switch (refusal.kind) {
 		case 'same_team':
-			return `A Roster Move is between two Teams. ${refusal.teamName} is named on both sides of this one.`;
+			return `A Roster Trade is between two Teams. ${refusal.teamName} is named on both sides of this one.`;
 		case 'names_nothing':
-			return 'This Move names no Players. A Move may send in one direction only, but it must move something.';
+			return 'This Trade names no Players. A Trade may send in one direction only, but it must move something.';
 		case 'named_both_ways':
-			return `${refusal.playerName} is named on both sides of this Move. A Contract travels one way or the other, never both, so the Move says two things that cannot both be true.`;
+			return `${refusal.playerName} is named on both sides of this Trade. A Contract travels one way or the other, never both, so the Trade says two things that cannot both be true.`;
 		case 'not_held':
-			return `${refusal.playerName} is not a Contract ${refusal.teamName} holds, so there is nothing for this Move to transfer.`;
+			return `${refusal.playerName} is not a Contract ${refusal.teamName} holds, so there is nothing for this Trade to transfer.`;
 		case 'gates': {
-			if (gates === null) return 'The Move was refused.';
+			if (gates === null) return 'The Trade was refused.';
 			const sentences: string[] = [];
 			if (!gates.contested.passed) {
 				const named = gates.contested.contested.map((player) =>
@@ -511,10 +499,10 @@ export function rosterMoveRefusalDetail(
 			for (const gate of [gates.sendingCap, gates.receivingCap]) {
 				if (gate.passed) continue;
 				sentences.push(
-					`${gate.teamName} cannot cover what it is already committed to after this Move. ` +
+					`${gate.teamName} cannot cover what it is already committed to after this Trade. ` +
 						`Cap Space ${formatExactDollars(gate.capSpace)}, Committed Bids ${formatExactDollars(gate.committedBids)}, ` +
 						`Roster Reserve ${formatExactDollars(gate.rosterReserve)} — a shortfall of ${formatExactDollars(gate.shortfall ?? NO_MONEY)}. ` +
-						`${auctionsInWords(gate)} Wait for it to close or void the Bid; the Move will not cancel it.`
+						`${auctionsInWords(gate)} Wait for it to close or void the Bid; the Trade will not cancel it.`
 				);
 			}
 			for (const gate of [gates.sendingSlots, gates.receivingSlots]) {
@@ -551,44 +539,44 @@ export function rosterMoveRefusalDetail(
 
 /**
  * The Cap Hit a re-placement changed, stated in words — the sentence FR-41
- * requires on the reason sheet before a Move commits.
+ * requires on the reason sheet before a Trade commits.
  *
  * `null` where the charge did not move, because the sheet's amber marker is
  * the product's single attention colour and a sheet that marks every row
  * marks nothing.
  */
-export function capHitChangeSentence(transfer: MoveTransfer): string | null {
+export function capHitChangeSentence(transfer: TradeTransfer): string | null {
 	if (compareMoney(transfer.capHitBefore, transfer.capHitAfter) === 0) return null;
 	return (
 		`${transfer.playerName} moves from ${SLOT_LABELS[transfer.fromPlacement]} to ` +
 		`${SLOT_LABELS[transfer.toPlacement]}, so his Cap Hit changes from ` +
-		`${describeMoveAmount(transfer.capHitBefore)} to ` +
-		`${describeMoveAmount(transfer.capHitAfter)} on ${transfer.toTeamName}. His winning ` +
-		`amount is unchanged at ${describeMoveAmount(transfer.winningAmount)}.`
+		`${describeActAmount(transfer.capHitBefore)} to ` +
+		`${describeActAmount(transfer.capHitAfter)} on ${transfer.toTeamName}. His winning ` +
+		`amount is unchanged at ${describeActAmount(transfer.winningAmount)}.`
 	);
 }
 
 /**
- * The assigned contract length a Move CLEARS, stated in words (§10 example 42,
+ * The assigned contract length a Trade CLEARS, stated in words (§10 example 42,
  * FR-41).
  *
  * **The second consequence the two states do not show, and the one that has
  * no arithmetic to give it away.** §10 example 42's Powell charges $9,000,000
- * before the Move and $9,000,000 after it, so `capHitChangeSentence` answers `null`
- * and the sheet would otherwise carry no warning at all — while the Move wipes
+ * before the Trade and $9,000,000 after it, so `capHitChangeSentence` answers `null`
+ * and the sheet would otherwise carry no warning at all — while the Trade wipes
  * the 3-year length the sending Team spent its single allotment on, returns
  * that year to it, leaves the Player unassigned on the receiving Team, and
  * re-blocks the FR-30 export until somebody assigns again.
  *
- * `null` where nothing was assigned, which is every Move during the Auction
- * Phase and every Move of an Existing Contract: the amber marker is the
+ * `null` where nothing was assigned, which is every Trade during the Auction
+ * Phase and every Trade of an Existing Contract: the amber marker is the
  * product's single attention colour, and a sheet that marks every row marks
  * nothing.
  *
  * Both sentences may apply to one transfer — a stashed Player with a length,
  * re-placed on arrival — and the sheet carries both on the row.
  */
-export function clearedLengthSentence(transfer: MoveTransfer): string | null {
+export function clearedLengthSentence(transfer: TradeTransfer): string | null {
 	const years = transfer.clearedContractYears;
 	if (years === null) return null;
 	const term = years === 1 ? '1-year' : `${String(years)}-year`;
@@ -608,7 +596,7 @@ export function clearedLengthSentence(transfer: MoveTransfer): string | null {
  * are joined here rather than at the render site: a caller choosing between
  * them would have to know which takes precedence, and the answer is neither.
  */
-export function transferAttention(transfer: MoveTransfer): string | null {
+export function transferAttention(transfer: TradeTransfer): string | null {
 	const sentences = [capHitChangeSentence(transfer), clearedLengthSentence(transfer)].filter(
 		(sentence): sentence is string => sentence !== null
 	);
@@ -616,17 +604,17 @@ export function transferAttention(transfer: MoveTransfer): string | null {
 }
 
 /**
- * `slotPlacementFor` re-exported, because it is the rule a Move REUSES rather
+ * `slotPlacementFor` re-exported, because it is the rule a Trade REUSES rather
  * than restates.
  *
  * `rules/close.ts` owns "an eligible Player takes a free Minor League Slot if
  * one exists and Active/Bench otherwise" (FR-21), and `arrivalPlacementFor`
- * above calls it verbatim. Re-exporting it here lets a caller reading a Move's
+ * above calls it verbatim. Re-exporting it here lets a caller reading a Trade's
  * placement reach the one definition rather than a copy.
  *
- * **`capHitFor` is deliberately NOT here.** Nothing in a Move calls it: the
+ * **`capHitFor` is deliberately NOT here.** Nothing in a Trade calls it: the
  * charge a Contract makes is `chargedCapHit`'s answer, which covers all four
- * `RosterSlotKind` values — an Injury Reserve row charges in full and a Move
+ * `RosterSlotKind` values — an Injury Reserve row charges in full and a Trade
  * can carry one — while `capHitFor` answers only the two-member
  * `SlotPlacement`. And `contractsReducer` reads `capHitAfter` off the payload
  * this module computed rather than re-deriving it, so there is no second

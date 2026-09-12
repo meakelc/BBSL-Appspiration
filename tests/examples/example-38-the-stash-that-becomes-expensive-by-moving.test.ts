@@ -25,7 +25,7 @@
  *
  * **Minors Exposure is not stored and is not adjusted.** It is derived on
  * every evaluation, so Team D's exposure falling is what happens when the
- * post-Move occupancy is handed to the same arithmetic — nothing writes it,
+ * post-Trade occupancy is handed to the same arithmetic — nothing writes it,
  * and the third Auction's Maximum Bid moves without anybody touching it.
  *
  * Calls the core directly against state literals — no database, no HTTP, no
@@ -38,9 +38,9 @@ import { SALARY_CAP } from '../../src/lib/core/constants.ts';
 import { parseMoney } from '../../src/lib/core/money.ts';
 import type { Auction, OpenAuctions } from '../../src/lib/core/projection/auctions.ts';
 import { INITIAL_NOMINATIONS } from '../../src/lib/core/projection/nominations.ts';
-import { evaluateMove } from '../../src/lib/core/rules/roster-move.ts';
-import type { MovingPlayer, RosterMoveState } from '../../src/lib/core/rules/roster-move.ts';
-import type { RecordRosterMove } from '../../src/lib/core/types.ts';
+import { evaluateTrade } from '../../src/lib/core/rules/roster-trade.ts';
+import type { TradingPlayer, RosterTradeState } from '../../src/lib/core/rules/roster-trade.ts';
+import type { RecordRosterTrade } from '../../src/lib/core/types.ts';
 
 const CLOSES_AT = '2026-09-11T09:00:00.000Z';
 
@@ -51,7 +51,7 @@ const CLOSES_AT = '2026-09-11T09:00:00.000Z';
  * `chargedCapHit`'s answer about the Slot he is in, which is $0 here and
  * $18,000,000 the moment he lands in Active/Bench.
  */
-const ELLIS: MovingPlayer = {
+const ELLIS: TradingPlayer = {
 	fantraxPlayerId: 'p-ellis',
 	playerName: 'Ellis',
 	rosterSlotKind: 'minor_league',
@@ -60,7 +60,7 @@ const ELLIS: MovingPlayer = {
 	contractYears: null
 };
 
-function activeBench(prefix: string, count: number, total: number): MovingPlayer[] {
+function activeBench(prefix: string, count: number, total: number): TradingPlayer[] {
 	const each = Math.floor(total / count);
 	return Array.from({ length: count }, (_unused, index) => ({
 		fantraxPlayerId: `${prefix}-${String(index)}`,
@@ -72,7 +72,7 @@ function activeBench(prefix: string, count: number, total: number): MovingPlayer
 	}));
 }
 
-function minors(prefix: string, count: number): MovingPlayer[] {
+function minors(prefix: string, count: number): TradingPlayer[] {
 	return Array.from({ length: count }, (_unused, index) => ({
 		fantraxPlayerId: `${prefix}-m-${String(index)}`,
 		playerName: `${prefix} minor ${String(index)}`,
@@ -86,8 +86,8 @@ function minors(prefix: string, count: number): MovingPlayer[] {
 }
 
 // Team D: Ellis plus two more minors — three occupied Minor League Slots, so
-// `M = 0` before the Move and `M = 1` after it.
-const TEAM_D_ROWS: readonly MovingPlayer[] = [
+// `M = 0` before the Trade and `M = 1` after it.
+const TEAM_D_ROWS: readonly TradingPlayer[] = [
 	ELLIS,
 	...minors('d', 2),
 	...activeBench('d', 6, 60_000_000)
@@ -95,7 +95,7 @@ const TEAM_D_ROWS: readonly MovingPlayer[] = [
 
 // Team E: Roster Count 9, $20,000,000 of Cap Space, and all three Minor
 // League Slots already full — so Ellis has nowhere to stash.
-const TEAM_E_ROWS: readonly MovingPlayer[] = [
+const TEAM_E_ROWS: readonly TradingPlayer[] = [
 	...minors('e', 3),
 	...activeBench('e', 9, SALARY_CAP - 20_000_000)
 ];
@@ -130,7 +130,7 @@ const AUCTIONS: OpenAuctions = {
 	}
 };
 
-const STATE: RosterMoveState = {
+const STATE: RosterTradeState = {
 	sending: { teamId: 't-d', teamName: 'Team D', rows: TEAM_D_ROWS },
 	receiving: { teamId: 't-e', teamName: 'Team E', rows: TEAM_E_ROWS },
 	auctions: AUCTIONS,
@@ -142,8 +142,8 @@ const STATE: RosterMoveState = {
 	playerNameFor: (id) => id
 };
 
-const TRADE: RecordRosterMove = {
-	kind: 'RecordRosterMove',
+const TRADE: RecordRosterTrade = {
+	kind: 'RecordRosterTrade',
 	sendingTeamId: 't-d',
 	sendingTeamName: 'Team D',
 	receivingTeamId: 't-e',
@@ -155,7 +155,7 @@ const TRADE: RecordRosterMove = {
 
 describe('§10 example 38 — the stash that becomes expensive by moving', () => {
 	it('lands Ellis in ACTIVE/BENCH, because Team E has no Free Minor League Slot', () => {
-		const outcome = evaluateMove(STATE, TRADE);
+		const outcome = evaluateTrade(STATE, TRADE);
 		expect(outcome.kind).toBe('permitted');
 		if (outcome.kind !== 'permitted') return;
 
@@ -165,7 +165,7 @@ describe('§10 example 38 — the stash that becomes expensive by moving', () =>
 	});
 
 	it('turns a $0 Cap Hit into $18,000,000, with the winning amount UNCHANGED', () => {
-		const outcome = evaluateMove(STATE, TRADE);
+		const outcome = evaluateTrade(STATE, TRADE);
 		expect(outcome.kind).toBe('permitted');
 		if (outcome.kind !== 'permitted') return;
 
@@ -177,7 +177,7 @@ describe('§10 example 38 — the stash that becomes expensive by moving', () =>
 	});
 
 	it('leaves Team E at Roster Count 10 and $2,000,000', () => {
-		const outcome = evaluateMove(STATE, TRADE);
+		const outcome = evaluateTrade(STATE, TRADE);
 		expect(outcome.kind).toBe('permitted');
 		if (outcome.kind !== 'permitted') return;
 
@@ -190,7 +190,7 @@ describe('§10 example 38 — the stash that becomes expensive by moving', () =>
 	});
 
 	it("raises Team D's Free Minor League Slots from 0 to 1", () => {
-		const outcome = evaluateMove(STATE, TRADE);
+		const outcome = evaluateTrade(STATE, TRADE);
 		expect(outcome.kind).toBe('permitted');
 		if (outcome.kind !== 'permitted') return;
 
@@ -201,23 +201,23 @@ describe('§10 example 38 — the stash that becomes expensive by moving', () =>
 	});
 
 	it('RECOMPUTES Minors Exposure across every eligible Auction Team D still leads', () => {
-		const outcome = evaluateMove(STATE, TRADE);
+		const outcome = evaluateTrade(STATE, TRADE);
 		expect(outcome.kind).toBe('permitted');
 		if (outcome.kind !== 'permitted') return;
 
-		// After the Move: `N = 2` eligible leads against `M = 1`, so Overflow
+		// After the Trade: `N = 2` eligible leads against `M = 1`, so Overflow
 		// Count is 1 and Minors Exposure is the LARGER of the two — $12,000,000.
 		// Before it, `M = 0` and the exposure was both of them, $16,000,000.
 		expect(outcome.gates.sendingCap.minorsExposure).toBe(12_000_000);
 		expect(outcome.gates.sendingCap.committedBids).toBe(12_000_000);
-		// Nothing wrote that: it is derived from the post-Move occupancy handed
+		// Nothing wrote that: it is derived from the post-Trade occupancy handed
 		// to the same arithmetic every Bid is judged by. A third Auction's
 		// Maximum Bid moved for a Team that was not party to this trade.
 	});
 
-	it('refuses the same Move outright when Team E can no longer cover what it leads', () => {
+	it('refuses the same Trade outright when Team E can no longer cover what it leads', () => {
 		// Team E leading $5,000,000 elsewhere: $2,000,000 of Cap Space after
-		// the Move cannot carry it, and the whole Move is refused.
+		// the Trade cannot carry it, and the whole Trade is refused.
 		const leadingE: Auction = {
 			...eligibleAuction('p-e-lead', 5_000_000),
 			leadingBid: {
@@ -231,7 +231,7 @@ describe('§10 example 38 — the stash that becomes expensive by moving', () =>
 				seedHash: null
 			}
 		};
-		const outcome = evaluateMove(
+		const outcome = evaluateTrade(
 			{
 				...STATE,
 				auctions: { byPlayer: { ...AUCTIONS.byPlayer, 'p-e-lead': leadingE } },
@@ -243,7 +243,7 @@ describe('§10 example 38 — the stash that becomes expensive by moving', () =>
 		expect(outcome.kind).toBe('refused');
 		if (outcome.kind !== 'refused') return;
 		expect(outcome.gates?.receivingCap.passed).toBe(false);
-		// **The WHOLE Move is refused**, not the arriving Player alone.
+		// **The WHOLE Trade is refused**, not the arriving Player alone.
 		expect(outcome.refusal.kind).toBe('gates');
 	});
 });

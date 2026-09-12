@@ -1,9 +1,15 @@
 /**
- * The Roster Move command: one transaction, one `RosterMoveRecorded`, and one
+ * The Roster Trade command: one transaction, one `RosterMoveRecorded`, and one
  * `UPDATE` per Existing Contract that changed hands (Story 7.7, FR-41).
  *
+ * **The event type reads `RosterMoveRecorded` on purpose, not by oversight.**
+ * Story 7.10 renamed the act; AD-4 makes `auction_events` insert-only, so the
+ * wire name rows were already written under is frozen and only the constant
+ * `ROSTER_TRADE_RECORDED_EVENT` moved. `core/projection/contracts.ts` declares
+ * it and states the reason in full.
+ *
  * **One transaction under the global write lock, and that is the requirement
- * rather than an implementation detail.** FR-41 says a Move that moved three
+ * rather than an implementation detail.** FR-41 says a Trade that moved three
  * Players of five is never a reachable state, so the event and every
  * `team_rosters` row travel together through `runTransactionalWrite`: the
  * lock is taken before anything is read (AD-6), the gates are re-derived
@@ -24,7 +30,7 @@
  *
  * **No `enqueue`.** `contract-assignment.ts` passes none because an
  * assignment is a Team talking to itself; this passes none because FR-41 says
- * so outright — a Roster Move is the one Commissioner act that is not
+ * so outright — a Roster Trade is the one Commissioner act that is not
  * broadcast to Discord, and it is recorded in the league-visible Audit Log
  * instead. Being off Discord is therefore a property of this file's shape
  * rather than a setting somebody could flip.
@@ -39,13 +45,13 @@ import { fold } from '../core/projection/fold.ts';
 import { INITIAL_AUCTIONS, auctionsReducer } from '../core/projection/auctions.ts';
 import {
 	INITIAL_CONTRACTS,
-	ROSTER_MOVE_RECORDED_EVENT,
+	ROSTER_TRADE_RECORDED_EVENT,
 	contractsReducer,
 	contractsWonBy
 } from '../core/projection/contracts.ts';
 import type {
 	AuctionContracts,
-	RosterMoveRecordedPayload
+	RosterTradeRecordedPayload
 } from '../core/projection/contracts.ts';
 import {
 	INITIAL_ELIGIBILITY,
@@ -58,23 +64,23 @@ import {
 	nominationsReducer
 } from '../core/projection/nominations.ts';
 import {
-	allMoveGatesPassed,
-	evaluateMove,
-	rosterMoveRefusalDetail
-} from '../core/rules/roster-move.ts';
+	allTradeGatesPassed,
+	evaluateTrade,
+	rosterTradeRefusalDetail
+} from '../core/rules/roster-trade.ts';
 import type {
-	MoveOutcome,
-	MoveTransfer,
-	MovingPlayer,
-	MovingTeam,
-	RosterMoveRefusal,
-	RosterMoveState
-} from '../core/rules/roster-move.ts';
+	TradeOutcome,
+	TradeTransfer,
+	TradingPlayer,
+	TradingTeam,
+	RosterTradeRefusal,
+	RosterTradeState
+} from '../core/rules/roster-trade.ts';
 import type { OverrideActor } from '../core/rules/override.ts';
 import type {
 	EventEnvelope,
-	RecordRosterMove,
-	RecordRosterMoveGateResults
+	RecordRosterTrade,
+	RecordRosterTradeGateResults
 } from '../core/types.ts';
 import { runTransactionalWrite } from '../shell/write.ts';
 import type { ConnectionGateway, TransactionalClient, WriteOutcome } from '../shell/write.ts';
@@ -83,17 +89,17 @@ import { loadTeamRosterDetail } from './team-roster.ts';
 import type { TeamRecord } from './team-registry.ts';
 import type { TeamRosterDetail } from './team-roster.ts';
 
-export type { OverrideActor as RosterMoveActor };
+export type { OverrideActor as RosterTradeActor };
 
 /** The statement one Existing Contract moves by. Never a delete and an insert. */
-export const MOVE_ROSTER_ROW_SQL =
+export const TRADE_ROSTER_ROW_SQL =
 	'update team_rosters set team_id = $2, roster_slot_kind = $3 where fantrax_player_id = $1';
 
 /** Every Team, ordered by name — what the destination's first step picks from. */
 const TEAMS_SQL = 'select id::text as id, name from teams order by name';
 
 /** What the Commissioner submitted, once the route has narrowed it. */
-export type RosterMoveInput = {
+export type RosterTradeInput = {
 	readonly sendingTeamId: string;
 	readonly receivingTeamId: string;
 	readonly sendingPlayerIds: readonly string[];
@@ -110,24 +116,24 @@ export type RosterMoveInput = {
  * `BidRejection.gates` is: a malformed act has no arithmetic to show, and a
  * panel handed empty figures would print a breakdown of nothing.
  */
-export type RosterMoveRejection = {
-	readonly refusal: RosterMoveRefusal;
+export type RosterTradeRejection = {
+	readonly refusal: RosterTradeRefusal;
 	readonly detail: string;
-	readonly gates: RecordRosterMoveGateResults | null;
+	readonly gates: RecordRosterTradeGateResults | null;
 };
 
 /** Everything one transaction reads: the two Teams, and the League they sit in. */
-export type LoadedRosterMoveState = {
+export type LoadedRosterTradeState = {
 	readonly teams: readonly TeamRecord[];
-	readonly move: RosterMoveState;
+	readonly move: RosterTradeState;
 	readonly contracts: AuctionContracts;
 };
 
 /** A rejection, built once so the gate and the route read one wording. */
-function rejectionFor(outcome: Extract<MoveOutcome, { kind: 'refused' }>): RosterMoveRejection {
+function rejectionFor(outcome: Extract<TradeOutcome, { kind: 'refused' }>): RosterTradeRejection {
 	return {
 		refusal: outcome.refusal,
-		detail: rosterMoveRefusalDetail(outcome.refusal, outcome.gates),
+		detail: rosterTradeRefusalDetail(outcome.refusal, outcome.gates),
 		gates: outcome.gates
 	};
 }
@@ -139,23 +145,23 @@ function rejectionFor(outcome: Extract<MoveOutcome, { kind: 'refused' }>): Roste
  * **The join is what recovers `winningAmount` and `contractYears`.**
  * `loadTeamRosterDetail` returns the rows the Cap arithmetic is counted from,
  * and a won row carries the CHARGED Cap Hit — `$0` for a stash — because that
- * is what `computeCapSpace` sums. A Move needs the full value instead: §10
+ * is what `computeCapSpace` sums. A Trade needs the full value instead: §10
  * example 38's Ellis charges `$0` on one Team and `$18,000,000` on the next,
  * and a charged figure carried across the transfer would lose the difference
  * silently. So the contract is read for its `winningAmount`, and an imported
  * row's own `cap_hit` — which is stored in full whatever Slot it sits in — is
  * the same fact for the other kind.
  */
-function movingTeamFor(
+function tradingTeamFor(
 	teamId: string,
 	teamName: string,
 	detail: TeamRosterDetail,
 	contracts: AuctionContracts
-): MovingTeam {
+): TradingTeam {
 	const won = new Map(
 		contractsWonBy(contracts, teamId).map((contract) => [contract.fantraxPlayerId, contract])
 	);
-	const rows: MovingPlayer[] = detail.rows.map((row) => {
+	const rows: TradingPlayer[] = detail.rows.map((row) => {
 		const contract = won.get(row.fantraxPlayerId);
 		// **A won row with no contract behind it is a THROW, not a fallback.**
 		//
@@ -173,7 +179,7 @@ function movingTeamFor(
 		// so nothing is written.
 		if (row.won && contract === undefined) {
 			throw new Error(
-				`movingTeamFor: ${row.fantraxPlayerId} is a won row on ${teamId} with no Auction Contract folded`
+				`tradingTeamFor: ${row.fantraxPlayerId} is a won row on ${teamId} with no Auction Contract folded`
 			);
 		}
 		return {
@@ -193,7 +199,7 @@ function movingTeamFor(
 }
 
 /**
- * Everything a Move is judged against, from ONE read of the log plus one
+ * Everything a Trade is judged against, from ONE read of the log plus one
  * roster read per Team.
  *
  * Four folds share the single `loadEventsViaClient` read — the nominations
@@ -205,11 +211,11 @@ function movingTeamFor(
  * `loadBidState`'s discipline: the sheet and the gate cannot disagree about
  * what the log says, only about when they read it.
  */
-export async function loadRosterMoveState(
+export async function loadRosterTradeState(
 	client: TransactionalClient,
 	sendingTeamId: string,
 	receivingTeamId: string
-): Promise<LoadedRosterMoveState> {
+): Promise<LoadedRosterTradeState> {
 	const events = await loadEventsViaClient(client);
 	const nominations = fold(INITIAL_NOMINATIONS, events, nominationsReducer);
 	const auctions = fold(INITIAL_AUCTIONS, events, auctionsReducer);
@@ -231,8 +237,8 @@ export async function loadRosterMoveState(
 		teams,
 		contracts,
 		move: {
-			sending: movingTeamFor(sendingTeamId, nameOf(sendingTeamId), sendingDetail, contracts),
-			receiving: movingTeamFor(
+			sending: tradingTeamFor(sendingTeamId, nameOf(sendingTeamId), sendingDetail, contracts),
+			receiving: tradingTeamFor(
 				receivingTeamId,
 				nameOf(receivingTeamId),
 				receivingDetail,
@@ -253,9 +259,9 @@ export async function loadRosterMoveState(
 }
 
 /** The command the core decides from, built from the submitted input. */
-function commandFor(state: LoadedRosterMoveState, input: RosterMoveInput): RecordRosterMove {
+function commandFor(state: LoadedRosterTradeState, input: RosterTradeInput): RecordRosterTrade {
 	return {
-		kind: 'RecordRosterMove',
+		kind: 'RecordRosterTrade',
 		sendingTeamId: input.sendingTeamId,
 		sendingTeamName: state.move.sending.teamName,
 		receivingTeamId: input.receivingTeamId,
@@ -266,46 +272,46 @@ function commandFor(state: LoadedRosterMoveState, input: RosterMoveInput): Recor
 	};
 }
 
-/** The sheet's read: what this Move would do, decided by the core, writing nothing. */
-export type RosterMovePreview = {
+/** The sheet's read: what this Trade would do, decided by the core, writing nothing. */
+export type RosterTradePreview = {
 	readonly teams: readonly TeamRecord[];
-	readonly sending: MovingTeam;
-	readonly receiving: MovingTeam;
-	readonly outcome: MoveOutcome;
+	readonly sending: TradingTeam;
+	readonly receiving: TradingTeam;
+	readonly outcome: TradeOutcome;
 };
 
 /**
- * Evaluate a Move without committing it — the reason sheet's before → after.
+ * Evaluate a Trade without committing it — the reason sheet's before → after.
  *
  * It opens a transaction because `loadEventsViaClient` needs a
  * `TransactionalClient`; it takes no advisory lock and decides nothing that
- * is written. **The render is never the check** (AD-9): `recordRosterMove`
+ * is written. **The render is never the check** (AD-9): `recordRosterTrade`
  * re-derives every gate under the lock, from the log as it stands then.
  */
-export async function previewRosterMove(
+export async function previewRosterTrade(
 	gateway: ConnectionGateway,
-	input: RosterMoveInput
-): Promise<RosterMovePreview> {
+	input: RosterTradeInput
+): Promise<RosterTradePreview> {
 	const client = await gateway.connect();
 	try {
-		const state = await loadRosterMoveState(client, input.sendingTeamId, input.receivingTeamId);
+		const state = await loadRosterTradeState(client, input.sendingTeamId, input.receivingTeamId);
 		return {
 			teams: state.teams,
 			sending: state.move.sending,
 			receiving: state.move.receiving,
-			outcome: evaluateMove(state.move, commandFor(state, input))
+			outcome: evaluateTrade(state.move, commandFor(state, input))
 		};
 	} finally {
 		try {
 			client.release();
 		} catch (error) {
-			console.error('previewRosterMove: releasing the read connection failed', error);
+			console.error('previewRosterTrade: releasing the read connection failed', error);
 		}
 	}
 }
 
 /** Every Team, for the destination's first step. One read, no lock, no decision. */
-export async function loadRosterMoveTeams(
+export async function loadRosterTradeTeams(
 	gateway: ConnectionGateway
 ): Promise<readonly TeamRecord[]> {
 	const client = await gateway.connect();
@@ -319,55 +325,55 @@ export async function loadRosterMoveTeams(
 		try {
 			client.release();
 		} catch (error) {
-			console.error('loadRosterMoveTeams: releasing the read connection failed', error);
+			console.error('loadRosterTradeTeams: releasing the read connection failed', error);
 		}
 	}
 }
 
 /**
- * Record one Roster Move: one transaction, one event, one `UPDATE` per moved
+ * Record one Roster Trade: one transaction, one event, one `UPDATE` per moved
  * Existing Contract, and nothing on the outbox.
  *
  * Returns `accepted` with the single appended event, or `rejected` carrying a
- * `RosterMoveRejection`. A rejection is a RETURNED value and never a throw,
+ * `RosterTradeRejection`. A rejection is a RETURNED value and never a throw,
  * and `runTransactionalWrite` has already rolled the transaction back by the
- * time it arrives — so a refused Move has written no event, no row and no
+ * time it arrives — so a refused Trade has written no event, no row and no
  * delivery intent.
  */
-export async function recordRosterMove(
+export async function recordRosterTrade(
 	gateway: ConnectionGateway,
 	actor: OverrideActor,
-	input: RosterMoveInput,
+	input: RosterTradeInput,
 	deviceClass: string
 ): Promise<WriteOutcome> {
 	// What `decide` settled, read by the projection below. Assigned inside the
 	// transaction and read inside the same one — `import-promotion.ts`'s seam,
 	// which is the only precedent in this codebase for mutating a live
 	// reference table alongside an appended event.
-	let transfers: readonly MoveTransfer[] = [];
+	let transfers: readonly TradeTransfer[] = [];
 
-	return await runTransactionalWrite<LoadedRosterMoveState>({
+	return await runTransactionalWrite<LoadedRosterTradeState>({
 		gateway,
-		load: (client) => loadRosterMoveState(client, input.sendingTeamId, input.receivingTeamId),
-		// **No `enqueue`, by FR-41.** A Roster Move is the one Commissioner act
+		load: (client) => loadRosterTradeState(client, input.sendingTeamId, input.receivingTeamId),
+		// **No `enqueue`, by FR-41.** A Roster Trade is the one Commissioner act
 		// that is not broadcast: it is recorded in the Audit Log, where every
 		// Manager can read it and filter by Team.
 		decide: ({ state }) => {
-			const outcome = evaluateMove(state.move, commandFor(state, input));
+			const outcome = evaluateTrade(state.move, commandFor(state, input));
 			if (outcome.kind === 'refused') {
 				return { kind: 'rejected', reason: rejectionFor(outcome) };
 			}
-			// The gates are re-asserted rather than trusted: `evaluateMove`
+			// The gates are re-asserted rather than trusted: `evaluateTrade`
 			// already refuses a failing set, and this is what makes "nothing is
 			// written when any gate fails" true of this file as well as of the
 			// core it calls.
-			if (!allMoveGatesPassed(outcome.gates)) {
-				throw new Error('recordRosterMove: a permitted Move carried a failing gate');
+			if (!allTradeGatesPassed(outcome.gates)) {
+				throw new Error('recordRosterTrade: a permitted Trade carried a failing gate');
 			}
 
 			transfers = outcome.delta.transfers;
 
-			const payload: RosterMoveRecordedPayload = {
+			const payload: RosterTradeRecordedPayload = {
 				sendingTeamId: state.move.sending.teamId,
 				sendingTeamName: state.move.sending.teamName,
 				receivingTeamId: state.move.receiving.teamId,
@@ -381,13 +387,13 @@ export async function recordRosterMove(
 			};
 
 			const event: EventEnvelope = {
-				type: ROSTER_MOVE_RECORDED_EVENT,
+				type: ROSTER_TRADE_RECORDED_EVENT,
 				payload,
 				managerId: actor.managerId,
 				teamId: actor.teamId,
 				deviceClass
 			};
-			// ONE event for the whole Move — FR-41's "one entry, not two".
+			// ONE event for the whole Trade — FR-41's "one entry, not two".
 			return { kind: 'accepted', events: [event] };
 		},
 		projections: [
@@ -396,7 +402,7 @@ export async function recordRosterMove(
 				// appended a moment ago, and `contractsReducer` is what moves it.
 				for (const transfer of transfers) {
 					if (transfer.won) continue;
-					await client.query(MOVE_ROSTER_ROW_SQL, [
+					await client.query(TRADE_ROSTER_ROW_SQL, [
 						transfer.fantraxPlayerId,
 						transfer.toTeamId,
 						transfer.toPlacement

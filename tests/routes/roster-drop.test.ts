@@ -8,7 +8,7 @@
  * would pass unchanged if the three-step branching inverted, if the sheet
  * rendered for a Drop the core refused, or if `commitAction` dropped a `drop`
  * parameter and committed a different Drop from the one reviewed. This file
- * calls `load` and `actions.record` instead — `tests/routes/roster-move.test.ts`
+ * calls `load` and `actions.record` instead — `tests/routes/roster-trade.test.ts`
  * is the template, added by Story 7.7's own review for exactly this reason.
  *
  * The REAL `requireCommissioner`, `requireLiveDestination` and

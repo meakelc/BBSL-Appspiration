@@ -348,7 +348,7 @@
 
 	/*
 	 * The detail rows as a definition list, one label above its value in one
-	 * column. A two-column grid was drafted and rejected: a Roster Move's
+	 * column. A two-column grid was drafted and rejected: a Roster Trade's
 	 * `Lakers — Meakel — Cap Space` label and a long transfer sentence cannot
 	 * share a 375px row without one of them scrolling.
 	 */

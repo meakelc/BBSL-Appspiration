@@ -12,9 +12,9 @@
  * > refused**, naming the Auction Team C leads and the $300,000 shortfall.
  * > Read what happened: Team C got $500,000 *richer* and became unable to
  * > afford a Bid it was already winning, because the freed Slot costs
- * > $1,000,000 to reserve. **A Roster Move can be refused because of the Team
+ * > $1,000,000 to reserve. **A Roster Trade can be refused because of the Team
  * > giving players up.** Team C's remedies are to wait for that Auction to
- * > close or to void the Bid under FR-32 — never for the Move to cancel it,
+ * > close or to void the Bid under FR-32 — never for the Trade to cancel it,
  * > since cancellation is triggered only by a Close (FR-40).
  *
  * **The refusal caused by the SENDING Team, and the one this story exists to
@@ -25,7 +25,7 @@
  *
  * **The refusal offers no way to cancel a Bid**, which is asserted here in
  * words rather than left to a reviewer to notice: FR-40's cancellation trigger
- * is a Close and only a Close, and a Move must not extend that list.
+ * is a Close and only a Close, and a Trade must not extend that list.
  *
  * Calls the core directly against state literals — no database, no HTTP, no
  * clock mocking.
@@ -37,14 +37,14 @@ import { SALARY_CAP } from '../../src/lib/core/constants.ts';
 import { parseMoney } from '../../src/lib/core/money.ts';
 import type { Auction, OpenAuctions } from '../../src/lib/core/projection/auctions.ts';
 import { INITIAL_NOMINATIONS } from '../../src/lib/core/projection/nominations.ts';
-import { evaluateMove, rosterMoveRefusalDetail } from '../../src/lib/core/rules/roster-move.ts';
-import type { MovingPlayer, RosterMoveState } from '../../src/lib/core/rules/roster-move.ts';
-import type { RecordRosterMove } from '../../src/lib/core/types.ts';
+import { evaluateTrade, rosterTradeRefusalDetail } from '../../src/lib/core/rules/roster-trade.ts';
+import type { TradingPlayer, RosterTradeState } from '../../src/lib/core/rules/roster-trade.ts';
+import type { RecordRosterTrade } from '../../src/lib/core/types.ts';
 
 const CLOSES_AT = '2026-09-11T09:00:00.000Z';
 
 /** The Player Team C sends away — Active/Bench, Cap Hit $500,000. */
-const CHEAP: MovingPlayer = {
+const CHEAP: TradingPlayer = {
 	fantraxPlayerId: 'p-cheap',
 	playerName: 'Vassell',
 	rosterSlotKind: 'active_bench',
@@ -53,7 +53,7 @@ const CHEAP: MovingPlayer = {
 	contractYears: null
 };
 
-function filler(prefix: string, count: number, total: number): MovingPlayer[] {
+function filler(prefix: string, count: number, total: number): TradingPlayer[] {
 	const each = Math.floor(total / count);
 	return Array.from({ length: count }, (_unused, index) => ({
 		fantraxPlayerId: `${prefix}-${String(index)}`,
@@ -66,13 +66,13 @@ function filler(prefix: string, count: number, total: number): MovingPlayer[] {
 }
 
 // Team C: eleven Active/Bench Players and $6,700,000 of Cap Space.
-const TEAM_C_ROWS: readonly MovingPlayer[] = [
+const TEAM_C_ROWS: readonly TradingPlayer[] = [
 	CHEAP,
 	...filler('c', 10, SALARY_CAP - 6_700_000 - 500_000)
 ];
 
 // Team D: somewhere for the Player to land. Nothing about it is at issue.
-const TEAM_D_ROWS: readonly MovingPlayer[] = filler('d', 5, 10_000_000);
+const TEAM_D_ROWS: readonly TradingPlayer[] = filler('d', 5, 10_000_000);
 
 /** The one Auction Team C leads, at $6,500,000. */
 const LED_AUCTION: Auction = {
@@ -97,7 +97,7 @@ const LED_AUCTION: Auction = {
 
 const AUCTIONS: OpenAuctions = { byPlayer: { 'p-contested': LED_AUCTION } };
 
-const STATE: RosterMoveState = {
+const STATE: RosterTradeState = {
 	sending: { teamId: 't-c', teamName: 'Team C', rows: TEAM_C_ROWS },
 	receiving: { teamId: 't-d', teamName: 'Team D', rows: TEAM_D_ROWS },
 	auctions: AUCTIONS,
@@ -106,8 +106,8 @@ const STATE: RosterMoveState = {
 	playerNameFor: (id) => (id === 'p-contested' ? 'Sharpe' : id)
 };
 
-const MOVE: RecordRosterMove = {
-	kind: 'RecordRosterMove',
+const TRADE: RecordRosterTrade = {
+	kind: 'RecordRosterTrade',
 	sendingTeamId: 't-c',
 	sendingTeamName: 'Team C',
 	receivingTeamId: 't-d',
@@ -118,8 +118,8 @@ const MOVE: RecordRosterMove = {
 };
 
 describe('§10 example 37 — the Team pushed over by giving something away', () => {
-	it('refuses the Move, on the SENDING Team and on the money', () => {
-		const outcome = evaluateMove(STATE, MOVE);
+	it('refuses the Trade, on the SENDING Team and on the money', () => {
+		const outcome = evaluateTrade(STATE, TRADE);
 
 		expect(outcome.kind).toBe('refused');
 		if (outcome.kind !== 'refused') return;
@@ -135,7 +135,7 @@ describe('§10 example 37 — the Team pushed over by giving something away', ()
 	});
 
 	it('states the arithmetic the PRD states, figure for figure', () => {
-		const outcome = evaluateMove(STATE, MOVE);
+		const outcome = evaluateTrade(STATE, TRADE);
 		expect(outcome.kind).toBe('refused');
 		if (outcome.kind !== 'refused') return;
 
@@ -153,7 +153,7 @@ describe('§10 example 37 — the Team pushed over by giving something away', ()
 	});
 
 	it('names the Auction Team C leads', () => {
-		const outcome = evaluateMove(STATE, MOVE);
+		const outcome = evaluateTrade(STATE, TRADE);
 		expect(outcome.kind).toBe('refused');
 		if (outcome.kind !== 'refused') return;
 
@@ -163,11 +163,11 @@ describe('§10 example 37 — the Team pushed over by giving something away', ()
 	});
 
 	it('says the Team, the gate, the Auction and the arithmetic out loud', () => {
-		const outcome = evaluateMove(STATE, MOVE);
+		const outcome = evaluateTrade(STATE, TRADE);
 		expect(outcome.kind).toBe('refused');
 		if (outcome.kind !== 'refused') return;
 
-		const detail = rosterMoveRefusalDetail(outcome.refusal, outcome.gates);
+		const detail = rosterTradeRefusalDetail(outcome.refusal, outcome.gates);
 
 		// The Team, the gate's own words, the Auction and the amount it is led
 		// at. The gate is named by what the sentence says it could not do —
@@ -179,7 +179,7 @@ describe('§10 example 37 — the Team pushed over by giving something away', ()
 		// **The refusal states its own arithmetic, in full.** $300,000 is off
 		// the $500,000 grid, so `formatMoney` refuses it and `describeAmount`
 		// would hedge — "an amount that is not on the grid" — which leaves the
-		// Commissioner unable to check the sum that refused their Move. The
+		// Commissioner unable to check the sum that refused their Trade. The
 		// figure is real: the CSV roster importer asserts no grid, so an
 		// imported Cap Hit carries whatever Fantrax held, and this Team's
 		// $6,700,000 Cap Space is exactly such a figure. `formatExactDollars`
@@ -194,24 +194,24 @@ describe('§10 example 37 — the Team pushed over by giving something away', ()
 	});
 
 	it('offers NO control that would cancel a Bid — only waiting or a void', () => {
-		const outcome = evaluateMove(STATE, MOVE);
+		const outcome = evaluateTrade(STATE, TRADE);
 		expect(outcome.kind).toBe('refused');
 		if (outcome.kind !== 'refused') return;
 
-		const detail = rosterMoveRefusalDetail(outcome.refusal, outcome.gates);
+		const detail = rosterTradeRefusalDetail(outcome.refusal, outcome.gates);
 
 		// The two remedies FR-41 allows, named.
 		expect(detail).toContain('Wait for it to close or void the Bid');
-		// And the promise the sentence makes about what a Move will not do.
-		expect(detail).toContain('the Move will not cancel it');
+		// And the promise the sentence makes about what a Trade will not do.
+		expect(detail).toContain('the Trade will not cancel it');
 	});
 
 	it('would have passed with the Player kept — the SENDING is what refuses it', () => {
-		const kept = evaluateMove(STATE, { ...MOVE, sendingPlayerIds: ['c-0'] });
+		const kept = evaluateTrade(STATE, { ...TRADE, sendingPlayerIds: ['c-0'] });
 
 		// `c-0` carries the bulk of the roster, so sending him instead frees far
 		// more than $1,000,000 of reserve. The contrast is the example's lesson:
-		// what refuses the Move is the SIZE of what left, not the act of trading.
+		// what refuses the Trade is the SIZE of what left, not the act of trading.
 		expect(kept.kind).toBe('permitted');
 	});
 });
