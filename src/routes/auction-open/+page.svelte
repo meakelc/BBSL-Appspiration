@@ -222,7 +222,7 @@
 		/* The admin token, not the interactive one: this control sits in a
 		   Commissioner block and must not borrow the Manager control's colour.
 		   It deliberately does NOT carry `control-commissioner` — that class
-		   generates the persistent "visible only to you" ::before label, which
+		   generates the persistent "Commissioner" ::before label, which
 		   belongs on the block and the submit. */
 		accent-color: var(--color-admin);
 	}

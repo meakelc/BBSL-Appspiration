@@ -112,7 +112,13 @@ const CATALOG: Readonly<Record<LeaguePhase, readonly Destination[]>> = Object.fr
 		destination('nominate', 'Nominate', '/nominate', false),
 		destination('teams', 'Teams', '/teams', false),
 		destination('audit-log', 'Audit Log', '/audit-log', false),
-		destination('notification-settings', 'Notification settings', '/notifications', false),
+		// Not listed: a permission, not a menu row. The surface holds a single
+		// control — the nomination-slot notification toggle — which does not earn
+		// a standing row beside the Bid Board and Nominate. The permission stays so
+		// the route keeps working, but NOTHING links to it now — it is reachable by
+		// URL alone, which is deliberate while the nomination-slot category's future
+		// is open. Restore the row by dropping the trailing `false`.
+		destination('notification-settings', 'Notification settings', '/notifications', false, false),
 		// Story 7.7: recording a trade the League agreed elsewhere. Commissioner
 		// only, and live in the two phases FR-41 permits — this list and the
 		// Contract Assignment one below. It is deliberately absent from

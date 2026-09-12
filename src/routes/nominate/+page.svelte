@@ -4,7 +4,7 @@
 	// Every control here is a MANAGER control in a Manager block. Nothing on
 	// this page is an administrative act: nominating is the ordinary thing a
 	// Manager came here to do, so the Commissioner classes — dashed, never
-	// filled, labelled "visible only to you" — would be a lie about who this
+	// filled, labelled "Commissioner" — would be a lie about who this
 	// belongs to.
 	//
 	// Nomination is a TWO-PART act: choosing a Player is not nominating them.

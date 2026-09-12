@@ -4,7 +4,7 @@
 	// Every control here is a MANAGER control in a Manager block. Nothing on
 	// this page is an administrative act: spending the Year Allotment is the
 	// whole reason this phase exists, so the Commissioner classes — dashed,
-	// never filled, labelled "visible only to you" — would be a lie about who
+	// never filled, labelled "Commissioner" — would be a lie about who
 	// this belongs to.
 	//
 	// BOTH acts are two-part, and for the same reason `/nominate`'s nomination
