@@ -70,13 +70,28 @@ const ORDERED_TEAMS = Object.freeze([
 	'Minnesota Timberwolves', // (18)
 	'New Orleans Pelicans', // (19)
 	'New York Knicks', // (20)
-	'Oklahoma City Thunder', // (21)
-	'Orlando Magic', // (22)
-	'Philadelphia 76ers', // (23)
-	'Phoenix Suns', // (24)
-	'Portland Trail Blazers', // (25)
-	'Sacramento Kings', // (26)
-	'San Antonio Spurs', // (27)
+	// NO Oklahoma City Thunder. This league plays Seattle, and an OKC entry sat
+	// here until 2026-09-12 — the same mistake `seed-league.js` records against
+	// TEAMS, left uncorrected in this file after that one was fixed. It shifted
+	// every entry from here down by one, so files (21) through (27) were each
+	// named for the Team ABOVE their real owner, and the thirtieth file was
+	// named for a Team that does not exist.
+	//
+	// Iteration 2 imported through that list and was corrected by hand
+	// afterwards. `_bmad-output/pilot-2-archive/team_rosters.json` is therefore
+	// evidence rather than assertion: the order below reproduces, for all thirty
+	// Teams, the highest-paid player each Manager confirmed as their own.
+	//
+	// Seattle sorts by FULL NAME — after San Antonio, before Toronto. By
+	// abbreviation SEA would follow SAS too, but that agreement is a coincidence
+	// of these two names and not the rule this list follows.
+	'Orlando Magic', // (21)
+	'Philadelphia 76ers', // (22)
+	'Phoenix Suns', // (23)
+	'Portland Trail Blazers', // (24)
+	'Sacramento Kings', // (25)
+	'San Antonio Spurs', // (26)
+	'Seattle SuperSonics', // (27)
 	'Toronto Raptors', // (28)
 	'Washington Wizards' // (29)
 ]);
