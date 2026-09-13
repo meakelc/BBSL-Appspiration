@@ -207,11 +207,6 @@
 			     single flex line to the top of the box, which is what left the
 			     text all but touching the top border. -->
 			<span class="strip-facts">
-				{#if showsMaximumBid && figure !== null}
-					<span class="strip-label">{maximumBidLabel}</span>
-					<span class="strip-figure money">{figure}</span>
-					<span class="strip-separator" aria-hidden="true">·</span>
-				{/if}
 				<span class="strip-roster">{roster}</span>
 				<!-- The bids figure, behind the SAME `·` the money half already
 				     uses. Plain type and nothing else: at parity the figure
@@ -221,6 +216,16 @@
 				{#if bids !== null}
 					<span class="strip-separator" aria-hidden="true">·</span>
 					<span class="strip-bids">{bids}</span>
+				{/if}
+				<!-- Maximum Bid LAST, so the one number the app exists to
+				     compute sits hard against the trailing edge the facts are
+				     pushed to. Its separator leads it rather than trails it,
+				     which is what keeps a single `·` between every pair of
+				     segments whether or not the bids half is present. -->
+				{#if showsMaximumBid && figure !== null}
+					<span class="strip-separator" aria-hidden="true">·</span>
+					<span class="strip-label">{maximumBidLabel}</span>
+					<span class="strip-figure money">{figure}</span>
 				{/if}
 			</span>
 		</summary>
@@ -325,10 +330,18 @@
 	/* The inner row: the baseline the label, the figure and the Roster Count
 	   share, so a 12px word and a 17px number sit on one line rather than
 	   floating against each other. It carries the one-line discipline too —
-	   it is the element that actually holds the text. */
+	   it is the element that actually holds the text.
+
+	   Pushed to the trailing edge by the auto margin, so the hamburger keeps
+	   the leading edge and the facts read against the far side of the strip.
+	   An auto margin rather than `justify-content` on the row, because the
+	   burger must stay put whether or not the money half is present — with
+	   `space-between` a strip carrying only the Roster Count would still split
+	   two items to opposite ends, which is the same result by accident. */
 	.strip-facts {
 		display: flex;
 		align-items: baseline;
+		margin-inline-start: auto;
 		gap: var(--space-card-gap);
 		flex-wrap: nowrap;
 		white-space: nowrap;
