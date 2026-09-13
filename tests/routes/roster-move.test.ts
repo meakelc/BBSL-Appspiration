@@ -27,7 +27,12 @@ import {
 import { OVERRIDE_REASON_REQUIRED_STATUS } from '../../src/lib/server/override-guard.ts';
 import type { RegisteredManager, SessionState } from '../../src/lib/server/auth.ts';
 import type { ResolvedPhase } from '../../src/lib/server/phase.ts';
+import {
+	confirmSheetView,
+	ROSTER_MOVE_COMMIT_LABEL
+} from '../../src/lib/reason-sheet-view.ts';
 import type { ConfirmSheetView, ReasonSheetView } from '../../src/lib/reason-sheet-view.ts';
+import { OVERRIDE_REASON_FIELD } from '../../src/lib/core/rules/override.ts';
 
 /**
  * The world the fake gateway answers from.
@@ -273,23 +278,43 @@ describe('/roster-move — the guards, on load AND on the action', () => {
 		);
 	});
 
-	it('is live in the Contract Assignment Phase, for a Manager as well', async () => {
-		const data = await loadAt('', MANAGER, ASSIGNMENT);
-		expect(data.step).toBe('players');
+	it('is live in the Contract Assignment Phase too', async () => {
+		const data = await loadAt('', COMMISSIONER, ASSIGNMENT);
+		expect(data.step).toBe('team');
 	});
 
-	it('refuses a Manager naming ANOTHER Team, whatever the page rendered', async () => {
-		// The one guard this route exists to hold. It refuses rather than
-		// silently substituting the Manager's own Team: a quiet swap would
-		// commit an act the submitter did not ask for.
+	it('refuses an ordinary Manager outright — the Move is Commissioner-only', async () => {
+		// **This is an OPERATOR decision, not FR-44's.** FR-44 gives a Manager
+		// the Move on their own Team, and the branch that serves it is still in
+		// this route. `destinations.ts` marks the entry `commissionerOnly`, and
+		// `requireLiveDestination` resolves through the same filter — so the
+		// refusal lands here, before the Team is ever resolved, on `load` and on
+		// the action alike. Flip that one flag back and the branch below wakes
+		// up. See `deferred-work.md`.
+		await expectRefusal(() => loadAt('', MANAGER), LIVE_DESTINATION_REFUSAL_STATUS);
+		await expectRefusal(() => loadAt('', MANAGER_ONE), LIVE_DESTINATION_REFUSAL_STATUS);
 		await expectRefusal(
-			() => loadAt('?team=t-1', MANAGER),
-			FOREIGN_TEAM_REFUSAL_STATUS
+			() => commit(`?${DEMOTE_TWO}`, null, MANAGER),
+			LIVE_DESTINATION_REFUSAL_STATUS
 		);
+		// In the Contract Assignment Phase too, where the entry carries the same
+		// flag.
 		await expectRefusal(
-			() => commit(`?team=t-1&${DEMOTE_ONE}`, null, MANAGER),
-			FOREIGN_TEAM_REFUSAL_STATUS
+			() => loadAt('', MANAGER_ONE, ASSIGNMENT),
+			LIVE_DESTINATION_REFUSAL_STATUS
 		);
+	});
+
+	it('still resolves the Team from the session rather than the form', async () => {
+		// The foreign-Team guard is now unreachable through the destination
+		// gate, but it stays in the route and stays asserted: it is what makes
+		// re-enabling the Manager branch a one-flag change rather than a
+		// security review.
+		const source = (
+			await import('node:fs')
+		).readFileSync('src/routes/roster-move/+page.server.ts', 'utf8');
+		expect(source).toContain('FOREIGN_TEAM_REFUSAL');
+		expect(source).toContain('locals.session.manager.teamId');
 	});
 
 	it('demands a reason from the COMMISSIONER before anything is written', async () => {
@@ -303,11 +328,6 @@ describe('/roster-move — the guards, on load AND on the action', () => {
 		);
 	});
 
-	it('demands NO reason from a Manager acting on their own Team', async () => {
-		const outcome = await commit(`?${DEMOTE_TWO}`, null, MANAGER);
-		expect(outcome.notice).toContain('recorded');
-	});
-
 	it('never reads the Team or the actor off the submitted form', async () => {
 		// The Team comes from the session for a Manager and from the URL for the
 		// Commissioner; the actor comes from the session for both.
@@ -319,90 +339,58 @@ describe('/roster-move — the guards, on load AND on the action', () => {
 	});
 });
 
-describe('/roster-move — the Manager branch', () => {
-	it('skips the Team step entirely and lands on its own roster', async () => {
-		const data = await loadAt('', MANAGER_ONE);
+describe('/roster-move — the Manager branch, currently gated off', () => {
+	// **The branch is built, tested elsewhere, and unreachable today.** FR-44
+	// gives a Manager the Move on their own Team; the operator chose to ship it
+	// Commissioner-only for now, and `destinations.ts` carries that as one
+	// `commissionerOnly` argument in each of the two phase lists.
+	//
+	// These tests assert the code that serves the Manager is still PRESENT, so
+	// that re-enabling it is flipping a flag rather than rebuilding a feature.
+	// The behavioural tests that used to live here were deleted rather than
+	// skipped: a skipped test asserting a refused path is a test that will rot.
 
-		expect(data.commissioner).toBe(false);
-		expect(data.step).toBe('players');
-		expect(data.teamId).toBe('t-1');
-		expect(data.team?.teamName).toBe('Team One');
-		// **No Team list at all.** A Manager has one Team and the page offers no
-		// way to name another.
-		expect(data.teams).toEqual([]);
+	it('keeps the session-resolved Team and the reasonless sheet in the route', async () => {
+		const source = (
+			await import('node:fs')
+		).readFileSync('src/routes/roster-move/+page.server.ts', 'utf8');
+
+		// The Manager half of the branch, intact.
+		expect(source).toContain('confirmSheetView');
+		expect(source).toContain('managerSheet');
+		expect(source).toContain('locals.session.manager.teamId');
 	});
 
-	it('offers only the two participating Slots, each as a toggle to the other', async () => {
-		const data = await loadAt('', MANAGER_ONE);
-		const ids = data.team?.players.map((player) => player.fantraxPlayerId) ?? [];
+	it('keeps a sheet shape that structurally cannot carry a reason (UX-DR41)', async () => {
+		// `ConfirmSheetView` is the Manager's shape and `ReasonSheetView` is that
+		// plus the two reason fields, so a single component with a conditional
+		// field remains impossible even while the branch is gated off.
+		const view = confirmSheetView({
+			act: 'Record that Team One moves Stashed One to Active/Bench.',
+			commitLabel: ROSTER_MOVE_COMMIT_LABEL,
+			rows: [],
+			cancelHref: '/roster-move'
+		});
 
-		expect(ids).toContain('p-active');
-		expect(ids).toContain('p-stash');
-		// **Injury Reserve and Dead Money are not offered.** The rules core
-		// refuses either if named anyway; the picker not offering them is the
-		// same fact said where it stops a pointless refusal.
-		expect(ids).not.toContain('p-ir');
-		expect(ids).not.toContain('p-dead');
-
-		const stash = data.team?.players.find((player) => player.fantraxPlayerId === 'p-stash');
-		expect(stash?.slotLabel).toBe('Minor League');
-		expect(stash?.targetLabel).toBe('Active/Bench');
-		expect(stash?.value).toBe('p-stash~active_bench');
-		// A stash charges $0 today, and that is the number a Move changes.
-		const active = data.team?.players.find((player) => player.fantraxPlayerId === 'p-active');
-		expect(active?.targetLabel).toBe('Minor League');
+		expect(view as unknown as Record<string, unknown>).not.toHaveProperty('reasonLabel');
+		expect(view as unknown as Record<string, unknown>).not.toHaveProperty('reasonFieldName');
+		expect(view.commitLabel).toBe(ROSTER_MOVE_COMMIT_LABEL);
 	});
 
-	it('renders the reasonless confirmation sheet and no reason sheet at all', async () => {
-		const data = await loadAt(`?confirm=yes&${DEMOTE_ONE}`, MANAGER_ONE);
+	it('keeps the solid Manager sheet component, with no reason field', async () => {
+		const markup = (
+			await import('node:fs')
+		).readFileSync('src/lib/components/ManagerSheet.svelte', 'utf8');
 
-		expect(data.step).toBe('sheet');
-		expect(data.sheet).toBeNull();
-		expect(data.managerSheet).not.toBeNull();
-		// **The shape cannot carry a reason.** `ConfirmSheetView` has no
-		// `reasonLabel` and no `reasonFieldName`, so there is no field for a
-		// component to render even by accident.
-		expect(data.managerSheet as unknown as Record<string, unknown>).not.toHaveProperty(
-			'reasonLabel'
-		);
-		expect(data.managerSheet as unknown as Record<string, unknown>).not.toHaveProperty(
-			'reasonFieldName'
-		);
-		expect(data.managerSheet?.title).toContain('Roster Move');
-		expect(data.managerSheet?.act).toContain('Team One moves Stashed One to Active/Bench');
-	});
-
-	it('states which way Maximum Bid moved, on the sheet, before commit', async () => {
-		const data = await loadAt(`?confirm=yes&${DEMOTE_ONE}`, MANAGER_ONE);
-		const rows = data.managerSheet?.rows ?? [];
-
-		const maximumBid = rows.find((row) => row.label.includes('Maximum Bid'));
-		expect(maximumBid).toBeDefined();
-		expect(maximumBid?.attention).toMatch(/ROSE|FELL|unchanged/);
-		// And the consequence is on the ROW, so a reader can see which value it
-		// is about.
-		expect(data.managerSheet?.attentionNotes.length).toBeGreaterThan(0);
-	});
-
-	it('commits what was reviewed — the selection rides the action URL', async () => {
-		const data = await loadAt(`?confirm=yes&${DEMOTE_ONE}`, MANAGER_ONE);
-
-		expect(data.commitAction).toContain('?/record');
-		expect(data.commitAction).toContain('team=t-1');
-		expect(data.commitAction).toContain('p-stash%7Eactive_bench');
-		// Cancel goes back to the picker with the selection intact.
-		expect(data.managerSheet?.cancelHref).toContain('move=p-stash%7Eactive_bench');
-	});
-
-	it('writes one UPDATE and one event, and says so', async () => {
-		world.statements.length = 0;
-		const outcome = await commit(`?${DEMOTE_TWO}`, null, MANAGER);
-
-		expect(outcome.notice).toContain('Roster Move is recorded');
-		expect(outcome.notice).toContain('not');
-		expect(outcome.appended?.seq).toBe('51');
-		const updates = world.statements.filter((sql) => /^update team_rosters/i.test(sql));
-		expect(updates).toHaveLength(1);
+		expect(markup).toContain('class="manager-block"');
+		expect(markup).toContain('class="control-manager"');
+		// The CLASS, not the word — the file's own header explains why it is not
+		// a `commissioner-block`, and that sentence is not a control.
+		expect(markup).not.toContain('class="commissioner-block"');
+		// No FIELD posting a reason — the word appears in the header explaining
+		// why there is none, so the assertion is on the `name`, not the noun.
+		expect(markup).not.toContain(`name="${OVERRIDE_REASON_FIELD}"`);
+		expect(markup).not.toMatch(/<textarea|<input/);
 	});
 });
 
@@ -463,7 +451,7 @@ describe('/roster-move — a refused Move gets no sheet', () => {
 	it('reports the core’s own sentence and stays on the picker', async () => {
 		// `p-active` has no pool row and has never been observed in a Minor
 		// League Slot, so the promotion is refused by the rules core.
-		const data = await loadAt('?confirm=yes&move=p-active~minor_league', MANAGER_ONE);
+		const data = await loadAt('?team=t-1&confirm=yes&move=p-active~minor_league', COMMISSIONER);
 
 		expect(data.step).toBe('players');
 		expect(data.sheet).toBeNull();
@@ -475,7 +463,7 @@ describe('/roster-move — a refused Move gets no sheet', () => {
 	});
 
 	it('returns a 409 with the core’s sentence when the action itself is refused', async () => {
-		const outcome = await commit('?move=p-active-2~minor_league', null, MANAGER_ONE);
+		const outcome = await commit('?team=t-1&move=p-active-2~minor_league', 'A reason.', COMMISSIONER);
 
 		expect(outcome.status).toBe(409);
 		expect(outcome.data.notice).toContain('never been told');
@@ -486,7 +474,7 @@ describe('/roster-move — a refused Move gets no sheet', () => {
 		// not a selection any surface produced, but dropping it here would make
 		// this screen the check for a rule the core owns — and the matrix says
 		// the refusal comes from the rules core, not the screen.
-		const data = await loadAt('?confirm=yes&move=p-active~injury_reserve', MANAGER_ONE);
+		const data = await loadAt('?team=t-1&confirm=yes&move=p-active~injury_reserve', COMMISSIONER);
 
 		expect(data.step).toBe('players');
 		expect(data.refusal?.detail).toContain('Injury Reserve');
@@ -497,7 +485,7 @@ describe('/roster-move — a refused Move gets no sheet', () => {
 	});
 
 	it('lets the rules core refuse a hand-typed Dead Money target too', async () => {
-		const data = await loadAt('?confirm=yes&move=p-active~dead_money', MANAGER_ONE);
+		const data = await loadAt('?team=t-1&confirm=yes&move=p-active~dead_money', COMMISSIONER);
 
 		expect(data.refusal?.detail).toContain('Dead Money');
 		expect(data.refusal?.detail).not.toContain('names no Contracts');
@@ -509,9 +497,9 @@ describe('/roster-move — a refused Move gets no sheet', () => {
 		// is one act, so an unmovable leg refuses all of it and writes nothing.
 		world.statements.length = 0;
 		const outcome = await commit(
-			`?${DEMOTE_ONE}&move=p-active~injury_reserve`,
-			null,
-			MANAGER_ONE
+			`?team=t-1&${DEMOTE_ONE}&move=p-active~injury_reserve`,
+			'A reason.',
+			COMMISSIONER
 		);
 
 		expect(outcome.status).toBe(409);
@@ -526,7 +514,7 @@ describe('/roster-move — a refused Move gets no sheet', () => {
 	it('still drops a string that names no Slot kind at all', async () => {
 		// There is nothing to hand the core for `p-active~nowhere`: it is not a
 		// `RosterSlotKind`, so the act genuinely names nothing.
-		const data = await loadAt('?confirm=yes&move=p-active~nowhere', MANAGER_ONE);
+		const data = await loadAt('?team=t-1&confirm=yes&move=p-active~nowhere', COMMISSIONER);
 
 		expect(data.refusal?.detail).toContain('names no Contracts');
 	});

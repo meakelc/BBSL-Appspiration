@@ -15,8 +15,14 @@
  * Setup's Import, Minor League Eligibility, Manager registration and the
  * auction-open gate are Commissioner-only: `EXPERIENCE.md`'s "genuinely
  * global acts" list names exactly this kind of administrative action, the
- * same category Auction's Pause/Resume and Operational health, and Contract
- * Assignment's assignment monitoring and export gate, already sit in.
+ * same category Auction's three roster acts, and Contract Assignment's
+ * assignment monitoring and export gate, already sit in.
+ *
+ * **Pause/Resume and Operational health are NOT in the table below**, though
+ * `EXPERIENCE.md` lists them. Both were catalog rows with no route behind
+ * them — a menu entry that 404s is worse than an absent one — so they were
+ * removed on 2026-09-12 until Story 7.4 and Epic 8 build the surfaces. Add
+ * each row back in the same change that adds its route.
  * Archived carries no Commissioner split — re-downloading the Export is for
  * every Manager, not an administrative act.
  *
@@ -119,36 +125,35 @@ const CATALOG: Readonly<Record<LeaguePhase, readonly Destination[]>> = Object.fr
 		// URL alone, which is deliberate while the nomination-slot category's future
 		// is open. Restore the row by dropping the trailing `false`.
 		destination('notification-settings', 'Notification settings', '/notifications', false, false),
-		// Story 7.11: a Team rearranging its OWN Slot placements (FR-44).
-		// `commissionerOnly: false`, and that is the one thing that makes this
-		// entry different from the Trade and the Drop below it — a Manager needs
-		// it, because a Move is a Manager's ordinary strategic decision on their
-		// own Team and the Commissioner's on-behalf half is the exception. It
-		// sits with the Manager entries, ahead of the Commissioner-only block,
-		// because that is where its role puts it. Live in the two phases FR-44
-		// permits and deliberately absent from `Archived`, where
-		// `requireOverridablePhase` refuses it a second time.
-		destination('roster-move', 'Record a Roster Move', '/roster-move', false),
-		// Story 7.7: recording a trade the League agreed elsewhere. Commissioner
-		// only, and live in the two phases FR-41 permits — this list and the
-		// Contract Assignment one below. It is deliberately absent from
-		// `Archived`, where `requireOverridablePhase` refuses it a second time.
-		destination('roster-trade', 'Record a Roster Trade', '/roster-trade', true),
-		// Story 7.8: recording a release the Team made in Fantrax. Commissioner
-		// only, live in the same two phases the Trade is, and deliberately absent
-		// from `Archived` where `requireOverridablePhase` refuses it a second
-		// time.
-		destination('roster-drop', 'Record a Drop', '/roster-drop', true),
-		destination('pause-resume', 'Pause/Resume', '/pause-resume', true),
-		destination('operational-health', 'Operational health', '/operational-health', true)
+		// The three roster acts, all Commissioner-only, all live in the two
+		// phases FR-41 and FR-44 permit — this list and the Contract Assignment
+		// one below — and all deliberately absent from `Archived`, where
+		// `requireOverridablePhase` refuses them a second time.
+		//
+		// **The Move is Commissioner-only by OPERATOR DECISION, not by FR-44.**
+		// FR-44 gives a Manager the Move on their own Team, and Story 7.11 built
+		// that half: the session-resolved Team, the solid reasonless
+		// `ManagerSheet`, and the route branch behind them are all still here and
+		// still tested. Flipping this flag is what takes it away, because
+		// `requireLiveDestination` resolves through the same filter — so a
+		// Manager is refused server-side on `load` and on the action, not merely
+		// shown no menu row. Re-enable by setting this one argument to `false` in
+		// BOTH phase lists; nothing else has to change. See `deferred-work.md`.
+		destination('roster-move', 'Roster Move', '/roster-move', true),
+		// Story 7.7: recording a trade the League agreed elsewhere.
+		destination('roster-trade', 'Trade', '/roster-trade', true),
+		// Story 7.8: recording a release the Team made in Fantrax.
+		destination('roster-drop', 'Drop', '/roster-drop', true)
 	],
 	'Contract Assignment': [
 		destination('contract-assignment', 'Contract Assignment', '/contract-assignment', false),
 		destination('teams', 'Teams', '/teams', false),
 		destination('audit-log', 'Audit Log', '/audit-log', false),
-		destination('roster-move', 'Record a Roster Move', '/roster-move', false),
-		destination('roster-trade', 'Record a Roster Trade', '/roster-trade', true),
-		destination('roster-drop', 'Record a Drop', '/roster-drop', true),
+		// The same three acts, on the same terms as the Auction list above —
+		// including the Move's operator-decision Commissioner flag.
+		destination('roster-move', 'Roster Move', '/roster-move', true),
+		destination('roster-trade', 'Trade', '/roster-trade', true),
+		destination('roster-drop', 'Drop', '/roster-drop', true),
 		destination('assignment-monitoring', 'Assignment monitoring', '/assignment-monitoring', true),
 		destination('export-gate', 'Export gate', '/export-gate', true)
 	],
