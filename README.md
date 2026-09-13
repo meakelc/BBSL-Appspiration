@@ -213,6 +213,12 @@ npm run seed:league            # thirty Teams and their Managers
 npm run seed:league -- --wipe  # clear both first
 ```
 
+The table in `scripts/seed-league.js` names a Manager for **all thirty** Teams.
+It refuses to seed while any row is missing a display name, and it refuses two
+rows sharing one snowflake — a duplicate would not fail the upsert, it would
+silently re-bind the first Manager to the second's Team and leave one Team
+unbound.
+
 Idempotent: Teams insert on-conflict-do-nothing, Managers upsert on their
 Discord id, so correcting a Team binding or a Commissioner flag is an edit to
 the table in `scripts/seed-league.js` plus a re-run.
@@ -229,6 +235,34 @@ or any Team, exists.
 `--wipe` deliberately does not delete `auction_events`. If it fails on that
 foreign key, the auction has real history and the script will not destroy it
 quietly.
+
+### Ending a pilot
+
+`seed:league --wipe` is the wrong tool for that — it leaves the history, the
+staged imports, the promoted rosters and the heartbeats exactly where they were.
+Use the loud version, which archives every table to JSON before deleting
+anything:
+
+```bash
+npm run reset:pilot -- --archive-to=_bmad-output/pilot-2-archive
+npm run reset:pilot -- --archive-to=_bmad-output/pilot-2-archive --confirm-wipe
+```
+
+The first run is a **dry run**: it prints the row count per table and writes
+nothing, locally or in the database. Read those counts before adding
+`--confirm-wipe`, which is the run that writes the archive and then deletes.
+
+`_bmad-output/pilot-*-archive/` is git-ignored, so the archive is local — a
+pilot's dump is the only surviving evidence of how that iteration behaved, and
+the script refuses to write into a directory that already holds one.
+
+It refuses to run when `SUPABASE_ENVIRONMENT` is `prod`, checked before it
+connects. `auction_watermark` is reset to 0 rather than deleted (its row is a
+schema-enforced singleton no INSERT re-creates), and `auction_events.seq`
+restarts at 1 so the new pilot's log reads against the old one's.
+
+**Disable the tick schedule first.** A sweep landing mid-wipe writes events
+against Teams the transaction is deleting.
 
 ---
 
