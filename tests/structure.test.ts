@@ -217,6 +217,26 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 	[
 		'example-43-a-stashed-drop-moves-the-maximum-bid-the-other-way.test.ts',
 		'43 — A stashed Drop moves the Maximum Bid the other way'
+	],
+	// Story 7.11's Roster Move (FR-44) lands the last THREE. 44 is example 39's
+	// lesson reached by a different act — a swap that is legal as one act and
+	// refused one leg at a time, so the file runs the sequenced order as the
+	// regression test. 45 is the mirror of 40 on the Move side: Cap Space falls
+	// and Maximum Bid RISES, which is why the sheet computes the direction
+	// rather than asserting it. 46 is the first §10 example about what the app
+	// KNOWS rather than what it can compute — two roster rows that are
+	// indistinguishable in `team_rosters` and are told apart by the log alone.
+	[
+		'example-44-the-optimization-after-the-trade.test.ts',
+		'44 — The optimization after the trade'
+	],
+	[
+		'example-45-the-move-that-buys-bidding-power-by-spending-cap.test.ts',
+		'45 — The Move that buys bidding power by spending cap'
+	],
+	[
+		'example-46-the-promotion-the-app-must-refuse-and-the-one-it-must-allow.test.ts',
+		'46 — The promotion the app must refuse, and the one it must allow'
 	]
 ];
 

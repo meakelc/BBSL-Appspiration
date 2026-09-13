@@ -119,6 +119,16 @@ const CATALOG: Readonly<Record<LeaguePhase, readonly Destination[]>> = Object.fr
 		// URL alone, which is deliberate while the nomination-slot category's future
 		// is open. Restore the row by dropping the trailing `false`.
 		destination('notification-settings', 'Notification settings', '/notifications', false, false),
+		// Story 7.11: a Team rearranging its OWN Slot placements (FR-44).
+		// `commissionerOnly: false`, and that is the one thing that makes this
+		// entry different from the Trade and the Drop below it — a Manager needs
+		// it, because a Move is a Manager's ordinary strategic decision on their
+		// own Team and the Commissioner's on-behalf half is the exception. It
+		// sits with the Manager entries, ahead of the Commissioner-only block,
+		// because that is where its role puts it. Live in the two phases FR-44
+		// permits and deliberately absent from `Archived`, where
+		// `requireOverridablePhase` refuses it a second time.
+		destination('roster-move', 'Record a Roster Move', '/roster-move', false),
 		// Story 7.7: recording a trade the League agreed elsewhere. Commissioner
 		// only, and live in the two phases FR-41 permits — this list and the
 		// Contract Assignment one below. It is deliberately absent from
@@ -136,6 +146,7 @@ const CATALOG: Readonly<Record<LeaguePhase, readonly Destination[]>> = Object.fr
 		destination('contract-assignment', 'Contract Assignment', '/contract-assignment', false),
 		destination('teams', 'Teams', '/teams', false),
 		destination('audit-log', 'Audit Log', '/audit-log', false),
+		destination('roster-move', 'Record a Roster Move', '/roster-move', false),
 		destination('roster-trade', 'Record a Roster Trade', '/roster-trade', true),
 		destination('roster-drop', 'Record a Drop', '/roster-drop', true),
 		destination('assignment-monitoring', 'Assignment monitoring', '/assignment-monitoring', true),

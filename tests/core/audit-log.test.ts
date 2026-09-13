@@ -57,6 +57,7 @@ import {
 import {
 	CONTRACT_LENGTH_ASSIGNED_EVENT,
 	DROP_RECORDED_EVENT,
+	ROSTER_REARRANGED_EVENT,
 	ROSTER_TRADE_RECORDED_EVENT
 } from '../../src/lib/core/projection/contracts.ts';
 import { MINOR_LEAGUE_ELIGIBILITY_SET } from '../../src/lib/core/projection/eligibility.ts';
@@ -93,6 +94,7 @@ import type { ImportPromotedPayload } from '../../src/lib/server/import-promotio
 import type {
 	ContractLengthAssignedPayload,
 	DropRecordedPayload,
+	RosterRearrangedPayload,
 	RosterTradeRecordedPayload,
 	RosterActTeamFigures,
 	RosterTradeTransfer
@@ -370,6 +372,42 @@ const DROP: DropRecordedPayload = {
 	reason: 'Both released in Fantrax on the 11th.'
 };
 
+/**
+ * A Roster Move that swaps two Contracts between the two participating Slots
+ * (Story 7.11, FR-44, §10 example 44): a won stash promoted INTO a Minor
+ * League Slot, which stops it charging, and an imported stash demoted OUT of
+ * one, which starts it charging.
+ */
+const ROSTER_MOVE: RosterRearrangedPayload = {
+	teamId: TEAM_A,
+	teamName: 'Lakers',
+	moves: [
+		{
+			fantraxPlayerId: PLAYER_ONE,
+			playerName: 'Jalen Green',
+			won: true,
+			fromPlacement: 'active_bench',
+			toPlacement: 'minor_league',
+			capHitBefore: parseMoney(18_000_000),
+			capHitAfter: parseMoney(0),
+			value: parseMoney(18_000_000)
+		},
+		{
+			fantraxPlayerId: PLAYER_TWO,
+			playerName: 'Jalen Duren',
+			won: false,
+			fromPlacement: 'minor_league',
+			toPlacement: 'active_bench',
+			capHitBefore: parseMoney(0),
+			capHitAfter: parseMoney(3_000_000),
+			value: parseMoney(3_000_000)
+		}
+	],
+	teamBefore: FIGURES(TEAM_A, 'Lakers', 2_000_000),
+	teamAfter: FIGURES(TEAM_A, 'Lakers', 17_000_000),
+	reason: 'Recorded on behalf of the Manager, who is travelling.'
+};
+
 const ELIGIBILITY_SET: MinorLeagueEligibilitySetPayload = {
 	fantraxPlayerId: PLAYER_ONE,
 	playerName: 'Jalen Green',
@@ -434,6 +472,7 @@ function everyKnownEvent(): AppendedEvent[] {
 		event(CONTRACT_LENGTH_ASSIGNED_EVENT, CONTRACT_LENGTH_ASSIGNED),
 		event(ROSTER_TRADE_RECORDED_EVENT, ROSTER_TRADE),
 		event(DROP_RECORDED_EVENT, DROP),
+		event(ROSTER_REARRANGED_EVENT, ROSTER_MOVE),
 		event(MINOR_LEAGUE_ELIGIBILITY_SET, ELIGIBILITY_SET),
 		event(ASSIGNMENTS_SUBMITTED_EVENT, ASSIGNMENTS_SUBMITTED),
 		event(ASSIGNMENT_DEADLINE_SET_EVENT, DEADLINE_SET),
@@ -647,6 +686,74 @@ describe('a Drop', () => {
 
 		expect(row?.value).toContain('Dead Money —');
 		expect(row?.value).not.toContain('$0');
+	});
+});
+
+describe('a Roster Move', () => {
+	// **`RENDERERS` is OPEN.** A missing key is not a compile error — the entry
+	// falls back to the envelope plus the raw payload and renders machine
+	// tokens at a reader — so this block is the ONLY proof the renderer exists
+	// and is wired to the event type the write path appends.
+	it('is one entry stating the reason, each re-placed Contract and the before → after', () => {
+		const entry = only([event(ROSTER_REARRANGED_EVENT, ROSTER_MOVE)]);
+		const text = rendered(entry);
+
+		expect(entry.typeLabel).toBe('Roster Move recorded');
+		expect(entry.headline).toContain('Lakers');
+		expect(entry.headline).toContain('Roster Move');
+		// The Commissioner's stated reason, verbatim and first.
+		expect(entry.details[0]?.label).toBe('Reason');
+		expect(entry.details[0]?.value).toBe(ROSTER_MOVE.reason);
+		// The Team's figures, before → after — §10 example 44's $2.0M → $17.0M.
+		expect(text).toContain('Lakers — Cap Space');
+		expect(text).toContain('$2.0M → $17.0M');
+		expect(entry.teams).toEqual([TEAM_A]);
+		expect(entry.players).toEqual([PLAYER_ONE, PLAYER_TWO]);
+	});
+
+	it('states both placements and both Cap Hits on each Contract, with the value beside them', () => {
+		const entry = only([event(ROSTER_REARRANGED_EVENT, ROSTER_MOVE)]);
+		const promoted = entry.details.find((detail) => detail.label === 'Jalen Green');
+		const demoted = entry.details.find((detail) => detail.label === 'Jalen Duren');
+
+		// The promotion: it stops charging, and its value is untouched (AD-23).
+		expect(promoted?.value).toContain('Active/Bench → Minor League');
+		expect(promoted?.value).toContain('Cap Hit $18.0M → $0.0M');
+		expect(promoted?.value).toContain('Value $18.0M');
+		// **Worded, never a boolean** — it is what says whether a `team_rosters`
+		// row was updated or the Contract moved by this event alone.
+		expect(promoted?.value).toContain('Auction Contract');
+
+		// The demotion: the same act, the opposite direction.
+		expect(demoted?.value).toContain('Minor League → Active/Bench');
+		expect(demoted?.value).toContain('Cap Hit $0.0M → $3.0M');
+		expect(demoted?.value).toContain('Existing Contract');
+	});
+
+	it('carries NO Reason row for a Manager acting on their own Team', () => {
+		// FR-44 gives a Manager a confirmation and no justification, so the
+		// payload's `reason` is `null` — and `rows()` drops a null rather than
+		// rendering an empty Reason line.
+		const own = { ...ROSTER_MOVE, reason: null };
+		const entry = only([event(ROSTER_REARRANGED_EVENT, own)]);
+
+		expect(entry.details.some((detail) => detail.label === 'Reason')).toBe(false);
+		// Everything else is still there: the record is the same record.
+		expect(rendered(entry)).toContain('Cap Hit $18.0M → $0.0M');
+	});
+
+	it('states an absence rather than an invented $0 when a move carries no amount', () => {
+		const malformed = {
+			...ROSTER_MOVE,
+			moves: [{ fantraxPlayerId: PLAYER_ONE, playerName: 'Jalen Green' }]
+		};
+		const entry = only([
+			event(ROSTER_REARRANGED_EVENT, malformed as unknown as RosterRearrangedPayload)
+		]);
+		const row = entry.details.find((detail) => detail.label === 'Jalen Green');
+
+		expect(row?.value).not.toContain('$0');
+		expect(row?.value).not.toContain('Cap Hit');
 	});
 });
 

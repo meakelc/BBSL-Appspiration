@@ -331,7 +331,17 @@ describe('scope — exactly one override reaches for this mechanism', () => {
 			// Story 7.8's Drop — the second override to reach the mechanism, and
 			// it reaches exactly the same four names the Trade does.
 			'src/routes/roster-drop/+page.server.ts',
-			'src/routes/roster-drop/+page.svelte'
+			'src/routes/roster-drop/+page.svelte',
+			// Story 7.11's Roster Move — the third, and the first that is only
+			// HALF an override. The Commissioner's on-behalf branch renders the
+			// reason sheet and calls `requireOverrideReason`; a Manager's own
+			// branch renders `ManagerSheet.svelte` and calls neither, because
+			// FR-44 gives a Manager a confirmation rather than a justification.
+			// The sheet component itself is listed for the same reason the
+			// Commissioner's is: it owns half of the mechanism's markup.
+			'src/lib/components/ManagerSheet.svelte',
+			'src/routes/roster-move/+page.server.ts',
+			'src/routes/roster-move/+page.svelte'
 		];
 		const naming = sources().filter((path) =>
 			/buildOverrideRecord|requireOverrideReason|requireOverridablePhase|reasonSheetView|ReasonSheet/.test(
@@ -356,12 +366,12 @@ describe('scope — exactly one override reaches for this mechanism', () => {
 		);
 		expect(named).toEqual([]);
 
-		// Exactly two routes reach for the mechanism: the Roster Trade (Story
-		// 7.7, FR-41) and the Drop (Story 7.8, FR-43). Both are global acts on
-		// a Team rather than on an object a Manager is looking at, so each gets
-		// an admin destination of its own rather than a control placed in
-		// context. The list stays exhaustive — a third override appearing
-		// without this test being edited is a third override nobody reviewed.
+		// Exactly three routes reach for the mechanism: the Roster Trade (Story
+		// 7.7, FR-41), the Drop (Story 7.8, FR-43) and the Roster Move (Story
+		// 7.11, FR-44). All three are acts on a Team rather than on an object a
+		// Manager is looking at, so each gets a destination of its own rather
+		// than a control placed in context. The list stays exhaustive — a fourth
+		// appearing without this test being edited is one nobody reviewed.
 		const reaching = routeFiles.filter((path) =>
 			/override-guard|rules\/override|reason-sheet-view|ReasonSheet/.test(
 				readFileSync(join(ROOT, ...path.split('/')), 'utf8')
@@ -370,6 +380,8 @@ describe('scope — exactly one override reaches for this mechanism', () => {
 		expect(reaching.sort()).toEqual([
 			'src/routes/roster-drop/+page.server.ts',
 			'src/routes/roster-drop/+page.svelte',
+			'src/routes/roster-move/+page.server.ts',
+			'src/routes/roster-move/+page.svelte',
 			'src/routes/roster-trade/+page.server.ts',
 			'src/routes/roster-trade/+page.svelte'
 		]);

@@ -34,6 +34,7 @@ import type {
 	RosterActTeamFigures,
 	RosterTradeTransfer
 } from './core/projection/contracts.ts';
+import type { ActCapGateOutcome } from './core/types.ts';
 import { OVERRIDE_REASON_FIELD } from './core/rules/override.ts';
 import { SLOT_LABELS } from './core/rules/roster-import.ts';
 import { describeActAmount } from './core/rules/roster-act.ts';
@@ -41,6 +42,12 @@ import { transferAttention } from './core/rules/roster-trade.ts';
 import type { RosterTradeDelta } from './core/rules/roster-trade.ts';
 import { dropAttention } from './core/rules/roster-drop.ts';
 import type { DropRelease, RosterDropDelta } from './core/rules/roster-drop.ts';
+import { maximumBidDirectionSentence, moveAttention } from './core/rules/roster-rearrange.ts';
+import type {
+	MaximumBidPair,
+	RearrangeMove,
+	RosterRearrangeDelta
+} from './core/rules/roster-rearrange.ts';
 
 /**
  * One before→after row, as the caller states it.
@@ -100,8 +107,19 @@ export type ReasonSheetViewRow = {
 	readonly attention: string | null;
 };
 
-/** The whole sheet, in words. */
-export type ReasonSheetView = {
+/**
+ * Everything a sheet says EXCEPT the reason field — the shape a Manager's own
+ * confirmation sheet reads (Story 7.11, FR-44).
+ *
+ * **Split out rather than made optional.** FR-44 gives a Manager acting on
+ * their own Team a confirmation sheet and NO reason: it is an ordinary
+ * strategic decision, not a referee intervention, and UX-DR41 forbids one
+ * component with a conditional reason field. A `reasonLabel?: string` would
+ * be exactly that conditional, moved into the type — so the Manager variant
+ * is a shape that cannot carry a reason at all, and `ReasonSheetView` is this
+ * plus the two fields the Commissioner's sheet needs.
+ */
+export type ConfirmSheetView = {
 	readonly title: string;
 	readonly act: string;
 	readonly rowsHeading: string;
@@ -110,18 +128,22 @@ export type ReasonSheetView = {
 	 * Every row's consequence sentence, in row order. Empty when none.
 	 *
 	 * The sheet does NOT render this list — each sentence renders on the row
-	 * it belongs to, so the Commissioner can see which value a consequence is
+	 * it belongs to, so the reader can see which value a consequence is
 	 * about. This is the same set, flattened, for a caller that needs to ask
-	 * "does this override have consequences at all" without walking the rows.
+	 * "does this act have consequences at all" without walking the rows.
 	 */
 	readonly attentionNotes: readonly string[];
-	readonly reasonLabel: string;
-	/** The `name` the reason posts under — the guard's field, not a second literal. */
-	readonly reasonFieldName: string;
 	readonly cancelLabel: string;
 	readonly cancelHref: string;
 	readonly commitLabel: string;
 	readonly auditFooter: string;
+};
+
+/** The whole sheet, in words. */
+export type ReasonSheetView = ConfirmSheetView & {
+	readonly reasonLabel: string;
+	/** The `name` the reason posts under — the guard's field, not a second literal. */
+	readonly reasonFieldName: string;
 };
 
 /**
@@ -191,6 +213,23 @@ function attentionOf(row: ReasonSheetRow): string | null {
  * was rendered.
  */
 export function reasonSheetView(input: ReasonSheetInput): ReasonSheetView {
+	return {
+		...sheetBody(input, REASON_SHEET_TITLE, REASON_SHEET_AUDIT_FOOTER),
+		reasonLabel: REASON_SHEET_FIELD_LABEL,
+		reasonFieldName: OVERRIDE_REASON_FIELD
+	};
+}
+
+/**
+ * The half both sheets share: the act, the paired rows and the way out.
+ *
+ * One mapping, called twice, so the Manager's confirmation sheet and the
+ * Commissioner's reason sheet cannot pair a before with a different after or
+ * key their rows differently. Neither sheet's own words are decided here —
+ * the title and the footer arrive from the caller, because they are the two
+ * sentences that actually differ.
+ */
+function sheetBody(input: ReasonSheetInput, title: string, auditFooter: string): ConfirmSheetView {
 	const rows = input.rows.map((row, index) => ({
 		key: `row-${index}`,
 		label: row.label,
@@ -198,21 +237,55 @@ export function reasonSheetView(input: ReasonSheetInput): ReasonSheetView {
 		attention: attentionOf(row)
 	}));
 	return {
-		title: REASON_SHEET_TITLE,
+		title,
 		act: input.act,
 		rowsHeading: REASON_SHEET_ROWS_HEADING,
 		rows,
 		attentionNotes: rows
 			.map((row) => row.attention)
 			.filter((note): note is string => note !== null),
-		reasonLabel: REASON_SHEET_FIELD_LABEL,
-		reasonFieldName: OVERRIDE_REASON_FIELD,
 		cancelLabel: REASON_SHEET_CANCEL_LABEL,
 		cancelHref: input.cancelHref,
 		commitLabel: input.commitLabel,
-		auditFooter: REASON_SHEET_AUDIT_FOOTER
+		auditFooter
 	};
 }
+
+/**
+ * The Manager's own confirmation sheet (Story 7.11, FR-44).
+ *
+ * **A sheet without a reason is not a weaker override sheet; it is a
+ * different object.** A Manager rearranging their own Roster is making an
+ * ordinary strategic decision — FR-44 says so in as many words — and asking
+ * them to justify it to the League would be the app treating a legal move as
+ * an intervention. What it still does is state the act, both states and every
+ * consequence the two states do not show, because §10 example 45's Maximum
+ * Bid moves in the direction nobody expects.
+ *
+ * The title says whose act it is, and the footer says the record is
+ * league-visible and permanent — which is true of a Manager's Move as much as
+ * of a Commissioner's, and is the one thing they might not otherwise expect.
+ */
+export function confirmSheetView(input: ReasonSheetInput): ConfirmSheetView {
+	return sheetBody(input, CONFIRM_SHEET_TITLE, CONFIRM_SHEET_AUDIT_FOOTER);
+}
+
+/** The Manager sheet's title. It names the act's owner, not the referee. */
+export const CONFIRM_SHEET_TITLE = 'Confirm your Roster Move';
+
+/**
+ * The Manager sheet's footer.
+ *
+ * No reason is asked for, so the footer cannot say "and this reason". What it
+ * must still say is that the act is written down, that every Manager can read
+ * it, and that it cannot be unwritten — a Manager who believes their own
+ * rearrangement is private would be surprised by the Audit Log, and the
+ * surprise is avoidable here.
+ */
+export const CONFIRM_SHEET_AUDIT_FOOTER =
+	'Written to the Audit Log with your name, the timestamp and both states. Every Manager can read ' +
+	'it, and it cannot be edited or deleted afterwards. The Move itself is reversible: move the ' +
+	'Contract back and the roster returns to exactly the state it held.';
 
 // --- Story 7.7: the two-Team Roster Trade sheet ----------------------------
 
@@ -395,3 +468,80 @@ export function dropReasonRows(delta: RosterDropDelta): readonly ReasonSheetRow[
 
 /** The commit control's own words. Never "Confirm" — it names the act. */
 export const DROP_COMMIT_LABEL = 'Record the Drop';
+
+// --- Story 7.11: the one-Team Roster Move sheet ---------------------------
+
+/**
+ * One re-placed Contract, named under the Team's figures (Story 7.11, FR-44,
+ * UX-DR41).
+ *
+ * `before` is the Slot it occupied and what it was charging; `after` is the
+ * Slot it now occupies and what it charges there. The row is deliberately
+ * readable without the arithmetic above it: "Active/Bench 18.0M to Minor
+ * League 0" is the whole of FR-44's cap rule for one Contract.
+ *
+ * The `attention` sentence is the pure core's (`moveAttention`) and states
+ * what the Contract's charge did, with the value stated unchanged beside it
+ * (AD-23) — §10 example 44's $15,000,000 recovery is two of these rows
+ * pulling opposite ways.
+ */
+function rearrangeRow(move: RearrangeMove): ReasonSheetRow {
+	return {
+		label: move.playerName,
+		before: `${SLOT_LABELS[move.fromPlacement]} · ${describeActAmount(move.capHitBefore)}`,
+		after: `${SLOT_LABELS[move.toPlacement]} · ${describeActAmount(move.capHitAfter)}`,
+		attention: moveAttention(move)
+	};
+}
+
+/**
+ * Every row a Roster Move's sheet shows, in reading order.
+ *
+ * The Team's five figures, then the **Maximum Bid** row, then one row per
+ * re-placed Contract.
+ *
+ * **Maximum Bid earns a row of its own, and it is the reason this sheet
+ * exists.** The five figures show Cap Space falling while Roster Count rises,
+ * which every intuition reads as a loss — and §10 example 45 is the case
+ * where the Team ends $10,000,000 RICHER at the bidding table for exactly
+ * that trade. The figure is `managerMaximumBidFor`'s — the Maximum Bid a
+ * Manager knows from the board, which counts the Bid about to be placed —
+ * and NOT the gates' solvency headroom, which projects none and would state
+ * a gain $1,000,000 short. The sentence beside it is
+ * `maximumBidDirectionSentence`'s. Neither is asserted here.
+ *
+ * `teamFigureRows` is the Trade's, called rather than copied: a Move's five
+ * figures are a Trade's five figures asked of one Team.
+ */
+export function rearrangeReasonRows(
+	delta: RosterRearrangeDelta,
+	capBefore: ActCapGateOutcome,
+	capAfter: ActCapGateOutcome,
+	maximumBid: MaximumBidPair
+): readonly ReasonSheetRow[] {
+	return [
+		...teamFigureRows(delta.before, delta.after),
+		{
+			label: `${delta.after.teamName} · Maximum Bid`,
+			before: describeActAmount(maximumBid.before),
+			after: describeActAmount(maximumBid.after),
+			attention: maximumBidDirectionSentence(capBefore, capAfter, maximumBid)
+		},
+		...delta.moves.map(rearrangeRow)
+	];
+}
+
+/**
+ * The act, as one finished sentence — the pure core's, re-exported rather
+ * than restated.
+ *
+ * `dropActSentence` lives in `rules/roster-drop.ts` and
+ * `rosterTradeActSentence` lives here; the Move's sentence lives in the core
+ * beside the rule that produces the delta, and this name is what the Code Map
+ * promises callers of this module. One function, two names, no second
+ * wording.
+ */
+export { rearrangeActSentence } from './core/rules/roster-rearrange.ts';
+
+/** The commit control's own words. Never "Confirm" — it names the act. */
+export const ROSTER_MOVE_COMMIT_LABEL = 'Record the Roster Move';

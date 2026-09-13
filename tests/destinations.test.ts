@@ -77,7 +77,16 @@ const EXPECTED: Record<
 			'nominate',
 			'teams',
 			'audit-log',
-			'notification-settings'
+			'notification-settings',
+			// Story 7.11 adds `roster-move` — and it is a MANAGER entry, which is
+			// the one thing that makes it different from the Trade and the Drop.
+			// FR-44 is a Manager's own act on their own Team; the Commissioner's
+			// on-behalf half is the exception. The catalog therefore files it
+			// with the Manager entries — last of them, after
+			// `notification-settings` and BEFORE the Commissioner-only block —
+			// which is why it lands at the end of this list rather than beside
+			// the Trade and the Drop below.
+			'roster-move'
 		],
 		// Story 7.7 adds `roster-trade` ahead of the two Epic 1 admin entries, in
 		// the catalog's own order: FR-41 permits a Trade in the Auction Phase and
@@ -87,7 +96,7 @@ const EXPECTED: Record<
 		commissionerOnly: ['roster-trade', 'roster-drop', 'pause-resume', 'operational-health']
 	},
 	'Contract Assignment': {
-		manager: ['contract-assignment', 'teams', 'audit-log'],
+		manager: ['contract-assignment', 'teams', 'audit-log', 'roster-move'],
 		commissionerOnly: ['roster-trade', 'roster-drop', 'assignment-monitoring', 'export-gate']
 	},
 	Archived: {

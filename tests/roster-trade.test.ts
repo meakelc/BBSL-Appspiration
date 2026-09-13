@@ -647,11 +647,14 @@ describe('the /roster-trade surface, by source-text assertion', () => {
 		expect(SERVER.match(/guard\(locals\);/g)).toHaveLength(2);
 	});
 
-	it('leaves NO `/roster-move` route behind — the old URL is a 404, not a redirect', () => {
-		// Story 7.10's rename frees the name for Story 7.11's within-Team Move.
-		// A redirect would keep the old vocabulary reachable and would have to
-		// be deleted again the moment 7.11 claims `/roster-move` for real.
-		expect(existsSync(join(ROOT, 'src', 'routes', 'roster-move'))).toBe(false);
+	it('leaves NO redirect behind: /roster-move belongs to Story 7.11, not to this act', () => {
+		// Story 7.10's rename freed the name and Story 7.11 claimed it: the
+		// route now exists and serves FR-44's within-Team rearrangement. What
+		// must still be true is that the Trade does not reach for it — a
+		// redirect from here would keep the old vocabulary alive and would land
+		// a Commissioner looking for a Trade on a different act entirely.
+		expect(existsSync(join(ROOT, 'src', 'routes', 'roster-move'))).toBe(true);
+		expect(read('src/routes/roster-move/+page.svelte')).toMatch(/Record a Roster Move/);
 		expect(SERVER).not.toMatch(/roster-move/);
 		expect(PAGE).not.toMatch(/roster-move/);
 	});

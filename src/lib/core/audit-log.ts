@@ -66,6 +66,7 @@ import { AUCTION_OPENED_EVENT, CONTRACT_ASSIGNMENT_OPENED_EVENT } from './projec
 import {
 	CONTRACT_LENGTH_ASSIGNED_EVENT,
 	DROP_RECORDED_EVENT,
+	ROSTER_REARRANGED_EVENT,
 	ROSTER_TRADE_RECORDED_EVENT
 } from './projection/contracts.ts';
 import { MINOR_LEAGUE_ELIGIBILITY_SET } from './projection/eligibility.ts';
@@ -1019,6 +1020,73 @@ function renderBidVoided(): AuditRender {
 }
 
 /**
+ * One `RosterRearrangedMove` — `projection/contracts.ts`'s
+ * `RosterRearrangedMove`.
+ *
+ * NOT an event type of its own: it is an element of `RosterRearranged`'s
+ * `moves`. Both placements are stated because the placement IS the act, and
+ * both Cap Hits beside them because Cap Hit follows placement (FR-44) — a
+ * Contract reading `$18,000,000 → $0` on a row that only moved Slots is the
+ * least obvious thing in this requirement, and the `value` stands unchanged
+ * beside the pair (AD-23) so nobody has to derive one from the other.
+ *
+ * `won` is the Existing-Contract-versus-Auction-Contract distinction, WORDED
+ * rather than shown as a boolean: it is what says whether a `team_rosters`
+ * row was updated or the Contract moved by this event alone.
+ */
+function rearrangedRow(move: Payload, refs: AuditReferences): AuditDetail {
+	const player = playerNamed(refs, text(move, 'fantraxPlayerId'), text(move, 'playerName'));
+	const won = flag(move, 'won');
+	const fromPlacement = wordToken(SLOT_KIND_WORDS, move['fromPlacement']);
+	const toPlacement = wordToken(SLOT_KIND_WORDS, move['toPlacement']);
+	const capBefore = amount(move, 'capHitBefore');
+	const capAfter = amount(move, 'capHitAfter');
+	const value = amount(move, 'value');
+
+	const parts: string[] = [];
+	if (fromPlacement !== null || toPlacement !== null) {
+		parts.push(`${fromPlacement ?? '—'}${TO}${toPlacement ?? '—'}`);
+	}
+	if (won !== null) parts.push(won ? 'Auction Contract' : 'Existing Contract');
+	if (capBefore !== null || capAfter !== null) {
+		parts.push(`Cap Hit ${capBefore ?? '—'}${TO}${capAfter ?? '—'}`);
+	}
+	if (value !== null) parts.push(`Value ${value}`);
+	return { label: player, value: parts.join(LIST_SEPARATOR) };
+}
+
+/**
+ * `RosterRearranged` — `projection/contracts.ts`'s `RosterRearrangedPayload`.
+ *
+ * ONE entry however many Contracts moved, because a Move is one act evaluated
+ * once. FR-44 does not broadcast a Move to Discord, which makes this the only
+ * surface it can be looked up on.
+ *
+ * **The reason row renders only when there IS one.** A Manager acting on
+ * their own Team gives none — FR-44 requires a confirmation and no
+ * justification — and `rows()` drops a `null`, so the entry simply carries no
+ * Reason line rather than an empty one. The Commissioner's on-behalf Move
+ * carries the reason verbatim and first, exactly as the Trade's and the
+ * Drop's do.
+ */
+function renderRosterMove(payload: Payload, refs: AuditReferences): AuditRender {
+	const teamId = text(payload, 'teamId');
+	const team = teamNamed(refs, teamId, text(payload, 'teamName'));
+	const moves = payloadList(payload, 'moves');
+
+	return {
+		headline: `${team} recorded a Roster Move.`,
+		details: [
+			...rows(row('Reason', text(payload, 'reason'))),
+			...moves.map((move) => rearrangedRow(move, refs)),
+			...figureRows(team, asPayload(payload['teamBefore']), asPayload(payload['teamAfter']))
+		],
+		teams: distinct([teamId]),
+		players: distinct(moves.map((move) => text(move, 'fantraxPlayerId')))
+	};
+}
+
+/**
  * The registry: a LOOKUP from `event_type` to a renderer, never a union.
  *
  * An absent key is not an error — `renderAuditEvent` falls back to the
@@ -1071,6 +1139,12 @@ const RENDERERS: Readonly<Record<string, AuditEntry>> = Object.freeze({
 	// silently plain entry. Story 7.8's Drop is the record FR-43 requires, and
 	// it is the only surface the act appears on.
 	[DROP_RECORDED_EVENT]: { label: 'Drop recorded', render: renderDrop },
+	// `RENDERERS` is OPEN, so a missing entry here is not a compile error but a
+	// silently plain entry rendering machine tokens at a reader — which is why
+	// `tests/core/audit-log.test.ts` is the only proof this key exists. Story
+	// 7.11's Roster Move is the record FR-44 requires, and the Audit Log is the
+	// only surface the act appears on.
+	[ROSTER_REARRANGED_EVENT]: { label: 'Roster Move recorded', render: renderRosterMove },
 	[MINOR_LEAGUE_ELIGIBILITY_SET]: {
 		label: 'Minor League Eligibility set',
 		render: renderEligibilitySet

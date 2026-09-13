@@ -1230,6 +1230,107 @@ export type RecordDropGateResults = {
 	readonly slots: ActSlotsGateOutcome;
 };
 
+// --- Story 7.11: the RearrangeRoster command and its fixed gate set -------
+
+/**
+ * The `RearrangeRoster` command (Story 7.11, FR-44, PRD §10 examples 44, 45
+ * and 46).
+ *
+ * **The FIFTH command type, and AR-44's "fourth" is a stale count.**
+ * `RecordDrop` above already took fourth place; AR-44's other count — that
+ * this is the THIRD caller of the shared evaluator in `rules/roster-act.ts`,
+ * after the Trade and the Drop — is correct.
+ *
+ * **A Team moving its own Contracts between its own Slots.** No Contract
+ * changes hands, there is no counterparty, no amount is edited and no
+ * assigned length is cleared. What changes is PLACEMENT, and Cap Hit follows
+ * it: a Contract promoted into a Minor League Slot charges `$0` and one
+ * demoted to Active/Bench charges its full amount.
+ *
+ * **Placement is carried on the command and is never re-derived.** Every
+ * other placement in this codebase goes through `slotPlacementFor`, which is
+ * FR-21's automatic rule against the Team's occupancy at that instant. A Move
+ * that re-derived placement would take the demotion the Manager just asked
+ * for and put the Contract straight back in the Slot it left, so `toPlacement`
+ * rides each entry of `moves` and the rules core applies it verbatim.
+ *
+ * **Why not a `RecordRosterTrade` with one Team on both sides.** A Trade
+ * transfers a Contract between two Teams and clears the assigned length; a
+ * Move transfers nothing and clears nothing. Routing a Move through a Trade
+ * would evaluate one Team's gates twice and would return a year to the Year
+ * Allotment that FR-44 says is untouched.
+ *
+ * `teamName` rides the command for the EVENT's sake, exactly as `RecordDrop`'s
+ * does: the Audit Log entry states the Team and an id is not a name.
+ *
+ * **`reason` is nullable, which is the one shape difference from every other
+ * override command.** FR-44 gives a Manager acting on their OWN Team a
+ * confirmation sheet and no reason — it is an ordinary strategic decision,
+ * not a referee intervention — while the Commissioner acting on any Team's
+ * behalf goes through the reason sheet and a `requireOverrideReason` that has
+ * already trimmed and rejected a blank one.
+ */
+export type RearrangeRoster = {
+	readonly kind: 'RearrangeRoster';
+	readonly teamId: string;
+	readonly teamName: string;
+	/**
+	 * The Contracts being re-placed, each with the Slot it is to occupy.
+	 * Empty is refused: the act names nothing.
+	 */
+	readonly moves: readonly {
+		readonly fantraxPlayerId: string;
+		readonly toPlacement: RosterSlotKind;
+	}[];
+	/** The Commissioner's stated reason, or `null` for a Manager's own Move. */
+	readonly reason: string | null;
+};
+
+/**
+ * The gate set for `RearrangeRoster`, **fixed per command type** (AD-1), and
+ * the FIFTH fixed gate set this codebase declares.
+ *
+ * **Three names, and the list is FLAT** for `RECORD_DROP_GATES`' reason:
+ * `GateResults` is `Readonly<Record<string, GateOutcome>>` and
+ * `RearrangeRosterGateResults` must stay assignable to it, so nothing may
+ * nest inside a gate. A Move has one Team, so it needs one cap key and one
+ * slots key rather than the Trade's two of each.
+ *
+ * **`contested` leads**, exactly as it leads the other four: cap and slots
+ * are meaningless questions about a Player nobody holds. Reading order, not
+ * short-circuit order — all three outcomes are always returned (AD-7).
+ *
+ * **The money before the capacity**, matching every other gate list, so a
+ * reader who knows one knows all five.
+ *
+ * Frozen at runtime as well as `as const`, for `PLACE_BID_GATES`' reason:
+ * this list is what `evaluateRearrange()`'s totality is asserted against, and
+ * a caller that could splice an entry out of it could make a partial result
+ * look complete.
+ */
+export const REARRANGE_ROSTER_GATES = Object.freeze(['contested', 'cap', 'slots'] as const);
+
+/** One of the three gate names above. */
+export type RearrangeRosterGate = (typeof REARRANGE_ROSTER_GATES)[number];
+
+/**
+ * What `evaluateRearrange()` returns for a `RearrangeRoster`, in any state
+ * whose shape permits an evaluation at all.
+ *
+ * Three keys, one per name in `REARRANGE_ROSTER_GATES`, always all present.
+ *
+ * **The outcome shapes are the Trade's and the Drop's, reused rather than
+ * paralleled.** A Move asks the identical two questions of the identical
+ * arithmetic (`rules/roster-act.ts`), so a `RearrangeCapGateOutcome` would be
+ * a second spelling of one answer — and `gateFigure` and the refusal wording
+ * already read these.
+ */
+export type RearrangeRosterGateResults = {
+	readonly contested: ContestedGateOutcome;
+	readonly cap: ActCapGateOutcome;
+	readonly slots: ActSlotsGateOutcome;
+};
+
 /**
  * `decide()` authorised the command: here are the events to append.
  *
