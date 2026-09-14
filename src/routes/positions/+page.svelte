@@ -1,7 +1,7 @@
 <script lang="ts">
 	// Your Positions (Story 4.4) — the landing.
 	//
-	// Five groups in the wake-up's order and no other: Won · Outbid · You lead
+	// Five groups in the wake-up's order and no other: Won · Outbid · Leading
 	// · Contending · Nomination Slot. The order is not a sort and there is no
 	// control that changes it.
 	//
@@ -367,7 +367,7 @@
 					{#each positions.outbid as card (card.fantraxPlayerId)}
 						<li class="card" class:lottery={card.contention === 'minimum_bid'}>
 							<!-- ROW 1 — identity, with the state at the far edge. The
-							     chip is reserved for Outbid and You lead
+							     chip is reserved for Outbid and Leading
 							     (DESIGN.md:194): filled `attention` here. It carries an
 							     ICON and a WORD together, so a greyscale screenshot
 							     reads identically. -->
@@ -417,7 +417,7 @@
 								<!-- Where the READER stands, under the Auction's own
 								     state and opposite the price — the Bid Board card's
 								     own arrangement. The chip is reserved for Outbid and
-								     You lead (DESIGN.md:194): filled `attention` here.
+								     Leading (DESIGN.md:194): filled `attention` here.
 								     It carries an ICON and a WORD together, so a
 								     greyscale screenshot reads identically. -->
 								<p class="state chip chip-outbid">
@@ -478,10 +478,16 @@
 				<h2 class="section-label">{GROUP_HEADINGS.you_lead}</h2>
 				<ul class="cards">
 					{#each positions.youLead as card (card.fantraxPlayerId)}
-						<li class="card" class:lottery={card.contention === 'minimum_bid'}>
-							<!-- ROW 1 — identity, with the state at the far edge.
-							     Outlined, never filled: leading is a standing fact,
-							     not an alert. -->
+						<!-- The pale green left edge marks an Auction THIS reader leads.
+						     Every card in this group is one, by construction — the
+						     grouping is computed for the signed-in Manager, so no other
+						     Manager's page carries the mark. It never carries the state
+						     alone: the filled chip on the figure row below carries the
+						     icon and the word. A card that is also in a Minimum-Bid
+						     Contention shows the lottery bar instead: that 3px device is
+						     exclusive, and the chip still says the reader leads. -->
+						<li class="card leading" class:lottery={card.contention === 'minimum_bid'}>
+							<!-- ROW 1 — identity, with the state at the far edge. -->
 							<div class="card-head">
 								<a class="card-link" href={card.href}>
 									<span class="display card-player">{card.playerName}</span>
@@ -524,9 +530,10 @@
 									</p>
 								</div>
 								<!-- Where the READER stands, under the Auction's own
-								     state — the Bid Board card's own arrangement.
-								     Outlined, never filled: leading is a standing fact,
-								     not an alert. -->
+								     state — the Bid Board card's own arrangement. Filled
+								     pale green, the Outbid chip's treatment in the
+								     opposite colour, and the word the left edge's mark
+								     stands for. -->
 								<p class="state chip chip-lead">
 									<span class="chip-icon" aria-hidden="true">{card.stateIcon}</span>
 									<span class="chip-word">{card.stateLabel}</span>
@@ -686,6 +693,16 @@
 		border: var(--border-width) solid var(--color-border);
 		border-radius: var(--rounded-panel);
 		padding: var(--space-panel-padding);
+	}
+
+	/*
+	 * The Leading edge: a 2px pale green rule on an Auction the reader leads.
+	 * Deliberately NOT the 3px lottery bar below — that device is exclusive to
+	 * Minimum-Bid Contention — and declared FIRST so that a card which is both
+	 * leading and in a contention takes the lottery bar, never this one.
+	 */
+	.card.leading {
+		border-left: var(--leading-edge-width) solid var(--color-leading);
 	}
 
 	/*
@@ -873,10 +890,15 @@
 		font-size: var(--size-12-5);
 	}
 
-	/* Outlined, never filled: leading is a standing fact, not an alert. */
+	/*
+	 * Filled pale green, the Outbid chip's own treatment in the opposite
+	 * colour: leading is the one other fact on this card that is about the
+	 * READER, and the two read as a pair. Not `brand`, which may never signal
+	 * leading, and not `attention`, which marks Outbid and nothing else.
+	 */
 	.chip-lead {
-		border: var(--border-width) solid var(--color-border-strong);
-		color: var(--color-text);
+		background-color: var(--color-leading);
+		color: var(--color-leading-ink);
 	}
 
 	/*

@@ -407,7 +407,19 @@
 				     nothing else in the system. It never carries the state ALONE:
 				     the icon and the word beside it are what make a greyscale
 				     screenshot read identically. -->
-				<li class="card" class:lottery={card.state === 'minimum_bid'}>
+				<!-- The pale green left edge marks an Auction THIS reader leads, and
+				     only this reader: `viewerState` is computed for the signed-in
+				     Manager, so nobody else's board shows it. Like the lottery bar it
+				     never carries the state alone — the filled `LEADING` chip on the
+				     figure row below carries the icon and the word. A card that is
+				     both leading and in a Minimum-Bid Contention shows the lottery
+				     bar: that 3px device is exclusive, and the chip still says the
+				     reader leads. -->
+				<li
+					class="card"
+					class:leading={card.viewerState === 'you_lead'}
+					class:lottery={card.state === 'minimum_bid'}
+				>
 					<!-- ROW 1 — identity and the Auction's own state.
 					     The name, the NBA team and position beside it, and the state
 					     word pushed to the far edge. The metadata is not a fact owed a
@@ -455,8 +467,8 @@
 					     value is never announced without its name.
 
 					     The CHIP is reserved for the two states DESIGN.md:194 gives one
-					     to: filled `attention` for Outbid, outlined `border-strong` for
-					     You lead. Contender is ambient — a plain `text-secondary` label,
+					     to: filled `attention` for Outbid, filled `leading` for
+					     Leading. Contender is ambient — a plain `text-secondary` label,
 					     no chip. `not_involved` prints NOTHING at all: it is the state
 					     of most cards on most boards, and a marker on every one of them
 					     is a row of noise saying the reader has nothing to do here,
@@ -746,6 +758,16 @@
 	}
 
 	/*
+	 * The Leading edge: a 2px pale green rule on an Auction the reader leads.
+	 * Deliberately NOT the 3px lottery bar below — that device is exclusive to
+	 * Minimum-Bid Contention — and declared FIRST so that a card which is both
+	 * leading and in a contention takes the lottery bar, never this one.
+	 */
+	.card.leading {
+		border-left: var(--leading-edge-width) solid var(--color-leading);
+	}
+
+	/*
 	 * The 3px left accent bar marking a Minimum-Bid Contention — the one
 	 * structural exception in the design, and no other element on any surface
 	 * may borrow the device. It never carries the state alone.
@@ -930,10 +952,15 @@
 		font-size: var(--size-12-5);
 	}
 
-	/* Outlined, never filled: leading is a standing fact, not an alert. */
+	/*
+	 * Filled pale green, the Outbid chip's own treatment in the opposite
+	 * colour: leading is the one other fact on this card that is about the
+	 * READER, and the two read as a pair. Not `brand`, which may never signal
+	 * leading, and not `attention`, which marks Outbid and nothing else.
+	 */
 	.chip-lead {
-		border: var(--border-width) solid var(--color-border-strong);
-		color: var(--color-text);
+		background-color: var(--color-leading);
+		color: var(--color-leading-ink);
 	}
 
 	/*

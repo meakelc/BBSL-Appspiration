@@ -3,7 +3,7 @@
  * of them says (Story 4.4).
  *
  * **Five groups, in the wake-up's own order, and that order is not a sort.**
- * Won · Outbid · You lead · Contending · Nomination Slot. It is not viewer
+ * Won · Outbid · Leading · Contending · Nomination Slot. It is not viewer
  * configurable and there is no control that reorders it, because the order IS
  * the answer to "what happened while I was asleep, and what needs me now" —
  * a sort control would turn a designed reading order into thirty renderings
@@ -115,7 +115,7 @@ export const POSITIONS_GROUP_ORDER: readonly PositionsGroup[] = Object.freeze([
  *
  * `outbid` and `you_lead` take `VIEWER_STATE_LABELS`' own words rather than
  * respelling them: the board already calls those two states exactly this, and
- * a heading that said "You're winning" over cards chipped "You lead" would be
+ * a heading that said "You're winning" over cards chipped "Leading" would be
  * two names for one state on two surfaces a Manager moves between.
  */
 export const GROUP_HEADINGS: Readonly<Record<PositionsGroup, string>> = Object.freeze({
@@ -635,7 +635,7 @@ function highestBidBy(auction: Auction, teamId: string): Money | null {
  * the contention, so a dissolved lottery is `standard` with every former
  * joiner still listed, and the contention test is therefore gated on the
  * contention being LIVE. Ungated, the Team whose raise dissolved it would
- * appear under Contending rather than under You lead, and the Team that raise
+ * appear under Contending rather than under Leading, and the Team that raise
  * genuinely outbid would appear there too — both waiting on a draw that is
  * not running. Restating those tests here would put two copies of that
  * ordering in the core, and a later correction to one would silently leave

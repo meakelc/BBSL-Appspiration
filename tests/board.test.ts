@@ -479,7 +479,11 @@ describe('every state carries a word AND a shape', () => {
 			'won',
 			'you_lead'
 		]);
-		expect(VIEWER_STATE_LABELS.you_lead).toBe('You lead');
+		// Named without a pronoun: the chip reaches only the Manager it is
+		// about, so `Leading` reads identically as a chip, as the Positions
+		// heading and as the board's own filter.
+		expect(VIEWER_STATE_LABELS.you_lead).toBe('Leading');
+		expect(FILTER_LABELS.leading).toBe(VIEWER_STATE_LABELS.you_lead);
 		expect(VIEWER_STATE_LABELS.outbid).toBe('Outbid');
 		expect(VIEWER_STATE_LABELS.contender).toBe('Contender');
 		expect(VIEWER_STATE_LABELS.not_involved).toBe('Not involved');

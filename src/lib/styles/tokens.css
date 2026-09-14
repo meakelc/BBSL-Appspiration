@@ -154,4 +154,30 @@
 	   routes/teams/+page.svelte. It is neither a `--size-*` nor a `--color-*`,
 	   so tests/tokens.test.ts' counts are untouched. */
 	--own-row-edge-width: 2px;
+
+	/* The Leading mark: a pale green left edge and a filled chip on an Auction
+	   the VIEWER leads, on the Bid Board and on Your Positions.
+
+	   Not `--color-brand`. DESIGN.md:47 is explicit that brand "never signals
+	   leading, winning, safe or approved", so the one green already in the
+	   palette is the one green this may not be — hence a second, paler green
+	   declared here rather than a borrowed one. It is also not
+	   `--color-attention`: amber marks Outbid and nothing else in the entire
+	   system, and leading is the opposite fact.
+
+	   Measured, following the `--control-fill` precedent above: #9FD8B4 on
+	   `--color-leading-ink` #0D1712 is 11.7:1, clearing 1.4.3 for the chip's
+	   own word; the same fill against surface #15211B is 10.7:1, clearing
+	   1.4.11 for the left edge, which carries no text of its own. The edge
+	   never carries the state ALONE — the chip's icon and word beside it are
+	   what make a greyscale screenshot read identically.
+
+	   The WIDTH is deliberately not `--accent-bar-width`. DESIGN.md reserves
+	   that 3px bar for Minimum-Bid Contention and forbids any other element
+	   borrowing it, so this is a second, distinct rule width on the
+	   `--own-row-edge-width` precedent — and a card that is both leading and
+	   in a contention shows the lottery bar, never this one. */
+	--color-leading: #9FD8B4;
+	--color-leading-ink: #0D1712;
+	--leading-edge-width: 2px;
 }

@@ -214,7 +214,7 @@ describe('loadBoard — executed against a fake client', () => {
 		expect(card?.closesAt).toBe('2026-08-28T00:00:00.000Z');
 		// The viewer holds the leading Bid, so the state and its word agree.
 		expect(card?.viewerState).toBe('you_lead');
-		expect(card?.viewerStateLabel).toBe('You lead');
+		expect(card?.viewerStateLabel).toBe('Leading');
 		expect(card?.auctionStateLabel).toBe('Open');
 		expect(card?.state).toBe('standard');
 		// An open card carries none of the closed fields, so a surface that

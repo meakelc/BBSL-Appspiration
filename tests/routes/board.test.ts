@@ -282,7 +282,26 @@ describe('the board page — what it renders', () => {
 		const attentionRules = [...PAGE.matchAll(/var\(--color-attention[^)]*\)/g)];
 		expect(attentionRules).toHaveLength(2);
 		expect(PAGE.indexOf('.chip-lead')).toBeLessThan(PAGE.indexOf('.chip-outbid'));
-		expect(PAGE).toMatch(/\.chip-lead \{[\s\S]*?--color-border-strong[\s\S]*?\}/);
+		// You lead takes its OWN colour — never attention, and never brand,
+		// which DESIGN.md:47 forbids from signalling leading.
+		expect(PAGE).toMatch(/\.chip-lead \{[\s\S]*?--color-leading[\s\S]*?\}/);
+		expect(PAGE).not.toMatch(/\.chip-lead \{[\s\S]*?--color-brand[\s\S]*?\}/);
+	});
+
+	it('marks a card the VIEWER leads with the leading edge, and only that viewer', () => {
+		// The edge is keyed on `viewerState`, which is computed for the
+		// signed-in Manager — so nobody else's board carries the mark.
+		expect(PAGE).toMatch(/class:leading=\{card\.viewerState === 'you_lead'\}/);
+		expect(PAGE).toContain('border-left: var(--leading-edge-width) solid var(--color-leading)');
+		// It is NOT the lottery bar: that 3px device is exclusive to a
+		// Minimum-Bid Contention, and the leading rule is declared first so a
+		// card that is both takes the lottery bar.
+		const leadingBlock = /\.card\.leading \{[\s\S]*?\}/.exec(PAGE)?.[0] ?? '';
+		expect(leadingBlock).not.toContain('--accent-bar-width');
+		expect(PAGE.indexOf('.card.leading')).toBeLessThan(PAGE.indexOf('.card.lottery'));
+		// And it never carries the state alone — the chip beside it has the
+		// icon and the word.
+		expect(PAGE).toMatch(/class:chip-lead=\{card\.viewerState === 'you_lead'\}/);
 	});
 
 	it('gives a chip to You lead and Outbid ONLY — ambient states stay plain', () => {

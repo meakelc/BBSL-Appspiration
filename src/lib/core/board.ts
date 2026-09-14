@@ -277,7 +277,13 @@ export const AUCTION_STATE_ICONS: Readonly<Record<BoardCardState, string>> = Obj
 
 /** Where the viewer stands, in words. */
 export const VIEWER_STATE_LABELS: Readonly<Record<BoardViewerState, string>> = Object.freeze({
-	you_lead: 'You lead',
+	// `Leading`, not `You lead`. The chip is only ever rendered to the Manager
+	// it is about — `viewerStateFor` computes it against the reader's own Team
+	// — so the pronoun stated a fact the surface had already established, and
+	// cost the state a name that reads the same as a heading, as a filter and
+	// as a chip. `won` keeps its pronoun: a Team's win is read beside other
+	// Teams' wins, where whose it is has to be said.
+	you_lead: 'Leading',
 	outbid: 'Outbid',
 	contender: 'Contender',
 	// Stated, never congratulated. The card says whose Player this now is and
@@ -322,7 +328,9 @@ export const FILTER_LABELS: Readonly<Record<BoardFilter, string>> = Object.freez
 	all: 'All Auctions',
 	open: 'Open Auctions',
 	closed: 'Closed Auctions',
-	leading: 'You lead',
+	// The same word the chip and the Positions heading use: one state, one
+	// name, on every surface a Manager moves between.
+	leading: 'Leading',
 	contending: 'Contending'
 });
 
@@ -551,7 +559,7 @@ export function priceLabel(price: Money | null): string {
  * the same amount, so `leadingBid` names whoever joined earliest purely as
  * the fold's `seq` tiebreak, and AD-14 decides the winner by a seeded draw
  * over the ordered Contender list rather than by that field. Telling the
- * earliest joiner "You lead" would state a standing they do not hold and
+ * earliest joiner "Leading" would state a standing they do not hold and
  * invite them not to act on an Auction they are no likelier to win than
  * anyone else — the Auction page never makes that claim either, swapping its
  * Leading Bidder line for the contention panel (`auction/[fantraxPlayerId]/+page.svelte:692`).
@@ -614,7 +622,7 @@ export function viewerStateFor(
  * Where the viewer stands on a CLOSED Auction — and there are exactly two
  * answers.
  *
- * `won` or `not_involved`, and nothing else. "You lead" and "Contender"
+ * `won` or `not_involved`, and nothing else. "Leading" and "Contender"
  * describe standings a settled Auction no longer holds: nobody leads an
  * Auction that is over, and a Contender in a lottery that has drawn either won
  * it or did not. "Outbid" is the sharpest of the three to get wrong — it is

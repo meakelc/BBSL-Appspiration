@@ -308,7 +308,27 @@ describe('the Positions page — what it renders', () => {
 		// the fill and its ink, and no third use.
 		const attentionRules = [...PAGE.matchAll(/var\(--color-attention[^)]*\)/g)];
 		expect(attentionRules).toHaveLength(2);
-		expect(PAGE).toMatch(/\.chip-lead \{[\s\S]*?--color-border-strong[\s\S]*?\}/);
+		// You lead takes its OWN colour — never attention, and never brand,
+		// which DESIGN.md:47 forbids from signalling leading.
+		expect(PAGE).toMatch(/\.chip-lead \{[\s\S]*?--color-leading[\s\S]*?\}/);
+		expect(PAGE).not.toMatch(/\.chip-lead \{[\s\S]*?--color-brand[\s\S]*?\}/);
+	});
+
+	it('marks every You lead card with the leading edge, and no other group', () => {
+		// The group is computed for the signed-in Manager, so every card in it
+		// is one this reader leads — and no other Manager's page shows it.
+		const leadCards = [...PAGE.matchAll(/<li class="card leading"/g)];
+		expect(leadCards).toHaveLength(1);
+		expect(PAGE).toContain('border-left: var(--leading-edge-width) solid var(--color-leading)');
+		// It is NOT the lottery bar: that 3px device is exclusive to a
+		// Minimum-Bid Contention, and the leading rule is declared first so a
+		// card that is both takes the lottery bar.
+		const leadingBlock = /\.card\.leading \{[\s\S]*?\}/.exec(PAGE)?.[0] ?? '';
+		expect(leadingBlock).not.toContain('--accent-bar-width');
+		expect(PAGE.indexOf('.card.leading')).toBeLessThan(PAGE.indexOf('.card.lottery'));
+		// And it never carries the state alone — the chip beside it has the
+		// icon and the word.
+		expect(PAGE).toMatch(/class="state chip chip-lead"/);
 	});
 
 	it('gives the lottery bar to Minimum-Bid Contention and to nothing else', () => {
