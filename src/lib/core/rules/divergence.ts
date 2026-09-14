@@ -761,7 +761,7 @@ function evaluateGuard(input: {
 	//     unit FR-42 names is "a quarter of the League" and the League is
 	//     thirty Teams — a single Team rebuilt from scratch is one Team's
 	//     problem however many Players it moves, while eight Teams changing at
-	//     once between two hourly reads is the shape of a wrong league id.
+	//     once between two consecutive reads is the shape of a wrong league id.
 	const touched = new Set<string>();
 	for (const proposal of input.proposals) {
 		if (proposal.kind === 'trade') {

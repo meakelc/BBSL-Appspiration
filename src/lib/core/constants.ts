@@ -204,21 +204,33 @@ export const GLOBAL_WRITE_LOCK_KEY = 0x4242534c00000001n;
  * NOT a freshness figure.** `FRESHNESS_WINDOW` and `STALE_WINDOW` above are
  * chosen against how quickly a Manager should be told the app has lost the
  * server; this one is chosen against how often it is decent to ask a service
- * that never agreed to answer us at all. Nothing degrades when an hour passes
- * without a read: the comparison runs at RENDER against the stored membership,
- * so the surface is exactly as current as the last read, and it says when that
- * was.
+ * that never agreed to answer us at all. Nothing degrades when the interval
+ * passes without a read: the comparison runs at RENDER against the stored
+ * membership, so the surface is exactly as current as the last read, and it
+ * says when that was.
+ *
+ * **Half an hour, shortened from an hour on 2026-09-14** at the Commissioner's
+ * request, to halve the worst-case time a trade nobody reported goes unseen.
+ * The costs were weighed and are small at this spacing: twice the invocations
+ * is still noise beside the 10-second tick, and the read record roughly doubles
+ * to ~50MB a month — worth watching, because `fantrax_reads` has no retention
+ * and nothing prunes it. Shortening it further was declined: 15 minutes buys
+ * little on a fault whose remedy is a human recording a Trade, and quadruples
+ * the polling of an endpoint with no published rate limit and no recourse if it
+ * blocks us.
  *
  * It is an interval, never an instant: nothing here reads a clock (AD-3).
  * `server/divergence.ts` enforces it from the last `fantrax_reads` row rather
- * than from a timer, so a second invocation inside the hour is skipped however
- * it arrives — a re-enabled cron job, a hand-called endpoint, two deployments.
+ * than from a timer, so a second invocation inside the interval is skipped
+ * however it arrives — a re-enabled cron job, a hand-called endpoint, two
+ * deployments. The cron schedule and this constant must agree, but this one
+ * BINDS: a cron firing more often is merely skipped, cheaply.
  *
  * Deliberately NOT on the 10-second tick. That pass closes Auctions under the
  * global write lock, and hanging a stranger's latency off it would put a third
  * party in the path of every close.
  */
-export const DIVERGENCE_READ_INTERVAL = 60 * 60 * 1000;
+export const DIVERGENCE_READ_INTERVAL = 30 * 60 * 1000;
 
 /**
  * The share of the League a single comparison may touch before its
@@ -236,8 +248,13 @@ export const DIVERGENCE_READ_INTERVAL = 60 * 60 * 1000;
  *
  * A quarter rather than a half or a tenth: a real offseason day might see two
  * or three Teams trade, which is a tenth of thirty and must not trip; nothing
- * legitimate moves eight Teams at once between two hourly reads, and a payload
- * that says so is far more likely to be the wrong league id, the wrong period,
- * or a Fantrax outage answering with somebody else's data.
+ * legitimate moves eight Teams at once between two consecutive reads, and a
+ * payload that says so is far more likely to be the wrong league id, the wrong
+ * period, or a Fantrax outage answering with somebody else's data.
+ *
+ * Shortening `DIVERGENCE_READ_INTERVAL` only ever makes this bar SAFER — less
+ * legitimate activity accumulates between reads, so a real trading day is
+ * further from the threshold, not nearer it. Lengthening it is the direction
+ * that would need this number revisited.
  */
 export const DIVERGENCE_VOLUME_FRACTION = 0.25;

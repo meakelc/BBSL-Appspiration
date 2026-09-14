@@ -224,7 +224,7 @@ describe('load', () => {
 		expect(data.read.outcome).toBe('unreachable');
 		expect(data.read.lastGoodReadAt).toBe('2026-09-14T10:00:00.000Z');
 		// **And nothing is raised**, which is the frozen matrix's own wording for
-		// this row: an hour-old membership compared against rosters that have
+		// this row: a stale membership compared against rosters that have
 		// moved since would propose acts against an unconfirmed world.
 		expect((data as { report: unknown }).report).toBeNull();
 	});

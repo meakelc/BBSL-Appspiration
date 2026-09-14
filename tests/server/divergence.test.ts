@@ -4,8 +4,8 @@
  * Four claims this file exists to hold, none of which is visible from the pure
  * core:
  *
- *  1. **The hourly interval is enforced from the LAST STORED ROW**, so a second
- *     invocation inside the hour is skipped and says when the next read is due
+ *  1. **The read interval is enforced from the LAST STORED ROW**, so a second
+ *     invocation inside the interval is skipped and says when the next read is due
  *     — however it arrives.
  *  2. **Exactly one `fantrax_reads` row per attempt, whatever the outcome.**
  *     Unreachable, 429, malformed and ok all append one. AD-19's reasoning: a
@@ -179,7 +179,7 @@ const OK_RESULT: FantraxRosterResult = {
 	}
 };
 
-describe('the hourly interval', () => {
+describe('the read interval', () => {
 	it('reads when nothing has ever been read', async () => {
 		const world = emptyWorld();
 		const summary = await runFantraxRead(fakeGateway(world), portAnswering(OK_RESULT));
@@ -188,7 +188,7 @@ describe('the hourly interval', () => {
 		expect(world.reads).toHaveLength(1);
 	});
 
-	it('SKIPS a second invocation inside the hour and says when the next is due', async () => {
+	it('SKIPS a second invocation inside the interval and says when the next is due', async () => {
 		const world = emptyWorld({
 			reads: [
 				{
@@ -205,8 +205,8 @@ describe('the hourly interval', () => {
 
 		expect(summary.kind).toBe('skipped');
 		if (summary.kind !== 'skipped') return;
-		// Fifty minutes after the last read, which is the hour from it.
-		expect(summary.nextDueAt).toBe(new Date(NOW.getTime() + 50 * 60 * 1000).toISOString());
+		// Twenty minutes after the last read, which is the half-hour from it.
+		expect(summary.nextDueAt).toBe(new Date(NOW.getTime() + 20 * 60 * 1000).toISOString());
 		// And nothing was appended, because nothing was attempted.
 		expect(world.reads).toHaveLength(1);
 	});
@@ -215,7 +215,7 @@ describe('the hourly interval', () => {
 		const world = emptyWorld({
 			reads: [
 				{
-					read_at: new Date(NOW.getTime() - 61 * 60 * 1000),
+					read_at: new Date(NOW.getTime() - 31 * 60 * 1000),
 					outcome: 'ok',
 					detail: null,
 					membership: {},
@@ -403,7 +403,7 @@ describe('the view', () => {
 		expect(view.read.lastGoodReadAt).toBe(NOW.toISOString());
 		// **And NOTHING is raised.** The frozen I/O matrix is explicit — "Read
 		// fails → renders stopped with the reason and the time of the last good
-		// read | nothing raised" — because proposing acts from an hour-old
+		// read | nothing raised" — because proposing acts from a stale
 		// membership, against rosters that have moved since, is proposing against
 		// a world nobody has confirmed.
 		expect(view.report).toBeNull();

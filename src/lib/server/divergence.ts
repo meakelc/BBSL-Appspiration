@@ -3,7 +3,7 @@
  *
  * **Two jobs that deliberately do not touch each other.**
  *
- *   1. `runFantraxRead` — the hourly read. Enforce the interval from the last
+ *   1. `runFantraxRead` — the scheduled read. Enforce the interval from the last
  *      `fantrax_reads` row, call the port, and append EXACTLY ONE
  *      `fantrax_reads` row whatever the outcome. That last part is AD-19's
  *      reasoning applied to a second pipe: a read that recorded nothing is
@@ -16,7 +16,7 @@
  *
  * Comparing at RENDER rather than at read time is what makes "once the Trade
  * is recorded, the divergence resolves" arrive immediately instead of up to an
- * hour later, and it keeps the stored row a transcript of a third party rather
+ * a read interval later, and it keeps the stored row a transcript of a third party rather
  * than an opinion about the league.
  *
  * **Nothing in this file calls `runTransactionalWrite`, and nothing in it may.**
@@ -157,7 +157,7 @@ export type FantraxReadSummary =
  * **The interval is enforced from the LAST STORED ROW, not from a timer.** A
  * timer belongs to one process; this rule has to hold across a re-enabled cron
  * job, a hand-called endpoint and two deployments at once, and the only thing
- * all three share is the table. A second invocation inside the hour is skipped
+ * all three share is the table. A second invocation inside the interval is skipped
  * and says when the next read is due.
  *
  * **Exactly one row per attempt, whatever happens.** The port never throws, so
@@ -370,7 +370,7 @@ export async function loadDivergenceView(
 		// **A failed latest read RAISES NOTHING.** The frozen I/O matrix is
 		// explicit — "Read fails → renders stopped with the reason and the time of
 		// the last good read | nothing raised" — and the reason is sound: an
-		// hour-old membership compared against a roster that has moved since would
+		// stale membership compared against a roster that has moved since would
 		// propose acts against a world nobody has confirmed. The last good read's
 		// time is still named, so the Commissioner knows exactly how stale the
 		// silence is.
@@ -718,7 +718,7 @@ export function configuredFantraxPort(input: {
 export const NOT_CONFIGURED_STATUS = 503;
 
 /**
- * The header the hourly cron job presents. Named in
+ * The header the scheduled cron job presents. Named in
  * `supabase/migrations/20260915000000_fantrax_divergence.sql`, not guessed.
  *
  * Deliberately NOT the tick's `x-tick-invocation-secret`: two jobs that share

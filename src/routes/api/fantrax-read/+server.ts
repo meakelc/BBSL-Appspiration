@@ -1,5 +1,5 @@
 /**
- * The hourly Fantrax roster read, as an endpoint. `POST /api/fantrax-read`.
+ * The scheduled Fantrax roster read, as an endpoint. `POST /api/fantrax-read`.
  * Story 7.9, FR-42.
  *
  * **Guarded by a constant-time compare of a shared secret, exactly as the tick
