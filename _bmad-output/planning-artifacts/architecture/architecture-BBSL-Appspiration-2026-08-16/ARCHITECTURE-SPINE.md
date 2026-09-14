@@ -7,7 +7,7 @@ paradigm: 'functional core / imperative shell, with an event-sourced auction dom
 scope: 'The whole v1 system: Fantrax CSV import, identity, nomination, bidding and cap enforcement, clocks and contention, the bid board, notifications, contract assignment, export, commissioner controls and audit.'
 status: final
 created: '2026-08-16'
-updated: '2026-09-10'
+updated: '2026-09-14'
 binds:
   - 'FR-1 … FR-43 (PRD §4)'
   - 'NFR set (PRD §5)'
@@ -135,6 +135,8 @@ Dependencies point one way only: **shell → core**. The core imports nothing fr
 - **Rule:** a **single** Supabase Cron schedule invokes a **single** Edge Function that performs the close sweep and *then* drains the outbox, at a sub-minute interval. It never runs on Netlify and holds no in-memory timer. Overdue auctions are found by re-deriving what has expired, never by remembering what is pending, so the sweep is restart-safe by construction. The dev project's schedule is disabled by default and enabled only for a rehearsal.
 
 > Two separate 10-second schedules would be ~518K invocations/month against Supabase free's 500K cap — which is shared org-wide with the dev project and the AD-3 rehearsal, and whose exhaustion stops the sweep **silently**. One combined tick is ~259K. The interval is chosen against the remaining headroom, not against the SLA alone.
+
+- **"Single" governs the CLOSING schedule, not the count of rows in `cron.job`** *(amended 2026-09-14, on Story 7.9)*. Both reasons above are reasons about closing: two schedules that close would let two things close the same Auction and put AD-6's single-writer property in the hands of the advisory lock alone, and two *sub-minute* schedules would exhaust the invocation cap. Neither reason reaches a schedule that closes nothing. **A second schedule is permitted when it closes no Auction, takes no write lock, appends no event, and its invocation budget is negligible against the cap** — Story 7.9's `bbsl-fantrax-read` is the first and, at half-hourly spacing, costs ~1,440 invocations a month against 500K. It is forbidden to fold such work into the tick instead: AD-32 keeps the Fantrax read out of the close path precisely so a stranger's latency is never in front of an Auction closing, which is the same interest this AD protects, reached from the other side. **The bar for a further schedule is this paragraph's four conditions, not precedent** — a second *closing* schedule remains forbidden outright, and `scripts/verify-supabase.js` enforces the rule by NAMING the permitted jobs rather than counting them, so an unknown schedule still fails.
 
 ### AD-11 — Closes are sequential and deterministically ordered
 
