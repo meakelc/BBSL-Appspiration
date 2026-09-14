@@ -102,7 +102,8 @@ const TEAMS = Object.freeze([
 const PENDING_NAME = '<pending>';
 
 /**
- * The league's Managers — all thirty, one per Team.
+ * The league's Managers — all thirty-one: one per Team, plus a second seat on
+ * the co-managed Team named in CO_MANAGED.
  *
  * `discordUserId` is the account's own snowflake, which is what AD-15 binds
  * identity to: an account absent from this table is refused at sign-in without
@@ -151,7 +152,9 @@ const MANAGERS = Object.freeze([
 	['MIL', 'Damian', '789320957343825940', false],
 	['MIN', 'Row', '608152289236090881', false],
 	['NOP', 'Captain Sprinkles', '606885233735893012', false],
-	['NYK', 'Stered', '388499745745797121', false],
+	['NYK', 'DaddyLightYears', '388499745745797121', false],
+	// The 31st Manager, and the only co-managed seat (see CO_MANAGED).
+	['NYK', 'Pesto', '345082937533792256', false],
 	['ORL', 'Kostas', '777613302310240277', false],
 	// The snowflake file spells this one PHO; TEAMS keys it PHX, which is the
 	// abbreviation the Phoenix Suns carry everywhere else in this repository.
@@ -176,6 +179,29 @@ const MANAGERS = Object.freeze([
  * adds a Team binding without adding an identity.
  */
 const PLACEHOLDER_PREFIX = 'pilot-placeholder-';
+
+/**
+ * Teams that deliberately carry more than one Manager.
+ *
+ * **Co-management is a product feature, not an anomaly.** Story 9.4's
+ * acceptance criteria required a Team with two Managers seeded against one
+ * `team_id`, and both resolving to identical Cap Space, Maximum Bid and
+ * Nomination Slot status; Story 9.8 requires all **31** Managers, which is
+ * thirty Teams plus this one second seat.
+ *
+ * The duplicate-Team check below refused exactly this until 2026-09-14, on the
+ * reasonable assumption that one abbreviation appearing twice is a typo. It
+ * usually is. So the check is kept and narrowed rather than removed: a Team
+ * appearing twice is still a hard refusal UNLESS it is named here, which makes
+ * the one intended case explicit in the file and leaves every accidental one
+ * loud. Deleting the check would have bought the 31st Manager at the price of
+ * every future mis-keyed abbreviation seeding silently.
+ *
+ * The duplicate-SNOWFLAKE check is untouched and must stay absolute: the same
+ * account twice would not fail the upsert, it would silently re-bind the first
+ * Manager to the second's Team and leave one Team unbound.
+ */
+const CO_MANAGED = Object.freeze(new Set(['NYK']));
 
 /**
  * Give every Manager-less Team an inert Manager, so `refuseAuctionOpen`'s
@@ -276,8 +302,11 @@ function validateManagers() {
 		seenSnowflake.set(discordUserId, abbrev);
 
 		const priorTeam = seenTeam.get(abbrev);
-		if (priorTeam !== undefined) {
-			complaints.push(`${abbrev} appears twice (${priorTeam}, ${displayName})`);
+		if (priorTeam !== undefined && !CO_MANAGED.has(abbrev)) {
+			complaints.push(
+				`${abbrev} appears twice (${priorTeam}, ${displayName})`,
+				`If that is deliberate co-management, add '${abbrev}' to CO_MANAGED in this file.`
+			);
 		}
 		seenTeam.set(abbrev, displayName);
 	}

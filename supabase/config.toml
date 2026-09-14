@@ -83,13 +83,38 @@ enabled = false
 [auth]
 enabled = true
 
-# The origin Supabase sends a signed-in browser back to. Set to the pilot
-# branch deploy (Story 9.1) rather than localhost, because this file is pushed
-# to the hosted project with `supabase config push` — the same values serve the
-# local stack and the dev project, and the hosted one is the one people use.
+# The origin Supabase sends a signed-in browser back to, and — far more
+# importantly — the origin it SILENTLY FALLS BACK TO when a `redirect_to` fails
+# the `additional_redirect_urls` match. A failed match is not refused.
+#
+# **This is `env()` rather than a literal because ONE FILE SERVES TWO PROJECTS**
+# (Story 9.8, 2026-09-14). It read `https://pilot--bbslapp.netlify.app` until
+# prod was provisioned, which was correct while dev was the only hosted project
+# and actively wrong the moment a second one existed: `supabase config push
+# --project-ref <prod>` would have set the REAL auction's fallback origin to the
+# pilot branch deploy. That was not hypothetical — `supabase config diff`
+# against the fresh prod project reported exactly that change, `declared: true`,
+# ready to apply.
+#
+# A literal cannot be right for both projects, and the two candidate literals
+# fail in opposite directions: pilot-as-fallback strands prod Managers on the
+# test deploy, prod-as-fallback strands dev sign-ins on the real auction. So the
+# value is supplied per push from the gitignored `.env` instead, which makes it
+# a deliberate input the operator sets while pointing at a project rather than a
+# committed constant that is wrong half the time.
+#
+#   dev   -> SUPABASE_SITE_URL=https://pilot--bbslapp.netlify.app
+#   prod  -> SUPABASE_SITE_URL=https://bbslapp.netlify.app
+#
+# **Set it before every `config push`.** An unset variable resolves empty, and
+# the push would then declare an empty `site_url`. `supabase config diff` shows
+# the RESOLVED value and names the variable it came from under `env_variables`,
+# so running the diff first catches this — which the CLI's own help says to do,
+# because a non-interactive push defaults to proceeding rather than prompting.
+#
 # Harmless locally: `site_url`'s other job is addressing email links, and this
 # product sends no email for any purpose, ever.
-site_url = "https://pilot--bbslapp.netlify.app"
+site_url = "env(SUPABASE_SITE_URL)"
 
 # Every origin Supabase may redirect back to after Discord.
 #
@@ -122,7 +147,18 @@ site_url = "https://pilot--bbslapp.netlify.app"
 # this project ever serves — which cost exactly the evening the note above
 # predicts: a local sign-in landed on the pilot branch deploy instead, making
 # local UI work impossible to see.
+#
+# The list is the UNION of every first-party origin, not a per-project list, and
+# that is deliberate (Story 9.8). `site_url` above is environment-specific
+# because a wrong fallback silently strands a real Manager; this list is not,
+# because an array cannot vary its length through `env()` without inventing
+# fixed slots, and the widening it costs is small and bounded: an authorization
+# code is issued BY one project and can only be exchanged AGAINST that same
+# project, so prod's origin appearing in dev's list is a dead end rather than a
+# door. Every entry is an origin this league actually serves.
 additional_redirect_urls = [
+  "https://bbslapp.netlify.app/auth/callback",
+  "https://bbslapp.netlify.app/auth/callback**",
   "https://pilot--bbslapp.netlify.app/auth/callback",
   "https://pilot--bbslapp.netlify.app/auth/callback**",
   "http://localhost:5173/auth/callback",

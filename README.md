@@ -47,7 +47,7 @@ fails silently.** This table is the authority; `.env.example` lists names only.
 | --- | --- | --- |
 | `SUPABASE_URL` | SvelteKit app | Netlify |
 | `SUPABASE_SERVICE_ROLE_KEY` | SvelteKit app | Netlify (**never** `PUBLIC_`) |
-| `SUPABASE_DB_URL` | app **and** Edge Function | Netlify **and** Supabase secrets |
+| `SUPABASE_DB_URL` | app **and** Edge Function | Netlify only — see below |
 | `COMMISSIONER_RECOVERY_SECRET` | SvelteKit app | Netlify |
 | `PUBLIC_SUPABASE_URL` | browser | Netlify |
 | `PUBLIC_SUPABASE_ANON_KEY` | browser | Netlify |
@@ -56,6 +56,21 @@ fails silently.** This table is the authority; `.env.example` lists names only.
 | `DISCORD_WEBHOOK_URL` | Edge Function only | Supabase function secrets |
 | `DISCORD_CLIENT_ID` | `supabase config push` | local `.env` only |
 | `DISCORD_CLIENT_SECRET` | `supabase config push` | local `.env` only |
+| `SUPABASE_SITE_URL` | `supabase config push` | local `.env` only — **set per project** |
+| `FANTRAX_BASE_URL` | SvelteKit app | Netlify |
+| `FANTRAX_LEAGUE_ID` | SvelteKit app | Netlify |
+| `FANTRAX_PERIOD` | SvelteKit app | Netlify |
+| `FANTRAX_READ_INVOCATION_SECRET` | SvelteKit app | Netlify **and** Vault |
+| `DIVERGENCE_VOLUME_FRACTION` | SvelteKit app | Netlify (optional) |
+
+The five `FANTRAX_*` / `DIVERGENCE_*` names are Story 7.9's divergence reader and
+are read in `src/lib/server/divergence.ts` — **the app, not the Edge Function**,
+because the read is an app route (`/api/fantrax-read`) that a cron job calls.
+The first three are required and the reader refuses without them, naming which
+are absent. `DIVERGENCE_VOLUME_FRACTION` is optional: absent or unparseable, it
+warns and falls back to `DIVERGENCE_VOLUME_FRACTION` in `core/constants.ts`, so
+it belongs in Netlify only where a project deliberately overrides the core
+default.
 
 **Read by nothing at all:** `SUPABASE_JWT_SECRET`, `DISCORD_REDIRECT_URI`,
 `DISCORD_GUILD_ID`. They were removed from `.env.example` in Story 9.6. The app
@@ -123,9 +138,14 @@ npm run verify:supabase        # needs SUPABASE_DB_URL in the environment
 ```
 
 `db push` exiting 0 proves the CLI issued statements. This proves the schema
-matches the repository: all 13 migrations, all 15 tables with RLS enabled and
+matches the repository: all 20 migrations, all 18 tables with RLS enabled and
 forced, exactly one policy, `anon` holding nothing anywhere, the exact grant set
-per table, both extensions, and `bbsl-tick` present and **inactive**.
+per table, both extensions, and both cron jobs — `bbsl-tick` and
+`bbsl-fantrax-read` — present and **inactive**, with no third job present.
+
+No count is stated in the script itself, deliberately: `EXPECTED_MIGRATIONS` is
+the authority and a version absent from that array is not required of the
+database at all. The numbers here are prose and will date; the array will not.
 
 It is read-only by construction and safe to run against prod.
 
@@ -159,9 +179,39 @@ it is reviewable and reproducible rather than clicked:
 
 ```bash
 npx supabase login
-npx supabase link --project-ref <ref> -p "$DB_PASSWORD"
-npx supabase config push          # env() reads DISCORD_* from .env
+npx supabase config diff --project-ref <ref>   # ALWAYS FIRST — see below
+npx supabase config push --project-ref <ref>   # env() reads from .env
 ```
+
+> ### Always diff before you push
+>
+> `config push` **prompts** for each changed resource when it has a TTY — and a
+> non-interactive run (a script, an agent, piped stdin) **defaults to
+> proceeding**. The CLI's own help says so. Run `config diff` first and read it:
+> anything marked `declared: true` will be written, anything `declared: false`
+> is left alone.
+>
+> This is not theoretical. On 2026-09-14 a push aimed at the fresh prod project
+> would have set the real auction's `site_url` to the **pilot branch deploy** —
+> the diff caught it, sitting there as a `declared: true` change.
+
+**`SUPABASE_SITE_URL` must be set to the project you are pointing at**, every
+push, because one file serves two projects:
+
+| Target | Value |
+| --- | --- |
+| dev | `https://pilot--bbslapp.netlify.app` |
+| prod | `https://bbslapp.netlify.app` |
+
+`site_url` is where Supabase **silently falls back** when a `redirect_to` fails
+the allow-list match, so a wrong value strands a real Manager on the wrong
+deployment. `config diff` prints the resolved value and names the variable under
+`env_variables`, so an unset one is visible before it is written.
+
+`additional_redirect_urls`, by contrast, is the **union** of every first-party
+origin rather than a per-project list — an array cannot vary its length through
+`env()`, and the widening is bounded because a code issued by one project can
+only be exchanged against that same project.
 
 `additional_redirect_urls` must name every origin a Manager may sign in from.
 Deploy previews are deliberately absent: admitting `deploy-preview-*` makes
@@ -299,7 +349,21 @@ and promote.
 
 ---
 
-## 6. The tick
+## 6. The two schedules
+
+**There are two cron jobs, and only one of them closes anything.** AD-10's "one
+tick" rule governs the CLOSING schedule; it was amended on 2026-09-14 when Story
+7.9 added a second job that closes nothing, takes no lock and only reads.
+
+| Job | What it does | Ships |
+| --- | --- | --- |
+| `bbsl-tick` | sweep then drain — the one closing schedule (AD-10) | inactive |
+| `bbsl-fantrax-read` | polls Fantrax for roster divergence, every 30 min | inactive |
+
+`verify:supabase` asserts both are present, both are inactive, and that **no
+third job exists**.
+
+### The tick
 
 One cron schedule, one Edge Function, sweep then drain (AD-10).
 
@@ -311,18 +375,33 @@ Before it can run, the Edge Function needs its own secrets — these are **not**
 Netlify variables:
 
 ```bash
-npx supabase secrets set SUPABASE_DB_URL='...' TICK_INVOCATION_SECRET='...' \
+npx supabase secrets set --project-ref <ref> TICK_INVOCATION_SECRET='...' \
                          DISCORD_WEBHOOK_URL='...' APP_ORIGIN='https://...'
-npx supabase functions deploy tick
+npx supabase functions deploy tick --project-ref <ref>
 ```
 
-and two Vault secrets, created per project (the migration reads them by name so
-that no secret is ever a literal in git):
+> **Do not set `SUPABASE_DB_URL` here**, even though the tick calls
+> `required('SUPABASE_DB_URL')` and would throw without it. Supabase injects it
+> — along with `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`
+> and the key/JWKS entries — into every Edge Function automatically. They do not
+> appear in `supabase secrets list` until a function has been deployed **once**,
+> so a fresh project looks alarmingly empty right up until the first deploy
+> fills it in. This instruction read "Netlify **and** Supabase secrets" until
+> Story 9.8 checked it against a real project.
+
+and **four** Vault secrets, created per project (the migrations read them by name
+so that no secret and no project-specific URL is ever a literal in git):
 
 ```sql
 select vault.create_secret('<value>', 'tick_invocation_secret');
 select vault.create_secret('<url>',   'tick_function_url');
+select vault.create_secret('<value>', 'fantrax_read_invocation_secret');
+select vault.create_secret('<url>',   'fantrax_read_function_url');
 ```
+
+A project whose secrets are absent gets a null url, which pg_net rejects
+outright and pg_cron records as a failed run in `cron.job_run_details` — the
+correct, visible outcome for a project nobody configured to read Fantrax.
 
 Enable and disable it explicitly:
 
@@ -337,6 +416,31 @@ select cron.alter_job(
 > continuously-running tick is roughly 260K invocations a month against a 500K
 > org-wide ceiling shared with production. A dev schedule left on spends the
 > real auction's budget.
+
+### The Fantrax read
+
+`20260915000000_fantrax_divergence.sql` creates `bbsl-fantrax-read`, also
+inactive; `20260916000000_fantrax_read_every_thirty_minutes.sql` reschedules it
+from hourly without touching `active`. It calls the app route
+`/api/fantrax-read` through pg_net — **not** an Edge Function — authorised by
+`x-fantrax-read-invocation-secret`, so `fantrax_read_function_url` is the app
+origin plus that path, and the header value must equal the Netlify
+`FANTRAX_READ_INVOCATION_SECRET`.
+
+```sql
+select cron.alter_job(
+  job_id := (select jobid from cron.job where jobname = 'bbsl-fantrax-read'),
+  active := true
+);
+```
+
+> **Do not enable this against a project holding real rosters until
+> `seed-fantrax-team-ids.js` has run.** Until the Team ids are seeded every Team
+> reads as unmapped, and the detector proposes divergences for the whole league.
+
+Always `cron.alter_job`, never `update cron.job` and never `cron.schedule` — the
+latter upserts with `active := true` and would silently switch on a schedule
+somebody had deliberately switched off.
 
 ---
 
@@ -370,11 +474,19 @@ A green CI run is not evidence that any integration assertion executed.
 5. Set Netlify variables in the dev contexts; allow-list the branch; build
 6. `curl -I` the deploy and confirm the security headers are served
 7. `npm run seed:league`
-8. `npm run name:rosters` — **and check the ordering table**
-9. Import, preview per Team, promote
-10. Set eligibility by hand
-11. Function secrets, Vault secrets, deploy the tick, enable the schedule
-12. Open the auction
+8. `node scripts/seed-fantrax-team-ids.js` — the explicit Team map, by id never
+   by name (AD-24)
+9. `npm run name:rosters` — **and check the ordering table**
+10. Import, preview per Team, promote
+11. `node scripts/set-minor-league-eligibility.js <csv>` — not by hand; the real
+    pool is ~1,467 Players of whom roughly 950 are eligible, and the sanctioned
+    page renders all of them as one unpaginated list
+12. Function secrets, the four Vault secrets, deploy the tick, enable both
+    schedules
+13. Open the auction
 
-Steps 1–6 are Story 9.1–9.3; 7–10 are setup day; 11–12 need Story 8.4's go-live
+Steps 1–6 are Story 9.1–9.3; 7–11 are setup day; 12–13 need Story 8.4's go-live
 gate first.
+
+Step 8 precedes step 12 for a reason: enabling `bbsl-fantrax-read` before the
+Team ids exist makes every Team read as unmapped.

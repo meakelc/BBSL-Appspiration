@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 08-18-2026 13:11
-last_updated: 09-14-2026 00:00
+last_updated: 09-14-2026 12:30
 project: BBSL-Appspiration
 project_key: NOKEY
 tracking_system: file-system
@@ -103,9 +103,9 @@ development_status:
   7-6-dead-money-and-the-rookie-scale-designation: done
   7-7-record-a-roster-move: done
   7-8-record-a-drop: done
-  7-9-detect-a-roster-divergence-from-fantrax: review
+  7-9-detect-a-roster-divergence-from-fantrax: done
   7-10-rename-the-roster-move-to-a-roster-trade: done
-  7-11-rearrange-a-roster-s-slot-placements: review
+  7-11-rearrange-a-roster-s-slot-placements: done
   epic-7-retrospective: optional
 
   epic-8: backlog
@@ -123,14 +123,14 @@ development_status:
   9-5-confirm-the-fantrax-column-maps-against-a-real-export: done
   9-6-the-setup-runbook: done
   9-7-run-the-moderator-pilot: backlog
-  9-8-provision-prod-and-run-setup-day-for-real: backlog
+  9-8-provision-prod-and-run-setup-day-for-real: in-progress
   epic-9-retrospective: optional
 
-  epic-10: in-progress
+  epic-10: done
   10-1-the-outstanding-bid-allowance-in-the-slots-gate: done
   10-2-lottery-entries-leave-the-slots-gate: done
   10-3-cancel-the-surplus-commitment-at-close: done
   10-4-restore-the-next-highest-bidder: done
   10-5-a-lottery-whose-contenders-were-cancelled: done
-  10-6-say-it-on-the-board-and-in-discord: review
+  10-6-say-it-on-the-board-and-in-discord: done
   epic-10-retrospective: optional
