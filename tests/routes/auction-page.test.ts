@@ -86,6 +86,9 @@ const CLOSED_MARKUP = PAGE.slice(
 	PAGE.indexOf('<!-- The identity block:')
 );
 const OPEN_MARKUP = PAGE.slice(PAGE.indexOf('<!-- The identity block:'), PAGE.indexOf('</main>'));
+// The closed state's empty-history sentence, read off the source rather than
+// retyped, so the assertion about its wording cannot pass against a copy.
+const CLOSED_HISTORY_SENTENCE = /const CLOSED_HISTORY_EMPTY = '([^']*)';/.exec(PAGE)?.[1] ?? '';
 const OPEN_MARKUP_CODE = stripComments(OPEN_MARKUP);
 
 // **Both slices are keyed on literal source text, so both can go vacuous.**
@@ -331,13 +334,18 @@ describe('the Auction page — what it renders', () => {
 	});
 
 	it('renders every Bid in chronological order, each naming its Team and Manager — AC6', () => {
-		expect(PAGE).toMatch(/\{#each auction\.bids as bid \(bid\.seq\)\}/);
+		// The loop lives in the `bidHistory` snippet both states of the page
+		// render through, so the list is asserted at its one definition and at
+		// the open branch's call to it.
+		expect(PAGE).toMatch(/\{#snippet bidHistory\(/);
+		expect(PAGE).toMatch(/\{#each bids as bid \(bid\.seq\)\}/);
+		expect(PAGE).toContain('{@render bidHistory(auction.bids, OPEN_HISTORY_EMPTY)}');
 		expect(PAGE).toContain('bid.bidder');
 		expect(PAGE).toContain('bid.amount');
 		expect(PAGE).toContain('bid.occurredAt');
 		// The server hands the list back already in seq order; the surface
 		// must not re-sort it into some other order.
-		expect(PAGE).not.toMatch(/auction\.bids\.(sort|reverse|toSorted)/);
+		expect(PAGE).not.toMatch(/\bbids\.(sort|reverse|toSorted)/);
 	});
 
 	it('renders no anonymity anywhere — every history line carries a named bidder', () => {
@@ -1791,9 +1799,9 @@ describe('the Auction history tells a cancelled Bid from a live one', () => {
 	it('strikes the row through and labels it, in unchanged seq order', () => {
 		// The loop is unchanged — every Bid, keyed by `seq`, oldest first —
 		// and nothing filters, sorts or hides.
-		expect(PAGE_CODE).toContain('{#each auction.bids as bid (bid.seq)}');
-		expect(PAGE_CODE).not.toMatch(/auction\.bids\.filter/);
-		expect(PAGE_CODE).not.toMatch(/auction\.bids\.sort/);
+		expect(PAGE_CODE).toContain('{#each bids as bid (bid.seq)}');
+		expect(PAGE_CODE).not.toMatch(/\bbids\.filter/);
+		expect(PAGE_CODE).not.toMatch(/\bbids\.sort/);
 		// The row treatment, conditioned on the fact and on nothing else.
 		expect(PAGE_CODE).toContain('class:cancelled={bid.cancellation !== null}');
 		expect(PAGE_CODE).toContain('{BID_CANCELLED_LABEL}');
@@ -1901,12 +1909,38 @@ describe('the Auction page — the Closed state it renders', () => {
 		);
 	});
 
-	it('shows NO Bid history, NO nominating Team and NO countdown', () => {
-		// `auctionsReducer` deletes the Auction at the close, so the Bids are
-		// not durable and a partial history would be an invented one.
-		// `nominationsReducer` deletes the nomination for the same reason.
+	it('shows the Bid history, through the same snippet the open half renders', () => {
+		// The close deletes the projection ENTRY, not the Bids: every one is
+		// still in the log with its own `seq`, so the server folds them back and
+		// this branch prints the record the winner sits on top of. It renders
+		// through the SAME snippet the open half calls, so the two lists cannot
+		// drift apart — a second copy of the markup here would be the drift.
+		expect(CLOSED_MARKUP).toContain('{@render bidHistory(closed.bids, CLOSED_HISTORY_EMPTY)}');
+		expect(CLOSED_MARKUP).not.toContain('as bid (bid.seq)');
+		// Below the outcome, never above it: a settled Auction states what it
+		// settled at first and how it got there second.
+		expect(CLOSED_MARKUP.indexOf('id="auction-final-amount"')).toBeLessThan(
+			CLOSED_MARKUP.indexOf('{@render bidHistory(')
+		);
+	});
+
+	it('words the empty history for a settled Auction, never with “yet”', () => {
+		// An open Auction with no Bids is WAITING for an Opening Bid; a closed
+		// one is waiting for nothing. Printing "yet" under a settled Auction
+		// would promise a Bid that can no longer be placed.
+		expect(PAGE).toContain("const OPEN_HISTORY_EMPTY = 'No bids have been placed yet.';");
+		expect(PAGE).toContain(
+			"const CLOSED_HISTORY_EMPTY = 'No bids stood when this Auction closed.';"
+		);
+		expect(CLOSED_HISTORY_SENTENCE).not.toMatch(/\byet\b/);
+	});
+
+	it('shows NO nominating Team and NO countdown', () => {
+		// `nominationsReducer` deletes the nomination, so a Team named here
+		// would be a Team nothing in the log still says nominated this Player —
+		// which is the one thing the close really does take with it. And
+		// nothing counts down on an Auction that has already settled.
 		for (const gone of [
-			'auction-history',
 			'auction-nominated-at',
 			'auction-nominating-team',
 			'closesInPhrase',

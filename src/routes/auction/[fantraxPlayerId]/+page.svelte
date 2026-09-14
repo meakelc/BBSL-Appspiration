@@ -180,6 +180,24 @@
 	};
 
 	/**
+	 * The two ways an empty Bid history reads.
+	 *
+	 * The surface's own furniture, like the panel headings — no rule and no
+	 * refusal is worded on this page (AD-7). They differ because the states do:
+	 * an open Auction with no Bids is WAITING for an Opening Bid, while a closed
+	 * one is waiting for nothing and never will be. Printing "yet" under a
+	 * settled Auction would promise a Bid that can no longer be placed.
+	 *
+	 * The closed sentence is close to unreachable — a Standard close has a
+	 * winning Bid by definition, and a cancelled Bid stays in the history
+	 * struck through rather than leaving it — but an emptied lottery (Story
+	 * 10.5) is a real recorded outcome and the branch must state something
+	 * true rather than nothing.
+	 */
+	const OPEN_HISTORY_EMPTY = 'No bids have been placed yet.';
+	const CLOSED_HISTORY_EMPTY = 'No bids stood when this Auction closed.';
+
+	/**
 	 * One Contender in a closed lottery, as the read path resolved it — the
 	 * Team's NAME — the raw id when the `teams` lookup missed — and whether
 	 * the draw selected it. The ORDER is the server's and is never touched
@@ -219,6 +237,12 @@
 		readonly winningAmount: string;
 		readonly closedAt: string;
 		readonly draw: ClosedDraw | null;
+		/**
+		 * Every Bid the Auction took, oldest first — the same shape and the
+		 * same order the open half renders, because it IS the same history.
+		 * The close removes the control, not the record.
+		 */
+		readonly bids: readonly AuctionBid[];
 		readonly figuresAt: string;
 	};
 
@@ -787,18 +811,77 @@
 	<title>{closed !== null ? closed.playerName : auction.playerName} — Auction — Appspiration</title>
 </svelte:head>
 
+<!-- **The Bid history, once, for both states of the page.** An open Auction and
+     a closed one render the identical record: every Bid, oldest first, each
+     naming the Team and the acting Manager, cancelled ones struck through and
+     labelled in unchanged `seq` order. The close removes the CONTROL, not the
+     record, so a second copy of this markup under the closed branch would be
+     two spellings of one list that could drift apart.
+
+     `emptyStatement` is the one thing the two states word differently: an open
+     Auction is waiting for an Opening Bid, and a closed one is not waiting for
+     anything. -->
+{#snippet bidHistory(bids: readonly AuctionBid[], emptyStatement: string)}
+	{#if bids.length === 0}
+		<p class="prose" id="auction-history">{emptyStatement}</p>
+	{:else}
+		<ul class="history" id="auction-history">
+			{#each bids as bid (bid.seq)}
+				<!-- Who bid and when on the left, what they bid on the right —
+				     one row instead of three stacked lines, so a seven-Bid
+				     history is read rather than scrolled. The amounts share a
+				     trailing edge, which is what makes a column of tabular
+				     figures scannable. -->
+				<!-- A cancelled Bid is struck through and labelled, in
+				     unchanged `seq` order — never deleted, hidden or
+				     reordered (FR-40). The label is one word and the
+				     sentence beneath it names the win that caused it; both
+				     are the core's, and both are worded so the row cannot
+				     be read as a void, which would say somebody decided the
+				     Bid should not have stood. A Bid that was never
+				     cancelled renders exactly as before. -->
+				<li class="history-row" class:cancelled={bid.cancellation !== null}>
+					<span class="history-bidder">
+						<span class="prose">{bid.bidder}</span>
+						<span class="history-when">{relativePhrase(bid.occurredAt, nowIso)}</span>
+						{#if bid.cancellation !== null}
+							<span class="history-cancelled">
+								{bidCancelledSentence(bid.cancellation.causePlayerName, bid.cancellation.restored)}
+							</span>
+						{/if}
+					</span>
+					<!-- Whitespace-tight, and it has to be. `.history-row` is
+					     `justify-content: space-between`, so a newline before
+					     `{bid.amount}` or after the `{/if}` renders as a text
+					     node and walks every amount — cancelled or not — off
+					     the trailing edge that makes a column of tabular
+					     figures scannable. An uncancelled Bid must render with
+					     no layout shift at all. -->
+					<span class="history-amount"
+						>{bid.amount}{#if bid.cancellation !== null}<span class="history-cancelled-label"
+								>{BID_CANCELLED_LABEL}</span
+							>{/if}</span
+					>
+				</li>
+			{/each}
+		</ul>
+	{/if}
+{/snippet}
+
 <main class="page">
 	{#if closed !== null}
 	<!-- **The Closed state** (`EXPERIENCE.md:168`): the winner, the final
 	     amount, the Slot placement, and for a lottery the seed, the published
 	     commitment and the ordered Contender list.
 
-	     There is no Bid history here and its absence is deliberate:
-	     `auctionsReducer` deletes the Auction at the close, so the Bids are not
-	     durable past it and a partial history assembled from whatever survived
-	     would be an invented one — on the page whose whole claim is that it can
-	     be checked. There is no nominating Team either, for the same reason
-	     applied to `nominationsReducer`.
+	     The Bid history is here too, and the reasoning that once kept it off
+	     this branch was wrong. `auctionsReducer` deletes the projection ENTRY at
+	     the close, not the Bids: every one of them is still in the log with its
+	     own `seq`, so the server folds the same reducer up to the close and gets
+	     back the record exactly as it stood when the Auction settled. Nothing
+	     partial and nothing invented — the Manager who lost by a raise can still
+	     see the raise that beat them. There is no nominating Team, which is the
+	     one thing the close really does take with it.
 
 	     Nothing here congratulates and nothing counts down. A settled Auction
 	     is stated. -->
@@ -903,6 +986,14 @@
 			</p>
 		</section>
 	{/if}
+
+	<!-- The record the winner sits on top of, in the footnote position the open
+	     page gives it: below the outcome, never above it. A settled Auction
+	     states what it settled at first and how it got there second. -->
+	<section class="panel">
+		<p class="section-label">History</p>
+		{@render bidHistory(closed.bids, CLOSED_HISTORY_EMPTY)}
+	</section>
 	{:else}
 		<!-- The identity block: the name, and the line that identifies the Player
 		     beneath it. The metadata had a `.panel` of its own — a background, a
@@ -1194,50 +1285,7 @@
 			     Manager. No anonymity at any point. Nothing here lets a Bid be
 			     taken back, revised or reduced — that whole class of control is
 			     absent from this page, not merely turned off. -->
-			{#if auction.bids.length === 0}
-				<p class="prose" id="auction-history">No bids have been placed yet.</p>
-			{:else}
-				<ul class="history" id="auction-history">
-					{#each auction.bids as bid (bid.seq)}
-						<!-- Who bid and when on the left, what they bid on the right —
-						     one row instead of three stacked lines, so a seven-Bid
-						     history is read rather than scrolled. The amounts share a
-						     trailing edge, which is what makes a column of tabular
-						     figures scannable. -->
-						<!-- A cancelled Bid is struck through and labelled, in
-						     unchanged `seq` order — never deleted, hidden or
-						     reordered (FR-40). The label is one word and the
-						     sentence beneath it names the win that caused it; both
-						     are the core's, and both are worded so the row cannot
-						     be read as a void, which would say somebody decided the
-						     Bid should not have stood. A Bid that was never
-						     cancelled renders exactly as before. -->
-						<li class="history-row" class:cancelled={bid.cancellation !== null}>
-							<span class="history-bidder">
-								<span class="prose">{bid.bidder}</span>
-								<span class="history-when">{relativePhrase(bid.occurredAt, nowIso)}</span>
-								{#if bid.cancellation !== null}
-									<span class="history-cancelled">
-										{bidCancelledSentence(bid.cancellation.causePlayerName, bid.cancellation.restored)}
-									</span>
-								{/if}
-							</span>
-							<!-- Whitespace-tight, and it has to be. `.history-row` is
-							     `justify-content: space-between`, so a newline before
-							     `{bid.amount}` or after the `{/if}` renders as a text
-							     node and walks every amount — cancelled or not — off
-							     the trailing edge that makes a column of tabular
-							     figures scannable. An uncancelled Bid must render with
-							     no layout shift at all. -->
-							<span class="history-amount"
-								>{bid.amount}{#if bid.cancellation !== null}<span class="history-cancelled-label"
-										>{BID_CANCELLED_LABEL}</span
-									>{/if}</span
-							>
-						</li>
-					{/each}
-				</ul>
-			{/if}
+			{@render bidHistory(auction.bids, OPEN_HISTORY_EMPTY)}
 
 			<!-- The nomination, in the footnote position the mock gives it: who put
 			     this Player up and when. It had two `.panel`s of its own above the

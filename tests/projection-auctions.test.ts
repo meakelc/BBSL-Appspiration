@@ -23,6 +23,7 @@ import {
 	MINIMUM_LOTTERY_LABEL,
 	SEED_COMMITMENT_UNVERIFIABLE,
 	SEED_REVEALED,
+	auctionAtClose,
 	auctionForPlayer,
 	auctionsReducer,
 	closeInstantFor,
@@ -1443,5 +1444,108 @@ describe('auctionsReducer — BidCancelled seats the RECORDED restoration (Story
 		expect(auction?.contention).toBe('minimum_bid');
 		expect(auction?.leadingBid?.seq).toBe('2');
 		expect(auction?.contenders.map((entry) => entry.teamId)).toEqual(['t-2']);
+	});
+});
+
+describe('auctionAtClose — the history a settled Auction left behind', () => {
+	const closeOf = (seq: number, fantraxPlayerId = 'p-1') =>
+		event(seq, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId }));
+
+	it('returns the Auction exactly as it stood the instant before the close', () => {
+		// The whole point: `auctionsReducer` drops the entry on the close, so
+		// `at()` finds nothing — while the Bids themselves are still in the log
+		// and fold back into the record the Closed page prints.
+		const log = [bid(1, 6_000_000, { teamId: 't-1' }), bid(2, 8_000_000, { teamId: 't-2' }), closeOf(3)];
+
+		expect(at(log)).toBeNull();
+
+		const closed = auctionAtClose(log, 'p-1');
+		expect(closed?.bids.map((entry) => entry.seq)).toEqual(['1', '2']);
+		expect(closed?.bids.map((entry) => entry.amount)).toEqual([6_000_000, 8_000_000]);
+		expect(closed?.leadingBid?.seq).toBe('2');
+	});
+
+	it('keeps a cancelled Bid in the history, still marked', () => {
+		// FR-40 requires a cancelled Bid kept visible, and the close must not
+		// be the thing that finally hides it.
+		const log = [
+			bid(1, 4_000_000, { teamId: 't-9' }),
+			bid(2, 6_000_000, { teamId: 't-1' }),
+			cancelled(3, '1'),
+			closeOf(4)
+		];
+
+		const closed = auctionAtClose(log, 'p-1');
+		expect(closed?.bids).toHaveLength(2);
+		expect(wasCancelled(closed!.bids[0]!)).toBe(true);
+		expect(wasCancelled(closed!.bids[1]!)).toBe(false);
+	});
+
+	it('ignores everything after the close, including another Player’s Bids', () => {
+		// The cut is this Player's own close and nothing else. A later Auction
+		// on the same log contributes nothing here.
+		const log = [
+			bid(1, 8_000_000),
+			closeOf(2),
+			bid(3, 5_000_000, { fantraxPlayerId: 'p-2' }),
+			bid(4, 9_000_000, { fantraxPlayerId: 'p-1' })
+		];
+
+		const closed = auctionAtClose(log, 'p-1');
+		expect(closed?.bids.map((entry) => entry.seq)).toEqual(['1']);
+	});
+
+	it('drops the Bids of an earlier round that was terminated', () => {
+		// A Player nominated, terminated with no winner, then nominated again
+		// and won. The prefix is folded in FULL, so the reducer's own
+		// termination case clears the abandoned round before the second one
+		// starts — the closed page never shows a Bid from an Auction that
+		// produced no contract.
+		const log = [
+			bid(1, 4_000_000, { teamId: 't-9' }),
+			event(2, AUCTION_TERMINATED_EVENT, { fantraxPlayerId: 'p-1' }),
+			bid(3, 7_000_000, { teamId: 't-2' }),
+			closeOf(4)
+		];
+
+		const closed = auctionAtClose(log, 'p-1');
+		expect(closed?.bids.map((entry) => entry.seq)).toEqual(['3']);
+	});
+
+	it('cuts at the FIRST close, which is the one that produced the contract', () => {
+		// `contractsReducer` keeps the first close for a Player and ignores a
+		// second, so this has to agree with it — otherwise the winner printed
+		// above the history and the history itself would describe two
+		// different Auctions.
+		const log = [bid(1, 8_000_000), closeOf(2), closeOf(3)];
+
+		expect(auctionAtClose(log, 'p-1')?.bids.map((entry) => entry.seq)).toEqual(['1']);
+	});
+
+	it('reads the cut off `seq` rather than array position', () => {
+		// `fold` sorts a copy, so a caller handing over an unsorted array must
+		// not get a different history from one that sorted first.
+		const ordered = [bid(1, 6_000_000), bid(2, 8_000_000), closeOf(3)];
+		const shuffled = [ordered[2]!, ordered[0]!, ordered[1]!];
+
+		expect(auctionAtClose(shuffled, 'p-1')).toEqual(auctionAtClose(ordered, 'p-1'));
+	});
+
+	it('answers null for a Player whose Auction never closed', () => {
+		// Deliberately not an empty Auction: "never closed" and "closed with no
+		// surviving Bid" are different answers, and only the second is a
+		// history a page may render as empty.
+		expect(auctionAtClose([bid(1, 8_000_000)], 'p-1')).toBeNull();
+		expect(auctionAtClose([], 'p-1')).toBeNull();
+		// A close naming some other Player is not this Player's cut.
+		expect(auctionAtClose([bid(1, 8_000_000), closeOf(2, 'p-2')], 'p-1')).toBeNull();
+	});
+
+	it('answers null for a close naming no readable Player', () => {
+		// The same reader `nominationsReducer` folds a close through, so a
+		// malformed payload is skipped here exactly as it is skipped there.
+		const log = [bid(1, 8_000_000), event(2, AUCTION_CLOSED_EVENT, { fantraxPlayerId: 42 })];
+
+		expect(auctionAtClose(log, 'p-1')).toBeNull();
 	});
 });

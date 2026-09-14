@@ -50,6 +50,8 @@ import { MINIMUM_BID } from '../constants.ts';
 import { formatInstant, parseInstant } from '../instant.ts';
 import type { Money } from '../money.ts';
 import { compareMoney, parseMoney } from '../money.ts';
+import type { AppendedEvent } from '../types.ts';
+import { fold } from './fold.ts';
 import type { Reducer } from './fold.ts';
 import {
 	AUCTION_CLOSED_EVENT,
@@ -431,6 +433,56 @@ function hasOwn(record: Readonly<Record<string, Auction>>, key: string): boolean
 export function auctionForPlayer(auctions: OpenAuctions, fantraxPlayerId: string): Auction | null {
 	if (!hasOwn(auctions.byPlayer, fantraxPlayerId)) return null;
 	return auctions.byPlayer[fantraxPlayerId] ?? null;
+}
+
+/**
+ * The Auction one Player's Bids left behind, as it stood the instant before
+ * its close — the history a Closed Auction page renders.
+ *
+ * **The Bids are durable; only the PROJECTION drops them.** `auctionsReducer`
+ * deletes the entry on `AuctionClosed`, which is what stops a settled Auction
+ * being offered a Bid or swept up as overdue, and for a long time the Closed
+ * page read that deletion as "the Bids are gone" and printed nothing. They are
+ * not gone: every `BidPlaced` is still in `auction_events` with its own `seq`,
+ * and so is every `BidCancelled` that marked one. Folding the same reducer
+ * over the log UP TO the close reconstructs the Auction exactly as it was when
+ * it closed — nothing assembled from leftovers and nothing invented, which is
+ * what the page's checkability claim actually requires.
+ *
+ * **The FIRST close for the Player is the cut**, which is `contractsReducer`'s
+ * own rule for which close produced the contract — so the history this returns
+ * and the winner printed above it can never describe two different Auctions.
+ * Everything before that point is folded in full, so a Player whose earlier
+ * nomination was terminated and who was nominated again contributes no Bids
+ * from the abandoned round: this reducer's own `AuctionTerminated` case
+ * cleared them inside the prefix.
+ *
+ * Comparison is on `seq` as `BigInt` rather than on array position — `fold`
+ * sorts a copy for exactly this reason, and a caller handing over an unsorted
+ * array must not get a different history from one that sorted first.
+ *
+ * `null` when the log holds no close for this Player, which on a Closed page
+ * cannot happen: `closedAuctionFor` requires the contract that only a close
+ * writes. It is `null` rather than an empty Auction so a caller cannot mistake
+ * "never closed" for "closed with no Bids" — the second is real (a lottery
+ * whose every Contender was cancelled) and reads as an empty history.
+ */
+export function auctionAtClose(
+	events: readonly AppendedEvent[],
+	fantraxPlayerId: string
+): Auction | null {
+	let closeSeq: bigint | null = null;
+	for (const event of events) {
+		if (event.type !== AUCTION_CLOSED_EVENT) continue;
+		if (readClosedPlayerId(event.payload) !== fantraxPlayerId) continue;
+		const seq = BigInt(event.seq);
+		if (closeSeq === null || seq < closeSeq) closeSeq = seq;
+	}
+	if (closeSeq === null) return null;
+
+	const cut = closeSeq;
+	const before = events.filter((event) => BigInt(event.seq) < cut);
+	return auctionForPlayer(fold(INITIAL_AUCTIONS, before, auctionsReducer), fantraxPlayerId);
 }
 
 /**

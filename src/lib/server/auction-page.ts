@@ -118,6 +118,7 @@ import type { AppendedEvent } from '../core/types.ts';
 import { fold } from '../core/projection/fold.ts';
 import {
 	INITIAL_AUCTIONS,
+	auctionAtClose,
 	auctionForPlayer,
 	auctionsReducer,
 	contentionOf,
@@ -472,14 +473,19 @@ export type ClosedAuctionDraw = {
 /**
  * Everything the Auction page renders once the Auction has closed.
  *
- * **No Bid history, and it is not an omission.** `auctionsReducer` deletes the
- * Auction at the close, so the Bids are not durable past it — showing a
- * partial history assembled from whatever happened to survive would be
- * inventing one, on the surface whose whole job is to be checkable.
+ * **The Bid history IS carried, and the earlier reasoning against it was
+ * wrong.** What `auctionsReducer` deletes at the close is the projection
+ * ENTRY, not the Bids: every `BidPlaced` and every `BidCancelled` stays in
+ * `auction_events` with its own `seq`. `auctionAtClose` folds the same reducer
+ * over the log up to the close and gets back the Auction exactly as it stood
+ * the instant it settled — a complete history, not a partial one assembled
+ * from leftovers, which is what the checkability claim actually asked for. The
+ * Manager who lost by a raise can still see the raise that beat them.
  *
- * **No nominating Team either**, for the same reason applied to
- * `nominationsReducer`: the nomination is deleted, and a Team named here would
- * be a Team nothing in the log still says nominated this Player.
+ * **No nominating Team**, for the reason that does still hold when applied to
+ * `nominationsReducer`: the nomination is deleted and nothing carries it
+ * forward, so a Team named here would be a Team nothing in the log still says
+ * nominated this Player.
  */
 export type ClosedAuctionPageState = {
 	readonly kind: 'closed';
@@ -495,6 +501,15 @@ export type ClosedAuctionPageState = {
 	readonly closedAt: string;
 	/** The lottery that decided it, or `null` for a Standard close. */
 	readonly draw: ClosedAuctionDraw | null;
+	/**
+	 * Every Bid this Auction took, oldest first, in the same shape the open
+	 * page renders — cancelled ones included and marked, exactly as FR-40
+	 * requires them kept visible while the Auction was still open.
+	 *
+	 * Empty is a real answer rather than a missing one: a lottery whose every
+	 * Contender was cancelled closes with no surviving Bid at all.
+	 */
+	readonly bids: readonly AuctionPageBid[];
 	/**
 	 * The database clock at the moment of the read — the ONE instant the
 	 * relative phrase beside the closed stamp is derived from, read from
@@ -587,6 +602,87 @@ function distinctManagerIds(bids: readonly Bid[]): readonly string[] {
  * (`managers.id`, primary key), and one resolving the distinct bidding
  * Managers, issued only when the Auction has Bids.
  */
+/**
+ * Every bidding Manager's display name, as the lookup the history lines and
+ * the Leading Bidder both read through.
+ *
+ * One statement for every bidding Manager, and only when there is at least one
+ * Bid. `::text` on both sides rather than a `uuid[]` cast: a malformed
+ * historical payload carrying a non-uuid id must produce a missing NAME, not a
+ * failed query that 500s the whole page.
+ *
+ * Keyed on manager id AND team id together, which is the same pairing the
+ * nominating join asserts in SQL: a `managerId` that does not belong to the
+ * bidding Team resolves to no name rather than to some other Team's Manager.
+ * `JSON.stringify` of the pair rather than a delimiter-joined string: the two
+ * halves are ids from an insert-only log, and a `|` inside one would let
+ * `a|b` + `c` collide with `a` + `b|c` and name the wrong Manager on a Bid.
+ * This module already tolerates a malformed id through the `::text` cast
+ * above; tolerating one here costs a function call.
+ *
+ * Shared by the open branch and the closed one, which is the point: a closed
+ * page that resolved names its own way could print a different bidder for the
+ * same Bid than the open page printed an hour earlier.
+ */
+async function resolveBidderNames(
+	client: TransactionalClient,
+	bids: readonly Bid[]
+): Promise<(bid: Bid) => string | null> {
+	const bidderIds = distinctManagerIds(bids);
+	const bidderResult =
+		bidderIds.length === 0
+			? { rows: [] as ReadonlyArray<Record<string, unknown>> }
+			: await client.query(
+					`select m.id::text as id, m.team_id::text as team_id, m.display_name
+					from ${MANAGERS_TABLE} m
+					where m.id::text = any($1::text[])`,
+					[[...bidderIds]]
+				);
+	const pairKey = (managerId: string, teamId: string): string =>
+		JSON.stringify([managerId, teamId]);
+	const bidderNames = new Map<string, string>();
+	for (const row of bidderResult.rows) {
+		const displayName = row['display_name'];
+		if (typeof displayName !== 'string' || displayName === '') continue;
+		bidderNames.set(pairKey(String(row['id']), String(row['team_id'])), displayName);
+	}
+	return (bid: Bid): string | null =>
+		bidderNames.get(pairKey(bid.managerId, bid.teamId)) ?? null;
+}
+
+/**
+ * The Bid history, oldest first, as both states of the page render it.
+ *
+ * The fold's order is kept and never re-sorted: `bids` is in `seq` order by
+ * construction (AD-5), and a history re-ordered here would not be the sequence
+ * that produced the price.
+ */
+function renderBidHistory(
+	bids: readonly Bid[],
+	nameOf: (bid: Bid) => string | null
+): readonly AuctionPageBid[] {
+	return bids.map((bid) => {
+		// `bid.cancellation ?? null` is how every reader takes it
+		// (`projection/auctions.ts`): the field is written by a LATER event onto
+		// a Bid already folded, so its absence is the ordinary case rather than
+		// a missing fact.
+		const cancellation = bid.cancellation ?? null;
+		return {
+			seq: bid.seq,
+			bidder: nameBidder(bid.teamName, nameOf(bid)),
+			amount: describeAmount(bid.amount),
+			occurredAt: bid.occurredAt,
+			cancellation:
+				cancellation === null
+					? null
+					: {
+							causePlayerName: cancellation.causePlayerName,
+							restored: cancellation.restoration !== null
+						}
+		};
+	});
+}
+
 /**
  * The Contender list of a closed lottery, as NAMES in the fold's own order.
  *
@@ -702,6 +798,13 @@ async function readClosedAuction(
 	const contenders = await loadContenders(client, closed);
 	const draw = closed.draw;
 
+	// The history, folded from the SAME events array the caller already read —
+	// one log read per request is this module's discipline — up to the close
+	// that produced the contract above. Names resolve through the one helper the
+	// open branch uses, so a Bid reads identically on either side of the close.
+	const closedBids = auctionAtClose(events, fantraxPlayerId)?.bids ?? [];
+	const history = renderBidHistory(closedBids, await resolveBidderNames(client, closedBids));
+
 	return {
 		kind: 'closed',
 		fantraxPlayerId: contract.fantraxPlayerId,
@@ -729,6 +832,7 @@ async function readClosedAuction(
 								? selectedPositionSentence(draw.selectedIndex, draw.contenders.length)
 								: null
 					},
+		bids: history,
 		figuresAt
 	};
 }
@@ -863,41 +967,12 @@ export async function loadAuctionPage(
 		// Manager and the mismatched pairing alike.
 		const managerDisplayName = typeof rawDisplayName === 'string' ? rawDisplayName : null;
 
-		// One statement for every bidding Manager, and only when there is at
-		// least one Bid. `::text` on both sides rather than a `uuid[]` cast: a
-		// malformed historical payload carrying a non-uuid id must produce a
-		// missing NAME, not a failed query that 500s the whole page.
+		// The bidding Managers' names, and the history they render into — both
+		// through the helpers the Closed branch also calls, so a Bid reads
+		// identically before and after its Auction settles.
 		const bids = auction?.bids ?? [];
-		const bidderIds = distinctManagerIds(bids);
-		const bidderResult =
-			bidderIds.length === 0
-				? { rows: [] as ReadonlyArray<Record<string, unknown>> }
-				: await client.query(
-						`select m.id::text as id, m.team_id::text as team_id, m.display_name
-						from ${MANAGERS_TABLE} m
-						where m.id::text = any($1::text[])`,
-						[[...bidderIds]]
-					);
-		// Keyed on manager id AND team id together, which is the same pairing
-		// the nominating join asserts in SQL: a `managerId` that does not
-		// belong to the bidding Team resolves to no name rather than to some
-		// other Team's Manager.
-		// `JSON.stringify` of the pair rather than a delimiter-joined string:
-		// the two halves are ids from an insert-only log, and a `|` inside one
-		// would let `a|b` + `c` collide with `a` + `b|c` and name the wrong
-		// Manager on a Bid. This module already tolerates a malformed id
-		// through the `::text` cast above; tolerating one here costs a
-		// function call.
-		const pairKey = (managerId: string, teamId: string): string =>
-			JSON.stringify([managerId, teamId]);
-		const bidderNames = new Map<string, string>();
-		for (const row of bidderResult.rows) {
-			const displayName = row['display_name'];
-			if (typeof displayName !== 'string' || displayName === '') continue;
-			bidderNames.set(pairKey(String(row['id']), String(row['team_id'])), displayName);
-		}
-		const nameOf = (bid: Bid): string | null =>
-			bidderNames.get(pairKey(bid.managerId, bid.teamId)) ?? null;
+		const nameOf = await resolveBidderNames(client, bids);
+		const history = renderBidHistory(bids, nameOf);
 
 		await client.query('rollback');
 
@@ -938,26 +1013,7 @@ export async function loadAuctionPage(
 					? null
 					: nameBidder(auction.leadingBid.teamName, nameOf(auction.leadingBid)),
 			closesAt: auction?.closesAt ?? null,
-			bids: bids.map((bid) => {
-				// `bid.cancellation ?? null` is how every reader takes it
-				// (`projection/auctions.ts`): the field is written by a LATER
-				// event onto a Bid already folded, so its absence is the
-				// ordinary case rather than a missing fact.
-				const cancellation = bid.cancellation ?? null;
-				return {
-					seq: bid.seq,
-					bidder: nameBidder(bid.teamName, nameOf(bid)),
-					amount: describeAmount(bid.amount),
-					occurredAt: bid.occurredAt,
-					cancellation:
-						cancellation === null
-							? null
-							: {
-									causePlayerName: cancellation.causePlayerName,
-									restored: cancellation.restoration !== null
-								}
-				};
-			}),
+			bids: history,
 			bidControl: readBidControl(
 				auction,
 				team,

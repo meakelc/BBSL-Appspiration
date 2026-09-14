@@ -619,6 +619,115 @@ describe('loadAuctionPage — no open nomination', () => {
 		expect(closed?.winner).not.toContain('Sam');
 	});
 
+	it('carries the Bid history the close left behind, named and in seq order', async () => {
+		// The Bids are still in the log after the close — only the projection
+		// entry went — so the Closed page prints the record the winner sits on
+		// top of, with the same names the open page printed an hour earlier.
+		const harness = fakeGateway({
+			events: [
+				nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1'),
+				bidPlaced(
+					2,
+					'p-1',
+					't-2',
+					'Rockets',
+					'm-2',
+					6_000_000,
+					'2026-08-26T09:00:00.000Z',
+					'2026-08-27T09:00:00.000Z'
+				),
+				bidPlaced(
+					3,
+					'p-1',
+					't-3',
+					'Suns',
+					'm-3',
+					8_000_000,
+					'2026-08-26T10:00:00.000Z',
+					'2026-08-27T10:00:00.000Z'
+				),
+				logEvent(4, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1' }))
+			],
+			teams: [CLOSED_TEAM_ID, 't-2', 't-3'],
+			managers: [
+				{ id: 'm-2', teamId: 't-2', displayName: 'Ali' },
+				{ id: 'm-3', teamId: 't-3', displayName: 'Bo' }
+			]
+		});
+
+		const closed = closedPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
+
+		// Oldest first, in the log's own `seq` order, each naming the Team AND
+		// the acting Manager — there is no anonymity on either side of a close.
+		expect(closed?.bids.map((entry) => entry.seq)).toEqual(['2', '3']);
+		expect(closed?.bids.map((entry) => entry.bidder)).toEqual([
+			'Rockets — Ali',
+			'Suns — Bo'
+		]);
+		expect(closed?.bids.map((entry) => entry.amount)).toEqual(['$6.0M', '$8.0M']);
+		expect(closed?.bids[0]?.occurredAt).toBe('2026-08-26T09:00:00.000Z');
+	});
+
+	it('keeps a cancelled Bid in the closed history, still marked (FR-40)', async () => {
+		// A cancellation withdraws a Bid's STANDING and never the Bid, and the
+		// close must not be the thing that finally hides it.
+		const harness = fakeGateway({
+			events: [
+				nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1'),
+				bidPlaced(
+					2,
+					'p-1',
+					't-2',
+					'Rockets',
+					'm-2',
+					6_000_000,
+					'2026-08-26T09:00:00.000Z',
+					'2026-08-27T09:00:00.000Z'
+				),
+				logEvent(3, BID_CANCELLED_EVENT, {
+					fantraxPlayerId: 'p-1',
+					cancelledSeq: '2',
+					causePlayerId: 'p-9',
+					causePlayerName: 'Alperen Sengun'
+				}),
+				bidPlaced(
+					4,
+					'p-1',
+					't-3',
+					'Suns',
+					'm-3',
+					8_000_000,
+					'2026-08-26T10:00:00.000Z',
+					'2026-08-27T10:00:00.000Z'
+				),
+				logEvent(5, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1' }))
+			],
+			teams: [CLOSED_TEAM_ID, 't-2', 't-3']
+		});
+
+		const closed = closedPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
+
+		expect(closed?.bids.map((entry) => entry.seq)).toEqual(['2', '4']);
+		expect(closed?.bids[0]?.cancellation?.causePlayerName).toBe('Alperen Sengun');
+		expect(closed?.bids[1]?.cancellation).toBeNull();
+	});
+
+	it('renders an empty history rather than none when no Bid survived the close', async () => {
+		// A close with no `BidPlaced` behind it at all. Empty is a real recorded
+		// answer — an emptied lottery reaches it — and the page states it.
+		const harness = fakeGateway({
+			events: [
+				nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1'),
+				logEvent(2, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1' }))
+			],
+			teams: [CLOSED_TEAM_ID]
+		});
+
+		const closed = closedPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
+
+		expect(closed?.bids).toEqual([]);
+	});
+
 	// Matrix row "Draw with no contract". A `ContentionDrawn` alone is not a
 	// closed Auction: it says a lottery selected somebody and the close was
 	// never recorded, which is a corrupt or half-written log. Inventing a
@@ -977,7 +1086,7 @@ describe('loadAuctionPage — the Auction with Bids on it (AC6)', () => {
 		expect(auction?.leadingBidder).toBe('Rockets');
 	});
 
-	it('drops the Auction, price and Bid history alike, once a close is folded', async () => {
+	it('drops the Auction and its price once a close is folded, and keeps the history', async () => {
 		const harness = fakeGateway({
 			events: [
 				nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1', NOMINATED_AT),
@@ -1001,14 +1110,22 @@ describe('loadAuctionPage — the Auction with Bids on it (AC6)', () => {
 		// winner, the amount and the placement.
 		const closed = closedPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
 		expect(closed?.kind).toBe('closed');
-		// **And no Bid history, on purpose.** The Bids left with the Auction,
-		// so a history assembled from whatever survived would be an invented
-		// one — on the surface whose whole claim is that it can be checked.
-		// There is no `bids`, no `price` and no `leadingBidder` on this shape
-		// at all, which is what makes that structural rather than a rendering
-		// choice a later edit could reverse.
-		expect(Object.keys(closed ?? {})).not.toContain('bids');
+		// **And the Bid history comes with it.** What the close deleted is the
+		// projection ENTRY; every `BidPlaced` is still in the log with its own
+		// `seq`, so folding the same reducer up to the close returns the record
+		// exactly as it stood when the Auction settled — a complete history
+		// rather than a partial one, which is what the page's checkability
+		// claim actually asked for.
+		expect(closed?.bids).toHaveLength(1);
+		expect(closed?.bids[0]?.bidder).toBe('Rockets');
+		expect(closed?.bids[0]?.amount).toBe('$8.0M');
+		// What is still structurally absent is the LIVE half: there is no
+		// current price and no Leading Bidder on a settled Auction, and their
+		// absence is the shape rather than a rendering choice a later edit
+		// could reverse.
+		expect(Object.keys(closed ?? {})).not.toContain('price');
 		expect(Object.keys(closed ?? {})).not.toContain('leadingBidder');
+		expect(Object.keys(closed ?? {})).not.toContain('bidControl');
 		// And no nominating Team either: `nominationsReducer` deleted the
 		// nomination, so naming one would be naming a Team nothing in the log
 		// still says nominated this Player.
