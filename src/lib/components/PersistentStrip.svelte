@@ -242,9 +242,23 @@
 
 <style>
 	/*
-	 * Pinned to the bottom on a phone, in the flow at 640px — the one
+	 * Pinned to the TOP on a phone, in the flow at 640px — the one
 	 * breakpoint four route files already use, so this introduces none.
 	 * Sized from `--strip-height`; the 52px literal appears nowhere.
+	 *
+	 * **It was pinned to the bottom until the mobile destination bar
+	 * arrived.** The bottom edge is the thumb's edge, and a five-button nav
+	 * earns it far more than a readout does: the bar saves a tap on every
+	 * navigation, where the strip is read and never pressed for its figures.
+	 * Two fixed elements stacked at the same edge would also have cost 112px
+	 * of a phone's height, so the readout moved to the top rather than
+	 * doubling up. It stays persistent at every width, which is the actual
+	 * requirement (`epic-4-context.md:44`) — which edge it is persistent on
+	 * never was.
+	 *
+	 * Top-pinned also puts the sheet back where a disclosure belongs: it
+	 * opens DOWNWARD over the page, rather than growing upward out of an
+	 * element whose bottom edge is the viewport's.
 	 *
 	 * Legible without colour: the label is the display face and the figure
 	 * the `ui` face a size up, so the two are told apart by typeface and
@@ -255,7 +269,7 @@
 	.strip {
 		position: fixed;
 		inset-inline: 0;
-		bottom: 0;
+		top: 0;
 		/*
 		 * Above page content, below nothing else yet. `HeaderMenu`'s
 		 * disclosure establishes no stacking context of its own and sits
@@ -265,20 +279,24 @@
 		 */
 		z-index: 1;
 		background-color: var(--color-surface);
-		border-top: var(--border-width) solid var(--color-border-strong);
+		/* The strip's edge faces the page it sits above, so the rule is on the
+		   BOTTOM at every width now — there is no longer a top-pinned and a
+		   bottom-pinned case to tell apart. */
+		border-bottom: var(--border-width) solid var(--color-border-strong);
 		/*
 		 * The border is INSIDE the reserved height. `global.css` reserves
 		 * exactly `--strip-height` of room, so a border added on top of a
 		 * `min-height` of the same token would occupy one pixel more than was
-		 * reserved and cover the last row of the page by that much.
+		 * reserved and cover the first row of the page by that much.
 		 *
 		 * `box-sizing` alone did NOT achieve that, and said so for a year.
 		 * It governs an element's OWN specified height, and this element
 		 * specifies none — the `min-height` is on `.strip-summary`, a child,
 		 * where this rule cannot reach it. So the strip stood at 53px against
-		 * 52px of reserved room: it covered the page's last row by exactly the
+		 * 52px of reserved room: it covered a row of the page by exactly the
 		 * pixel the comment promised it would not, and `/nominate`'s sticky
-		 * action bar, which clears `--strip-height`, sat 2px over the strip.
+		 * action bar, which then cleared `--strip-height`, sat 2px over the
+		 * strip.
 		 * The height is subtracted on the summary instead, below, where the
 		 * `min-height` actually is.
 		 */
@@ -315,10 +333,10 @@
 		   affordances stacked against each other. */
 		list-style: none;
 		/*
-		 * One line, always. The reserved room below the page is a fixed
+		 * One line, always. The reserved room above the page is a fixed
 		 * `--strip-height`; a strip free to wrap to two lines would grow past
-		 * the room reserved for it and cover the last control — the one thing
-		 * the reservation exists to prevent. The figure and the Roster Count
+		 * the room reserved for it and cover the first row of the page — the
+		 * one thing the reservation exists to prevent. The figure and the Roster Count
 		 * are short by construction, and the label is the part that may be
 		 * elided if a narrow viewport genuinely cannot fit all three.
 		 */
@@ -432,18 +450,19 @@
 	}
 
 	@media (min-width: 640px) {
-		/* In the header, not pinned to the bottom — Maximum Bid stays on
-		   screen and the page keeps its last control.
+		/* In the flow under the header, not pinned — Maximum Bid stays on
+		   screen and the page needs no room reserved for it.
 
 		   This works because the strip is mounted immediately AFTER
 		   `HeaderMenu` in `+layout.svelte` and before the page content:
 		   `static` renders it where it sits in the document, so its DOM
 		   position is what puts it under the header rather than at the foot
-		   of the page. Moving the mount moves the strip. */
+		   of the page. Moving the mount moves the strip.
+
+		   Only the pinning is released. The border already faces the page at
+		   both widths, so nothing about the strip's own edge changes here. */
 		.strip {
 			position: static;
-			border-top: none;
-			border-bottom: var(--border-width) solid var(--color-border-strong);
 		}
 	}
 </style>

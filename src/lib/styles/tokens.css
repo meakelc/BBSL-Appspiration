@@ -99,6 +99,12 @@
 	--control-height: 46px;
 	--touch-min: 44px;
 	--strip-height: 52px;
+	/* The mobile destination bar, which occupies the bottom edge the strip
+	   used to. Taller than the strip because each button stacks a drawn icon
+	   over its own label, and the label may run to two lines at 320px — a
+	   single-line bar would either elide the page names or drop below the
+	   44px touch floor. Released at 640px, where the bar does not render. */
+	--nav-height: 60px;
 	/* Depth is a 1px border. There are no shadows and no elevation layers. */
 	--border-width: 1px;
 	/* Minimum-Bid Contention left bar; refusal-panel top bar. Nothing else. */

@@ -602,13 +602,22 @@ describe('the nomination surface', () => {
 		expect(SOURCE.indexOf('pool.consequence', confirmAt)).toBe(-1);
 	});
 
-	it('clears the whole persistent strip, never the strip minus a pixel', () => {
-		// The strip is fixed to the bottom of the same viewport a sticky offset
-		// is measured against, and it occupies exactly `--strip-height`. A
-		// negative offset here is what put the bar ON the strip.
-		expect(SOURCE).toMatch(/:global\(body:has\(\.strip\)\) \.action-bar \{\s*bottom: var\(--strip-height\);/);
+	it('clears the whole mobile nav bar, never the bar minus a pixel', () => {
+		// The mobile destination bar is fixed to the bottom of the same
+		// viewport a sticky offset is measured against, and it occupies
+		// exactly `--nav-height`. A negative offset here is what put this bar
+		// ON the thing below it.
+		expect(SOURCE).toMatch(/:global\(body:has\(\.mobile-nav\)\) \.action-bar \{\s*bottom: var\(--nav-height\);/);
 		expect(SOURCE, 'a negative sticky offset overlaps whatever is below').not.toMatch(
 			/\.action-bar[^}]*bottom:\s*-/
+		);
+		// And it clears the NAV's token, not the strip's. The strip is pinned
+		// to the top now and nothing of it is down here; clearing 52px against
+		// a 60px bar would leave the submit eight pixels under it — which is
+		// exactly the failure this file's sticky offset exists to prevent, and
+		// which the two tokens being interchangeable-looking makes easy.
+		expect(SOURCE, 'the action bar clears the strip, which is no longer at this edge').not.toContain(
+			'var(--strip-height)'
 		);
 	});
 
@@ -630,9 +639,9 @@ describe('the nomination surface', () => {
 		const submitAt = SOURCE.indexOf('type="submit"');
 		expect(confirmAt).toBeGreaterThan(barAt);
 		expect(submitAt).toBeGreaterThan(barAt);
-		// It clears the persistent strip, which is fixed to the bottom of the
-		// same viewport a sticky offset is measured against.
-		expect(SOURCE).toContain('var(--strip-height)');
+		// It clears the mobile destination bar, which is fixed to the bottom of
+		// the same viewport a sticky offset is measured against.
+		expect(SOURCE).toContain('var(--nav-height)');
 	});
 
 	it('gives every disabled control a reason that actually resolves', () => {

@@ -595,33 +595,39 @@
 	}
 
 	/*
-	 * The persistent strip is FIXED to the bottom of the viewport below 640px
-	 * (`PersistentStrip.svelte`), and a sticky element's offset is measured
+	 * The MOBILE DESTINATION BAR is FIXED to the bottom of the viewport below
+	 * 640px (`MobileNav.svelte`), and a sticky element's offset is measured
 	 * against that same viewport — so `bottom: 0` would park this bar
-	 * underneath the strip and hide the control this whole change exists to
-	 * make reachable. The bar clears it by exactly `--strip-height`, the token
-	 * the strip is sized from and the room `global.css` reserves, so the two
-	 * can only ever agree.
+	 * underneath the nav and hide the control this whole change exists to
+	 * make reachable. It clears it by exactly `--nav-height`, the token the
+	 * nav is sized from and the room `global.css` reserves, so the two can
+	 * only ever agree.
 	 *
-	 * Gated on `body:has(.strip)` for `global.css`'s reason: the strip does
-	 * not mount for every Manager on every page, and clearing 52px of nothing
+	 * **It used to clear `--strip-height`, and the swap is the whole point of
+	 * the move.** The persistent strip held this edge until the nav bar took
+	 * it; the strip is pinned to the TOP now and nothing about it is down
+	 * here to clear. Clearing the strip's token against the nav's bar would
+	 * be 52px of clearance for a 60px obstruction — the control eight pixels
+	 * under the thing it must sit above.
+	 *
+	 * Gated on `body:has(.mobile-nav)` for `global.css`'s reason: the nav does
+	 * not mount for every viewer on every page, and clearing 60px of nothing
 	 * would float the bar above the fold of its own accord.
 	 *
-	 * The WHOLE token, not the token minus a pixel. The strip now occupies
-	 * exactly `--strip-height` (`PersistentStrip.svelte` subtracts its border
-	 * on the row that carries the height, which is where `box-sizing` could
-	 * never reach), so clearing the full token puts the bar's bottom edge
-	 * against the strip's top border with nothing behind it and nothing over
-	 * it.
+	 * The WHOLE token, not the token minus a pixel. The nav occupies exactly
+	 * `--nav-height`, its 1px border inside that height, so clearing the full
+	 * token puts this bar's bottom edge against the nav's top border with
+	 * nothing behind it and nothing over it.
 	 */
-	:global(body:has(.strip)) .action-bar {
-		bottom: var(--strip-height);
+	:global(body:has(.mobile-nav)) .action-bar {
+		bottom: var(--nav-height);
 	}
 
-	/* At 640px the strip is `position: static` under the header, not pinned to
-	   the bottom at all, so there is nothing down here to clear. */
+	/* At 640px the nav bar does not render at all, so there is nothing down
+	   here to clear — and the strip is `position: static` under the header
+	   rather than pinned anywhere. */
 	@media (min-width: 640px) {
-		:global(body:has(.strip)) .action-bar {
+		:global(body:has(.mobile-nav)) .action-bar {
 			bottom: 0;
 		}
 	}

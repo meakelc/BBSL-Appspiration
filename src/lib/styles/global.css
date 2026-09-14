@@ -118,31 +118,45 @@ a {
 }
 
 /*
- * Room for the persistent strip (Story 4.2).
+ * Room for the two fixed edges: the persistent strip at the TOP of a phone
+ * (Story 4.2), and the mobile destination bar at the bottom.
  *
- * The strip is fixed to the bottom of the viewport on a phone, so without
- * this the last control on the longest page sits underneath it and cannot be
- * tapped. Reserved on `body` rather than on `.page`, because a surface that
- * does not use the `.page` band still ends somewhere and still has a last
- * control.
+ * Both are `position: fixed` below 640px, so without this the first heading
+ * sits underneath the strip and the last control sits underneath the nav —
+ * and neither can be read or tapped. Reserved on `body` rather than on
+ * `.page`, because a surface that does not use the `.page` band still begins
+ * and ends somewhere.
  *
- * Sized from `--strip-height` — the token, never the 52px literal — so the
- * room reserved and the strip occupying it can only ever be the same value.
- * The strip is `box-sizing: border-box`, so its 1px top border is inside that
- * height rather than added to it. Released at 640px, where the strip moves
- * into the header and is in the flow like any other element.
+ * Sized from `--strip-height` and `--nav-height` — the tokens, never the
+ * 52px and 60px literals — so the room reserved and the thing occupying it
+ * can only ever be the same value. Both are `box-sizing: border-box`, so
+ * their 1px borders are inside those heights rather than added to them.
+ * Released at 640px, where the strip moves into the header and is in the
+ * flow like any other element, and the nav bar does not render at all.
  *
- * Gated on `body:has(.strip)` so the room is reserved only where the strip
- * actually mounts. It does not mount for a signed-out visitor, a Manager
- * bound to no Team, or in Setup — and reserving 52px of dead space at the
- * bottom of those pages would be room held for something that is not there.
+ * Gated on `body:has(.strip)` / `body:has(.mobile-nav)` so each reservation
+ * is made only where that element actually mounts. The strip does not mount
+ * for a signed-out visitor, a Manager bound to no Team, or in Setup; the nav
+ * bar does not mount for a viewer with no listed destination of their own —
+ * and reserving dead space at either edge would be room held for something
+ * that is not there. Two separate `:has()` gates rather than one, because
+ * the two mount on different conditions and a Manager can have the strip
+ * without the bar.
  */
 body:has(.strip) {
-	padding-bottom: var(--strip-height);
+	padding-top: var(--strip-height);
+}
+
+body:has(.mobile-nav) {
+	padding-bottom: var(--nav-height);
 }
 
 @media (min-width: 640px) {
 	body:has(.strip) {
+		padding-top: 0;
+	}
+
+	body:has(.mobile-nav) {
 		padding-bottom: 0;
 	}
 }

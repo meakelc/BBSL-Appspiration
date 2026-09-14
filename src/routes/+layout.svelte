@@ -50,6 +50,7 @@
 	import { freshness } from '$lib/client/freshness.svelte.ts';
 	import FreshnessNotice from '$lib/components/FreshnessNotice.svelte';
 	import HeaderMenu from '$lib/components/HeaderMenu.svelte';
+	import MobileNav from '$lib/components/MobileNav.svelte';
 	import PersistentStrip from '$lib/components/PersistentStrip.svelte';
 
 	import type { LayoutData } from './$types';
@@ -102,14 +103,17 @@
      than four conditions restated in markup.
 
      **It is mounted HERE, immediately after the header, and that position is
-     load-bearing.** On a phone the strip is `position: fixed` to the bottom,
-     so DOM order is invisible; at 640px it becomes `position: static` and
+     load-bearing.** On a phone the strip is `position: fixed` to the top, so
+     DOM order is invisible; at 640px it becomes `position: static` and
      renders exactly where it sits in the document. Mounted after the page
-     content — where it was — `static` put it at the FOOT of the page, so
+     content — where it once was — `static` put it at the FOOT of the page, so
      Maximum Bid was reachable on desktop only by scrolling to the bottom of
      every surface. The requirement is persistent visibility at every width,
      not a mobile convenience (`epic-4-context.md:44`), so the strip must
-     precede the page content it is meant to stay in front of.
+     precede the page content it is meant to stay in front of. On a phone that
+     now agrees with where it renders as well: it is the top edge, and it is
+     announced first, because it states the figures the page beneath it is
+     read against.
 
      It carries FACTS and derives the figure itself (AD-7). The `serverInstant`
      it is handed is the same one the freshness contract anchors on, so the one
@@ -148,3 +152,32 @@
 {/if}
 
 {@render children()}
+
+<!-- The mobile destination bar, mounted ONCE for every surface beneath the
+     layout, for the same AD-29/AD-30 reason the strip and the freshness
+     notice are: one bar, one selection from one destination list, inherited
+     by every screen rather than restated per page.
+
+     **It is mounted LAST, after the page content, and that position is
+     load-bearing in the opposite direction to the strip's.** The bar is
+     `position: fixed` below 640px and `display: none` at 640px and above, so
+     it never renders in the flow and its DOM position never places it
+     visually. What its position does decide is READING order: a bar of five
+     destinations announced before the page would put the navigation between
+     a Manager and the content on every single surface. After the content is
+     where a screen reader and a keyboard both expect to find it, and it is
+     reachable at any moment by landmark regardless.
+
+     Gated on `data.signedIn` alone — NOT on `data.stripTeam`, which is the
+     strip's gate. A Manager bound to no Team has no figures to state and so
+     gets no strip, but they still have destinations and still deserve to
+     reach them in one tap. The component renders nothing when the selection
+     is empty, so the Setup case needs no condition here.
+
+     It is handed the SAME `data.destinations` the strip's sheet is handed.
+     One resolved list, two renderings of it; `navDestinations` narrows, and
+     can never widen, what the server already decided this viewer may
+     reach. -->
+{#if data.signedIn}
+	<MobileNav destinations={data.destinations} />
+{/if}

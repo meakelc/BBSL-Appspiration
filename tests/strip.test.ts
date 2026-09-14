@@ -456,11 +456,27 @@ describe('PersistentStrip.svelte — the surface, asserted against its source', 
 		expect(STRIP).toContain('position: static');
 	});
 
+	it('pins to the TOP on a phone, because the bottom edge belongs to the nav bar', () => {
+		// The strip held the bottom edge until `MobileNav.svelte` took it. Two
+		// fixed elements at one edge would cost 112px of a phone's height, and
+		// of the two it is the five-button bar that earns the thumb's edge —
+		// the strip is read, not pressed for its figures.
+		//
+		// Asserting the declaration inside `.strip` rather than anywhere in
+		// the file, because `.mobile-nav`'s own `bottom: 0` is the correct
+		// value on the correct element and a file-wide match would accept it.
+		const strip = /\.strip\s*\{[^}]*\}/.exec(STRIP)?.[0] ?? '';
+		expect(strip).toContain('top: 0');
+		expect(strip, 'the strip is pinned to the edge the nav bar occupies').not.toMatch(
+			/\sbottom:/
+		);
+	});
+
 	it('keeps its 1px border inside the height the layout reserves for it', () => {
 		// `global.css` reserves exactly `--strip-height`. A border added on
 		// TOP of a `min-height` of the same token occupies one pixel more than
-		// was reserved, so the strip covers the last row of the page by that
-		// much — the one thing the reservation exists to prevent.
+		// was reserved, so the strip covers a row of the page by that much —
+		// the one thing the reservation exists to prevent.
 		//
 		// This test used to assert `box-sizing: border-box` on `.strip` and
 		// stop there, and that assertion passed for a year while the strip
@@ -469,7 +485,10 @@ describe('PersistentStrip.svelte — the surface, asserted against its source', 
 		// `.strip-summary`, a child it cannot reach. The height is where the
 		// subtraction has to happen, so that is what is asserted now.
 		const strip = /\.strip\s*\{[^}]*\}/.exec(STRIP)?.[0] ?? '';
-		expect(strip).toContain('border-top: var(--border-width)');
+		// The rule faces the page, and the page is BELOW the strip at both
+		// widths now, so the border is on the bottom and there is no longer a
+		// top-pinned and a bottom-pinned case to keep in step.
+		expect(strip).toContain('border-bottom: var(--border-width)');
 		expect(strip).toContain('box-sizing: border-box');
 		// `.strip` sets no height of its own — if it ever does, this test is
 		// asserting the wrong element and should be rewritten, not deleted.
@@ -704,17 +723,33 @@ describe('loadStripTeam — one read, facts only, and it cannot 500 a page', () 
 // --- The bottom room --------------------------------------------------------
 
 describe('the strip never covers the last control', () => {
-	it('reserves --strip-height of bottom room on mobile and releases it at 640px', () => {
-		expect(GLOBAL_CSS).toContain('padding-bottom: var(--strip-height)');
+	it('reserves --strip-height of TOP room on mobile and releases it at 640px', () => {
+		// The strip is pinned to the top now, so the room it needs is above
+		// the page and not below it. Reserved at the bottom instead, the page
+		// would begin underneath the strip — the first heading of every
+		// surface covered — while 52px of nothing sat at the foot.
+		expect(GLOBAL_CSS).toContain('padding-top: var(--strip-height)');
 		expect(GLOBAL_CSS).toContain('@media (min-width: 640px)');
-		expect(GLOBAL_CSS).toContain('padding-bottom: 0');
+		expect(GLOBAL_CSS).toContain('padding-top: 0');
 		expect(GLOBAL_CSS_CODE).not.toContain('52px');
 	});
 
-	it('reserves that room only where the strip actually mounts', () => {
+	it('reserves the bottom room for the nav bar instead, on its own gate', () => {
+		// The bottom edge is the mobile destination bar's now, and it is a
+		// different height and a different mount condition — a Manager can
+		// have the strip without the bar. One `:has()` gate each, never one
+		// shared between them.
+		expect(GLOBAL_CSS).toContain('padding-bottom: var(--nav-height)');
+		expect(GLOBAL_CSS).toContain('padding-bottom: 0');
+		expect(GLOBAL_CSS_CODE).toContain('body:has(.mobile-nav)');
+		expect(GLOBAL_CSS_CODE).not.toContain('60px');
+	});
+
+	it('reserves each room only where that element actually mounts', () => {
 		// The strip does not mount for a signed-out visitor, a Manager bound
-		// to no Team, or in Setup. Reserving the room unconditionally holds
-		// 52px of dead space at the bottom of every one of those pages for
+		// to no Team, or in Setup; the nav bar does not mount for a viewer
+		// with no listed destination of their own. Reserving either room
+		// unconditionally holds dead space on every one of those pages for
 		// something that is not there.
 		expect(GLOBAL_CSS_CODE).toContain('body:has(.strip)');
 		expect(GLOBAL_CSS_CODE).not.toMatch(/\nbody \{\s*padding-bottom/);
