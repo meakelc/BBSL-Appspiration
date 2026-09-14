@@ -438,13 +438,36 @@
 	}
 
 	/*
-	 * `ui` at 15px, not Georgia (DESIGN.md:181). A fantasy Team is an entity,
-	 * and setting it in the display face would put it in the same register as
-	 * the players it competes for.
+	 * `ui`, never Georgia (DESIGN.md:181). A fantasy Team is an entity, and
+	 * setting it in the display face would put it in the same register as the
+	 * players it competes for.
+	 *
+	 * The SECTION-LABEL treatment — 10px uppercase at `0.16em`, the same three
+	 * properties `global.css:175` gives the group headers of Your Positions.
+	 * DESIGN.md:181 specifies 15px sentence case; this is a deliberate
+	 * departure from that line and from nothing else on the row. The name is
+	 * now read as the heading the row hangs off rather than as its largest
+	 * line, which is what lets the figures beneath it carry the weight on a
+	 * list whose whole job is comparing them.
+	 *
+	 * The COLOUR is untouched, and that is the half of the section-label
+	 * treatment deliberately not taken: `global.css` sets those headers in
+	 * `text-tertiary`, and DESIGN.md:187 — every Team name in `text`, the
+	 * viewer's included — is a separate rule about hierarchy rather than about
+	 * type, and still stands. The name takes the label's SHAPE, not its
+	 * quietness.
+	 *
+	 * Stated as three properties rather than by adding `class="section-label"`
+	 * to the span, because that class carries the colour too, and which of the
+	 * two single-class rules won would then depend on whether the scoped
+	 * component sheet was injected after `global.css` — an ordering nothing in
+	 * this codebase pins down.
 	 */
 	.team-identity {
 		font-family: var(--font-ui);
-		font-size: var(--size-15);
+		font-size: var(--size-10);
+		text-transform: uppercase;
+		letter-spacing: 0.16em;
 		color: var(--color-text);
 	}
 
@@ -453,6 +476,10 @@
 	 * (DESIGN.md:187). EVERY Team name sits in `text`, the viewer's included:
 	 * dimming twenty-nine names to make one stand out was drafted and rejected
 	 * at the mock, and the left edge already carries the marker.
+	 *
+	 * It sits INSIDE `.team-identity`, so it takes the label treatment above
+	 * with it and the two halves stay one line of one kind. Only the colour
+	 * separates them, which is the whole of what DESIGN.md:187 asks for.
 	 */
 	.team-manager {
 		color: var(--color-text-secondary);

@@ -393,8 +393,21 @@ describe('the Teams index page — what it renders', () => {
 	it('sets the Team name in `ui`, not Georgia (DESIGN.md:181)', () => {
 		const block = /\.team-identity\s*\{[\s\S]*?\}/.exec(PAGE)?.[0] ?? '';
 		expect(block).toContain('var(--font-ui)');
-		expect(block).toContain('var(--size-15)');
 		expect(block).not.toContain('--font-display');
+	});
+
+	it('gives the Team name the section-label treatment of Your Positions’ group headers', () => {
+		const block = /\.team-identity\s*\{[\s\S]*?\}/.exec(PAGE)?.[0] ?? '';
+		// `global.css:175`'s own three properties. A deliberate departure from
+		// DESIGN.md:181's 15px sentence case: the name reads as the heading the
+		// row hangs off, so the figures beneath it carry the weight.
+		expect(block).toContain('var(--size-10)');
+		expect(block).toContain('text-transform: uppercase');
+		expect(block).toContain('letter-spacing: 0.16em');
+		// The COLOUR half of that treatment is deliberately NOT taken — the
+		// group headers are `text-tertiary`, and DESIGN.md:187 keeps every Team
+		// name in `text`. The name takes the label's shape, not its quietness.
+		expect(block).not.toContain('var(--color-text-tertiary)');
 	});
 
 	/*
