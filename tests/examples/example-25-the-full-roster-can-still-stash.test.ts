@@ -256,7 +256,7 @@ describe('§10 example 25 — the full roster can still stash', () => {
 				state: stateAfter(led),
 				fantraxPlayerId,
 				viewerTeamId: 't-r',
-				amountText: '1500000',
+				amountText: '1.5',
 				confirmed: true,
 				now: ''
 			});

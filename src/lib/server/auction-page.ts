@@ -144,6 +144,7 @@ import {
 	isEligible
 } from '../core/projection/eligibility.ts';
 import {
+	bidAmountField,
 	bidControlState,
 	bidStateFor,
 	describeAmount,
@@ -1086,7 +1087,7 @@ function readBidControl(
 		state,
 		fantraxPlayerId,
 		viewerTeamId,
-		amountText: String(minimumLegal),
+		amountText: bidAmountField(minimumLegal),
 		confirmed: true,
 		now: figuresAt
 	});

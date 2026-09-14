@@ -171,7 +171,8 @@ import {
 	MINIMUM_BID,
 	MINIMUM_INCREMENT,
 	MINOR_LEAGUE_SLOTS,
-	OUTSTANDING_BID_ALLOWANCE
+	OUTSTANDING_BID_ALLOWANCE,
+	SALARY_CAP
 } from '../constants.ts';
 import { hash } from '../hash.ts';
 import { parseInstant, relativePhrase } from '../instant.ts';
@@ -821,16 +822,122 @@ export type BidAmountReading =
  * misunderstanding of what the field is for.
  */
 export function readBidAmount(text: string): BidAmountReading {
-	const trimmed = text.trim();
-	if (trimmed === '') return { kind: 'unusable', refusal: { kind: 'unusable_amount' } };
+	const written = FIELD_TEXT.exec(text.trim());
+	if (written === null) return { kind: 'unusable', refusal: { kind: 'unusable_amount' } };
+
+	const [, sign, millions, fraction = ''] = written;
+	if (millions === undefined) return { kind: 'unusable', refusal: { kind: 'unusable_amount' } };
+
+	// More than six decimal places is a fraction of one dollar, and there is
+	// no such thing here: integer dollars end to end (AD-8).
+	if (fraction.length > MILLION_DECIMALS) {
+		return { kind: 'unusable', refusal: { kind: 'unusable_amount' } };
+	}
+
 	let amount: Money;
 	try {
-		amount = parseMoney(trimmed);
+		amount = parseMoney(toDollarDigits(millions, fraction));
 	} catch {
 		return { kind: 'unusable', refusal: { kind: 'unusable_amount' } };
 	}
-	if (amount < 0) return { kind: 'unusable', refusal: { kind: 'negative_amount' } };
+
+	// The sign is read before the unit: a minus is never a unit mistake, and
+	// it keeps its own sentence for the reason given above.
+	if (sign === '-' && amount > 0) return { kind: 'unusable', refusal: { kind: 'negative_amount' } };
+
+	if (Number(millions) > MOST_MILLIONS) {
+		return { kind: 'unusable', refusal: { kind: 'dollars_not_millions' } };
+	}
 	return { kind: 'usable', amount };
+}
+
+/**
+ * Exactly what the bid field's language allows: an optional sign, an optional
+ * currency symbol, a canonical run of digits, an optional decimal part, and an
+ * optional `m`.
+ *
+ * The digits are a figure in MILLIONS — `10.5` is $10,500,000 — because that
+ * is what the field beside them now reads as, `$10.5m`. Leading zeros are
+ * refused here as they are in `money.ts`: `007.5` is not a figure a person
+ * means, and accepting it would mean the zeros carry no information.
+ *
+ * The `$` and the `m` are the field's own adornments and a Manager never types
+ * either. They are accepted anyway because the figure they frame is the one
+ * this product prints everywhere else — `$10.5M` in a Discord broadcast, in
+ * the Bid history, on the board — and a figure pasted out of one of those into
+ * the field should be the figure the field then holds.
+ */
+const FIELD_TEXT = /^(-?)\$?(0|[1-9][0-9]*)(?:\.([0-9]+))?[mM]?$/;
+
+/** Dollars in one million. The unit the bid field is denominated in. */
+const DOLLARS_PER_MILLION = 1_000_000;
+
+/** Decimal places of one million that one whole dollar occupies. */
+const MILLION_DECIMALS = 6;
+
+/**
+ * The largest figure the field's language can express — the whole Salary Cap,
+ * `165`, as a count of millions.
+ *
+ * **This is a unit check and not the Cap rule.** The Cap is a gate's question
+ * and it stays one; what this bounds is the LANGUAGE. The field used to take
+ * whole dollars, so `10500000` is what a Manager's hands will type into it out
+ * of habit for some time yet, and read as millions that is $10.5 trillion — a
+ * figure no gate can word usefully, because every sentence it could produce
+ * would be about a Cap breach rather than about the mistake that was actually
+ * made. Nothing above the Cap can ever be a legal Bid, so refusing it HERE
+ * costs no legal figure and lets the refusal name the unit instead.
+ */
+const MOST_MILLIONS = SALARY_CAP / DOLLARS_PER_MILLION;
+
+/**
+ * Compose the canonical integer-dollar text `parseMoney` takes from a figure
+ * written in millions: `10` and `5` become `10500000`.
+ *
+ * **By text, never by multiplication.** `10.5 * 1_000_000` happens to be exact,
+ * but `0.1 * 1_000_000` is `100000.00000000001`, and a field that takes one
+ * decimal place would produce an amount off by a dollar at some figures and
+ * not at others. Padding the decimal part out to six digits and concatenating
+ * is exact at every figure, and it is the same reason `money.ts` renders by
+ * remainder and exact division rather than with a float (AD-8: integer dollars
+ * end to end, no float, no decimal library).
+ *
+ * The leading zeros a small figure picks up are stripped rather than left for
+ * `parseMoney` to refuse: `0` and `5` compose `0500000`, whose value is
+ * $500,000 and whose spelling is one `money.ts` rejects as non-canonical.
+ */
+function toDollarDigits(millions: string, fraction: string): string {
+	const digits = millions + fraction.padEnd(MILLION_DECIMALS, '0');
+	return digits.replace(/^0+(?=[0-9])/, '');
+}
+
+/**
+ * Write an amount the way the bid field holds it: `$10.5m` is `10.5`, and
+ * `$1.0M` is `1`.
+ *
+ * The inverse of `readBidAmount`, and the pair is the point — every string
+ * this returns is one that parser reads back as the same amount, so the field
+ * can never be seeded with a figure it would then refuse.
+ *
+ * **The trailing `.0` is dropped, and this is the one place in the product
+ * that drops it.** `formatMoney` renders `$1.0M` and must keep doing so: it is
+ * a RENDERING, one figure among many in a column of them, and a column where
+ * some rows have a decimal and others do not is a column that reads as
+ * ragged. This is not a rendering — it is editable text, and the next thing
+ * that happens to it is a Manager typing into it. Seeding `1.0` would put the
+ * caret after a decimal place nobody asked for and make `12` take a deletion
+ * to reach.
+ *
+ * The `$` and the `m` are not here, because they are not part of the value:
+ * the field wears them as fixed adornments beside the text, so they cannot be
+ * deleted, retyped, or accidentally submitted as part of the figure.
+ */
+export function bidAmountField(amount: Money): string {
+	const negative = amount < 0;
+	const digits = String(negative ? -amount : amount).padStart(MILLION_DECIMALS + 1, '0');
+	const whole = digits.slice(0, digits.length - MILLION_DECIMALS);
+	const fraction = digits.slice(digits.length - MILLION_DECIMALS).replace(/0+$/, '');
+	return `${negative ? '-' : ''}${whole}${fraction === '' ? '' : `.${fraction}`}`;
 }
 
 // --- The gates -------------------------------------------------------------
@@ -2171,11 +2278,19 @@ export function failedGates(gates: PlaceBidGateResults): readonly PlaceBidGate[]
  *
  *  - `unusable_amount` — an empty, non-numeric or decimal-carrying field has
  *    no amount for a gate to decide about, so no transaction opens.
- *  - `negative_amount` — the field held a whole number of dollars, but a
- *    negative one. Its own case rather than a second reading of the one
- *    above, because "that is not a whole number of dollars" is false about
- *    `-500000` and the remedy differs: a decimal point is a typing slip, a
- *    minus sign is a misunderstanding of what the field is for.
+ *  - `negative_amount` — the field held a figure, but a negative one. Its own
+ *    case rather than a second reading of the one above, because "that is not
+ *    a figure in millions" is false about `-1.5` and the remedy differs: a
+ *    stray character is a typing slip, a minus sign is a misunderstanding of
+ *    what the field is for.
+ *  - `dollars_not_millions` — the field held a figure larger than the whole
+ *    Salary Cap expressed in millions, which is what a full dollar amount
+ *    typed into a millions field looks like. Its own case for
+ *    `negative_amount`'s reason, and a strong one: the field took whole
+ *    dollars until this change, so `10500000` is the shape of an old habit
+ *    rather than of a mistake, and the gates cannot name it — read as
+ *    millions it is a Cap breach of $10.5 trillion, and every sentence they
+ *    could produce would be about the Cap instead of about the unit.
  *  - `unconfirmed` — bidding is a deliberate two-part act; an unconfirmed
  *    submit establishes only that this request did not mean to bid.
  *  - `unbound_actor` — `auction_events.manager_id`/`team_id` are NOT NULL
@@ -2195,6 +2310,7 @@ export type BidRefusal =
 	| { readonly kind: 'gates'; readonly gates: PlaceBidGateResults }
 	| { readonly kind: 'unusable_amount' }
 	| { readonly kind: 'negative_amount' }
+	| { readonly kind: 'dollars_not_millions' }
 	| { readonly kind: 'unconfirmed' }
 	| { readonly kind: 'unbound_actor' }
 	| { readonly kind: 'no_open_auction' }
@@ -3248,13 +3364,19 @@ export function bidRefusalDelta(refusal: BidRefusal): string {
 		}
 		case 'unusable_amount':
 			return (
-				'the amount is not a whole number of dollars. Enter it in whole dollars, with no ' +
-				'decimal point, no comma and no currency symbol.'
+				'the amount is not a figure the field can read. It is read in millions, so enter ' +
+				'$10.5M as 10.5 — digits and at most one decimal point, with no comma.'
 			);
 		case 'negative_amount':
 			return (
 				'the amount is negative, and a Bid is what you are offering to pay. Enter it as a ' +
-				'positive whole number of dollars.'
+				'positive figure in millions.'
+			);
+		case 'dollars_not_millions':
+			return (
+				`the amount is read in millions, so the whole Salary Cap — ${formatMoney(parseMoney(SALARY_CAP))} — ` +
+				'is entered as 165, and nothing larger can be a Bid. This looks like a figure in ' +
+				'whole dollars: enter $10.5M as 10.5, not as 10500000.'
 			);
 		case 'unconfirmed':
 			return (

@@ -50,6 +50,7 @@ import {
 	REFUSAL_HEADLINE,
 	REFUSAL_REASSURANCE,
 	outstandingBidFiguresFor,
+	bidAmountField,
 	readBidAmount,
 	teamMoneyStateFor
 } from '../../src/lib/core/rules/bidding.ts';
@@ -1355,23 +1356,45 @@ describe('minimumLegalBid — the pre-filled figure the control shows', () => {
 // --- parseBidAmount, the form boundary -------------------------------------
 
 describe('readBidAmount — the "unusable amount" row of the I/O matrix', () => {
-	it('accepts whole dollars, with surrounding whitespace trimmed', () => {
-		expect(readBidAmount('8500000')).toEqual({ kind: 'usable', amount: 8_500_000 });
-		expect(readBidAmount('  8500000  ')).toEqual({ kind: 'usable', amount: 8_500_000 });
+	it('reads the field in MILLIONS, with surrounding whitespace trimmed', () => {
+		expect(readBidAmount('8.5')).toEqual({ kind: 'usable', amount: 8_500_000 });
+		expect(readBidAmount('  8.5  ')).toEqual({ kind: 'usable', amount: 8_500_000 });
+		expect(readBidAmount('1')).toEqual({ kind: 'usable', amount: 1_000_000 });
+		expect(readBidAmount('165')).toEqual({ kind: 'usable', amount: 165_000_000 });
+		expect(readBidAmount('0.5')).toEqual({ kind: 'usable', amount: 500_000 });
 		expect(readBidAmount('0')).toEqual({ kind: 'usable', amount: 0 });
 	});
 
-	it('refuses empty, non-numeric and decimal-carrying amounts as unusable', () => {
+	it('composes the dollars by TEXT, so no figure is a float away from the grid', () => {
+		// 0.1 * 1_000_000 is 100000.00000000001. Every one of these is exact
+		// only because the decimal part is padded and concatenated (AD-8).
+		expect(readBidAmount('0.1')).toEqual({ kind: 'usable', amount: 100_000 });
+		expect(readBidAmount('0.7')).toEqual({ kind: 'usable', amount: 700_000 });
+		expect(readBidAmount('2.9')).toEqual({ kind: 'usable', amount: 2_900_000 });
+		expect(readBidAmount('0.000001')).toEqual({ kind: 'usable', amount: 1 });
+	});
+
+	it('accepts the adornments it displays, so a pasted $8.5M is the figure it reads', () => {
+		// A Manager never types either — they are fixed beside the field — but
+		// $8.5M is how this product prints the same figure everywhere else.
+		for (const text of ['$8.5m', '$8.5M', '8.5m', '8.5M', '$8.5']) {
+			expect(readBidAmount(text), text).toEqual({ kind: 'usable', amount: 8_500_000 });
+		}
+	});
+
+	it('refuses empty, non-numeric and mis-punctuated amounts as unusable', () => {
 		for (const text of [
 			'',
 			'   ',
 			'abc',
-			'8.5',
-			'8500000.0',
+			'8.5.1',
 			'8,500,000',
-			'$8500000',
 			'8e6',
 			'007',
+			'.5',
+			'8.',
+			'8 5',
+			'0.0000001',
 			'Infinity',
 			'NaN'
 		]) {
@@ -1382,22 +1405,103 @@ describe('readBidAmount — the "unusable amount" row of the I/O matrix', () => 
 		}
 	});
 
-	it('gives a negative amount its OWN refusal — it IS a whole number of dollars', () => {
-		// The remedy differs: a decimal point is a typing slip, a minus sign
+	it('gives a WHOLE-DOLLAR figure its own refusal — it is the old field habit', () => {
+		// The field took whole dollars until this change, so 8500000 is the
+		// shape of a habit rather than of a mistake. Read as millions it is
+		// $8.5 trillion, and no gate can word that usefully — every sentence
+		// they could produce would be about the Cap instead of the unit.
+		expect(readBidAmount('8500000')).toEqual({
+			kind: 'unusable',
+			refusal: { kind: 'dollars_not_millions' }
+		});
+		const detail = bidRefusalDetail({ kind: 'dollars_not_millions' });
+		expect(detail).toContain('millions');
+		expect(detail).toContain('165');
+		// Everything up to and including the whole Salary Cap still reads.
+		expect(readBidAmount('165')).toEqual({ kind: 'usable', amount: 165_000_000 });
+		expect(readBidAmount('166')).toEqual({
+			kind: 'unusable',
+			refusal: { kind: 'dollars_not_millions' }
+		});
+	});
+
+	it('REFUSES every legal whole-dollar figure, so no pre-deploy tab can misfire', () => {
+		// The deploy boundary, and the reason this change can ship into a
+		// running Auction at all.
+		//
+		// A Manager with the page already open when the deploy lands has a
+		// field holding whole dollars and the OLD script running beside it.
+		// If they submit, that text reaches the NEW action. What must never
+		// happen is that it READS — `8500000` accepted as a figure in millions
+		// would be a Bid nobody made.
+		//
+		// It cannot, and the reason is arithmetic rather than luck: the least
+		// a Bid may be is $1,000,000, so every figure the old field could
+		// legally hold is at least seven digits, and seven digits read as
+		// millions is always past the Cap. The unit check catches all of them.
+		for (let dollars = MINIMUM_BID; dollars <= SALARY_CAP; dollars += MINIMUM_INCREMENT) {
+			const asAnOldTabHeldIt = String(dollars);
+			expect(readBidAmount(asAnOldTabHeldIt), asAnOldTabHeldIt).toEqual({
+				kind: 'unusable',
+				refusal: { kind: 'dollars_not_millions' }
+			});
+		}
+		// The converse: the only old-format text the new parser DOES read is
+		// 0 to 165 dollars, every one of which is below the minimum — so the
+		// old page disabled its own submit on `below_the_minimum` and no such
+		// text could ever have been posted in the first place.
+		expect(readBidAmount('165')).toEqual({ kind: 'usable', amount: 165_000_000 });
+		expect(165).toBeLessThan(MINIMUM_BID);
+	});
+
+	it('gives a negative amount its OWN refusal, and reads the sign before the unit', () => {
+		// The remedy differs: a stray character is a typing slip, a minus sign
 		// is a misunderstanding of what the field is for. One sentence for
 		// both would be false about this input.
-		expect(readBidAmount('-500000')).toEqual({
+		expect(readBidAmount('-0.5')).toEqual({
+			kind: 'unusable',
+			refusal: { kind: 'negative_amount' }
+		});
+		// A minus is never a UNIT mistake, so it keeps its sentence even at a
+		// magnitude the unit check would otherwise refuse.
+		expect(readBidAmount('-8500000')).toEqual({
 			kind: 'unusable',
 			refusal: { kind: 'negative_amount' }
 		});
 		const detail = bidRefusalDetail({ kind: 'negative_amount' });
 		expect(detail).toContain('negative');
-		expect(detail).not.toContain('not a whole number of dollars');
 	});
 
 	it('never throws — an unusable amount is a person, not a corrupt column', () => {
-		for (const text of ['', 'abc', '8.5', '-1', '9'.repeat(40)]) {
+		for (const text of ['', 'abc', '8.5.1', '-1', '9'.repeat(40), '9.' + '9'.repeat(40)]) {
 			expect(() => readBidAmount(text)).not.toThrow();
+		}
+	});
+});
+
+describe('bidAmountField — what the field holds, and readBidAmount inverted', () => {
+	it('writes a figure in millions, dropping a trailing .0', () => {
+		expect(bidAmountField(parseMoney(1_000_000))).toBe('1');
+		expect(bidAmountField(parseMoney(1_500_000))).toBe('1.5');
+		expect(bidAmountField(parseMoney(10_500_000))).toBe('10.5');
+		expect(bidAmountField(parseMoney(500_000))).toBe('0.5');
+		expect(bidAmountField(parseMoney(165_000_000))).toBe('165');
+		expect(bidAmountField(parseMoney(0))).toBe('0');
+	});
+
+	it('round-trips every figure on the grid, from nothing to the whole Cap', () => {
+		// The pair is the point: the field can never be seeded with a figure
+		// it would then refuse.
+		for (let amount = 0; amount <= 165_000_000; amount += 500_000) {
+			const held = bidAmountField(parseMoney(amount));
+			expect(readBidAmount(held), held).toEqual({ kind: 'usable', amount });
+		}
+	});
+
+	it('round-trips an OFF-grid figure too — an imported Cap Hit is real', () => {
+		for (const amount of [1, 100_000, 6_750_000, 12_345_678]) {
+			const held = bidAmountField(parseMoney(amount));
+			expect(readBidAmount(held), held).toEqual({ kind: 'usable', amount });
 		}
 	});
 });
@@ -1654,7 +1758,7 @@ function controlFor(state: BidState, amountText: string, viewerTeamId: string | 
 
 describe('bidControlState — one decision function for the read path and the surface', () => {
 	it('is ready for the pre-filled amount, and says so in the core’s words', () => {
-		const control = controlFor(standardAt(8_000_000), '8500000');
+		const control = controlFor(standardAt(8_000_000), '8.5');
 		expect(control.blocked).toBe(false);
 		expect(control.detail).toBe(BID_READY);
 		expect(control.refusingGates).toEqual([]);
@@ -1663,7 +1767,7 @@ describe('bidControlState — one decision function for the read path and the su
 	it('blocks an off-grid TYPED amount with the granularity sentence', () => {
 		// $6,750,000 over a $6,000,000 high clears the increment and is off
 		// the grid — the case that used to reach an enabled control.
-		const control = controlFor(standardAt(6_000_000), '6750000');
+		const control = controlFor(standardAt(6_000_000), '6.75');
 		expect(control.blocked).toBe(true);
 		expect(control.refusingGates).toEqual(['granularity']);
 		expect(control.detail).toContain('whole multiple of $0.5M');
@@ -1676,14 +1780,14 @@ describe('bidControlState — one decision function for the read path and the su
 	});
 
 	it('blocks a sub-increment TYPED amount with the increment sentence', () => {
-		const control = controlFor(standardAt(8_000_000), '8400000');
+		const control = controlFor(standardAt(8_000_000), '8.4');
 		expect(control.blocked).toBe(true);
 		expect(control.refusingGates).toEqual(['increment', 'granularity']);
 		expect(control.detail).toContain('the least you may offer is $8.5M');
 	});
 
 	it('ALLOWS a TYPED Opening Bid of exactly $1,000,000 — it opens a lottery', () => {
-		const control = controlFor(NO_BIDS, '1000000');
+		const control = controlFor(NO_BIDS, '1');
 		expect(control.blocked).toBe(false);
 		expect(control.refusingGates).toEqual([]);
 		expect(control.detail).toBe(BID_READY);
@@ -1695,14 +1799,14 @@ describe('bidControlState — one decision function for the read path and the su
 		// it is `converts`.
 		// `t-2` joined but does not lead, so `contention` is the SOLE ground:
 		// the opener re-bidding would be refused on `selfBid` as well.
-		const control = controlFor(contentionWith(['t-2']), '1000000');
+		const control = controlFor(contentionWith(['t-2']), '1');
 		expect(control.blocked).toBe(true);
 		expect(control.refusingGates).toEqual(['contention']);
 		expect(control.detail).toContain('already a Contender');
 	});
 
 	it('blocks the Team that already leads, whatever it types', () => {
-		for (const typed of ['8500000', '9000000', '40000000']) {
+		for (const typed of ['8.5', '9', '40']) {
 			const control = controlFor(standardAt(8_000_000, 't-2'), typed);
 			expect(control.blocked, typed).toBe(true);
 			expect(control.detail, typed).toContain('does not bid against itself');
@@ -1713,17 +1817,23 @@ describe('bidControlState — one decision function for the read path and the su
 		expect(controlFor(standardAt(8_000_000), '').detail).toBe(
 			bidRefusalDetail({ kind: 'unusable_amount' })
 		);
-		expect(controlFor(standardAt(8_000_000), '8.5').detail).toBe(
+		expect(controlFor(standardAt(8_000_000), '8.5.1').detail).toBe(
 			bidRefusalDetail({ kind: 'unusable_amount' })
 		);
-		expect(controlFor(standardAt(8_000_000), '-500000').detail).toBe(
+		// A full dollar figure typed into a millions field gets its OWN
+		// sentence, because the gates cannot word it: read as millions it is a
+		// Cap breach of $8.5 trillion.
+		expect(controlFor(standardAt(8_000_000), '8500000').detail).toBe(
+			bidRefusalDetail({ kind: 'dollars_not_millions' })
+		);
+		expect(controlFor(standardAt(8_000_000), '-0.5').detail).toBe(
 			bidRefusalDetail({ kind: 'negative_amount' })
 		);
 		expect(controlFor(standardAt(8_000_000), '').refusingGates).toEqual([]);
 	});
 
 	it('blocks an unbound viewer before anything else — no Team, no command', () => {
-		const control = controlFor(standardAt(8_000_000), '8500000', null);
+		const control = controlFor(standardAt(8_000_000), '8.5', null);
 		expect(control.blocked).toBe(true);
 		expect(control.detail).toBe(bidRefusalDetail({ kind: 'unbound_actor' }));
 		expect(control.refusingGates).toEqual([]);
@@ -1734,7 +1844,7 @@ describe('bidControlState — one decision function for the read path and the su
 			state: standardAt(8_000_000),
 			fantraxPlayerId: 'p-1',
 			viewerTeamId: 't-2',
-			amountText: '8500000',
+			amountText: '8.5',
 			confirmed: false,
 			now: ''
 		});
@@ -1743,7 +1853,7 @@ describe('bidControlState — one decision function for the read path and the su
 	});
 
 	it('always states something — `detail` is never empty, in any branch', () => {
-		const cases = ['', '8.5', '-1', '1000000', '8400000', '8500000'];
+		const cases = ['', '8.5.1', '-1', '1', '8.4', '8.5'];
 		for (const typed of cases) {
 			for (const viewer of ['t-2', 't-1', null]) {
 				const control = controlFor(standardAt(8_000_000, 't-1'), typed, viewer);
@@ -1756,12 +1866,12 @@ describe('bidControlState — one decision function for the read path and the su
 		// The whole point: a control that says a Bid is impossible and a
 		// server refusal explaining why cannot disagree, because both reach
 		// their answer through `evaluate()`.
-		for (const typed of ['1000000', '8400000', '8500000', '9000000']) {
+		for (const typed of ['1', '8.4', '8.5', '9']) {
 			for (const state of [NO_BIDS, standardAt(8_000_000), standardAt(8_000_000, 't-2')]) {
 				const control = controlFor(state, typed);
 				const amount = readBidAmount(typed);
 				if (amount.kind !== 'usable') continue;
-				const decided = decide(state, command(Number(typed)), NOW, FRESH);
+				const decided = decide(state, command(amount.amount), NOW, FRESH);
 				expect(control.blocked, `${typed}`).toBe(decided.kind === 'rejected');
 				if (decided.kind === 'rejected') {
 					expect(control.detail).toBe(bidRefusalDetail({ kind: 'gates', gates: decided.gates }));
@@ -2643,7 +2753,7 @@ describe('evaluateSlots — Roster Capacity, the second independent ground (AC2,
 				),
 				fantraxPlayerId: 'p-1',
 				viewerTeamId: 't-1',
-				amountText: '1500000',
+				amountText: '1.5',
 				confirmed: true,
 				now: ''
 			});
@@ -3851,7 +3961,7 @@ describe('off-grid figures — rendered, never thrown on', () => {
 			state: AWKWARD,
 			fantraxPlayerId: 'p-1',
 			viewerTeamId: 't-2',
-			amountText: '9400000',
+			amountText: '9.4',
 			confirmed: true,
 			now: ''
 		});
@@ -4119,7 +4229,7 @@ describe('expiry — the control the surface disables (AC6)', () => {
 			state: auctionClosingAt(CLOSES),
 			fantraxPlayerId: 'p-1',
 			viewerTeamId: 't-2',
-			amountText: '8500000',
+			amountText: '8.5',
 			confirmed: true,
 			now: '2026-08-27T11:00:00.000Z'
 		});
@@ -4134,7 +4244,7 @@ describe('expiry — the control the surface disables (AC6)', () => {
 			state: auctionClosingAt(CLOSES),
 			fantraxPlayerId: 'p-1',
 			viewerTeamId: 't-2',
-			amountText: '8500000',
+			amountText: '8.5',
 			confirmed: true,
 			now: '2026-08-27T08:59:59.999Z'
 		});
@@ -4328,7 +4438,7 @@ describe('phase — bidding is disabled league-wide outside the Auction Phase (A
 			state: inPhase('Contract Assignment'),
 			fantraxPlayerId: 'p-1',
 			viewerTeamId: 't-2',
-			amountText: '8500000',
+			amountText: '8.5',
 			confirmed: true,
 			now: NOW
 		});

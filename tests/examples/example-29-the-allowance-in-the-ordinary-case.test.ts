@@ -216,7 +216,7 @@ describe('§10 example 29 — the allowance, in the ordinary case', () => {
 				state: stateAfter(led),
 				fantraxPlayerId,
 				viewerTeamId: 't-s',
-				amountText: '1500000',
+				amountText: '1.5',
 				confirmed: true,
 				now: ''
 			});
