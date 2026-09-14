@@ -24,6 +24,8 @@ import {
 import { BID_PLACED_EVENT } from '../../src/lib/core/projection/auctions.ts';
 import { AUCTION_OPENED_EVENT } from '../../src/lib/core/projection/phase.ts';
 import {
+	COMMISSIONER_SLOT_STATUS,
+	commissionerConsequenceSentence,
 	nominationPoolStatus,
 	nominationRefusalDetail,
 	nominationSlotStatus
@@ -45,7 +47,14 @@ import type {
 	TransactionalClient
 } from '../../src/lib/shell/write.ts';
 
-const ACTOR = { managerId: 'm-1', teamId: 't-1', teamName: 'Lakers' };
+const ACTOR = { managerId: 'm-1', teamId: 't-1', teamName: 'Lakers', spendsSlot: true };
+
+/**
+ * The same actor as a Commissioner: bound to the same Team, spending no
+ * Nomination Slot (Story 9.8). Deliberately the SAME Team as `ACTOR`, so a
+ * test can hold a Slot with one and prove the other nominates through it.
+ */
+const COMMISSIONER = { ...ACTOR, spendsSlot: false };
 
 const NOW = new Date('2026-08-26T09:00:00.000Z');
 
@@ -281,19 +290,26 @@ function nominated(
 	fantraxPlayerId: string,
 	playerName: string,
 	teamId: string,
-	teamName: string
+	teamName: string,
+	// Story 9.8. Defaults to the Manager rule, so every existing call still
+	// writes a Slot-spending nomination and every existing assertion still
+	// asserts about one.
+	holdsSlot = true
 ): QueryResultRow {
 	return logEvent(seq, NOMINATION_PLACED_EVENT, {
 		fantraxPlayerId,
 		playerName,
 		teamId,
 		teamName,
-		managerId: 'm-9'
+		managerId: 'm-9',
+		holdsSlot
 	});
 }
 
 const JALEN: FakePoolPlayer = { fantraxPlayerId: 'p-1', playerName: 'Jalen Green' };
 const SENGUN: FakePoolPlayer = { fantraxPlayerId: 'p-2', playerName: 'Alperen Sengun' };
+/** A third pool Player, for the Commissioner's third open nomination (Story 9.8). */
+const BRIGHT: FakePoolPlayer = { fantraxPlayerId: 'p-3', playerName: 'Ausar Bright' };
 
 function rejectionOf(outcome: { kind: string; reason?: unknown }): NominationRejection {
 	expect(outcome.kind).toBe('rejected');
@@ -336,7 +352,11 @@ describe('placeNomination — the gate holds', () => {
 			playerName: 'Jalen Green',
 			teamId: 't-1',
 			teamName: 'Lakers',
-			managerId: 'm-1'
+			managerId: 'm-1',
+			// Story 9.8: whether this nomination spent a Slot, written down so
+			// the fold decides the same thing forever rather than re-reading
+			// `managers.is_commissioner` at replay time.
+			holdsSlot: true
 		});
 	});
 
@@ -409,12 +429,16 @@ describe('placeNomination — the gate holds', () => {
 		expect(outcome.kind).toBe('accepted');
 		if (outcome.kind !== 'accepted') return;
 
-		const claimParams = harness.params.find((p) => p.length === 4);
+		const claimParams = harness.params.find((p) => p.length === 5);
 		expect(claimParams).toEqual([
 			'p-1',
 			't-1',
 			outcome.events[0]?.seq,
-			outcome.events[0]?.occurredAt
+			outcome.events[0]?.occurredAt,
+			// Story 9.8: the column the partial unique index is defined over.
+			// `true` here is what makes this row collide with a second Slot
+			// spend by the same Team.
+			true
 		]);
 	});
 
@@ -435,6 +459,10 @@ describe('placeNomination — the gate holds', () => {
 		// No money, no bid, no clock, anywhere in what was written.
 		expect(Object.keys(payload).sort()).toEqual([
 			'fantraxPlayerId',
+			// Story 9.8. A boolean about a Slot, which commits no money either:
+			// the point of this assertion is what is ABSENT, and nothing about
+			// cap space, bids or the clock has been added.
+			'holdsSlot',
 			'managerId',
 			'playerName',
 			'teamId',
@@ -1223,5 +1251,154 @@ describe('under contract, from the contracts fold (Story 3.4)', () => {
 		} finally {
 			client.release();
 		}
+	});
+});
+
+// --- The Commissioner exemption, through the transaction (Story 9.8) --------
+
+describe('placeNomination — the Commissioner exemption', () => {
+	it('nominates through a Slot its own Team is already holding', async () => {
+		// The identical log that refuses `ACTOR` at `slot_in_use` above. The
+		// only difference is who is asking.
+		const harness = fakeGateway({
+			pool: [JALEN, SENGUN],
+			events: [opened(), nominated(2, 'p-2', 'Alperen Sengun', 't-1', 'Lakers')]
+		});
+
+		const outcome = await placeNomination(harness.gateway, COMMISSIONER, 'p-1', DEVICE_CLASS);
+
+		expect(outcome.kind).toBe('accepted');
+		expect(harness.order).toContain('append-event');
+		expect(harness.order).toContain('commit');
+	});
+
+	it('writes holdsSlot false on the payload, so the fold agrees forever', async () => {
+		const harness = fakeGateway({ pool: [JALEN], events: [opened()] });
+
+		const outcome = await placeNomination(harness.gateway, COMMISSIONER, 'p-1', DEVICE_CLASS);
+		expect(outcome.kind).toBe('accepted');
+		if (outcome.kind !== 'accepted') return;
+
+		const payload = outcome.events[0]?.payload as NominationPlacedPayload;
+		expect(payload.holdsSlot).toBe(false);
+		// Everything else is an ordinary nomination. The exemption is one
+		// boolean, not a second kind of event.
+		expect(payload.teamId).toBe('t-1');
+		expect(payload.managerId).toBe('m-1');
+	});
+
+	it('writes holds_slot false on the claim row, so the index skips it', async () => {
+		const harness = fakeGateway({ pool: [JALEN], events: [opened()] });
+
+		const outcome = await placeNomination(harness.gateway, COMMISSIONER, 'p-1', DEVICE_CLASS);
+		expect(outcome.kind).toBe('accepted');
+
+		const claimParams = harness.params.find((p) => p.length === 5);
+		expect(claimParams?.[4]).toBe(false);
+	});
+
+	it('still claims the PLAYER — a Commissioner may not nominate one already on the board', async () => {
+		const harness = fakeGateway({
+			pool: [JALEN],
+			events: [opened(), nominated(2, 'p-1', 'Jalen Green', 't-9', 'Celtics')]
+		});
+
+		const rejection = rejectionOf(
+			await placeNomination(harness.gateway, COMMISSIONER, 'p-1', DEVICE_CLASS)
+		);
+
+		expect(rejection.refusal.kind).toBe('already_nominated');
+		expect(rejection.detail).toContain('Celtics');
+		expect(harness.appendedEvents).toEqual([]);
+	});
+
+	it('is still refused outside the Auction Phase', async () => {
+		const harness = fakeGateway({ pool: [JALEN], events: [] });
+
+		const rejection = rejectionOf(
+			await placeNomination(harness.gateway, COMMISSIONER, 'p-1', DEVICE_CLASS)
+		);
+
+		expect(rejection.refusal.kind).toBe('phase');
+		expect(harness.appendedEvents).toEqual([]);
+	});
+
+	it('is still refused a Player under contract', async () => {
+		const harness = fakeGateway({
+			pool: [{ ...JALEN, contractTeamName: 'Bulls' }],
+			events: [opened()]
+		});
+
+		const rejection = rejectionOf(
+			await placeNomination(harness.gateway, COMMISSIONER, 'p-1', DEVICE_CLASS)
+		);
+
+		expect(rejection.refusal.kind).toBe('under_contract');
+		expect(rejection.detail).toContain('Bulls');
+	});
+
+	it('holds several open nominations at once, each folded from the log', async () => {
+		// Two already placed by this Commissioner's own Team; a third is still
+		// accepted, which is the whole ask.
+		const harness = fakeGateway({
+			pool: [JALEN, SENGUN, BRIGHT],
+			events: [
+				opened(),
+				nominated(2, 'p-1', 'Jalen Green', 't-1', 'Lakers', false),
+				nominated(3, 'p-2', 'Alperen Sengun', 't-1', 'Lakers', false)
+			]
+		});
+
+		const outcome = await placeNomination(harness.gateway, COMMISSIONER, 'p-3', DEVICE_CLASS);
+		expect(outcome.kind).toBe('accepted');
+	});
+
+	it('does not exempt an ordinary Manager on the same Team', async () => {
+		// `ACTOR` and `COMMISSIONER` share a Team on purpose. A Commissioner's
+		// open nominations hold no Slot, so they do not block the Manager
+		// either — and the Manager's own one still does.
+		const harness = fakeGateway({
+			pool: [JALEN, SENGUN],
+			events: [opened(), nominated(2, 'p-2', 'Alperen Sengun', 't-1', 'Lakers')]
+		});
+
+		const rejection = rejectionOf(await placeNomination(harness.gateway, ACTOR, 'p-1', DEVICE_CLASS));
+		expect(rejection.refusal.kind).toBe('slot_in_use');
+	});
+});
+
+describe('loadNominatablePool — the Commissioner exemption', () => {
+	it('offers the pool to a Commissioner whose Team already has an open nomination', async () => {
+		const harness = fakeGateway({
+			pool: [JALEN, SENGUN],
+			events: [opened(), nominated(2, 'p-2', 'Alperen Sengun', 't-1', 'Lakers')]
+		});
+
+		const pool = await loadNominatablePool(harness.gateway, 't-1', false);
+
+		expect(pool.slotAvailable).toBe(true);
+		expect(pool.slotDetail).toBeNull();
+		expect(pool.players.find((p) => p.fantraxPlayerId === 'p-1')?.available).toBe(true);
+	});
+
+	it('states the absence of a Slot rather than an open one', async () => {
+		const harness = fakeGateway({ pool: [JALEN], events: [opened()] });
+
+		const pool = await loadNominatablePool(harness.gateway, 't-1', false);
+
+		expect(pool.slotStatus).toBe(COMMISSIONER_SLOT_STATUS);
+		expect(pool.consequence).toBe(commissionerConsequenceSentence(null));
+	});
+
+	it('refuses the same Team as a Manager — the default is the Manager rule', async () => {
+		const harness = fakeGateway({
+			pool: [JALEN, SENGUN],
+			events: [opened(), nominated(2, 'p-2', 'Alperen Sengun', 't-1', 'Lakers')]
+		});
+
+		const pool = await loadNominatablePool(harness.gateway, 't-1');
+
+		expect(pool.slotAvailable).toBe(false);
+		expect(pool.slotStatus).toBe(nominationSlotStatus('Alperen Sengun'));
 	});
 });

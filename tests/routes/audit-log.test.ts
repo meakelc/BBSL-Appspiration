@@ -88,7 +88,8 @@ const NOMINATION_PLACED: NominationPlacedPayload = {
 	playerName: 'Jalen Green',
 	teamId: TEAM_B,
 	teamName: 'Celtics',
-	managerId: MANAGER_B
+	managerId: MANAGER_B,
+	holdsSlot: true,
 };
 
 /**

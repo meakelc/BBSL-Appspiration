@@ -83,6 +83,8 @@ import {
 } from '../core/projection/contracts.ts';
 import { INITIAL_PHASE, phaseReducer } from '../core/projection/phase.ts';
 import {
+	COMMISSIONER_SLOT_STATUS,
+	commissionerConsequenceSentence,
 	nominationConsequenceSentence,
 	nominationPoolStatus,
 	nominationRefusalDetail,
@@ -110,6 +112,17 @@ export type NominationActor = {
 	readonly teamId: string;
 	/** The acting Team's name — carried into the payload so a refusal can name it. */
 	readonly teamName: string;
+	/**
+	 * Whether this actor's nomination spends their Team's one Nomination Slot
+	 * (Story 9.8).
+	 *
+	 * `false` for a Commissioner, who nominates without limit to keep the
+	 * number of open Auctions high; `true` for every Manager. Resolved from
+	 * `managers.is_commissioner` through the session (AD-15) and NEVER from a
+	 * form field — this is the one flag that decides whether a gate applies,
+	 * so a browser must not be able to assert it.
+	 */
+	readonly spendsSlot: boolean;
 };
 
 /**
@@ -132,6 +145,17 @@ export type NominationPlacedPayload = {
 	readonly teamId: string;
 	readonly teamName: string;
 	readonly managerId: string;
+	/**
+	 * Whether this nomination spent the Team's Nomination Slot (Story 9.8).
+	 *
+	 * Carried in the PAYLOAD rather than inferred at fold time for the reason
+	 * `core/projection/nominations.ts` states at length: a fold must be a
+	 * function of the log, so who is a Commissioner today cannot be allowed to
+	 * change what a nomination placed last week meant. It is written on every
+	 * event from here on; a payload without it folds to `true`, which is what
+	 * every nomination before this story was.
+	 */
+	readonly holdsSlot: boolean;
 };
 
 /**
@@ -234,6 +258,17 @@ export type NominatablePool = {
 	readonly slotStatus: string | null;
 	/** `NOMINATION_CONSEQUENCE` as a finished sentence, for beside the confirm. */
 	readonly consequence: string;
+	/**
+	 * Whether this actor's nomination spends their Team's Slot (Story 9.8).
+	 *
+	 * A RENDERING input and nothing else: the page needs it to ask the core
+	 * for the one sentence that names the Player it chose client-side, which
+	 * the server could not render without knowing the choice. The gate is
+	 * `refuseNomination` under the lock, from the session's own
+	 * `managers.is_commissioner`, so nothing a browser does with this value
+	 * can change what it is allowed to nominate.
+	 */
+	readonly spendsSlot: boolean;
 };
 
 type PoolRow = {
@@ -263,7 +298,8 @@ type PoolRow = {
  */
 export async function loadNominatablePool(
 	gateway: ConnectionGateway,
-	actorTeamId: string | null
+	actorTeamId: string | null,
+	actorSpendsSlot: boolean = true
 ): Promise<NominatablePool> {
 	const client = await gateway.connect();
 	try {
@@ -342,7 +378,8 @@ export async function loadNominatablePool(
 				// The empty string is not a Team id, so a signed-in Manager
 				// bound to no Team sees each Player's own availability rather
 				// than every row collapsing to a Slot refusal.
-				actorTeamId ?? ''
+				actorTeamId ?? '',
+				actorSpendsSlot
 			);
 
 			// A held Slot is not a property of a Player and must not grey out
@@ -376,14 +413,22 @@ export async function loadNominatablePool(
 							poolPlayer: { fantraxPlayerId: '', playerName: '' },
 							contractHolderTeamName: null
 						},
-						actorTeamId
+						actorTeamId,
+						actorSpendsSlot
 					);
 
 		// The Player holding this Team's Slot, from the SAME fold every gate
 		// above reads. The panel names them rather than printing the refusal
 		// sentence at rest: a refusal is a reply to an act, and opening the
 		// page is not an act.
-		const held = actorTeamId === null ? null : nominationForTeam(nominations, actorTeamId);
+		//
+		// A Commissioner is never asked: they hold no Slot, so there is no
+		// holder to name, and `COMMISSIONER_SLOT_STATUS` is what the panel
+		// prints instead.
+		const held =
+			actorTeamId === null || !actorSpendsSlot
+				? null
+				: nominationForTeam(nominations, actorTeamId);
 
 		return {
 			players,
@@ -391,12 +436,24 @@ export async function loadNominatablePool(
 			slotDetail: teamRefusal === null ? null : nominationRefusalDetail(teamRefusal),
 			// Stated for the two cases the Slot itself is the answer to — free,
 			// or held by a named Player. Every other reason the Slot is
-			// unavailable is a refusal, and `slotDetail` is its sentence.
-			slotStatus:
-				teamRefusal === null || teamRefusal.kind === 'slot_in_use'
+			// unavailable is a refusal, and `slotDetail` is its sentence. A
+			// Commissioner gets the third case (Story 9.8): not a Slot state but
+			// the absence of one, said plainly, because "Open for nomination."
+			// would describe a rule that does not apply to them.
+			slotStatus: !actorSpendsSlot
+				? COMMISSIONER_SLOT_STATUS
+				: teamRefusal === null || teamRefusal.kind === 'slot_in_use'
 					? nominationSlotStatus(held?.playerName ?? null)
 					: null,
-			consequence: nominationConsequenceSentence(null)
+			consequence: actorSpendsSlot
+				? nominationConsequenceSentence(null)
+				: commissionerConsequenceSentence(null),
+			// Passed through so the page can ask the CORE for the one sentence
+			// that names the chosen Player — which it only knows client-side
+			// (Story 9.8). It is a rendering input, never a gate: the gate is
+			// `refuseNomination`, re-derived under the lock, and a browser that
+			// lies about this changes only what it prints to itself.
+			spendsSlot: actorSpendsSlot
 		};
 	} catch (error) {
 		await client.query('rollback').catch(() => {
@@ -445,9 +502,21 @@ export const claimNomination: ProjectionUpdater = async (client, appended) => {
 		const payload = event.payload as NominationPlacedPayload;
 		await client.query(
 			`insert into ${OPEN_NOMINATIONS_TABLE}
-				(fantrax_player_id, team_id, seq, occurred_at)
-			values ($1, $2, $3, $4)`,
-			[payload.fantraxPlayerId, payload.teamId, event.seq, event.occurredAt]
+				(fantrax_player_id, team_id, seq, occurred_at, holds_slot)
+			values ($1, $2, $3, $4, $5)`,
+			[
+				payload.fantraxPlayerId,
+				payload.teamId,
+				event.seq,
+				event.occurredAt,
+				// The one column that decides whether the Slot constraint applies
+				// to this row (Story 9.8). `!== false` mirrors the fold's own
+				// reading of the same field, so the row and the event can never
+				// disagree about whether a Slot was spent — and a payload from
+				// some future path that omits it claims a Slot, which is the
+				// stricter answer.
+				payload.holdsSlot !== false
+			]
 		);
 	}
 };
@@ -654,7 +723,7 @@ export async function placeNomination(
 			// 2.2). Nothing reads it; it exists so a second writer collides.
 			projections: [claimNomination],
 			decide: ({ state }) => {
-				const refusal = refuseNomination(state, actor.teamId);
+				const refusal = refuseNomination(state, actor.teamId, actor.spendsSlot);
 				if (refusal !== null) {
 					const rejection: NominationRejection = {
 						refusal,
@@ -677,7 +746,10 @@ export async function placeNomination(
 					playerName: player.playerName,
 					teamId: actor.teamId,
 					teamName: actor.teamName,
-					managerId: actor.managerId
+					managerId: actor.managerId,
+					// What the gate just decided, written down so the fold decides
+					// the same thing forever (Story 9.8).
+					holdsSlot: actor.spendsSlot
 				};
 
 				const event: EventEnvelope = {

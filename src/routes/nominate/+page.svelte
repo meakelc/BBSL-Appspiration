@@ -39,6 +39,7 @@
 	// move the Auction page already makes; nothing server-only is reachable
 	// from here.
 	import { STALE_NOMINATION_REASON } from '$lib/core/freshness.ts';
+	import { nominationConfirmPrompt } from '$lib/core/rules/nomination.ts';
 	import {
 		POOL_POSITIONS,
 		POOL_POSITION_LEGEND,
@@ -68,6 +69,8 @@
 		/** The Slot at rest, in one line, or `null` when a refusal owns it. */
 		readonly slotStatus: string | null;
 		readonly consequence: string;
+		/** Whether this actor's nomination spends a Slot (Story 9.8). */
+		readonly spendsSlot: boolean;
 	};
 
 	type NominateForm = {
@@ -461,9 +464,11 @@
 							No Player is chosen. Choose exactly one Player from the list to enable
 							the confirmation.
 						{:else if !confirmed}
-							The confirmation has not been given. Tick it to enable the control:
-							nominating {chosen.playerName} holds your Slot until that Auction
-							closes.
+							<!-- The core's sentence, not this file's (Story 9.8). It used to
+							     be markup here, saying a Slot was held — which is false for
+							     a Commissioner, who spends none. A surface may not word a
+							     rule, and this is the rule about what confirming does. -->
+							{nominationConfirmPrompt(chosen.playerName, pool.spendsSlot)}
 						{:else}
 							{chosen.playerName} is chosen and the confirmation has been given. The
 							gate is re-derived from the event log when you submit.

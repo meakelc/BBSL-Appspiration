@@ -111,6 +111,7 @@ function nominationOn(fantraxPlayerId: string, playerName: string): OpenNominati
 		teamId: VIEWER,
 		teamName: 'Lakers',
 		managerId: 'm-1',
+		holdsSlot: true,
 		occurredAt: '2026-09-03T08:00:00.000Z'
 	};
 }

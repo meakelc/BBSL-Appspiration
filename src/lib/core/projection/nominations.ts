@@ -25,15 +25,13 @@
  * placement, and a termination names none of those and could not. Collapsing
  * them would make one reader answer two questions.
  *
- * What they have in common is the release itself. The board seat and the
- * Slot are one fact read two ways — `byTeam` indexes the same object
- * `byPlayer` holds — so dropping the Player's key and the holding Team's key
- * in a single step keeps both indexes consistent by construction. The Player
- * is the key and nothing else: the Slot frees whether the nominator won the
- * auction, lost it, or never bid at all. Keying on a Team would require the
- * close to carry the nominator, which it has no reason to know, and would
- * free the wrong Slot
- * if it carried the winner instead.
+ * What they have in common is the release itself, and both take it through
+ * one `releaseSeat`. The board seat and the Slot that seat was holding drop
+ * in a single step, which keeps both indexes consistent by construction. The
+ * Player is the key and nothing else: the Slot frees whether the nominator
+ * won the auction, lost it, or never bid at all. Keying on a Team would
+ * require the close to carry the nominator, which it has no reason to know,
+ * and would free the wrong Slot if it carried the winner instead.
  *
  * **The payload contract, fixed here — and it is now the WHOLE close.** This
  * fold uses only `fantraxPlayerId`, but it decides whether a payload is a
@@ -152,6 +150,27 @@ export type OpenNomination = {
 	 * has no Manager to name.
 	 */
 	readonly managerId: string | null;
+	/**
+	 * Whether this nomination spends the nominating Team's one Nomination
+	 * Slot (Story 9.8).
+	 *
+	 * `true` for every Manager nomination, which is the rule FR-8 states and
+	 * the only case that existed before this field. `false` for a
+	 * Commissioner's, because a Commissioner nominates to keep the board
+	 * full rather than to spend a Slot they happen to own, and the League
+	 * cannot wait on seven people to each spend one.
+	 *
+	 * **Recorded on the event, never looked up at fold time.** A fold must be
+	 * a function of the log alone (AD-2): asking `managers.is_commissioner`
+	 * here would make replay depend on who is a Commissioner TODAY, so a
+	 * Manager promoted after the auction would retroactively un-spend a Slot
+	 * they really did spend. The payload states what was true when the
+	 * nomination was placed, and stays true forever.
+	 *
+	 * A payload with no such field folds to `true` — every nomination written
+	 * before this field existed was a Slot-spending one.
+	 */
+	readonly holdsSlot: boolean;
 	/** The nomination event's own instant, as the shell read the db clock. */
 	readonly occurredAt: string;
 };
@@ -164,6 +183,18 @@ export type OpenNomination = {
  * whom". Both are needed because both refusals name something individually
  * rather than counting, and neither index can be derived from the other
  * without a scan the gate would then have to re-word.
+ *
+ * **`byTeam` indexes only Slot-spending nominations, and that is the whole
+ * of the Commissioner exemption** (Story 9.8). A Commissioner's nomination
+ * takes a board seat in `byPlayer` exactly as any other does — the Player is
+ * nominated, and nobody may nominate them twice — and is simply absent from
+ * `byTeam`, so `nominationForTeam` keeps answering the one question it was
+ * ever asked: has this Team spent its Slot. That is why no gate, surface or
+ * card downstream needed a second rule about Commissioners: a Slot that is
+ * never held reads as open, which is what it is.
+ *
+ * It follows that `byTeam` is no longer a subset-by-key of `byPlayer`'s
+ * values, and that the two indexes can hold different numbers of entries.
  */
 export type OpenNominations = {
 	readonly byPlayer: Readonly<Record<string, OpenNomination>>;
@@ -242,6 +273,7 @@ function readPayload(payload: unknown, event: { readonly occurredAt: string }): 
 	const playerName = record['playerName'];
 	const teamName = record['teamName'];
 	const managerId = record['managerId'];
+	const holdsSlot = record['holdsSlot'];
 
 	return {
 		fantraxPlayerId,
@@ -257,6 +289,13 @@ function readPayload(payload: unknown, event: { readonly occurredAt: string }): 
 		// invented value would fail a foreign key rather than merely read oddly.
 		// A nomination that named no Manager is still a nomination.
 		managerId: typeof managerId === 'string' && managerId !== '' ? managerId : null,
+		// Absent reads as `true`, and only an explicit `false` exempts. Every
+		// nomination written before Story 9.8 spent a Slot, so the missing
+		// field is not an unknown to be guessed at — it is the old rule,
+		// stated by its absence. Requiring the literal `false` also means a
+		// payload corrupted into some other shape falls back to the STRICTER
+		// answer, which is the direction a gate should fail in.
+		holdsSlot: holdsSlot !== false,
 		occurredAt: event.occurredAt
 	};
 }
@@ -408,6 +447,39 @@ function omitKey(
 }
 
 /**
+ * Drop a Player's board seat and, with it, the Slot that seat was holding —
+ * the one release both ending events share.
+ *
+ * **`byTeam` is dropped only when it holds THIS nomination** (Story 9.8).
+ * Before the Commissioner exemption the two indexes were one fact read two
+ * ways, so `omitKey(byTeam, released.teamId)` could not be wrong. It can now:
+ * a Commissioner's nomination is absent from `byTeam`, so a Team that has
+ * BOTH an exempt nomination and a Slot-spending one — a Manager promoted
+ * mid-auction, or demoted — would have the Slot-spending one silently freed
+ * by the exempt one's close. The identity check makes the release name the
+ * nomination rather than the Team, which is what it always meant.
+ *
+ * Returns `null` when no seat is held, so both callers keep the no-op that
+ * makes a double replay converge.
+ */
+function releaseSeat(
+	state: OpenNominations,
+	fantraxPlayerId: string
+): OpenNominations | null {
+	if (!hasOwn(state.byPlayer, fantraxPlayerId)) return null;
+	const released = state.byPlayer[fantraxPlayerId];
+	if (released === undefined) return null;
+	const slotHolder = nominationForTeam(state, released.teamId);
+	return {
+		byPlayer: omitKey(state.byPlayer, fantraxPlayerId),
+		byTeam:
+			slotHolder !== null && slotHolder.fantraxPlayerId === fantraxPlayerId
+				? omitKey(state.byTeam, released.teamId)
+				: state.byTeam
+	};
+}
+
+/**
  * Fold one event onto the open nominations.
  *
  * The `default: return state` discipline is `phase.ts`'s, for the same
@@ -427,6 +499,18 @@ export const nominationsReducer: Reducer<OpenNominations> = (state, event) => {
 			const nomination = readPayload(event.payload, event);
 			if (nomination === null) return state;
 			if (hasOwn(state.byPlayer, nomination.fantraxPlayerId)) return state;
+			// **The Slot check gates only the Slot index** (Story 9.8). A
+			// Commissioner's nomination holds no Slot, so there is no Slot for a
+			// second one to collide with, and it is folded onto the board beside
+			// however many others that Commissioner has open. The Player check
+			// above is untouched and still absolute: exemption is from the Team's
+			// one-Slot rule, never from "a Player is nominated once".
+			if (!nomination.holdsSlot) {
+				return {
+					byPlayer: { ...state.byPlayer, [nomination.fantraxPlayerId]: nomination },
+					byTeam: state.byTeam
+				};
+			}
 			if (hasOwn(state.byTeam, nomination.teamId)) return state;
 			return {
 				byPlayer: { ...state.byPlayer, [nomination.fantraxPlayerId]: nomination },
@@ -446,15 +530,10 @@ export const nominationsReducer: Reducer<OpenNominations> = (state, event) => {
 			// an already-ended phase harmless.
 			const terminated = readTerminatedPlayerId(event.payload);
 			if (terminated === null) return state;
-			if (!hasOwn(state.byPlayer, terminated)) return state;
-			const freed = state.byPlayer[terminated];
-			if (freed === undefined) return state;
-			// Both indexes drop together, keyed off the ONE nomination object they
-			// share — the close case's discipline, for the close case's reason.
-			return {
-				byPlayer: omitKey(state.byPlayer, terminated),
-				byTeam: omitKey(state.byTeam, freed.teamId)
-			};
+			// Both indexes drop together, through the ONE release both ending
+			// events share — the close case's discipline, for the close case's
+			// reason.
+			return releaseSeat(state, terminated) ?? state;
 		}
 		case AUCTION_CLOSED_EVENT: {
 			const fantraxPlayerId = readClosedPlayerId(event.payload);
@@ -462,16 +541,10 @@ export const nominationsReducer: Reducer<OpenNominations> = (state, event) => {
 			// A close for a Player who holds no board seat — one that arrived
 			// before any nomination, or a second fold of one already applied —
 			// changes nothing. That is what makes replay converge.
-			if (!hasOwn(state.byPlayer, fantraxPlayerId)) return state;
-			const released = state.byPlayer[fantraxPlayerId];
-			if (released === undefined) return state;
-			// Both indexes drop together, keyed off the ONE nomination object
-			// they share: the board seat and the nominating Team's Slot are two
-			// readings of a single fact, so they can never be released apart.
-			return {
-				byPlayer: omitKey(state.byPlayer, fantraxPlayerId),
-				byTeam: omitKey(state.byTeam, released.teamId)
-			};
+			// Both indexes drop together: the board seat and the Slot that seat
+			// was holding are two readings of a single fact, so they can never
+			// be released apart.
+			return releaseSeat(state, fantraxPlayerId) ?? state;
 		}
 		default:
 			return state;

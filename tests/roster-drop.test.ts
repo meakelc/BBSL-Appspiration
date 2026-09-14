@@ -329,6 +329,7 @@ describe('the contested ground — checked before cap and slots', () => {
 				teamId: 't-9',
 				teamName: 'Team Nine',
 				managerId: 'm-9',
+				holdsSlot: true,
 				occurredAt: '2026-09-10T09:00:00.000Z'
 			}
 		},

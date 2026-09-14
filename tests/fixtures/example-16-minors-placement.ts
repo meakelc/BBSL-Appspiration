@@ -90,6 +90,10 @@ export function nominationOf(fantraxPlayerId: string, playerName: string) {
 		// The nominating Manager (Story 3.7). No close reads it — an
 		// `AuctionTerminated` does, and the fold carries it for both.
 		managerId: 'm-n',
+		// An ordinary Manager nomination, which spent the Team's one Slot
+		// (Story 9.8). The Commissioner exemption is exercised in
+		// `tests/core/nomination.test.ts`; nothing about a close depends on it.
+		holdsSlot: true,
 		occurredAt: '2026-08-26T08:00:00.000Z'
 	};
 }

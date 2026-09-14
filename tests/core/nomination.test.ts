@@ -11,6 +11,7 @@ import { DEVICE_CLASSES, classifyDeviceClass } from '../../src/lib/core/device-c
 import { fold } from '../../src/lib/core/projection/fold.ts';
 import {
 	AUCTION_CLOSED_EVENT,
+	AUCTION_TERMINATED_EVENT,
 	INITIAL_NOMINATIONS,
 	NOMINATION_PLACED_EVENT,
 	nominationForPlayer,
@@ -25,7 +26,11 @@ import {
 } from '../../src/lib/core/projection/contracts.ts';
 import { AUCTION_OPENED_EVENT } from '../../src/lib/core/projection/phase.ts';
 import {
+	COMMISSIONER_NOMINATION_CONSEQUENCE,
+	COMMISSIONER_SLOT_STATUS,
 	NOMINATION_CONSEQUENCE,
+	commissionerConsequenceSentence,
+	nominationConfirmPrompt,
 	nominationConsequenceSentence,
 	nominationPoolStatus,
 	nominationRefusalDetail,
@@ -68,6 +73,30 @@ function nomination(
 		seq,
 		NOMINATION_PLACED_EVENT,
 		{ fantraxPlayerId, playerName, teamId, teamName, managerId: 'm-1' },
+		occurredAt
+	);
+}
+
+/**
+ * A COMMISSIONER's nomination: the same event with `holdsSlot: false` (Story
+ * 9.8).
+ *
+ * Written as a separate builder rather than a flag on the one above so that
+ * every existing test keeps asserting about the Manager rule, and the
+ * exemption is visible at each call site that exercises it.
+ */
+function exemptNomination(
+	seq: number,
+	fantraxPlayerId: string,
+	playerName: string,
+	teamId: string,
+	teamName: string,
+	occurredAt = '2026-08-25T12:00:00.000Z'
+): AppendedEvent {
+	return event(
+		seq,
+		NOMINATION_PLACED_EVENT,
+		{ fantraxPlayerId, playerName, teamId, teamName, managerId: 'm-1', holdsSlot: false },
 		occurredAt
 	);
 }
@@ -123,6 +152,10 @@ describe('nominationsReducer', () => {
 			// can name them on its envelope the way an `AuctionClosed` names the
 			// winner's. No gate reads it and no refusal prints it.
 			managerId: 'm-1',
+			// Story 9.8: an ordinary Manager nomination spends the Slot, which is
+			// what puts it in `byTeam` at all. The payload said nothing, and the
+			// absent field reads as the rule.
+			holdsSlot: true,
 			occurredAt: '2026-08-25T19:00:00.000Z'
 		});
 		expect(nominationForTeam(state, 't-1')).toEqual(nominationForPlayer(state, 'p-1'));
@@ -909,5 +942,286 @@ describe('nominationPoolStatus — what a pool row says about itself', () => {
 			expect(state).not.toContain('Nothing was written');
 			expect(state.split(' ').length).toBeLessThanOrEqual(4);
 		}
+	});
+});
+
+// --- The Commissioner exemption (Story 9.8) ---------------------------------
+
+describe('the Commissioner exemption — the fold', () => {
+	it('puts an exempt nomination on the board but never in the Slot register', () => {
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[exemptNomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers')],
+			nominationsReducer
+		);
+
+		expect(nominationForPlayer(state, 'p-1')?.playerName).toBe('Jalen Green');
+		expect(nominationForPlayer(state, 'p-1')?.holdsSlot).toBe(false);
+		// The whole exemption, in one assertion: the Team's Slot reads open
+		// because it IS open.
+		expect(nominationForTeam(state, 't-1')).toBeNull();
+	});
+
+	it('folds several exempt nominations by the SAME Team — the point of the story', () => {
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[
+				exemptNomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'),
+				exemptNomination(2, 'p-2', 'Alperen Sengun', 't-1', 'Lakers'),
+				exemptNomination(3, 'p-3', 'Ausar Bright', 't-1', 'Lakers')
+			],
+			nominationsReducer
+		);
+
+		expect(openNominations(state)).toHaveLength(3);
+		expect(nominationForTeam(state, 't-1')).toBeNull();
+	});
+
+	it('still refuses a second nomination of the SAME Player, exempt or not', () => {
+		// Exemption is from the Team's one-Slot rule and from nothing else.
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[
+				exemptNomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'),
+				exemptNomination(2, 'p-1', 'Jalen Green', 't-2', 'Celtics')
+			],
+			nominationsReducer
+		);
+
+		expect(openNominations(state)).toHaveLength(1);
+		expect(nominationForPlayer(state, 'p-1')?.teamName).toBe('Lakers');
+	});
+
+	it('reads a payload with no holdsSlot as Slot-spending — every nomination before 9.8', () => {
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers')],
+			nominationsReducer
+		);
+		expect(nominationForPlayer(state, 'p-1')?.holdsSlot).toBe(true);
+		expect(nominationForTeam(state, 't-1')?.playerName).toBe('Jalen Green');
+	});
+
+	it.each([
+		['a non-boolean', 'yes'],
+		['null', null],
+		['a number', 0]
+	])('reads %s holdsSlot as Slot-spending — corruption fails STRICT', (_label, value) => {
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[
+				event(1, NOMINATION_PLACED_EVENT, {
+					fantraxPlayerId: 'p-1',
+					playerName: 'Jalen Green',
+					teamId: 't-1',
+					teamName: 'Lakers',
+					managerId: 'm-1',
+					holdsSlot: value
+				})
+			],
+			nominationsReducer
+		);
+		expect(nominationForTeam(state, 't-1')?.playerName).toBe('Jalen Green');
+	});
+
+	it('releases an exempt nomination on a close, leaving the others standing', () => {
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[
+				exemptNomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'),
+				exemptNomination(2, 'p-2', 'Alperen Sengun', 't-1', 'Lakers'),
+				closed(3, 'p-1')
+			],
+			nominationsReducer
+		);
+
+		expect(nominationForPlayer(state, 'p-1')).toBeNull();
+		expect(nominationForPlayer(state, 'p-2')?.playerName).toBe('Alperen Sengun');
+	});
+
+	it('does NOT free a real Slot when an exempt nomination of the same Team closes', () => {
+		// The regression `releaseSeat`'s identity check exists for: a Team with
+		// BOTH kinds of open nomination — a Manager promoted mid-auction — must
+		// not have its genuinely spent Slot released by the exempt one's close.
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[
+				nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'),
+				exemptNomination(2, 'p-2', 'Alperen Sengun', 't-1', 'Lakers'),
+				closed(3, 'p-2')
+			],
+			nominationsReducer
+		);
+
+		expect(nominationForPlayer(state, 'p-2')).toBeNull();
+		expect(nominationForTeam(state, 't-1')?.playerName).toBe('Jalen Green');
+	});
+
+	it('frees the Slot on the close of the nomination that actually held it', () => {
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[
+				nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'),
+				exemptNomination(2, 'p-2', 'Alperen Sengun', 't-1', 'Lakers'),
+				closed(3, 'p-1')
+			],
+			nominationsReducer
+		);
+
+		expect(nominationForTeam(state, 't-1')).toBeNull();
+		expect(nominationForPlayer(state, 'p-2')?.playerName).toBe('Alperen Sengun');
+	});
+
+	it('applies the same identity rule to a termination', () => {
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[
+				nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'),
+				exemptNomination(2, 'p-2', 'Alperen Sengun', 't-1', 'Lakers'),
+				event(3, AUCTION_TERMINATED_EVENT, { fantraxPlayerId: 'p-2' })
+			],
+			nominationsReducer
+		);
+
+		expect(nominationForPlayer(state, 'p-2')).toBeNull();
+		expect(nominationForTeam(state, 't-1')?.playerName).toBe('Jalen Green');
+	});
+
+	it('converges on a double replay, exempt nominations included', () => {
+		const log = [
+			exemptNomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'),
+			exemptNomination(2, 'p-2', 'Alperen Sengun', 't-1', 'Lakers'),
+			closed(3, 'p-1')
+		];
+		const once = fold(INITIAL_NOMINATIONS, log, nominationsReducer);
+		const twice = fold(once, log, nominationsReducer);
+		expect(twice).toEqual(once);
+	});
+});
+
+describe('the Commissioner exemption — the gate', () => {
+	function heldBy(teamId: string) {
+		return fold(
+			INITIAL_NOMINATIONS,
+			[nomination(1, 'p-9', 'Ausar Bright', teamId, 'Lakers')],
+			nominationsReducer
+		);
+	}
+
+	it('refuses a Manager whose Slot is held', () => {
+		const refusal = refuseNomination(readyState({ nominations: heldBy('t-1') }), 't-1', true);
+		expect(refusal?.kind).toBe('slot_in_use');
+	});
+
+	it('admits a Commissioner through the same held Slot', () => {
+		expect(refuseNomination(readyState({ nominations: heldBy('t-1') }), 't-1', false)).toBeNull();
+	});
+
+	it('defaults to the Manager rule when the caller says nothing', () => {
+		expect(refuseNomination(readyState({ nominations: heldBy('t-1') }), 't-1')?.kind).toBe(
+			'slot_in_use'
+		);
+	});
+
+	it.each(['Setup', 'Contract Assignment', 'Archived'] as const)(
+		'still refuses a Commissioner in the %s phase',
+		(phase) => {
+			expect(refuseNomination(readyState({ phase }), 't-1', false)?.kind).toBe('phase');
+		}
+	);
+
+	it('still refuses a Commissioner an unknown Player', () => {
+		expect(refuseNomination(readyState({ poolPlayer: null }), 't-1', false)?.kind).toBe(
+			'unknown_player'
+		);
+	});
+
+	it('still refuses a Commissioner a Player under contract', () => {
+		expect(
+			refuseNomination(readyState({ contractHolderTeamName: 'Celtics' }), 't-1', false)?.kind
+		).toBe('under_contract');
+	});
+
+	it('still refuses a Commissioner a Player already on the board', () => {
+		const nominations = fold(
+			INITIAL_NOMINATIONS,
+			[nomination(1, 'p-1', 'Jalen Green', 't-2', 'Celtics')],
+			nominationsReducer
+		);
+		expect(refuseNomination(readyState({ nominations }), 't-1', false)?.kind).toBe(
+			'already_nominated'
+		);
+	});
+});
+
+describe('the Commissioner wordings (Story 9.8)', () => {
+	it('states the absence of a Slot rather than an open one', () => {
+		expect(COMMISSIONER_SLOT_STATUS).toContain('Unlimited');
+		expect(COMMISSIONER_SLOT_STATUS).toContain('Nomination Slot');
+		// It must NOT be the Manager's own "open" line, which would read as a
+		// Slot that this nomination is about to spend.
+		expect(COMMISSIONER_SLOT_STATUS).not.toBe(nominationSlotStatus(null));
+	});
+
+	it('promises no Slot is held, and denies money exactly as the Manager sentence does', () => {
+		expect(COMMISSIONER_NOMINATION_CONSEQUENCE).toContain('no Nomination Slot');
+		expect(COMMISSIONER_NOMINATION_CONSEQUENCE).toContain('No cap space is committed');
+		expect(COMMISSIONER_NOMINATION_CONSEQUENCE).toContain('Leading Bidder');
+	});
+
+	it('never claims a Slot is held', () => {
+		expect(COMMISSIONER_NOMINATION_CONSEQUENCE).not.toContain('Slot is held');
+		expect(COMMISSIONER_NOMINATION_CONSEQUENCE).not.toContain('only Nomination Slot');
+	});
+
+	it('names the Player and keeps the irreversibility', () => {
+		const sentence = commissionerConsequenceSentence('Jalen Green');
+		expect(sentence).toContain('Nominating Jalen Green');
+		expect(sentence).toContain('cannot be undone');
+		expect(sentence).toContain(COMMISSIONER_NOMINATION_CONSEQUENCE);
+	});
+
+	it('falls back to the unnamed subject, as the Manager sentence does', () => {
+		expect(commissionerConsequenceSentence(null)).toContain('A nomination cannot be undone');
+		expect(commissionerConsequenceSentence('')).toContain('A nomination cannot be undone');
+	});
+});
+
+describe('nominationConfirmPrompt (Story 9.8)', () => {
+	it('names the Player and the Slot for a Manager', () => {
+		const prompt = nominationConfirmPrompt('Jalen Green', true);
+		expect(prompt).toContain('Jalen Green');
+		expect(prompt).toContain('holds your Slot');
+		expect(prompt).toContain('The confirmation has not been given.');
+	});
+
+	it('names the Player and denies the Slot for a Commissioner', () => {
+		const prompt = nominationConfirmPrompt('Jalen Green', false);
+		expect(prompt).toContain('Jalen Green');
+		expect(prompt).toContain('holds no Slot');
+		expect(prompt).not.toContain('holds your Slot');
+	});
+
+	it('tells both readers the same thing about how to proceed', () => {
+		for (const spends of [true, false]) {
+			expect(nominationConfirmPrompt('Jalen Green', spends)).toContain(
+				'Tick it to enable the control'
+			);
+		}
+	});
+});
+
+describe('the unconfirmed refusal states the Board, not the Slot (Story 9.8)', () => {
+	const detail = nominationRefusalDetail({ kind: 'unconfirmed', playerName: 'Jalen Green' });
+
+	it('is true for a Commissioner as well as a Manager', () => {
+		expect(detail).not.toContain('Nomination Slot');
+		expect(detail).toContain('Bid Board');
+	});
+
+	it('still names the Player, says what to do, and says nothing was written', () => {
+		expect(detail).toContain('Jalen Green');
+		expect(detail).toContain('Tick the confirmation');
+		expect(detail).toContain('Nothing was written');
 	});
 });

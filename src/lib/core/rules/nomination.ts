@@ -199,10 +199,17 @@ export function nominationRefusalDetail(refusal: NominationRefusal): string {
 				'Auction closes, and you may nominate again then. Nothing was written.'
 			);
 		case 'unconfirmed':
+			// **States the board, not the Slot** (Story 9.8). This sentence used
+			// to say the Team's only Nomination Slot was held until that Auction
+			// closed — true of a Manager and false of a Commissioner, who spends
+			// none. What makes a nomination worth confirming is the same for both:
+			// the Player goes on the Bid Board and no event takes them back off it.
+			// Saying THAT keeps one wording per refusal, which is this module's
+			// rule, rather than splitting a refusal on a property of the actor.
 			return (
 				`No nomination was placed: the confirmation was not given. Nominating ` +
-				`${refusal.playerName} holds your Team\u2019s only Nomination Slot until that ` +
-				'Auction closes, so it is never inferred from a submit. Tick the confirmation ' +
+				`${refusal.playerName} puts that Player on the Bid Board until their Auction ` +
+				'closes, so it is never inferred from a submit. Tick the confirmation ' +
 				'and submit again. Nothing was written.'
 			);
 		case 'unbound_actor':
@@ -250,7 +257,8 @@ export function nominationRefusalDetail(refusal: NominationRefusal): string {
  */
 export function refuseNomination(
 	state: NominationState,
-	actorTeamId: string
+	actorTeamId: string,
+	actorSpendsSlot: boolean = true
 ): NominationRefusal | null {
 	if (state.phase !== 'Auction') return { kind: 'phase', phase: state.phase };
 
@@ -280,9 +288,23 @@ export function refuseNomination(
 		};
 	}
 
-	const slotHolder = nominationForTeam(state.nominations, actorTeamId);
-	if (slotHolder !== null) {
-		return { kind: 'slot_in_use', playerName: slotHolder.playerName };
+	// **The Commissioner exemption, and the whole of it** (Story 9.8). An
+	// actor who spends no Slot has no Slot to be held, so this gate — the
+	// last of the five, and the only one about the ACTOR rather than the
+	// Player — simply does not apply to them. Every gate above still does: a
+	// Commissioner cannot nominate outside the Auction Phase, cannot nominate
+	// a Player the pool has never heard of, cannot nominate one under
+	// contract, and cannot nominate one already on the board.
+	//
+	// The default is `true` because the Manager rule is the rule: an exemption
+	// has to be asked for explicitly, by a caller that has resolved who is
+	// acting from `managers.is_commissioner` server-side (AD-15). A caller
+	// that forgets gets the strict answer.
+	if (actorSpendsSlot) {
+		const slotHolder = nominationForTeam(state.nominations, actorTeamId);
+		if (slotHolder !== null) {
+			return { kind: 'slot_in_use', playerName: slotHolder.playerName };
+		}
 	}
 
 	return null;
@@ -329,6 +351,22 @@ export function nominationSlotStatus(heldPlayerName: string | null): string {
 }
 
 /**
+ * What a Commissioner's Nomination Slot is doing: nothing, ever (Story 9.8).
+ *
+ * `nominationSlotStatus`'s third case, kept as its own name rather than a
+ * `null` argument, because it is not a Slot state at all — it is the absence
+ * of one. A Commissioner reading "Open for nomination." would be told the
+ * truth about a rule that does not apply to them, and would have no way to
+ * know that the line will still say "Open" after they nominate.
+ *
+ * It says WHY, in the League's terms rather than the schema's: Commissioners
+ * nominate to keep Auctions open so the phase finishes, and waiting on thirty
+ * Managers to each spend one Slot is what makes it not finish.
+ */
+export const COMMISSIONER_SLOT_STATUS =
+	'Unlimited — Commissioner nominations hold no Nomination Slot.';
+
+/**
  * `NOMINATION_CONSEQUENCE` as a finished sentence about a named Player, for
  * the surface to print beside the confirm.
  *
@@ -340,4 +378,55 @@ export function nominationSlotStatus(heldPlayerName: string | null): string {
 export function nominationConsequenceSentence(playerName: string | null): string {
 	const subject = playerName === null || playerName === '' ? 'A nomination' : `Nominating ${playerName}`;
 	return `${subject} cannot be undone: ${NOMINATION_CONSEQUENCE}.`;
+}
+
+/**
+ * What confirming commits when the actor holds no Slot (Story 9.8).
+ *
+ * `NOMINATION_CONSEQUENCE`'s counterpart, and it exists for the same reason
+ * that constant does: the sentence beside a confirm must be TRUE. Printing
+ * "your Team's only Nomination Slot is held until that Player's Auction
+ * closes" to a Commissioner would state a consequence that will not happen,
+ * and the one thing a confirm must not do is misdescribe what it does.
+ *
+ * The irreversibility stays, because that is the part that is still true and
+ * the reason a confirm is asked for at all: the Player goes on the Board and
+ * no event takes them back off it. The three denials are `NOMINATION_CONSEQUENCE`'s
+ * own, word for word — a nomination commits no money whoever places it.
+ */
+export const COMMISSIONER_NOMINATION_CONSEQUENCE =
+	'that Player goes on the Bid Board and their Auction runs to the League Clock. As ' +
+	'Commissioner you hold no Nomination Slot, so this does not use one and does not stop ' +
+	'you nominating again. No cap space is committed, no bid is placed, and your Team does ' +
+	'not become the Leading Bidder';
+
+/**
+ * Why the submit control is still disabled when a Player is chosen and the
+ * confirmation is not yet ticked, naming the Player and what confirming does.
+ *
+ * Worded HERE rather than in `+page.svelte` (Story 9.8). The page was
+ * carrying this sentence as literal markup — "nominating X holds your Slot
+ * until that Auction closes" — which is a rule re-worded in a surface, and
+ * the Commissioner exemption is exactly what makes that cost something: it
+ * states a consequence that does not happen to seven of the thirty-seven
+ * people who read it. The page prints what the core says and decides nothing.
+ *
+ * Short on purpose: it sits inside the action bar beside the control, not in
+ * the consequence panel, so it says the one thing that changes rather than
+ * repeating `NOMINATION_CONSEQUENCE` in full.
+ */
+export function nominationConfirmPrompt(playerName: string, spendsSlot: boolean): string {
+	const lead = 'The confirmation has not been given. Tick it to enable the control: ';
+	return spendsSlot
+		? `${lead}nominating ${playerName} holds your Slot until that Auction closes.`
+		: `${lead}nominating ${playerName} puts them on the Bid Board and holds no Slot.`;
+}
+
+/**
+ * `COMMISSIONER_NOMINATION_CONSEQUENCE` as a finished sentence about a named
+ * Player — `nominationConsequenceSentence`'s shape, for its own consequence.
+ */
+export function commissionerConsequenceSentence(playerName: string | null): string {
+	const subject = playerName === null || playerName === '' ? 'A nomination' : `Nominating ${playerName}`;
+	return `${subject} cannot be undone: ${COMMISSIONER_NOMINATION_CONSEQUENCE}.`;
 }

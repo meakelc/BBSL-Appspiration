@@ -26,7 +26,7 @@ const stub = vi.hoisted(() => ({
 const placeCalls = vi.hoisted(
 	() =>
 		[] as Array<{
-			actor: { managerId: string; teamId: string; teamName: string };
+			actor: { managerId: string; teamId: string; teamName: string; spendsSlot: boolean };
 			fantraxPlayerId: string;
 			deviceClass: string;
 		}>
@@ -34,15 +34,23 @@ const placeCalls = vi.hoisted(
 
 const loadCalls = vi.hoisted(() => [] as Array<string | null>);
 
+/** The exemption flag the `load` passed through, per call (Story 9.8). */
+const loadSpendsSlot = vi.hoisted(() => [] as boolean[]);
+
 vi.mock('$lib/server/nomination.ts', () => ({
-	loadNominatablePool: async (_gateway: unknown, actorTeamId: string | null) => {
+	loadNominatablePool: async (
+		_gateway: unknown,
+		actorTeamId: string | null,
+		actorSpendsSlot: boolean
+	) => {
 		loadCalls.push(actorTeamId);
+		loadSpendsSlot.push(actorSpendsSlot);
 		return stub.pool;
 	},
 	placeNomination: vi.fn(
 		async (
 			_gateway: unknown,
-			actor: { managerId: string; teamId: string; teamName: string },
+			actor: { managerId: string; teamId: string; teamName: string; spendsSlot: boolean },
 			fantraxPlayerId: string,
 			deviceClass: string
 		) => {
@@ -118,6 +126,7 @@ beforeEach(() => {
 	};
 	placeCalls.length = 0;
 	loadCalls.length = 0;
+	loadSpendsSlot.length = 0;
 });
 
 describe('load — a Manager destination, gated on the destination and NOT on the role', () => {
@@ -131,6 +140,24 @@ describe('load — a Manager destination, gated on the destination and NOT on th
 	it('serves the Commissioner too — they are a Manager like any other', async () => {
 		await route.load({ locals: locals({ kind: 'registered', manager: COMMISSIONER }) } as never);
 		expect(loadCalls).toEqual(['t-1']);
+	});
+
+	it('tells the pool a Commissioner spends no Slot, off the session flag (Story 9.8)', async () => {
+		await route.load({ locals: locals({ kind: 'registered', manager: COMMISSIONER }) } as never);
+		expect(loadSpendsSlot).toEqual([false]);
+	});
+
+	it('tells the pool an ordinary Manager DOES spend theirs', async () => {
+		await route.load({ locals: locals({ kind: 'registered', manager: MANAGER }) } as never);
+		expect(loadSpendsSlot).toEqual([true]);
+	});
+
+	it('defaults an unbound Manager to the strict rule rather than exempting them', async () => {
+		// There is no actor at all, so there is no exemption to read. The
+		// Manager rule is what a missing answer means.
+		const unbound: RegisteredManager = { ...COMMISSIONER, teamId: null };
+		await route.load({ locals: locals({ kind: 'registered', manager: unbound }) } as never);
+		expect(loadSpendsSlot).toEqual([true]);
 	});
 
 	it('refuses a Manager outside the Auction Phase — this destination is not live in Setup', async () => {
@@ -310,7 +337,10 @@ describe('actions.nominate — gated the same way, and never the check itself', 
 		expect(placeCalls[0]?.actor).toEqual({
 			managerId: MANAGER.id,
 			teamId: MANAGER.teamId,
-			teamName: MANAGER.teamName
+			teamName: MANAGER.teamName,
+			// Story 9.8: resolved from the session's `isCommissioner`, and in
+			// this fixture that is an ordinary Manager, who spends their Slot.
+			spendsSlot: true
 		});
 	});
 
@@ -761,5 +791,48 @@ describe('the nomination surface', () => {
 
 		const summary = /\.explainer > summary \{[^}]*\}/.exec(MARKUP)?.[0] ?? '';
 		expect(summary, 'a 46px row around a 12px label').not.toContain('min-height');
+	});
+});
+
+// --- The Commissioner exemption is a session fact (Story 9.8) ---------------
+
+describe('actions.nominate — the Commissioner exemption', () => {
+	const nominateAction = route.actions.nominate as unknown as (event: unknown) => unknown;
+
+	function submit(
+		fields: Array<[string, string]>,
+		session: SessionState
+	) {
+		const form = new FormData();
+		for (const [key, value] of fields) form.append(key, value);
+		return {
+			request: new Request('https://app.example/nominate', { method: 'POST', body: form }),
+			locals: locals(session)
+		};
+	}
+
+	const CONFIRMED_FIELDS: Array<[string, string]> = [
+		['fantraxPlayerId', 'p-1'],
+		['confirm', 'yes']
+	];
+
+	it('passes spendsSlot false for a Commissioner', async () => {
+		await nominateAction(submit(CONFIRMED_FIELDS, { kind: 'registered', manager: COMMISSIONER }));
+		expect(placeCalls[0]?.actor.spendsSlot).toBe(false);
+	});
+
+	it('passes spendsSlot true for an ordinary Manager', async () => {
+		await nominateAction(submit(CONFIRMED_FIELDS, { kind: 'registered', manager: MANAGER }));
+		expect(placeCalls[0]?.actor.spendsSlot).toBe(true);
+	});
+
+	it('ignores a form field claiming the exemption — it is never a posted value', async () => {
+		await nominateAction(
+			submit(
+				[...CONFIRMED_FIELDS, ['spendsSlot', 'false'], ['isCommissioner', 'true']],
+				{ kind: 'registered', manager: MANAGER }
+			)
+		);
+		expect(placeCalls[0]?.actor.spendsSlot).toBe(true);
 	});
 });

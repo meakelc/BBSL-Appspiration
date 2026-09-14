@@ -271,7 +271,8 @@ const NOMINATION_PLACED: NominationPlacedPayload = {
 	playerName: 'Jalen Green',
 	teamId: TEAM_A,
 	teamName: 'Lakers',
-	managerId: MANAGER_A
+	managerId: MANAGER_A,
+	holdsSlot: true
 };
 
 const AUCTION_OPENED: AuctionOpenedPayload = {

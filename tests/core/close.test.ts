@@ -111,6 +111,7 @@ const NOMINATION: OpenNomination = {
 	teamId: 't-n',
 	teamName: 'Team N',
 	managerId: 'm-n',
+	holdsSlot: true,
 	occurredAt: '2026-08-26T08:00:00.000Z'
 };
 

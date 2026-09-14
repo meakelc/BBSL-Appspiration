@@ -356,6 +356,7 @@ const CLOSE_STATE: CloseState = {
 		teamId: 't-n',
 		teamName: 'Team N',
 		managerId: 'm-n',
+		holdsSlot: true,
 		occurredAt: '2026-08-24T08:00:00.000Z'
 	},
 	// "non-eligible players" throughout — the minors branch never applies.
@@ -593,6 +594,7 @@ function nextCloseState(fantraxPlayerId: string): CloseState {
 			teamId: 't-n2',
 			teamName: 'Team N2',
 			managerId: 'm-n2',
+			holdsSlot: true,
 			occurredAt: '2026-08-24T08:00:00.000Z'
 		},
 		auctions: AFTER_THE_CASCADE,

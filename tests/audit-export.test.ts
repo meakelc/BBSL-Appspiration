@@ -64,7 +64,8 @@ const NOMINATION_PLACED: NominationPlacedPayload = {
 	playerName: 'Jalen Green',
 	teamId: TEAM_B,
 	teamName: 'Celtics',
-	managerId: MANAGER_A
+	managerId: MANAGER_A,
+	holdsSlot: true
 };
 
 describe('the CSV escaping', () => {
