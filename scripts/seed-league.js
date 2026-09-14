@@ -117,10 +117,21 @@ const PENDING_NAME = '<pending>';
  * simultaneous nomination, a Team running out of cap mid-auction — was ever
  * exercised. This table is the fix, and placeholders are no longer used.
  *
- * The first seven keep `isCommissioner`, so any moderator can still drive
- * import, eligibility and auction-open during the test. Note the consequence:
- * any of the seven can open or RESET the auction, with 29 other people's work
- * inside it. Narrow this to one before the real auction (Story 9.8).
+ * **All seven keep `isCommissioner` into the real auction.** This block used to
+ * end "narrow this to one before the real auction (Story 9.8)"; the Commissioner
+ * decided otherwise on 2026-09-14, and the instruction is replaced rather than
+ * left standing next to a table that contradicts it. The seven are the league's
+ * moderators, and moderating is the thing the flag grants — driving import,
+ * eligibility and auction-open is their job in the real auction exactly as it
+ * was in the pilot, so a single holder would make the Commissioner a bottleneck
+ * on setup day rather than a safeguard.
+ *
+ * The consequence is unchanged and is accepted rather than absent: any of the
+ * seven can open or RESET the auction, with 29 other people's work inside it.
+ * There is no second factor and no confirmation step between a moderator and
+ * that act. The mitigation is social — these seven already hold the league's
+ * trust — and the log is append-only, so the act is attributable after the
+ * fact even though it is not preventable before it.
  *
  * The remaining 23 snowflakes came from `team_rosters/discord-ids/
  * 2026-snowflakes.txt` (collected 2026-09-12). Each decodes to a plausible
