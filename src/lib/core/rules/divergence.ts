@@ -19,10 +19,17 @@
  * three guards and their mandatory reason included. Nothing here writes a
  * Trade, a Drop or an event, and nothing here can.
  *
- * **Membership is the only fact compared.** A Slot kind arrives on both sides
- * and is never looked at: a placement difference is the expected state between
+ * **Membership is the only fact COMPARED, and a Slot kind is never compared
+ * across the two sides.** A placement difference is the expected state between
  * a Roster Move and the next Fantrax export, not drift, and raising it would
  * report the app working correctly as a fault.
+ *
+ * **One Slot kind is read on the app side, and it excludes rather than
+ * compares.** A `dead_money` row is a released Contract kept only to charge the
+ * Cap (FR-43); the Player is gone from Fantrax by design, so the row is dropped
+ * from the comparison before it can be read as a departure. That is a filter on
+ * ONE side, not a comparison between them, and the sentence above is unweakened
+ * by it: no Slot kind on either side is ever measured against the other.
  *
  * **Pairing is grouping, not matching.** A movement is directly observable —
  * the app says P is on A, Fantrax says P is on B — so no reverse movement has
@@ -79,7 +86,12 @@ export type AppRosterMember = {
 	 */
 	readonly fantraxPlayerId: string;
 	readonly playerName: string;
-	/** Advisory. Nothing in this file reads it — see the module header. */
+	/**
+	 * Read for ONE value. `dead_money` excludes the row from the comparison
+	 * entirely — see the module header — because a released Contract's Player
+	 * is absent from Fantrax by design. No other kind is looked at, and no kind
+	 * is ever compared against the Fantrax side's.
+	 */
 	readonly rosterSlotKind: RosterSlotKind;
 };
 
@@ -533,6 +545,22 @@ export function compareMembership(input: DivergenceInput): DivergenceReport {
 		// him because the auction put him there, Fantrax has not been told, and
 		// neither "departure" nor "arrival" is a true description of that.
 		if (won.has(playerId)) continue;
+
+		// Dead Money is excluded for a reason of its own. A released Contract
+		// keeps its `team_rosters` row so it can keep charging the Cap (FR-43),
+		// but the Player left the Fantrax roster at the moment he was dropped.
+		// His absence is therefore the CORRECT state rather than drift.
+		//
+		// **And it is the one departure acting on could never resolve.** Every
+		// other proposal names something the Commissioner can do that makes the
+		// two sides agree; here a Drop is what PUT the row in this state, so the
+		// proposal would return on the next pass, and the one after, forever.
+		//
+		// Excluded from BOTH sides, exactly as a won Player is — `appPlayerIds`
+		// above has already recorded him, so if another Team later rosters him
+		// that is silent too. It should be: he is on another roster BECAUSE he
+		// was released, which is the ordinary consequence rather than a fault.
+		if (member.rosterSlotKind === 'dead_money') continue;
 
 		const appTeam = teamById.get(member.teamId);
 		if (appTeam === undefined) continue;

@@ -237,6 +237,46 @@ describe('a Player gone', () => {
 	});
 });
 
+describe('a Dead Money row', () => {
+	it('raises nothing — the Player is gone from Fantrax BY DESIGN', () => {
+		// A released Contract keeps charging the Cap and keeps its `team_rosters`
+		// row, but the Player left the Fantrax roster when he was dropped. That
+		// absence is the CORRECT state, not drift, so reading it as a departure
+		// would invite the Commissioner to drop a Player already dropped — every
+		// pass, forever, because acting on the proposal cannot change the row.
+		const report = compare({
+			appMembers: paddedApp([appMember('t-a', 'p1', 'Amir Powell', 'dead_money')]),
+			fantraxMembers: padded([])
+		});
+		expect(report.proposals).toEqual([]);
+		expect(report.arrivals).toEqual([]);
+		expect(report.clean).toBe(true);
+	});
+
+	it('still raises a Drop for a row that is NOT Dead Money', () => {
+		// The guard above must turn on the Slot kind alone. An ordinary Contract
+		// absent from Fantrax is a real Drop and stays one.
+		const report = compare({
+			appMembers: paddedApp([appMember('t-a', 'p1', 'Amir Powell', 'active_bench')]),
+			fantraxMembers: padded([])
+		});
+		expect(report.proposals.map((proposal) => proposal.kind)).toEqual(['drop']);
+	});
+
+	it('raises nothing when the Player turns up on ANOTHER Fantrax roster', () => {
+		// Expected, not drift: the Team carries his Dead Money precisely BECAUSE
+		// he is no longer theirs, so another Team rostering him is the ordinary
+		// consequence. Neither a Trade proposal nor an unknown arrival.
+		const report = compare({
+			appMembers: paddedApp([appMember('t-a', 'p1', 'Amir Powell', 'dead_money')]),
+			fantraxMembers: padded([fantraxMember('ftx-c', 'p1', 'Amir Powell')])
+		});
+		expect(report.proposals).toEqual([]);
+		expect(report.arrivals).toEqual([]);
+		expect(report.clean).toBe(true);
+	});
+});
+
 describe('an unknown arrival', () => {
 	it('is reported as an error and never as a proposal', () => {
 		const report = compare({
