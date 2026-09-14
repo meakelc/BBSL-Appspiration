@@ -187,6 +187,13 @@ function fakeGateway(seed: QueryResultRow[], roster: QueryResultRow[] = ROSTER) 
 				order.push('release-claim');
 				return { rows: [] };
 			}
+			// The Slot claim, keyed on the winning Team (FR-9 amended): a close
+			// frees the board seat and the WINNER's Nomination Slot, and the two
+			// are separate deletes because they key on different things.
+			if (/^delete from nomination_slots/i.test(sql)) {
+				order.push('release-slot');
+				return { rows: [] };
+			}
 			if (/^insert into tick_heartbeats/i.test(sql)) {
 				order.push('heartbeat');
 				heartbeats.push([...params]);
@@ -304,6 +311,10 @@ describe('the sequential sweep — AD-11 through the real closeAuction', () => {
 			'read-roster',
 			'append-event',
 			'release-claim',
+			// The winner's Nomination Slot, freed by the win itself (FR-8
+			// amended) — a second delete, keyed on the Team rather than the
+			// Player, inside the same transaction.
+			'release-slot',
 			'commit',
 			// The second, which re-folds a log that now contains the first.
 			'begin',
@@ -313,6 +324,7 @@ describe('the sequential sweep — AD-11 through the real closeAuction', () => {
 			'read-roster',
 			'append-event',
 			'release-claim',
+			'release-slot',
 			'commit',
 			// One heartbeat, last.
 			'heartbeat'

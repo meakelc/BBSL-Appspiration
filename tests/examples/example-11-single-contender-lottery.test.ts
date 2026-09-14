@@ -221,11 +221,14 @@ describe('§10 example 11 — the single-contender lottery', () => {
 		expect(closed.contention).toBe('minimum_bid');
 	});
 
-	it('releases Team D’s Nomination Slot on the same close', () => {
+	it('frees the board seat on the close, and Team D’s Slot not at all', () => {
+		// Team E was the only Contender and won. Team D nominated the Player
+		// and did not, so since FR-9 was amended their Slot stays spent: the
+		// close frees the seat, and only a win frees a Slot.
 		const after = fold(INITIAL_NOMINATIONS, theWholeThing(), nominationsReducer);
 
-		expect(nominationForTeam(after, 't-d')).toBeNull();
 		expect(nominationForPlayer(after, 'p-1')).toBeNull();
+		expect(nominationForTeam(after, 't-d')?.fantraxPlayerId).toBe('p-1');
 	});
 
 	it('leaves the one-team draw readable after the Auction has gone', () => {

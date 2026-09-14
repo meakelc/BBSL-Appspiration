@@ -12,10 +12,10 @@
  * `AuctionClosed` must converge on the same contract rows rather than
  * duplicating them".
  *
- * `open_nominations` is a table because it needs a UNIQUENESS CONSTRAINT for
- * a real race between two Managers. A close has no such race: it is one
- * writer under the global lock (AD-6), so a table here would only have to be
- * undone.
+ * `open_nominations` and `nomination_slots` are tables because each needs a
+ * UNIQUENESS CONSTRAINT for a real race between two Managers. A close has no
+ * such race: it is one writer under the global lock (AD-6), so a table here
+ * would only have to be undone.
  *
  * **The two money fields are distinct and neither is derived from the other**
  * (AD-23). `winningAmount` is the contract's value; `capHit` is what it

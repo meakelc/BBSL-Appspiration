@@ -70,9 +70,10 @@ import { CANCELLATION_AXES, selectRestoration } from './restore.ts';
 import type { CandidateRosterFigures } from './restore.ts';
 import { isSeedShaped } from './draw.ts';
 // **The type is REUSED, not re-declared** (Story 10.5). `AuctionTerminated`
-// already means "this Auction ended with no winner, the nominating Team's Slot
-// comes back and the Player returns to the pool", and an emptied lottery is
-// that outcome arrived at a second way. A type of its own here would be a
+// already means "this Auction ended with no winner and the Player returns to
+// the pool", and an emptied lottery is that outcome arrived at a second way.
+// It frees no Nomination Slot in either case: since FR-9's amendment only a
+// win does that, and a termination has no winner by definition. A type of its own here would be a
 // second name for one fact, and `releaseNomination` and `nominationsReducer`
 // would each need a third case to read it. Type-only, and `phase-end.ts`
 // imports nothing from this module, so there is no cycle.
@@ -1170,7 +1171,7 @@ function cascadeFor(
  * `winningAmount` and a `placement`, and the columns behind the first two are
  * `not null` and reference real rows. Nobody won, so there is nothing to put
  * in any of them. `AuctionTerminated` already means precisely this outcome —
- * no winner, no contract, the nominating Team's Slot back, the Player in the
+ * no winner, no contract, no Nomination Slot released, the Player in the
  * Free Agent pool by arithmetic rather than by a table write — and
  * `server/nomination.ts`'s `releaseNomination` already reads both event types.
  * What this story gives it is a second producer: until now every one came from
@@ -1229,8 +1230,8 @@ function undrawnClose(
 	}
 
 	// **The NOMINATING Team, off the nominations fold, and there is no
-	// fallback for it.** `AuctionTerminatedPayload` names the Team whose
-	// Nomination Slot comes back, and no other fold knows who that is — the
+	// fallback for it.** `AuctionTerminatedPayload` names the Team that
+	// nominated this Player, and no other fold knows who that is — the
 	// Auction names bidders, and every one of them has been cancelled. A close
 	// with an Auction and no nomination is a log this codebase cannot write
 	// (the `no_open_auction` check refuses a Bid on an unnominated Player), so
@@ -1328,8 +1329,9 @@ function undrawnClose(
  *  - the League Clock does not reset — `league-clock.ts`'s
  *    `default: return state`, because AD-22 fixes the reset set at a
  *    Nomination and an accepted Bid and a close is neither;
- *  - the nominating Team's Nomination Slot releases —
- *    `nominationsReducer`'s own fold of this same event, keyed on the Player;
+ *  - the board seat releases, and the WINNING Team's Nomination Slot with it —
+ *    `nominationsReducer`'s own fold of this same event, keyed on the Player
+ *    for the seat and on the winner for the Slot (FR-9, amended);
  *  - Minors Exposure recomputes — the won Auction leaves `auctions.byPlayer`,
  *    so `teamMoneyStateFor` stops counting it (§10 example 20).
  *

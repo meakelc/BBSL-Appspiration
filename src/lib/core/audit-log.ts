@@ -525,8 +525,10 @@ function renderAuctionClosed(payload: Payload, refs: AuditReferences): AuditRend
  * `AuctionTerminated` — `rules/phase-end.ts:138`.
  *
  * There is NO `reason` on this payload and none is invented. The Team named is
- * the NOMINATING Team, which gets its Nomination Slot back; `managerId` is
- * nullable here and restates the envelope actor, so it is not a row.
+ * the NOMINATING Team — the one whose Slot was spent on this Player, and which
+ * keeps holding it: since FR-9's amendment a termination frees no Nomination
+ * Slot, because nobody won. `managerId` is nullable here and restates the
+ * envelope actor, so it is not a row.
  */
 function renderAuctionTerminated(payload: Payload, refs: AuditReferences): AuditRender {
 	const teamId = text(payload, 'teamId');

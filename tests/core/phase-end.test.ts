@@ -351,9 +351,12 @@ describe('decidePhaseEnd — only a nomination with NO Auction is terminated (AC
 		expect(after.nominations.byPlayer['p-stuck']).toBeDefined();
 		expect(after.nominations.byTeam['t-1']).toBeDefined();
 		expect(after.auctions.byPlayer['p-stuck']?.leadingBid?.amount).toBe(8_000_000);
-		// And the unbid one is gone, both indexes together.
+		// And the unbid one has left the BOARD — but not its nominator's Slot.
+		// Since FR-9 was amended only a win frees a Slot, and a termination has
+		// no winner by definition: t-2 spent theirs on a Player nobody bid for
+		// and does not get it back for that.
 		expect(after.nominations.byPlayer['p-unbid']).toBeUndefined();
-		expect(after.nominations.byTeam['t-2']).toBeUndefined();
+		expect(after.nominations.byTeam['t-2']).toBeDefined();
 	});
 
 	it('terminates a nomination whose only Bid is a lottery join not at all', () => {

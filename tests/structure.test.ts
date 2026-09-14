@@ -573,31 +573,46 @@ describe('AC2 — the Nomination Slot is released by the fold, never by a stored
 			.replace(/^\s*\/\/.*$/gm, '');
 	}
 
-	it('names open_nominations in exactly one module — the claim table has one owner', () => {
-		const naming = sources().filter((path) =>
-			/open_nominations|OPEN_NOMINATIONS_TABLE/.test(code(path))
-		);
+	it.each([
+		['open_nominations', /open_nominations|OPEN_NOMINATIONS_TABLE/],
+		['nomination_slots', /nomination_slots|NOMINATION_SLOTS_TABLE/]
+	])('names %s in exactly one module — each claim table has one owner', (_table, pattern) => {
+		const naming = sources().filter((path) => pattern.test(code(path)));
 		expect(naming).toEqual(['src/lib/server/nomination.ts']);
 	});
 
-	it('issues exactly one INSERT and one DELETE against it, and never a SELECT', () => {
-		// "Nothing reads `open_nominations` to answer a question" (Story 2.2's
-		// Always, carried into 2.3): it is a write-side constraint, and the
+	it.each([
+		// The board seat: one INSERT, and TWO deletes since Story 3.7 — a close
+		// and a termination end an Auction alike, and both return the Player to
+		// the pool.
+		['OPEN_NOMINATIONS_TABLE', ['delete from', 'delete from', 'insert into']],
+		// The Nomination Slot: one INSERT, and exactly ONE delete, because only
+		// a win frees a Slot (FR-9 amended). A second delete here would be a
+		// second way to free one, and the termination path is precisely the one
+		// that must not have it.
+		['NOMINATION_SLOTS_TABLE', ['delete from', 'insert into']]
+	])('issues only INSERTs and DELETEs against %s, and never a SELECT', (table, expected) => {
+		// "Nothing reads the claim tables to answer a question" (Story 2.2's
+		// Always, carried into 2.3): they are write-side constraints, and the
 		// answer to "is this Slot held" is the fold over `auction_events`.
 		const statements = [
 			...code('src/lib/server/nomination.ts').matchAll(
-				/\b(select|insert into|update|delete from)\b[^;`]*?\$\{OPEN_NOMINATIONS_TABLE\}/gi
+				new RegExp(
+					String.raw`\b(select|insert into|update|delete from)\b[^;\`]*?\$\{${table}\}`,
+					'gi'
+				)
 			)
 		].map((match) => (match[1] ?? '').toLowerCase());
 
-		expect(statements.sort()).toEqual(['delete from', 'insert into']);
+		expect(statements.sort()).toEqual(expected);
 	});
 
 	it('folds exactly three events — two of them release, and nothing else does', () => {
-		// Story 3.7 added the third: an `AuctionTerminated` frees the same board
-		// seat and the same Nomination Slot a close frees, because the League
-		// Clock ran out with that Player still Awaiting an Opening Bid. There is
-		// still no fourth, and in particular no timer of any kind.
+		// Story 3.7 added the third: an `AuctionTerminated` frees the board seat
+		// a close frees, because the League Clock ran out with that Player still
+		// Awaiting an Opening Bid. It frees no Nomination Slot — since FR-8 was
+		// amended only a win does that, and a termination has no winner. There
+		// is still no fourth case, and in particular no timer of any kind.
 		const nominations = code('src/lib/core/projection/nominations.ts');
 		const cases = [...nominations.matchAll(/case\s+([A-Z_]+):/g)].map((match) => match[1]);
 

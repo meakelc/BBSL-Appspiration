@@ -77,6 +77,7 @@ function fakeGateway(
 	const params: unknown[][] = [];
 	const appendedEvents: QueryResultRow[] = [];
 	let releasedClaims: unknown[][] = [];
+	let releasedSlots: unknown[][] = [];
 	let seq = 40;
 	let released = 0;
 	let committed = false;
@@ -146,6 +147,16 @@ function fakeGateway(
 				releasedClaims.push([...queryParams]);
 				return { rows: [] };
 			}
+			// The Slot claim, keyed on the WINNING Team (FR-9 amended). A second
+			// delete beside the board seat's, and deliberately recorded apart
+			// from it: the two now key on different things and end at different
+			// moments, so a harness that lumped them together could not tell a
+			// close that freed a Slot from one that merely freed a seat.
+			if (/^delete from nomination_slots/i.test(sql)) {
+				order.push('release-slot');
+				releasedSlots.push([...queryParams]);
+				return { rows: [] };
+			}
 			if (/^commit/i.test(sql)) {
 				order.push('commit');
 				committed = true;
@@ -158,6 +169,7 @@ function fakeGateway(
 				// must too, or "nothing was written" would be trivially true.
 				appendedEvents.length = 0;
 				releasedClaims = [];
+				releasedSlots = [];
 				return { rows: [] };
 			}
 			// Story 5.2 registered `enqueueBroadcasts` on this write, so the
@@ -204,6 +216,9 @@ function fakeGateway(
 		appendedEvents,
 		get releasedClaims() {
 			return releasedClaims;
+		},
+		get releasedSlots() {
+			return releasedSlots;
 		},
 		state: {
 			get released() {
@@ -410,6 +425,11 @@ describe('closeAuction — one event, one transaction (AC3)', () => {
 			'read-roster',
 			'append-event',
 			'release-claim',
+			// The Slot release follows the seat release, in the same
+			// transaction and before the commit. Two deletes since FR-8 was
+			// amended, because the seat frees on the Auction ending and the
+			// Slot frees on the WINNER winning.
+			'release-slot',
 			'commit'
 		]);
 	});
@@ -431,6 +451,19 @@ describe('closeAuction — one event, one transaction (AC3)', () => {
 		await closeAuction(harness.gateway, 'p-1');
 
 		expect(harness.releasedClaims).toEqual([['p-1']]);
+	});
+
+	it('frees the WINNER’s Nomination Slot, not the nominator’s (FR-9 amended)', async () => {
+		// `nominated()` puts t-n's Slot on p-1; the winning Bid is t-m's. Under
+		// the old rule this close handed t-n their Slot back for losing. It now
+		// hands t-m theirs back for winning, and t-n keeps theirs spent on a
+		// Player they no longer have any claim on.
+		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 8_500_000)] });
+
+		await closeAuction(harness.gateway, 'p-1');
+
+		expect(harness.releasedSlots).toEqual([['t-m']]);
+		expect(harness.releasedSlots).not.toContainEqual(['t-n']);
 	});
 
 	it('states the Auction’s NOMINAL expiry as closedAt while the row records when it landed', async () => {
@@ -680,6 +713,7 @@ describe('closeAuction — a Minimum-Bid Contention is drawn and closed (AC2, AC
 			'append-event',
 			'append-event',
 			'release-claim',
+			'release-slot',
 			'commit'
 		]);
 		expect(harness.params.some((entry) => entry[0] === 'p-1')).toBe(true);

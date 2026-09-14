@@ -103,9 +103,13 @@ export type PhaseEndState = {
  * one for a Minimum-Bid Contention whose every Contender was cancelled by
  * FR-40's cascade — Teams did bid, and none of their joins still stands. The
  * outcome is identical in every respect a reader cares about: no winner, no
- * contract, the nominating Team's Nomination Slot back and the Player in the
- * Free Agent pool by arithmetic, which is why it is this event rather than a
- * second one meaning the same thing.
+ * contract, no Nomination Slot released, and the Player in the Free Agent pool
+ * by arithmetic, which is why it is this event rather than a second one
+ * meaning the same thing.
+ *
+ * **It frees no Slot precisely because it names no winner.** Since FR-9's
+ * amendment a Nomination Slot is released by winning a Player and by nothing
+ * else, so a Team whose nomination expired unbid keeps the Slot it spent.
  *
  * FR-21's "written to the Audit Log" IS this event — AD-4 makes the Audit Log
  * a read of `auction_events`, not a second table — so everything a later
@@ -138,7 +142,10 @@ export type PhaseEndState = {
 export type AuctionTerminatedPayload = {
 	readonly fantraxPlayerId: string;
 	readonly playerName: string;
-	/** The NOMINATING Team, which gets its Nomination Slot back. */
+	/**
+	 * The NOMINATING Team — the one that spent a Slot on this Player and, since
+	 * FR-9's amendment, goes on holding it: nobody won, so nobody pays one back.
+	 */
 	readonly teamId: string;
 	readonly teamName: string;
 	/** The nominating Manager, or `null` when the nomination named none. */

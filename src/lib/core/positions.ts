@@ -526,12 +526,19 @@ export function leadCommitmentSentence(amount: Money): string {
  * The free case states the act is free of obligation, because the one thing
  * that stops a Manager spending a Slot at 7:40am is the belief that
  * nominating commits them to bidding. It does not, and FR says so.
+ *
+ * The spent case names the Player and then the ONE condition that frees the
+ * Slot: winning a Player. Under the amended FR-9 that is not the nominated
+ * Player's Auction ending — a Manager outbid on their own nomination keeps
+ * the Slot held — so this card may name a Player whose Auction closed days
+ * ago, and saying "frees when that Auction ends" would be a promise the rule
+ * no longer makes.
  */
 export function nominationSlotSentence(playerName: string | null): string {
 	if (playerName === null) {
 		return 'Your Nomination Slot is free. Nominating a Free Agent does not oblige you to bid on them.';
 	}
-	return `Your Nomination Slot is spent on ${playerName}, and frees when that Auction ends.`;
+	return `Your Nomination Slot is spent on ${playerName}, and frees when you win a Player.`;
 }
 
 /** The designed empty screen: what the state is, and where to go from it. */

@@ -731,12 +731,17 @@ describe('§10 example 34 — the lottery Team X was the ONLY Contender in', () 
 		expect(drawn.winningTeamId).toBeUndefined();
 	});
 
-	it('returns the Player to the pool and the nominator’s Slot with them', () => {
+	it('returns the Player to the pool, and leaves the nominator’s Slot spent', () => {
 		// "it closes with no winner and that player returns to the pool."
 		// Read through the folds rather than asserted about the payload: the
-		// board seat and the Nomination Slot both come back because
-		// `nominationsReducer` drops the entry, and the Auction goes because
-		// `auctionsReducer` learned this event in Story 10.5.
+		// board seat comes back because `nominationsReducer` drops the entry,
+		// and the Auction goes because `auctionsReducer` learned this event in
+		// Story 10.5.
+		//
+		// The Nomination Slot does NOT come back, and that is FR-9's amendment
+		// showing up in the worst case for the nominator: only a win frees a
+		// Slot, and this Auction was terminated with no winner at all. Team N2
+		// spent theirs on a Player nobody would bid for and holds it still.
 		const winner = drawnWinnerFor(emptied, SEED);
 		const decided = decideClose(nextCloseState('p-lot-solo'), LOTTERY_CLOSES, winner);
 		const nomination = appended(500, {
@@ -755,7 +760,7 @@ describe('§10 example 34 — the lottery Team X was the ONLY Contender in', () 
 
 		const nominations = fold(INITIAL_NOMINATIONS, log, nominationsReducer);
 		expect(nominationForPlayer(nominations, 'p-lot-solo')).toBeNull();
-		expect(nominationForTeam(nominations, 't-n2')).toBeNull();
+		expect(nominationForTeam(nominations, 't-n2')?.fantraxPlayerId).toBe('p-lot-solo');
 
 		// ...and the Auction is gone from `OpenAuctions`, so no later sweep
 		// finds it overdue and closes it a second time.

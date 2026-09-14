@@ -287,25 +287,68 @@ describe('nominationsReducer', () => {
 
 // --- The release, on a synthetic close (Story 2.3) --------------------------
 
-describe('nominationsReducer — AuctionClosed releases the nomination', () => {
-	it('frees the board seat AND the nominating Team’s Slot together — AC1', () => {
+describe('nominationsReducer — AuctionClosed ends the seat, a WIN ends the Slot', () => {
+	it('frees the board seat when the Auction closes, whoever won — AC1', () => {
 		const state = fold(
 			INITIAL_NOMINATIONS,
 			[nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'), closed(2, 'p-1')],
 			nominationsReducer
 		);
 		expect(nominationForPlayer(state, 'p-1')).toBeNull();
-		expect(nominationForTeam(state, 't-1')).toBeNull();
 		expect(openNominations(state)).toEqual([]);
 	});
 
+	it('does NOT free the nominator’s Slot when somebody else wins — the amended FR-9', () => {
+		// The rule change, in one test. `closed()` defaults the winner to
+		// CLOSED_TEAM_ID, which is not the nominator. Under the old rule this
+		// close handed the Lakers their Slot back for losing; it now leaves it
+		// held, spent on a Player they no longer have any claim on.
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'), closed(2, 'p-1')],
+			nominationsReducer
+		);
+		expect(nominationForTeam(state, 't-1')?.playerName).toBe('Jalen Green');
+		// And the Slot outlives its own board seat, which is the structural
+		// consequence: `byTeam` names a Player `byPlayer` no longer holds.
+		expect(nominationForPlayer(state, 'p-1')).toBeNull();
+	});
+
+	it('frees the Slot when the nominator wins their OWN nomination', () => {
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'), closed(2, 'p-1', { teamId: 't-1' })],
+			nominationsReducer
+		);
+		expect(nominationForTeam(state, 't-1')).toBeNull();
+		expect(nominationForPlayer(state, 'p-1')).toBeNull();
+	});
+
+	it('frees the Slot when the nominator wins SOMEBODY ELSE’s nomination', () => {
+		// The case the rule is actually for, and the one the old fold could not
+		// express at all: the Lakers spent their Slot on Jalen Green, were
+		// outbid, and then won Alperen Sengun — a Player the Celtics nominated.
+		// Winning anything at all is what pays the Slot back.
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[
+				nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'),
+				nomination(2, 'p-2', 'Alperen Sengun', 't-2', 'Celtics'),
+				closed(3, 'p-1'),
+				closed(4, 'p-2', { teamId: 't-1' })
+			],
+			nominationsReducer
+		);
+		expect(nominationForTeam(state, 't-1')).toBeNull();
+		// The Celtics were outbid on their own nomination and have won nothing,
+		// so their Slot is still spent on Sengun.
+		expect(nominationForTeam(state, 't-2')?.playerName).toBe('Alperen Sengun');
+	});
+
 	it.each([
-		['names another Team as the winner', { winningTeamId: 't-2', winningTeamName: 'Celtics' }],
-		['names the nominator as the winner', { winningTeamId: 't-1', winningTeamName: 'Lakers' }],
-		['names no winner at all', { winningTeamId: null }],
-		['carries a price and a Slot Placement', { price: 42, slotPlacement: 'active_bench' }],
+		['carries a price and a Slot Placement', { winningAmount: 42, placement: 'active_bench' }],
 		['carries a whole bid history', { bids: [{ teamId: 't-2', amount: 3 }] }]
-	])('frees the Slot identically when the close %s — the fold reads only the Player', (
+	])('frees the seat identically when the close %s — the seat reads only the Player', (
 		_label,
 		extra: Record<string, unknown>
 	) => {
@@ -314,20 +357,31 @@ describe('nominationsReducer — AuctionClosed releases the nomination', () => {
 			[nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'), closed(2, 'p-1', extra)],
 			nominationsReducer
 		);
-		expect(nominationForTeam(state, 't-1')).toBeNull();
 		expect(nominationForPlayer(state, 'p-1')).toBeNull();
 	});
 
-	it('frees the Slot of a nominator who never bid — the close names nobody it needs to', () => {
-		// No bid event exists in this log at all, which is the strongest form
-		// of "the nominator never bid": there is nothing for the reducer to
-		// have consulted even if it wanted to.
+	it('frees the winner’s Slot with no bid event in the log to consult', () => {
+		// The release is decided from the close's own winner field and from
+		// nothing the fold went looking for.
 		const state = fold(
 			INITIAL_NOMINATIONS,
-			[nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'), closed(2, 'p-1')],
+			[nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'), closed(2, 'p-9', { teamId: 't-1' })],
 			nominationsReducer
 		);
 		expect(nominationForTeam(state, 't-1')).toBeNull();
+		// A close for a Player nobody nominated frees no seat, and did not need
+		// to in order to free the Slot: the two halves are independent.
+		expect(nominationForPlayer(state, 'p-1')?.playerName).toBe('Jalen Green');
+	});
+
+	it('is a no-op on the Slot register when the winner holds no Slot at all', () => {
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'), closed(2, 'p-9', { teamId: 't-9' })],
+			nominationsReducer
+		);
+		expect(nominationForTeam(state, 't-1')?.playerName).toBe('Jalen Green');
+		expect(nominationForTeam(state, 't-9')).toBeNull();
 	});
 
 	it('leaves the state untouched when the close precedes any nomination — the reducer is total', () => {
@@ -339,13 +393,13 @@ describe('nominationsReducer — AuctionClosed releases the nomination', () => {
 		);
 	});
 
-	it('releases only the closed Player — another Team’s Slot stays held', () => {
+	it('releases only the closed Player’s seat and only the winner’s Slot', () => {
 		const state = fold(
 			INITIAL_NOMINATIONS,
 			[
 				nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'),
 				nomination(2, 'p-2', 'Alperen Sengun', 't-2', 'Celtics'),
-				closed(3, 'p-2')
+				closed(3, 'p-2', { teamId: 't-2' })
 			],
 			nominationsReducer
 		);
@@ -355,7 +409,7 @@ describe('nominationsReducer — AuctionClosed releases the nomination', () => {
 		expect(nominationForTeam(state, 't-2')).toBeNull();
 	});
 
-	it('leaves a held nomination alone when a DIFFERENT Player closes', () => {
+	it('leaves a held nomination alone when a DIFFERENT Player closes to a DIFFERENT Team', () => {
 		const state = fold(
 			INITIAL_NOMINATIONS,
 			[nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'), closed(2, 'p-9')],
@@ -366,7 +420,10 @@ describe('nominationsReducer — AuctionClosed releases the nomination', () => {
 	});
 
 	it('converges when the whole log is folded twice, and in scrambled order', () => {
-		const log = [nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'), closed(2, 'p-1')];
+		const log = [
+			nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'),
+			closed(2, 'p-1', { teamId: 't-1' })
+		];
 		const once = fold(INITIAL_NOMINATIONS, log, nominationsReducer);
 		const twice = fold(once, log, nominationsReducer);
 		expect(twice).toEqual(once);
@@ -375,12 +432,12 @@ describe('nominationsReducer — AuctionClosed releases the nomination', () => {
 		expect(fold(INITIAL_NOMINATIONS, [...log].reverse(), nominationsReducer)).toEqual(once);
 	});
 
-	it('lets the Team nominate again after its Player closes — the whole point of the Slot', () => {
+	it('lets the Team nominate again once it WINS — the whole point of the Slot', () => {
 		const state = fold(
 			INITIAL_NOMINATIONS,
 			[
 				nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'),
-				closed(2, 'p-1'),
+				closed(2, 'p-1', { teamId: 't-1' }),
 				nomination(3, 'p-2', 'Alperen Sengun', 't-1', 'Lakers')
 			],
 			nominationsReducer
@@ -390,6 +447,24 @@ describe('nominationsReducer — AuctionClosed releases the nomination', () => {
 		// The closed Player's entry is GONE, not overwritten by the new one.
 		expect(nominationForPlayer(state, 'p-1')).toBeNull();
 		expect(openNominations(state)).toHaveLength(1);
+	});
+
+	it('refuses a Team a second nomination when it LOST the first — the lockout is the rule', () => {
+		// The Lakers nominate, are outbid, and try again. The fold keeps the
+		// first nomination in `byTeam`, so the second never lands: a Team that
+		// never wins a Player nominates exactly once, for the whole auction.
+		const state = fold(
+			INITIAL_NOMINATIONS,
+			[
+				nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'),
+				closed(2, 'p-1'),
+				nomination(3, 'p-2', 'Alperen Sengun', 't-1', 'Lakers')
+			],
+			nominationsReducer
+		);
+		expect(nominationForTeam(state, 't-1')?.playerName).toBe('Jalen Green');
+		expect(nominationForPlayer(state, 'p-2')).toBeNull();
+		expect(openNominations(state)).toEqual([]);
 	});
 
 	it('makes the closed Player nominatable again, by another Team', () => {
@@ -403,7 +478,8 @@ describe('nominationsReducer — AuctionClosed releases the nomination', () => {
 			nominationsReducer
 		);
 		expect(nominationForPlayer(state, 'p-1')?.teamName).toBe('Celtics');
-		expect(nominationForTeam(state, 't-1')).toBeNull();
+		// ...and the Lakers, who lost him, still hold their Slot on him.
+		expect(nominationForTeam(state, 't-1')?.playerName).toBe('Jalen Green');
 	});
 
 	it.each([
@@ -426,12 +502,38 @@ describe('nominationsReducer — AuctionClosed releases the nomination', () => {
 		expect(nominationForTeam(after, 't-1')?.playerName).toBe('Jalen Green');
 	});
 
+	it('skips a close that names a Player but no winner — the Slot half made it matter', () => {
+		// `readClosedFacts` has always required a winner, and now this fold has
+		// a use for one. A close with no `teamId` releases NEITHER half, which
+		// is the same answer `contractsReducer` gives it.
+		const before = fold(
+			INITIAL_NOMINATIONS,
+			[nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers')],
+			nominationsReducer
+		);
+		const after = fold(
+			before,
+			[
+				event(
+					2,
+					AUCTION_CLOSED_EVENT,
+					closedPayload({ fantraxPlayerId: 'p-1', teamId: undefined })
+				)
+			],
+			nominationsReducer
+		);
+		expect(after).toEqual(before);
+	});
+
 	it.each(['constructor', 'toString', '__proto__', 'hasOwnProperty'])(
 		'releases a hostile id %s as an ordinary key, without touching a prototype',
 		(hostileId: string) => {
 			const state = fold(
 				INITIAL_NOMINATIONS,
-				[nomination(1, hostileId, 'Odd Name', hostileId, 'Odd Team'), closed(2, hostileId)],
+				[
+					nomination(1, hostileId, 'Odd Name', hostileId, 'Odd Team'),
+					closed(2, hostileId, { teamId: hostileId })
+				],
 				nominationsReducer
 			);
 			expect(nominationForPlayer(state, hostileId)).toBeNull();
@@ -449,7 +551,7 @@ describe('nominationsReducer — AuctionClosed releases the nomination', () => {
 			[nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers')],
 			nominationsReducer
 		);
-		const released = fold(held, [closed(2, 'p-1')], nominationsReducer);
+		const released = fold(held, [closed(2, 'p-1', { teamId: 't-1' })], nominationsReducer);
 		expect(openNominations(held)).toHaveLength(1);
 		expect(openNominations(released)).toHaveLength(0);
 		expect(nominationForTeam(held, 't-1')?.playerName).toBe('Jalen Green');
@@ -665,12 +767,16 @@ describe('nominationSlotStatus', () => {
 		expect(nominationSlotStatus('')).toBe('Open for nomination.');
 	});
 
-	it('names the Player holding the Slot, and when it comes back', () => {
+	it('names the Player holding the Slot, and what brings it back', () => {
 		// The name is the one fact a Manager cannot derive from `/nominate`:
 		// "held" without it sends them to the Bid Board to find out by whom.
 		const held = nominationSlotStatus('Alperen Sengun');
 		expect(held).toContain('Alperen Sengun');
-		expect(held).toContain('until that Auction closes');
+		// The condition, not a date. Since FR-9 was amended the Slot is not
+		// waiting on a clock: it comes back when this Team wins a Player, and
+		// saying "until that Auction closes" would be the old promise.
+		expect(held).toContain('until your Team wins a Player');
+		expect(held).not.toContain('Auction closes');
 	});
 
 	it('is a STATUS and never a refusal', () => {
@@ -694,7 +800,15 @@ describe('nominationSlotStatus', () => {
 describe('NOMINATION_CONSEQUENCE', () => {
 	it('states the Slot, which is the only thing a nomination commits', () => {
 		expect(NOMINATION_CONSEQUENCE).toContain('Nomination Slot');
-		expect(NOMINATION_CONSEQUENCE).toContain('Auction closes');
+		expect(NOMINATION_CONSEQUENCE).toContain('until your Team wins a Player');
+	});
+
+	it('says outright that LOSING does not give the Slot back', () => {
+		// The half of the amended FR-9 a Manager will otherwise assume the old
+		// way round. A confirm that did not say it would be taking a commitment
+		// under terms that no longer hold.
+		expect(NOMINATION_CONSEQUENCE).toContain('Losing that Auction does not give it back');
+		expect(NOMINATION_CONSEQUENCE).not.toContain('Auction closes');
 	});
 
 	it('states plainly that nothing else is committed', () => {
@@ -1040,9 +1154,13 @@ describe('the Commissioner exemption — the fold', () => {
 	});
 
 	it('does NOT free a real Slot when an exempt nomination of the same Team closes', () => {
-		// The regression `releaseSeat`'s identity check exists for: a Team with
-		// BOTH kinds of open nomination — a Manager promoted mid-auction — must
-		// not have its genuinely spent Slot released by the exempt one's close.
+		// A Team with BOTH kinds of open nomination — a Manager promoted
+		// mid-auction — must not have its genuinely spent Slot released by the
+		// exempt one's close. `releaseSeat`'s old identity check existed for
+		// exactly this; since FR-9's amendment the seat release no longer
+		// touches `byTeam` at all, so the case is protected by construction —
+		// and it is still asserted, because it is the behaviour that matters
+		// rather than the mechanism that delivers it.
 		const state = fold(
 			INITIAL_NOMINATIONS,
 			[
@@ -1057,22 +1175,28 @@ describe('the Commissioner exemption — the fold', () => {
 		expect(nominationForTeam(state, 't-1')?.playerName).toBe('Jalen Green');
 	});
 
-	it('frees the Slot on the close of the nomination that actually held it', () => {
+	it('frees that Team’s Slot when it WINS, whichever nomination the win closes', () => {
+		// The Lakers hold one real Slot (on Green) and one exempt nomination
+		// (on Sengun). They win Sengun — the Commissioner nomination, not the
+		// one holding their Slot — and the Slot comes back anyway, because
+		// winning is what pays it back and a Team holds only one.
 		const state = fold(
 			INITIAL_NOMINATIONS,
 			[
 				nomination(1, 'p-1', 'Jalen Green', 't-1', 'Lakers'),
 				exemptNomination(2, 'p-2', 'Alperen Sengun', 't-1', 'Lakers'),
-				closed(3, 'p-1')
+				closed(3, 'p-2', { teamId: 't-1' })
 			],
 			nominationsReducer
 		);
 
 		expect(nominationForTeam(state, 't-1')).toBeNull();
-		expect(nominationForPlayer(state, 'p-2')?.playerName).toBe('Alperen Sengun');
+		expect(nominationForPlayer(state, 'p-1')?.playerName).toBe('Jalen Green');
 	});
 
-	it('applies the same identity rule to a termination', () => {
+	it('frees no Slot at all on a termination, exempt nomination or not', () => {
+		// Nobody won, so nobody pays a Slot back. Both the Team's real Slot and
+		// the board seat behave exactly as they would for any other Team.
 		const state = fold(
 			INITIAL_NOMINATIONS,
 			[

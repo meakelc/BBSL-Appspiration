@@ -548,10 +548,16 @@ export function deadMoneySentence(charged: Money): string {
  * screen is where a Manager spends it. This is a statement about A Team —
  * possibly a rival's — and an offer on a rival's page would be a control that
  * acts on somebody else's Slot.
+ *
+ * The spent case says what frees it, which under the amended FR-9 is that
+ * Team winning a Player and nothing else. It is worth printing on a rival's
+ * card for the reason it is worth printing on your own: a Slot held by a
+ * Team that has won nothing is a Team that cannot nominate again, and that
+ * is a fact about the board every Manager reads it for.
  */
 export function nominationSlotStatusSentence(playerName: string | null): string {
 	if (playerName === null) return 'The Nomination Slot is free.';
-	return `The Nomination Slot is spent on ${playerName}, and frees when that Auction ends.`;
+	return `The Nomination Slot is spent on ${playerName}, and frees when that Team wins a Player.`;
 }
 
 // --- The assembly ----------------------------------------------------------

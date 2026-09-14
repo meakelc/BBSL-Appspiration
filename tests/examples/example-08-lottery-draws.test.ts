@@ -325,16 +325,23 @@ describe('§10 example 8 — the lottery draws', () => {
 		}
 	});
 
-	it('releases Team D’s Nomination Slot', () => {
-		// "Team D's Nomination Slot releases." Not a line in this story either:
-		// `nominationsReducer` frees the seat and the Slot together by folding
-		// the same `AuctionClosed`, keyed on the Player.
+	it('frees the board seat but NOT Team D’s Nomination Slot — Team D did not win', () => {
+		// The worked example used to read "Team D's Nomination Slot releases",
+		// and FR-9's amendment is what changed it. `nominationsReducer` still
+		// frees the board seat by folding the `AuctionClosed`, keyed on the
+		// Player — Jalen Green leaves the board and is Team G's. The Slot is a
+		// separate release keyed on the WINNER, and Team D nominated him and
+		// lost the lottery, so Team D keeps a Slot spent on a Player they no
+		// longer have any claim on, until they win someone.
 		const before = fold(INITIAL_NOMINATIONS, theLottery(), nominationsReducer);
 		const after = fold(INITIAL_NOMINATIONS, theWholeThing(), nominationsReducer);
 
 		expect(nominationForTeam(before, 't-d')?.fantraxPlayerId).toBe('p-1');
-		expect(nominationForTeam(after, 't-d')).toBeNull();
+		expect(nominationForTeam(after, 't-d')?.fantraxPlayerId).toBe('p-1');
 		expect(nominationForPlayer(after, 'p-1')).toBeNull();
+		// Team G won, and held no Slot to be freed — they nominated nobody in
+		// this log. The release is a no-op rather than an error.
+		expect(nominationForTeam(after, 't-g')).toBeNull();
 	});
 
 	it('keeps the three facts after the Auction itself is gone', () => {

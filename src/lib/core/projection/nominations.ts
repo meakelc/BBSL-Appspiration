@@ -11,27 +11,41 @@
  * status to be "a fold over the log … never a stored flag toggled by a
  * handler", so storing it now would only have to be undone.
  *
- * **Release is TWO cases, and both key on the Player.** Story 2.3 wrote the
- * first: a nomination is released when that Player's Auction CLOSES, and an
- * `AuctionClosed` for a nominated Player frees that Player's board seat and
- * the nominating Team's Nomination Slot together. Story 3.7 added the second
- * and, so far, last: an `AuctionTerminated` frees exactly the same pair when
- * the Auction Phase ends with that Player still Awaiting an Opening Bid —
- * nobody won them, no contract is recorded, and they return to the pool by
- * this fold's own arithmetic rather than by a write to `free_agent_players`.
+ * **The board seat and the Nomination Slot are released by DIFFERENT
+ * events, and that is the whole of FR-9's current rule.** They used to be one
+ * fact read two ways — an `AuctionClosed` freed the seat and the nominating
+ * Team's Slot together — and they are not.
  *
- * The two cases are written separately rather than shared because what makes
- * each event WELL FORMED differs: a close must name a winner, a price and a
- * placement, and a termination names none of those and could not. Collapsing
- * them would make one reader answer two questions.
+ *   - **The seat frees when the Auction ENDS**, either way it can end. An
+ *     `AuctionClosed` ends it with a winner; an `AuctionTerminated` (Story
+ *     3.7) ends it with none, when the Auction Phase expires on a Player
+ *     still Awaiting an Opening Bid or FR-40's cascade cancels every
+ *     Contender. Both key on the Player, and both put that Player back in the
+ *     nominatable pool by this fold's arithmetic rather than by a write to
+ *     `free_agent_players`.
+ *   - **The Slot frees when the Team WINS a Player**, and by nothing else. It
+ *     keys on the WINNING Team named by an `AuctionClosed`, which need not be
+ *     — and usually is not — the Team that nominated. A Manager who
+ *     nominates and is outbid keeps that Slot held: nominating is not the
+ *     cost, winning is what pays it back. A termination frees no Slot at all,
+ *     because nobody won.
  *
- * What they have in common is the release itself, and both take it through
- * one `releaseSeat`. The board seat and the Slot that seat was holding drop
- * in a single step, which keeps both indexes consistent by construction. The
- * Player is the key and nothing else: the Slot frees whether the nominator
- * won the auction, lost it, or never bid at all. Keying on a Team would
- * require the close to carry the nominator, which it has no reason to know,
- * and would free the wrong Slot if it carried the winner instead.
+ * **The consequence is deliberate and is the point of the rule.** A Team that
+ * never wins a Player nominates exactly once, for the whole auction. The Slot
+ * is not a turn that comes round again; it is held until that Team takes a
+ * Player off the board. What used to be an eventual, automatic return is now
+ * something a Team has to earn, which is what stops one nomination being
+ * parked on a Player nobody wants while its owner shops.
+ *
+ * It follows that a `byTeam` entry can OUTLIVE its `byPlayer` seat: the
+ * Slot-holding nomination names a Player whose Auction closed long ago, and
+ * every sentence that reports a held Slot still names that Player, because
+ * naming what the Slot was spent on is what makes the refusal actionable.
+ *
+ * The two ending events are read separately rather than shared because what
+ * makes each WELL FORMED differs: a close must name a winner, a price and a
+ * placement — and the winner is exactly what the Slot release now needs —
+ * whereas a termination names none of those and could not.
  *
  * **The payload contract, fixed here — and it is now the WHOLE close.** This
  * fold uses only `fantraxPlayerId`, but it decides whether a payload is a
@@ -109,11 +123,14 @@ export const AUCTION_CLOSED_EVENT = 'AuctionClosed';
  * still stands — after the `ContentionDrawn` that reveals the seed over the
  * empty list.
  *
- * **A termination is not a close and appends no contract.** Nobody was left to
- * win: the Player simply stops being on the board and the nominating
- * Team's Slot comes back. `contractsReducer` has no case for this event and
- * needs none, which is what returns the Player to the Free Agent pool by
- * arithmetic rather than by a table write.
+ * **A termination is not a close, appends no contract, and frees no
+ * Nomination Slot.** Nobody was left to win: the Player simply stops being on
+ * the board. `contractsReducer` has no case for this event and needs none,
+ * which is what returns the Player to the Free Agent pool by arithmetic
+ * rather than by a table write — and the absence of a winner is exactly why
+ * no Slot is released, because since FR-9's amendment only a WIN releases
+ * one. The nominating Team keeps the Slot it spent on a Player nobody bid
+ * for.
  *
  * **It names the NOMINATING Team**, not a winner — there is no winner. That
  * is the one substantive difference from a close, and it is why the payload
@@ -127,7 +144,10 @@ export type OpenNomination = {
 	readonly fantraxPlayerId: string;
 	/** That Player's name — what a refusal says out loud. */
 	readonly playerName: string;
-	/** The Team holding the Slot this nomination spent. */
+	/**
+	 * The Team that nominated — and so, while `holdsSlot`, the Team whose
+	 * Nomination Slot this holds until that Team wins a Player.
+	 */
 	readonly teamId: string;
 	/** That Team's name — what a refusal says out loud. */
 	readonly teamName: string;
@@ -195,6 +215,12 @@ export type OpenNomination = {
  *
  * It follows that `byTeam` is no longer a subset-by-key of `byPlayer`'s
  * values, and that the two indexes can hold different numbers of entries.
+ * Since FR-9's amendment it follows a second time and much more commonly: a
+ * `byTeam` entry survives its own `byPlayer` seat, because the seat ends with
+ * the Auction and the Slot ends only when that Team wins a Player. Most held
+ * Slots, late in an auction, name a Player who is no longer on the board.
+ * Nothing may therefore assume a `byTeam` nomination is still live — read
+ * `byPlayer`, or the Auctions fold, to ask that.
  */
 export type OpenNominations = {
 	readonly byPlayer: Readonly<Record<string, OpenNomination>>;
@@ -389,12 +415,16 @@ export function readClosedFacts(payload: unknown): ClosedFacts | null {
  * with one answer, not a per-caller one.
  *
  * **Exported because the release has two halves that must agree.** The fold
- * frees the Slot; `server/nomination.ts`'s `releaseNomination` deletes the
- * claim row. Both read the same event through this one function rather than
- * through two literals that could come to disagree about what a malformed
- * close means — a close the fold skipped but the delete acted on (or the
- * reverse) would leave the log and the claim table saying different things
- * about the same Slot.
+ * frees the Player's board seat; `server/nomination.ts`'s `releaseNomination`
+ * deletes the matching claim row. Both read the same event through this one
+ * function rather than through two literals that could come to disagree about
+ * what a malformed close means — a close the fold skipped but the delete acted
+ * on (or the reverse) would leave the log and the claim table saying different
+ * things about the same Player.
+ *
+ * It answers for the SEAT only. The Slot half of a close keys on the winning
+ * Team, so `releaseNomination` reads that through `readClosedFacts` directly,
+ * exactly as `nominationsReducer` does.
  */
 export function readClosedPlayerId(payload: unknown): string | null {
 	return readClosedFacts(payload)?.fantraxPlayerId ?? null;
@@ -406,8 +436,10 @@ export function readClosedPlayerId(payload: unknown): string | null {
  *
  * `readClosedPlayerId`'s shape and `readClosedPlayerId`'s reason, for its own
  * event — including the reason it is EXPORTED. The release has two halves
- * that must agree: this fold frees the Slot, and `server/nomination.ts`'s
- * `releaseNomination` deletes the claim row. Both read the same event through
+ * that must agree: this fold frees the Player's board seat, and
+ * `server/nomination.ts`'s `releaseNomination` deletes the claim row. A
+ * termination frees no Nomination Slot at all, so unlike a close it has only
+ * the one half. Both read the same event through
  * this one function rather than through two literals that could come to
  * disagree about what a malformed termination means. A termination the fold
  * skipped but the delete acted on — or the reverse — would leave the log and
@@ -447,17 +479,13 @@ function omitKey(
 }
 
 /**
- * Drop a Player's board seat and, with it, the Slot that seat was holding —
- * the one release both ending events share.
+ * Drop a Player's board seat — the release both ending events share.
  *
- * **`byTeam` is dropped only when it holds THIS nomination** (Story 9.8).
- * Before the Commissioner exemption the two indexes were one fact read two
- * ways, so `omitKey(byTeam, released.teamId)` could not be wrong. It can now:
- * a Commissioner's nomination is absent from `byTeam`, so a Team that has
- * BOTH an exempt nomination and a Slot-spending one — a Manager promoted
- * mid-auction, or demoted — would have the Slot-spending one silently freed
- * by the exempt one's close. The identity check makes the release name the
- * nomination rather than the Team, which is what it always meant.
+ * **It no longer touches `byTeam`, and that is the rule change.** A seat and
+ * a Slot were one fact read two ways until FR-9 was amended; now the seat
+ * ends with the Auction and the Slot ends with a win, so releasing them
+ * together would hand a Slot back to a Manager who was outbid. The Slot
+ * release lives in `releaseSlot` below and keys on the WINNER.
  *
  * Returns `null` when no seat is held, so both callers keep the no-op that
  * makes a double replay converge.
@@ -467,15 +495,37 @@ function releaseSeat(
 	fantraxPlayerId: string
 ): OpenNominations | null {
 	if (!hasOwn(state.byPlayer, fantraxPlayerId)) return null;
-	const released = state.byPlayer[fantraxPlayerId];
-	if (released === undefined) return null;
-	const slotHolder = nominationForTeam(state, released.teamId);
 	return {
 		byPlayer: omitKey(state.byPlayer, fantraxPlayerId),
-		byTeam:
-			slotHolder !== null && slotHolder.fantraxPlayerId === fantraxPlayerId
-				? omitKey(state.byTeam, released.teamId)
-				: state.byTeam
+		byTeam: state.byTeam
+	};
+}
+
+/**
+ * Free the winning Team's Nomination Slot — the ONE thing that frees one.
+ *
+ * Keyed on the Team that WON, never on the Team that nominated, and it is
+ * deliberately blind to WHICH Player the released Slot was spent on: a Team
+ * holds at most one Slot, so winning any Player at all returns it. That is
+ * the whole of the amended FR-9, and the reason it is worth stating twice:
+ * the Slot a Manager gets back on winning Kevin Durant is very often the one
+ * they spent nominating somebody else entirely, weeks earlier.
+ *
+ * Consequently there is **no identity check** of the kind the old combined
+ * release needed. That check existed because a Commissioner's exempt
+ * nomination could otherwise free a Slot-spending one held by the same Team;
+ * it cannot arise here, because this release is not reached from a
+ * nomination at all. A win frees whatever Slot the winner holds, and a winner
+ * holding none — a Commissioner, or a Team that has not nominated — is the
+ * no-op that makes replay converge.
+ *
+ * Returns `null` when that Team holds no Slot.
+ */
+function releaseSlot(state: OpenNominations, winningTeamId: string): OpenNominations | null {
+	if (!hasOwn(state.byTeam, winningTeamId)) return null;
+	return {
+		byPlayer: state.byPlayer,
+		byTeam: omitKey(state.byTeam, winningTeamId)
 	};
 }
 
@@ -489,9 +539,10 @@ function releaseSeat(
  * A nomination whose Player is already on the board, or whose Team already
  * holds an open nomination, leaves the state untouched — which is what makes
  * folding the same log twice converge on the identical result. A close for a
- * Player nobody nominated leaves it untouched for the same reason, which is
- * also what makes the release converge on a double replay: the second fold
- * of a close is a no-op on an absent key.
+ * Player nobody nominated, or won by a Team holding no Slot, leaves the
+ * corresponding index untouched for the same reason, which is also what makes
+ * both releases converge on a double replay: the second fold of a close is a
+ * no-op on an absent key, twice over.
  */
 export const nominationsReducer: Reducer<OpenNominations> = (state, event) => {
 	switch (event.type) {
@@ -530,21 +581,35 @@ export const nominationsReducer: Reducer<OpenNominations> = (state, event) => {
 			// an already-ended phase harmless.
 			const terminated = readTerminatedPlayerId(event.payload);
 			if (terminated === null) return state;
-			// Both indexes drop together, through the ONE release both ending
-			// events share — the close case's discipline, for the close case's
-			// reason.
+			// The SEAT only. A termination has no winner, and since FR-9's
+			// amendment only a win frees a Slot — so the nominating Team keeps
+			// theirs, spent on a Player who is now back in the pool for somebody
+			// else to nominate.
 			return releaseSeat(state, terminated) ?? state;
 		}
 		case AUCTION_CLOSED_EVENT: {
-			const fantraxPlayerId = readClosedPlayerId(event.payload);
-			if (fantraxPlayerId === null) return state;
-			// A close for a Player who holds no board seat — one that arrived
-			// before any nomination, or a second fold of one already applied —
-			// changes nothing. That is what makes replay converge.
-			// Both indexes drop together: the board seat and the Slot that seat
-			// was holding are two readings of a single fact, so they can never
-			// be released apart.
-			return releaseSeat(state, fantraxPlayerId) ?? state;
+			// **The one event that touches both indexes, for two unrelated
+			// reasons.** The close ends an Auction, which frees that Player's
+			// board seat; the close also names a WINNER, which frees that Team's
+			// Nomination Slot. The two are read off the same payload and applied
+			// in sequence, but they are not one fact: the Player whose seat drops
+			// and the Team whose Slot drops are usually nothing to do with each
+			// other.
+			//
+			// Read through `readClosedFacts` rather than `readClosedPlayerId`
+			// because the winner is now load-bearing here — and reading the whole
+			// close keeps this fold refusing exactly the payloads
+			// `contractsReducer` refuses, which is the invariant that reader
+			// exists for.
+			const closed = readClosedFacts(event.payload);
+			if (closed === null) return state;
+			// Either half may be a no-op and both commonly are: a close for a
+			// Player who holds no board seat — one that arrived before any
+			// nomination, or a second fold of one already applied — drops no
+			// seat, and a winner who holds no Slot frees none. That is what makes
+			// replay converge.
+			const afterSeat = releaseSeat(state, closed.fantraxPlayerId) ?? state;
+			return releaseSlot(afterSeat, closed.teamId) ?? afterSeat;
 		}
 		default:
 			return state;

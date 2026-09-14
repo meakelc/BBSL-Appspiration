@@ -132,7 +132,7 @@ Thirty-one people: thirty team managers (one team is co-managed by two people) p
 - **Minor League Eligible** — a Player who has played fewer than 82 lifetime NBA games. Required to occupy a Minor League Slot. **The Fantrax export does not carry this flag, so it is Commissioner-set app data (FR-38), applied before the auction opens and defaulting to *not* eligible.**
 - **Free Agent** — a Player in the imported pool, not under Contract to any Team, and not yet won in this auction.
 - **Nomination** — the act of placing a Free Agent onto the Bid Board. Does not obligate the nominating Team to bid.
-- **Nomination Slot** — a Team's right to have one Nomination in play. Released when the auction for that nominated Player closes.
+- **Nomination Slot** — a Team's right to have one Nomination in play. Released when that Team **wins a Player** — any Player, not necessarily the one it nominated. Losing the auction for your own nomination does not give it back.
 - **Bid Board** — the set of all Players with open auctions.
 - **Auction** — the contest for a single nominated Player. Has a state: **Awaiting Opening Bid**, **Standard Contention**, **Minimum-Bid Contention**, or **Closed**.
 - **Opening Bid** — the first Bid placed on an Auction. Minimum $1,000,000. Starts the Auction Clock.
@@ -245,7 +245,7 @@ The Commissioner holds league-administrative privileges in addition to full ordi
 
 ### 4.3 Nomination
 
-**Description:** Nomination paces the auction. Each Team may have one Nomination in play at a time, and gets its Nomination Slot back only when that Player's Auction closes. Crucially, nominating does not oblige you to bid — you can put a player on the board purely to make rivals spend. The league has explicitly chosen to keep this rule as written, accepting its consequence: a Team that nominates a Player nobody ever bids on has spent its Nomination Slot for the remainder of the auction. Realizes UJ-2, UJ-3.
+**Description:** Nomination paces the auction. Each Team may have one Nomination in play at a time, and gets its Nomination Slot back only by **winning a Player**. Crucially, nominating does not oblige you to bid — you can put a player on the board purely to make rivals spend. The league has explicitly chosen to keep this rule as written, accepting its consequence: a Team that never wins a Player nominates exactly once, for the whole auction. Realizes UJ-2, UJ-3.
 
 **Functional Requirements:**
 
@@ -273,13 +273,15 @@ The system refuses Nominations that violate league rules.
 
 #### FR-9: Nomination Slot release
 
-A Team's Nomination Slot is released at the Auction Close of the Player it nominated.
+A Team's Nomination Slot is released when that Team **wins a Player**, and at no other time.
 
 **Consequences (testable):**
-- The Slot is released regardless of which Team won the Player, and regardless of whether the nominating Team ever bid.
-- The Slot is released at Auction Close and not before — not when the nominating Team is outbid, and not on any timer of its own.
+- The Slot is released by any win, not only a win of the Player that Team nominated. A Team that spent its Slot on one Player and then won a different one gets the Slot back on that second Auction's Close.
+- The Slot is **not** released by the Close of the Player it nominated when another Team won: losing does not give the Slot back.
+- The Slot is **not** released by an Auction that ends with no winner at all — an unbid nomination at Phase End, or a Minimum-Bid Contention whose Contenders were all cancelled (FR-40). Nobody won, so nobody pays a Slot back. The Player returns to the pool; the Slot stays spent.
+- A Team holds at most one Slot, so a win releases whichever Slot it holds and a Team holding none is unaffected.
 - The Team's Managers are notified that they may nominate again.
-- A Player in **Awaiting Opening Bid** never closes, so its Nominator's Slot remains held until the Auction Phase ends. `[ASSUMPTION: this is the accepted consequence of the rules as written, confirmed by the league; the app surfaces it prominently rather than mitigating it — see FR-10.]`
+- A Team that never wins a Player nominates exactly once, for the whole auction. `[ASSUMPTION: this is the intended consequence of the rule, confirmed by the league; the app states it plainly on the nomination surface rather than mitigating it — see FR-10. It supersedes the earlier rule under which the Slot returned at the nominated Player's Auction Close.]`
 
 #### FR-10: Dead nomination visibility
 
@@ -287,7 +289,7 @@ The system makes an unbid Nomination visible to its owner and to the league.
 
 **Consequences (testable):**
 - A Player in **Awaiting Opening Bid** for more than 24 hours is visually flagged on the Bid Board as having attracted no bids.
-- The nominating Team's own view states plainly that this Nomination is holding their Slot and will continue to until someone bids.
+- The nominating Team's own view states plainly that this Nomination is holding their Slot and will continue to until that Team wins a Player.
 - The nominating Team's Managers are notified at the 24-hour mark.
 - No automatic expiry, withdrawal, or return-to-pool occurs; only a Commissioner override (FR-31) can clear it.
 
@@ -507,7 +509,7 @@ At Auction Clock expiry, the system closes the Auction and awards the Player.
 - Slot Placement is applied automatically: a Minor League Eligible Player takes a free Minor League Slot if one exists, otherwise an Active/Bench Slot; any other Player takes an Active/Bench Slot.
 - The winning Team's Roster Count increases by one **only if** the Player was placed in an Active/Bench Slot.
 - The Cap Hit recorded is the winning amount for an Active/Bench placement, and $0 for a Minor League placement. Any Minors Exposure the Team was carrying for this Auction is released and recomputed across its remaining eligible bids. See FR-35.
-- The nominating Team's Nomination Slot is released (FR-9).
+- The **winning** Team's Nomination Slot is released, if it held one (FR-9). The nominating Team's is not, unless they are the winner.
 - The Close then evaluates the winning Team's **remaining** commitments against Roster Capacity and applies FR-40, cancelling any that no longer have a Slot to land in. This happens **inside** the sequential close ordering — committed to the state the next Close is evaluated against — so two Auctions closing in the same sweep cannot both place a Player into the same last Slot.
 - Auction Close does **not** reset the League Clock.
 - Close occurs within 60 seconds of the Clock's nominal expiry even if no user is looking at the page.
@@ -537,7 +539,7 @@ When an Auction Close leaves a Team holding commitments with no Roster Slot to r
 *Restoration*
 - On an Auction in Standard Contention, the **next-highest surviving Bid becomes the leading Bid** and that Team's capital is re-committed.
 - The restored Team is re-evaluated against the **money and capacity gates at that instant** — the same two grounds FR-13 and FR-37 apply to any Bid. If it fails either, the next-highest Bid below is tried, and so on down the history.
-- If **no** surviving Bid passes, the Auction returns to **Awaiting Opening Bid** with no leading Bid. Its Auction Clock is **cleared**, not left running: an Auction with no Bid has no Clock, exactly as a nominated Player who has never been bid on has none (FR-17 starts the Clock at the Opening Bid). The Player stays on the Board, the nominating Team's Nomination Slot stays held (FR-9), and the Auction resolves the way any unbid nomination does — a fresh Opening Bid starts a fresh 24 hours, or the Auction Phase ends and the Player returns to the pool unclaimed (FR-22, §10 example 12).
+- If **no** surviving Bid passes, the Auction returns to **Awaiting Opening Bid** with no leading Bid. Its Auction Clock is **cleared**, not left running: an Auction with no Bid has no Clock, exactly as a nominated Player who has never been bid on has none (FR-17 starts the Clock at the Opening Bid). The Player stays on the Board, the nominating Team's Nomination Slot stays held (FR-9) — as it would have anyway, since only a win releases one — and the Auction resolves the way any unbid nomination does — a fresh Opening Bid starts a fresh 24 hours, or the Auction Phase ends and the Player returns to the pool unclaimed (FR-22, §10 example 12).
 - A restoration **never** itself triggers a cancellation. A restored Team that would breach its own capacity is skipped rather than restored-then-cancelled, so the cascade cannot re-enter.
 
 *Clocks*

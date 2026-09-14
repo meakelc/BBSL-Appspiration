@@ -195,8 +195,9 @@ export function nominationRefusalDetail(refusal: NominationRefusal): string {
 		case 'slot_in_use':
 			return (
 				'No nomination was placed: your Team\u2019s Nomination Slot is held by your ' +
-				`nomination of ${refusal.playerName}. The Slot is returned when that Player\u2019s ` +
-				'Auction closes, and you may nominate again then. Nothing was written.'
+				`nomination of ${refusal.playerName}. The Slot is returned when your Team wins a ` +
+				'Player \u2014 not when that Auction closes \u2014 so win one and you may nominate ' +
+				'again. Nothing was written.'
 			);
 		case 'unconfirmed':
 			// **States the board, not the Slot** (Story 9.8). This sentence used
@@ -249,7 +250,9 @@ export function nominationRefusalDetail(refusal: NominationRefusal): string {
  * whose problem is named first. A Manager whose Slot is held and who has
  * also picked an unavailable Player is told about the Player: the Slot is a
  * standing condition they can already see on their own page, whereas the
- * Player's unavailability is news.
+ * Player's unavailability is news. That reasoning got stronger with the
+ * amended FR-9, under which a held Slot is a condition that can stand for the
+ * whole auction rather than one that clears itself in an hour.
  *
  * Exported so the ordering is assertable as pure logic rather than inferred
  * from a transaction. Takes no clock, no database and no random source — the
@@ -319,11 +322,20 @@ export function refuseNomination(
  * nomination commits. Saying anything about money here would be false: no
  * cap space is reserved, the nominating Team is not the Leading Bidder, and
  * no Auction Clock starts.
+ *
+ * **It says explicitly that losing does not give the Slot back**, because
+ * that is the half of the amended FR-9 a Manager will otherwise assume the
+ * old way round. Under the previous rule the Slot returned when the nominated
+ * Player's Auction closed, however it closed — so nominating cost nothing a
+ * Manager had to plan around. It now costs the Slot until they WIN something,
+ * and a confirm that did not say so would be inviting a commitment under the
+ * old terms.
  */
 export const NOMINATION_CONSEQUENCE =
-	'your Team\u2019s only Nomination Slot is held until that Player\u2019s Auction closes, ' +
-	'and you cannot nominate anyone else until then. No cap space is committed, no bid ' +
-	'is placed, and your Team does not become the Leading Bidder';
+	'your Team\u2019s only Nomination Slot is held until your Team wins a Player, and you ' +
+	'cannot nominate anyone else until then. Losing that Auction does not give it back. ' +
+	'No cap space is committed, no bid is placed, and your Team does not become the ' +
+	'Leading Bidder';
 
 /**
  * What the Team's Nomination Slot is doing right now, in one line.
@@ -338,16 +350,22 @@ export const NOMINATION_CONSEQUENCE =
  *
  * A held Slot names the PLAYER holding it, because that is the fact the
  * Manager actually wants and the only one they cannot derive from the page:
- * "held" without a name sends them to the Bid Board to find out by whom. The
- * clause about the Auction closing stays, short, because when the Slot comes
- * back is the other half of the same fact.
+ * "held" without a name sends them to the Bid Board to find out by whom. It
+ * names that Player even once their Auction is long closed, which is the
+ * amended FR-9 showing through: the Slot outlives the Auction it was spent
+ * on, and what a Manager needs to know is what they spent it on.
+ *
+ * The second clause is when it comes back, and it is no longer a date — it is
+ * a condition the Manager controls. "until your Team wins a Player" is the
+ * whole rule, and it is the one line on the page that says the Slot is not
+ * waiting on a clock.
  *
  * The refusal sentence is not replaced anywhere it is a reply: a refused
  * submit still gets `nominationRefusalDetail` in full.
  */
 export function nominationSlotStatus(heldPlayerName: string | null): string {
 	if (heldPlayerName === null || heldPlayerName === '') return 'Open for nomination.';
-	return `Held by your nomination of ${heldPlayerName} until that Auction closes.`;
+	return `Held by your nomination of ${heldPlayerName} until your Team wins a Player.`;
 }
 
 /**
@@ -411,6 +429,11 @@ export const COMMISSIONER_NOMINATION_CONSEQUENCE =
  * states a consequence that does not happen to seven of the thirty-seven
  * people who read it. The page prints what the core says and decides nothing.
  *
+ * FR-9's amendment is the second vindication of that move, and a plainer one:
+ * the sentence quoted above is now simply FALSE — a Slot is held until the
+ * Team WINS a Player, not until that Auction closes — and correcting it took
+ * one edit here rather than a hunt through the markup.
+ *
  * Short on purpose: it sits inside the action bar beside the control, not in
  * the consequence panel, so it says the one thing that changes rather than
  * repeating `NOMINATION_CONSEQUENCE` in full.
@@ -418,7 +441,7 @@ export const COMMISSIONER_NOMINATION_CONSEQUENCE =
 export function nominationConfirmPrompt(playerName: string, spendsSlot: boolean): string {
 	const lead = 'The confirmation has not been given. Tick it to enable the control: ';
 	return spendsSlot
-		? `${lead}nominating ${playerName} holds your Slot until that Auction closes.`
+		? `${lead}nominating ${playerName} holds your Slot until your Team wins a Player.`
 		: `${lead}nominating ${playerName} puts them on the Bid Board and holds no Slot.`;
 }
 

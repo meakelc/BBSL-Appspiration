@@ -15,10 +15,11 @@ import { describe, expect, it } from 'vitest';
 
 import { CORE_VERSION } from '../../src/lib/core/constants.ts';
 
-import { closedPayload } from '../fixtures/closed-event.ts';
+import { CLOSED_TEAM_ID, closedPayload } from '../fixtures/closed-event.ts';
 
 import {
 	AUCTION_CLOSED_EVENT,
+	AUCTION_TERMINATED_EVENT,
 	NOMINATION_PLACED_EVENT
 } from '../../src/lib/core/projection/nominations.ts';
 import { BID_PLACED_EVENT } from '../../src/lib/core/projection/auctions.ts';
@@ -149,12 +150,30 @@ function fakeGateway(options: {
 				params.push([...queryParams]);
 				return { rows: [] };
 			}
+			// The SLOT claim, in its own table since FR-9 was amended: a Slot
+			// outlives the board seat, so one row deleted on close can no longer
+			// carry both. Written only when the nomination spends a Slot, which
+			// is why a Commissioner's nomination produces no `claim-slot` entry
+			// in `order` at all.
+			if (/^insert into nomination_slots/i.test(sql)) {
+				order.push('claim-slot');
+				params.push([...queryParams]);
+				return { rows: [] };
+			}
 			// The claim row's deleter (Story 2.3). Registered by no production
 			// call site — `releaseNomination` is driven directly by the tests
 			// below — but the fake must recognise the statement, or the very
 			// thing under test would read as "unexpected statement".
 			if (/^delete from open_nominations/i.test(sql)) {
 				order.push('release-nomination');
+				params.push([...queryParams]);
+				return { rows: [] };
+			}
+			// The Slot claim's deleter, keyed on the WINNING Team. Recorded
+			// apart from the seat's delete because the two key on different
+			// things and fire on different events.
+			if (/^delete from nomination_slots/i.test(sql)) {
+				order.push('release-slot');
 				params.push([...queryParams]);
 				return { rows: [] };
 			}
@@ -405,11 +424,11 @@ describe('placeNomination — the gate holds', () => {
 
 		await placeNomination(harness.gateway, ACTOR, 'p-1', DEVICE_CLASS);
 
-		// Every statement the transaction issued. The claim insert sits
-		// between the event and the commit, so the two commit together or roll
-		// back together — and no slot table, board table or clock row is
-		// written anywhere. The fake throws on any statement it does not
-		// recognise, which is the other half of this.
+		// Every statement the transaction issued. BOTH claim inserts sit
+		// between the event and the commit, so all three commit together or
+		// roll back together — and no board table or clock row is written
+		// anywhere. The fake throws on any statement it does not recognise,
+		// which is the other half of this.
 		expect(harness.order).toEqual([
 			'begin',
 			'lock',
@@ -418,6 +437,10 @@ describe('placeNomination — the gate holds', () => {
 			'read-contract',
 			'append-event',
 			'claim-nomination',
+			// The Slot claim, since FR-9 was amended. A Manager's nomination
+			// writes it; a Commissioner's does not, which is asserted in the
+			// exemption describe below.
+			'claim-slot',
 			'commit'
 		]);
 	});
@@ -620,10 +643,12 @@ describe('placeNomination — a claim-table conflict', () => {
 		const harness = fakeGateway({
 			pool: [JALEN, SENGUN],
 			events: [opened()],
+			// The Slot constraint moved to its own table when FR-9 was amended,
+			// and so did the name `classifyNominationConflict` matches on.
 			throwPg: {
-				on: /^insert into open_nominations/i,
+				on: /^insert into nomination_slots/i,
 				code: '23505',
-				constraint: 'open_nominations_team_id_key'
+				constraint: 'nomination_slots_pkey'
 			},
 			eventsAfterRollback: [opened(), nominated(2, 'p-2', 'Alperen Sengun', 't-1', 'Lakers')]
 		});
@@ -950,21 +975,21 @@ function appended(seq: number, type: string, payload: unknown): AppendedEvent {
 	};
 }
 
-describe('releaseNomination — the claim row is deleted when the Auction closes', () => {
-	it('issues exactly ONE delete for one close, keyed on the Player as a parameter', async () => {
+describe('releaseNomination — a close ends the seat, a win ends the Slot', () => {
+	it('issues ONE delete per claim for one close — the seat by Player, the Slot by winner', async () => {
 		const harness = fakeGateway({});
 
 		await releaseNomination(harness.client, [
 			appended(50, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1' }))
 		]);
 
-		expect(harness.order).toEqual(['release-nomination']);
-		// The Player id is a bound parameter, never interpolated into the SQL
-		// text — the same discipline every other statement in this module keeps.
-		expect(harness.params).toEqual([['p-1']]);
+		expect(harness.order).toEqual(['release-nomination', 'release-slot']);
+		// Both ids are bound parameters, never interpolated into the SQL text —
+		// the same discipline every other statement in this module keeps.
+		expect(harness.params).toEqual([['p-1'], [CLOSED_TEAM_ID]]);
 	});
 
-	it('keys on the Player ALONE — the Team is never named in the statement', async () => {
+	it('keys the seat delete on the Player ALONE and the Slot delete on the WINNER', async () => {
 		const harness = fakeGateway({});
 
 		await releaseNomination(harness.client, [
@@ -975,10 +1000,13 @@ describe('releaseNomination — the claim row is deleted when the Auction closes
 			)
 		]);
 
-		// The Slot frees whoever won, so the delete carries one parameter and
-		// it is the Player. A team id here would be the wrong key.
-		expect(harness.params).toEqual([['p-1']]);
+		// One parameter each, and they are different keys into different
+		// tables: the board seat belongs to the Player, the Nomination Slot to
+		// the Team that won. Neither statement names the NOMINATOR, who is not
+		// on the close at all and whose Slot this does not touch.
+		expect(harness.params).toEqual([['p-1'], ['t-9']]);
 		expect(harness.params[0]).toHaveLength(1);
+		expect(harness.params[1]).toHaveLength(1);
 	});
 
 	it('issues NO statement for a NominationPlaced — a claim is not released by being written', async () => {
@@ -999,7 +1027,7 @@ describe('releaseNomination — the claim row is deleted when the Auction closes
 	});
 
 	it.each([AUCTION_OPENED_EVENT, 'BidPlaced', 'ImportPromoted'])(
-		'issues no statement for %s either — only a close releases',
+		'issues no statement for %s either — only an ending event releases',
 		async (type: string) => {
 			const harness = fakeGateway({});
 			await releaseNomination(harness.client, [appended(50, type, { fantraxPlayerId: 'p-1' })]);
@@ -1017,20 +1045,43 @@ describe('releaseNomination — the claim row is deleted when the Auction closes
 		const harness = fakeGateway({});
 
 		await releaseNomination(harness.client, [
-			appended(50, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1' })),
+			appended(50, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1', teamId: 't-a' })),
 			appended(51, NOMINATION_PLACED_EVENT, { fantraxPlayerId: 'p-3', teamId: 't-3' }),
-			appended(52, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-2' }))
+			appended(52, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-2', teamId: 't-b' }))
 		]);
 
-		expect(harness.order).toEqual(['release-nomination', 'release-nomination']);
-		expect(harness.params).toEqual([['p-1'], ['p-2']]);
+		expect(harness.order).toEqual([
+			'release-nomination',
+			'release-slot',
+			'release-nomination',
+			'release-slot'
+		]);
+		expect(harness.params).toEqual([['p-1'], ['t-a'], ['p-2'], ['t-b']]);
+	});
+
+	it('deletes the SEAT but no Slot for a termination — nobody won, so nobody pays one back', async () => {
+		// The whole shape of the amended FR-9 at the data layer. A Slot row
+		// deleted here would put the table and the fold in permanent
+		// disagreement: `nominationsReducer` leaves `byTeam` untouched on a
+		// termination, and an insert-only log can never be replayed to put a
+		// deleted claim back.
+		const harness = fakeGateway({});
+
+		await releaseNomination(harness.client, [
+			appended(50, AUCTION_TERMINATED_EVENT, { fantraxPlayerId: 'p-1' })
+		]);
+
+		expect(harness.order).toEqual(['release-nomination']);
+		expect(harness.order).not.toContain('release-slot');
+		expect(harness.params).toEqual([['p-1']]);
 	});
 
 	// The write half of the release must skip exactly what the fold skips.
-	// Both read the close through the core's `readClosedPlayerId`, so this
-	// table and the fold's malformed-close table in `tests/core/nomination.test.ts`
+	// Both read the close through the core's `readClosedFacts`, so this table
+	// and the fold's malformed-close table in `tests/core/nomination.test.ts`
 	// cannot drift apart: a close the fold tolerates must never abort the
-	// transaction appending it, and one the fold skips must never delete a row.
+	// transaction appending it, and one the fold skips must never delete a row
+	// — of either kind.
 	it.each([
 		['not an object', 'nonsense'],
 		['null', null],
@@ -1050,17 +1101,17 @@ describe('releaseNomination — the claim row is deleted when the Auction closes
 	});
 
 	it('skips a malformed close but still releases a well-formed one in the same batch', async () => {
-		// One unusable row in the batch must not cost the Slot of a Player
+		// One unusable row in the batch must not cost the release of a Player
 		// whose close IS readable.
 		const harness = fakeGateway({});
 
 		await releaseNomination(harness.client, [
 			appended(50, AUCTION_CLOSED_EVENT, null),
-			appended(51, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-2' }))
+			appended(51, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-2', teamId: 't-b' }))
 		]);
 
-		expect(harness.order).toEqual(['release-nomination']);
-		expect(harness.params).toEqual([['p-2']]);
+		expect(harness.order).toEqual(['release-nomination', 'release-slot']);
+		expect(harness.params).toEqual([['p-2'], ['t-b']]);
 	});
 
 	it('is idempotent: a Player with no claim row simply affects zero rows, no throw', async () => {
@@ -1082,18 +1133,25 @@ describe('releaseNomination — the claim row is deleted when the Auction closes
 			])
 		).resolves.toBeUndefined();
 
-		expect(harness.order).toEqual(['release-nomination', 'release-nomination']);
+		expect(harness.order).toEqual([
+			'release-nomination',
+			'release-slot',
+			'release-nomination',
+			'release-slot'
+		]);
 	});
 
-	it('never SELECTS from the claim table — the Slot stays a fold of the log', async () => {
+	it('never SELECTS from either claim table — the Slot stays a fold of the log', async () => {
 		const harness = fakeGateway({});
 		await releaseNomination(harness.client, [
 			appended(50, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1' }))
 		]);
-		// The fake has no read branch for `open_nominations` at all and throws
-		// on any statement it does not recognise, so a select would have failed
-		// this test rather than passing unnoticed.
-		expect(harness.order.filter((s) => s === 'release-nomination')).toHaveLength(1);
+		// The fake has no read branch for `open_nominations` or
+		// `nomination_slots` at all and throws on any statement it does not
+		// recognise, so a select would have failed this test rather than
+		// passing unnoticed.
+		expect(harness.order.filter((entry) => entry === 'release-nomination')).toHaveLength(1);
+		expect(harness.order.filter((entry) => entry === 'release-slot')).toHaveLength(1);
 		expect(harness.order).not.toContain('read-log');
 	});
 
@@ -1105,6 +1163,7 @@ describe('releaseNomination — the claim row is deleted when the Auction closes
 		await placeNomination(harness.gateway, ACTOR, 'p-1', DEVICE_CLASS);
 
 		expect(harness.order).not.toContain('release-nomination');
+		expect(harness.order).not.toContain('release-slot');
 		expect(harness.order).toEqual([
 			'begin',
 			'lock',
@@ -1113,6 +1172,7 @@ describe('releaseNomination — the claim row is deleted when the Auction closes
 			'read-contract',
 			'append-event',
 			'claim-nomination',
+			'claim-slot',
 			'commit'
 		]);
 	});

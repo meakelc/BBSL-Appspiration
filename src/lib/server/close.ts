@@ -25,10 +25,15 @@
  *
  * **The ONE registered projection is `releaseNomination`, unchanged.** Story
  * 2.3 shipped that delete tested and deliberately unregistered, saying in as
- * many words that 3.4 would be a one-line registration. It is. The Slot's
- * release itself is not this module's doing either way —
- * `nominationsReducer` frees it by folding the same event — and the delete
- * exists so the claim table and the log agree about a Slot that is now free.
+ * many words that 3.4 would be a one-line registration. It is. Neither
+ * release is this module's doing — `nominationsReducer` frees both by folding
+ * the same event — and the deletes exist so the claim tables and the log agree
+ * about what is now free.
+ *
+ * On THIS path it issues two: the closed Player's board seat, and the winning
+ * Team's Nomination Slot. A close is the only event that frees a Slot at all
+ * (FR-9, amended), and it frees the WINNER's — very often a Slot spent
+ * nominating somebody else entirely, and never the nominator's for losing.
  *
  * **A Minimum-Bid Contention is DRAWN and then closed, in one transaction**
  * (Story 3.6). `loadCloseState` reads the sealed seed on this transaction's
