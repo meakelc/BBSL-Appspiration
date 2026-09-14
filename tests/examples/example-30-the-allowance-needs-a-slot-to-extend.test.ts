@@ -164,7 +164,7 @@ describe('§10 example 30 — the allowance needs a slot to extend', () => {
 			state: STATE,
 			fantraxPlayerId: 'p-1',
 			viewerTeamId: 't-t',
-			amountText: '5000000',
+			amountText: '5',
 			confirmed: true,
 			now: ''
 		});

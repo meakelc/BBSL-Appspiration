@@ -418,6 +418,36 @@ describe('the Auction page — the bid control (AC7)', () => {
 		expect(PAGE).toContain('parseMoney(control.leadingAmount)');
 	});
 
+	it('renders the amount field in MILLIONS, with the unit as an adornment', () => {
+		// The field reads `$10.5m` because a run of eight zeros is not legible
+		// and nothing here is ever below a million. The `$` and the `m` are
+		// adornments beside the value rather than characters in it, so there is
+		// no currency symbol to delete half of and nothing to re-format under
+		// the caret while a figure is being entered.
+		expect(PAGE).toMatch(/<div class="bid-amount">/);
+		expect(PAGE).toMatch(/<span class="bid-affix" aria-hidden="true">\$<\/span>/);
+		expect(PAGE).toMatch(/<span class="bid-affix" aria-hidden="true">m<\/span>/);
+		// The unit is hidden from the accessibility tree above, so the LABEL
+		// has to carry it — that is where a screen reader expects to be told
+		// what a field takes.
+		expect(PAGE).toMatch(/for="auction-bid-amount">\s*Your Bid, in millions of dollars/);
+		// A decimal point is now typed, so the numeric keypad has to offer one.
+		expect(PAGE).toMatch(/inputmode="decimal"/);
+		expect(PAGE).not.toMatch(/inputmode="numeric"/);
+	});
+
+	it('writes the pre-filled figure into the field through the CORE, never by hand', () => {
+		// `bidAmountField` is `readBidAmount`'s inverse, so the field can never
+		// be seeded with a figure it would then refuse. The page holds no
+		// renderer and no parser of its own at either end.
+		expect(PAGE_CODE).toContain('bidAmountField');
+		expect(PAGE_CODE).toMatch(/amount = bidAmountField\(parseMoney\(control\.minimumLegal\)\)/);
+		expect(PAGE_CODE).not.toMatch(/String\(control\.minimumLegal\)/);
+		// And no unit conversion on this page: a `1_000_000` here would be a
+		// second answer to what a million is.
+		expect(PAGE_CODE).not.toMatch(/1e6|1_?000_?000/);
+	});
+
 	it('re-implements no gate arithmetic of its own', () => {
 		// No comparison against an increment, a grid or a minimum anywhere in
 		// the component: it has two facts and a function that reads them.
@@ -1035,7 +1065,7 @@ describe('load — gated on the destination before the database is touched', () 
 
 describe('actions.bid — gated the same way, and never the check itself', () => {
 	it('places a Bid for a confirmed submission, and reports what landed', async () => {
-		const result = await bidAction(bidEvent({ amount: '9000000', confirm: 'yes' }));
+		const result = await bidAction(bidEvent({ amount: '9', confirm: 'yes' }));
 
 		expect(stub.bids).toEqual([
 			{
@@ -1056,7 +1086,7 @@ describe('actions.bid — gated the same way, and never the check itself', () =>
 
 	it('refuses outside the Auction Phase with 403, and never opens a transaction', async () => {
 		await expectRefusal(
-			() => bidAction(bidEvent({ amount: '9000000', confirm: 'yes' }, undefined, SETUP_PHASE)),
+			() => bidAction(bidEvent({ amount: '9', confirm: 'yes' }, undefined, SETUP_PHASE)),
 			LIVE_DESTINATION_REFUSAL_STATUS
 		);
 		expect(stub.bids).toEqual([]);
@@ -1066,7 +1096,7 @@ describe('actions.bid — gated the same way, and never the check itself', () =>
 		await expectRefusal(
 			() =>
 				bidAction(
-					bidEvent({ amount: '9000000', confirm: 'yes' }, { kind: 'signed-out' }, AUCTION_PHASE)
+					bidEvent({ amount: '9', confirm: 'yes' }, { kind: 'signed-out' }, AUCTION_PHASE)
 				),
 			LIVE_DESTINATION_REFUSAL_STATUS
 		);
@@ -1074,7 +1104,7 @@ describe('actions.bid — gated the same way, and never the check itself', () =>
 	});
 
 	it('refuses an unusable amount with 400, worded by the core, before any transaction opens', async () => {
-		for (const amount of ['', '   ', 'abc', '8.5', '8,500,000', '$9000000']) {
+		for (const amount of ['', '   ', 'abc', '8.5.1', '8,500,000', '9 000 000']) {
 			stub.bids.length = 0;
 			const result = await bidAction(bidEvent({ amount, confirm: 'yes' }));
 			expect(result['status'], amount).toBe(400);
@@ -1086,7 +1116,7 @@ describe('actions.bid — gated the same way, and never the check itself', () =>
 	});
 
 	it('refuses a NEGATIVE amount with its own sentence — it is a whole number of dollars', async () => {
-		const result = await bidAction(bidEvent({ amount: '-500000', confirm: 'yes' }));
+		const result = await bidAction(bidEvent({ amount: '-0.5', confirm: 'yes' }));
 		expect(result['status']).toBe(400);
 		expect((result['data'] as { notice: string }).notice).toBe(
 			bidRefusalDetail({ kind: 'negative_amount' })
@@ -1095,7 +1125,7 @@ describe('actions.bid — gated the same way, and never the check itself', () =>
 	});
 
 	it('refuses an unconfirmed submit with 400 — bidding is a deliberate two-part act', async () => {
-		const result = await bidAction(bidEvent({ amount: '9000000' }));
+		const result = await bidAction(bidEvent({ amount: '9' }));
 		expect(result['status']).toBe(400);
 		expect((result['data'] as { notice: string }).notice).toBe(
 			bidRefusalDetail({ kind: 'unconfirmed' })
@@ -1105,7 +1135,7 @@ describe('actions.bid — gated the same way, and never the check itself', () =>
 
 	it('refuses an unbound actor with 400, and never opens a transaction', async () => {
 		const result = await bidAction(
-			bidEvent({ amount: '9000000', confirm: 'yes' }, { kind: 'registered', manager: UNBOUND_MANAGER })
+			bidEvent({ amount: '9', confirm: 'yes' }, { kind: 'registered', manager: UNBOUND_MANAGER })
 		);
 		expect(result['status']).toBe(400);
 		expect((result['data'] as { notice: string }).notice).toBe(
@@ -1117,7 +1147,7 @@ describe('actions.bid — gated the same way, and never the check itself', () =>
 	it('classifies the device class from the header, at the transport boundary', async () => {
 		const agent = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)';
 		await bidAction(
-			bidEvent({ amount: '9000000', confirm: 'yes' }, undefined, AUCTION_PHASE, {
+			bidEvent({ amount: '9', confirm: 'yes' }, undefined, AUCTION_PHASE, {
 				'user-agent': agent
 			})
 		);
@@ -1131,14 +1161,14 @@ describe('actions.bid — gated the same way, and never the check itself', () =>
 			kind: 'rejected',
 			reason: { refusal, detail: bidRefusalDetail(refusal) }
 		};
-		const result = await bidAction(bidEvent({ amount: '9000000', confirm: 'yes' }));
+		const result = await bidAction(bidEvent({ amount: '9', confirm: 'yes' }));
 		expect(result['status']).toBe(409);
 		expect((result['data'] as { notice: string }).notice).toBe(bidRefusalDetail(refusal));
 	});
 
 	it('falls back to the stated no-reason sentence when a rejection carries none', async () => {
 		stub.outcome = { kind: 'rejected' };
-		const result = await bidAction(bidEvent({ amount: '9000000', confirm: 'yes' }));
+		const result = await bidAction(bidEvent({ amount: '9', confirm: 'yes' }));
 		expect(result['status']).toBe(409);
 		expect((result['data'] as { notice: string }).notice).toBe(
 			bidRefusalDetail({ kind: 'unrecorded' })
@@ -1147,7 +1177,7 @@ describe('actions.bid — gated the same way, and never the check itself', () =>
 
 	it('takes the Team from the session, never from a posted field', async () => {
 		await bidAction(
-			bidEvent({ amount: '9000000', confirm: 'yes', teamId: 't-999', managerId: 'm-999' })
+			bidEvent({ amount: '9', confirm: 'yes', teamId: 't-999', managerId: 'm-999' })
 		);
 		expect(stub.bids[0]?.actor).toEqual({ managerId: 'm-2', teamId: 't-2', teamName: 'Lakers' });
 	});
@@ -1203,9 +1233,13 @@ describe('the Auction page — layout and token discipline', () => {
 			}
 		}
 		// 22px and its 2px optical nudge size a native checkbox's own box;
-		// 1px and -1px are the visually-hidden clipping rectangle. Neither has
-		// a token in tokens.css, and inventing one is an Ask First item.
-		expect([...literals].sort()).toEqual(['-1px', '1px', '22px', '2px'].sort());
+		// 1px and -1px are the visually-hidden clipping rectangle. 5ch is the
+		// bid field, sized to the widest figure it can hold — four digits and
+		// a decimal point, `165.5` being the whole Salary Cap and a half — in
+		// the one unit that measures digits rather than pixels. None of the
+		// four has a token in tokens.css, which sizes controls and spacing and
+		// not text measures, and inventing one is an Ask First item.
+		expect([...literals].sort()).toEqual(['-1px', '1px', '22px', '2px', '5ch'].sort());
 	});
 
 	it('conveys no state by colour alone — every fact on the page is a sentence', () => {
@@ -1604,7 +1638,7 @@ describe('the bid action — a refusal carries the figures it was judged against
 			}
 		};
 
-		const result = await bidAction(bidEvent({ amount: '10500000', confirm: 'yes' }));
+		const result = await bidAction(bidEvent({ amount: '10.5', confirm: 'yes' }));
 		const data = result['data'] as { gates: unknown; figuresAt: unknown; delta: string };
 
 		// FR-13: refused with the CURRENT figures shown — the ones the locked
@@ -1625,7 +1659,7 @@ describe('the bid action — a refusal carries the figures it was judged against
 			}
 		};
 
-		const result = await bidAction(bidEvent({ amount: '10500000', confirm: 'yes' }));
+		const result = await bidAction(bidEvent({ amount: '10.5', confirm: 'yes' }));
 		const data = result['data'] as { gates: unknown; figuresAt: unknown; delta: string };
 
 		// A panel handed empty figures would print a breakdown of nothing.

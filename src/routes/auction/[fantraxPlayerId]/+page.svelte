@@ -71,6 +71,7 @@
 	import { parseMoney } from '$lib/core/money.ts';
 	import {
 		BID_CANCELLED_LABEL,
+		bidAmountField,
 		bidAppendedSentence,
 		bidCancelledSentence,
 		bidControlState,
@@ -349,15 +350,24 @@
 	const appended = $derived(bidForm?.appended ?? null);
 
 	/**
-	 * The typed amount. Typing is not bidding: the server decides.
+	 * The typed amount, IN MILLIONS — `10.5` is the `$10.5m` the field reads.
+	 *
+	 * The value holds the figure alone: the `$` and the `m` beside it are
+	 * fixed adornments in the markup rather than characters in this string, so
+	 * a Manager cannot delete half of a currency symbol, and the amount that
+	 * posts is the amount they can see they typed. `bidAmountField` is what
+	 * writes a figure into this language and `readBidAmount` is what reads it
+	 * back; both live in the core, so the page holds no parser of its own.
 	 *
 	 * Seeded at declaration rather than only in an effect, because effects do
 	 * not run during server rendering — an empty initial value would ship a
-	 * first paint whose control said "the amount is not a whole number of
-	 * dollars" about a field the Manager has not touched.
+	 * first paint whose control said the field could not read the amount, about
+	 * a field the Manager has not touched.
 	 */
 	// svelte-ignore state_referenced_locally
-	let amount = $state(String((data.auction as AuctionRead as Auction).bidControl?.minimumLegal ?? 0));
+	let amount = $state(
+		bidAmountField(parseMoney((data.auction as AuctionRead as Auction).bidControl?.minimumLegal ?? 0))
+	);
 
 	/** The confirmation. Ticking it is not bidding either. */
 	let confirmed = $state(false);
@@ -369,7 +379,7 @@
 		// guard is here rather than in the markup because an effect runs
 		// regardless of what is rendered.
 		if (closed !== null) return;
-		amount = String(control.minimumLegal);
+		amount = bidAmountField(parseMoney(control.minimumLegal));
 	});
 
 	/**
@@ -1188,7 +1198,7 @@
 
 				<div class="bid-row">
 					<label class="visually-hidden" for="auction-bid-amount">
-						Your Bid, in whole dollars
+						Your Bid, in millions of dollars
 					</label>
 					<!-- The FIELD is disabled on the standing condition, not just the
 					     submit: when this Auction will take no Bid from your Team at
@@ -1204,19 +1214,36 @@
 					     the app cannot confirm the figures beside the field, there is
 					     nothing to type either — and unlike the two above, it clears
 					     by itself the moment the server is reachable again. -->
-					<input
-						id="auction-bid-amount"
-						class="bid-amount"
-						name="amount"
-						type="text"
-						inputmode="numeric"
-						autocomplete="off"
-						aria-describedby={allowanceTrade === null
-							? 'auction-bid-availability'
-							: 'auction-bid-availability auction-bid-allowance'}
-						disabled={!control.available || expired || staleBlocked}
-						bind:value={amount}
-					/>
+					<!-- The `$` and the `m` are ADORNMENTS, not characters in the
+					     value. The field reads `$10.5m` because eight zeros in a
+					     row are not legible and nothing here is ever below a
+					     million, but the value itself is `10.5` — so there is no
+					     currency symbol to delete half of, no suffix to retype,
+					     and nothing to re-format under the caret while a figure
+					     is being entered. The unit is `aria-hidden` and carried by
+					     the label instead, which is where a screen reader expects
+					     to be told what a field takes.
+
+					     The box around all three is the wrapper; the input inside
+					     it is borderless and takes the focus ring on the wrapper's
+					     behalf, so the three read as one control. -->
+					<div class="bid-amount">
+						<span class="bid-affix" aria-hidden="true">$</span>
+						<input
+							id="auction-bid-amount"
+							class="bid-amount-field"
+							name="amount"
+							type="text"
+							inputmode="decimal"
+							autocomplete="off"
+							aria-describedby={allowanceTrade === null
+								? 'auction-bid-availability'
+								: 'auction-bid-availability auction-bid-allowance'}
+							disabled={!control.available || expired || staleBlocked}
+							bind:value={amount}
+						/>
+						<span class="bid-affix" aria-hidden="true">m</span>
+					</div>
 					<!-- The second part of the act, between the amount and the
 					     control that commits it. The consequence sentence that
 					     stood beside this box, and again as a paragraph above the
@@ -1440,8 +1467,15 @@
 		width: 100%;
 	}
 
+	/*
+	 * The box is the WRAPPER, not the input: the `$` and the `m` sit inside
+	 * the border with the text so the three read as one control rather than as
+	 * a field with labels loose beside it.
+	 */
 	.bid-amount {
-		flex: 1 1 10ch;
+		display: flex;
+		align-items: center;
+		flex: 0 0 auto;
 		min-height: var(--control-height);
 		padding: 0 var(--space-row-gap);
 		color: var(--color-text);
@@ -1451,6 +1485,80 @@
 		font-family: var(--font-ui);
 		font-size: var(--size-18);
 		font-variant-numeric: var(--numerals);
+	}
+
+	/*
+	 * The focus ring belongs to the whole control. `global.css` puts it on the
+	 * input itself, which would draw it INSIDE the border above and around
+	 * only the digits — so it is suppressed there and re-raised here, on the
+	 * box a Manager can actually see.
+	 */
+	.bid-amount:focus-within {
+		outline: 2px solid var(--color-border-interactive);
+		outline-offset: 2px;
+	}
+
+	/*
+	 * Disabled is a standing condition on the whole control, and the input is
+	 * the only part of it the browser greys by itself. Without this the box
+	 * and its two adornments would keep reading as live beside a field that is
+	 * not — and the field disabling is the visible answer for every reason the
+	 * hidden sentence below states.
+	 */
+	.bid-amount:has(.bid-amount-field:disabled) {
+		border-color: var(--color-text-disabled);
+		cursor: not-allowed;
+	}
+
+	.bid-amount:has(.bid-amount-field:disabled) .bid-affix {
+		color: var(--color-text-disabled);
+	}
+
+	/*
+	 * The text itself: no border, no background, no ring of its own — every
+	 * one of those belongs to the wrapper. It grows to fill the box so the
+	 * caret lands in the figure wherever the box is clicked.
+	 */
+	/*
+	 * Sized to the widest figure the field can hold and no wider. In millions
+	 * a Bid is at most four digits and one decimal point — `165.5` is the
+	 * whole Salary Cap and a half — so the box was sitting at more than twice
+	 * the width of anything that will ever be typed into it. `ch` is the
+	 * measure because the content is digits: with the tabular numerals above
+	 * every one of them is exactly 1ch, the point is narrower, and the spare
+	 * fraction is the caret's.
+	 */
+	.bid-amount-field {
+		flex: 0 0 auto;
+		width: 5ch;
+		padding: 0;
+		color: var(--color-text);
+		background-color: var(--color-surface-sunken);
+		border: 0;
+		font-family: var(--font-ui);
+		font-size: var(--size-18);
+		font-variant-numeric: var(--numerals);
+	}
+
+	.bid-amount-field:disabled {
+		color: var(--color-text-disabled);
+		background-color: var(--color-surface-sunken);
+		cursor: not-allowed;
+	}
+
+	.bid-amount-field:focus-visible {
+		outline: none;
+	}
+
+	/*
+	 * The unit, in the same size as the figure but stepped back from it: it is
+	 * a fixed part of the control and never something a Manager has to read
+	 * twice. Not selectable, so dragging across the figure copies the figure.
+	 */
+	.bid-affix {
+		flex: 0 0 auto;
+		color: var(--color-text-secondary);
+		user-select: none;
 	}
 
 	.bid-row .control-manager {

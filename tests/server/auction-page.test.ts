@@ -1876,7 +1876,7 @@ describe('loadAuctionPage — a Minimum-Bid Contention (Story 3.2, AC7)', () => 
 			},
 			fantraxPlayerId: 'p-1',
 			viewerTeamId: 't-2',
-			amountText: '1000000',
+			amountText: '1',
 			confirmed: true,
 			now: control.figuresAt
 		});

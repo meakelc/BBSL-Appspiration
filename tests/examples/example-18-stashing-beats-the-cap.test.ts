@@ -171,7 +171,7 @@ describe('§10 example 18 — stashing beats the cap, on purpose', () => {
 			state: STATE,
 			fantraxPlayerId: 'p-stash',
 			viewerTeamId: 't-p',
-			amountText: '1500000',
+			amountText: '1.5',
 			confirmed: true,
 			now: ''
 		});

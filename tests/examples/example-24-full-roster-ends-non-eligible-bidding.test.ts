@@ -201,7 +201,7 @@ describe('§10 example 24 — a full roster ends non-eligible bidding', () => {
 			state: STATE,
 			fantraxPlayerId: 'p-1',
 			viewerTeamId: 't-r',
-			amountText: '1500000',
+			amountText: '1.5',
 			confirmed: true,
 			now: ''
 		});

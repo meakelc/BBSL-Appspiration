@@ -80,6 +80,7 @@ import {
 } from './projection/nominations.ts';
 import type { OpenNominations } from './projection/nominations.ts';
 import {
+	bidAmountField,
 	bidControlState,
 	bidGateReport,
 	bidRefusalDelta,
@@ -280,7 +281,7 @@ export function reEntryFor(input: {
 		state: input.state,
 		fantraxPlayerId: input.fantraxPlayerId,
 		viewerTeamId: input.viewerTeamId,
-		amountText: String(nextLegal),
+		amountText: bidAmountField(nextLegal),
 		confirmed: true,
 		now: input.now
 	});
