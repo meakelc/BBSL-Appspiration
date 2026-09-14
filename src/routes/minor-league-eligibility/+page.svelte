@@ -19,8 +19,10 @@
 	type PoolRow = {
 		readonly fantraxPlayerId: string;
 		readonly playerName: string;
-		readonly positions: string;
-		readonly nbaTeam: string;
+		/** Finished cell text: what this Player is. Printed, never re-worded. */
+		readonly detail: string;
+		/** Finished cell text: the Free Agent pool, or the Team holding them. */
+		readonly heldBy: string;
 		readonly eligible: boolean;
 		/** The consequence sentence, worded server-side. Printed, never re-worded. */
 		readonly consequence: string;
@@ -69,11 +71,12 @@
 		     nothing to flag and NO control is offered. What is outstanding is
 		     named — Import — rather than counted. -->
 		<section class="panel">
-			<p class="section-label">No Players in the pool</p>
+			<p class="section-label">No Players to set this on</p>
 			<p class="prose">
-				The Free Agent pool is empty, so there is no Player to set Minor League Eligibility
-				for. Import is what is outstanding: promote the thirty-one sources on the Import
-				screen, and every promoted Player will be listed here.
+				The Free Agent pool is empty and no Roster holds a Contract, so there is no Player to
+				set Minor League Eligibility for. Import is what is outstanding: promote the
+				thirty-one sources on the Import screen, and every promoted Player — pooled or
+				rostered — will be listed here.
 			</p>
 		</section>
 	{:else}
@@ -84,6 +87,12 @@
 				the default is not eligible. Tick the Players to change, then state the direction.
 				A Player already at the value you ask for is reported as unchanged and records no
 				event. Once the auction opens, this is refused.
+			</p>
+			<p class="prose">
+				Rostered Contracts are listed alongside the Free Agent pool, because the flag asks
+				the same question of both: whether that Player may occupy a Minor League Slot. A
+				Contract the league has already placed in one needs nothing set here — the app has
+				observed it there, and that is enough on its own.
 			</p>
 
 			<!-- A disabled control ALWAYS states its reason, and the reason is
@@ -111,7 +120,7 @@
 						onchange={toggleAll}
 					/>
 					<span class="prose">
-						Select every Player in the pool ({players.length} Players).
+						Select every Player listed ({players.length} Players).
 					</span>
 				</label>
 
@@ -124,13 +133,15 @@
 					a real table with `scope` headers.
 				-->
 				<table class="pool-table">
-					<caption class="section-label">The Free Agent pool</caption>
+					<caption class="section-label">
+						The Free Agent pool and every rostered Contract
+					</caption>
 					<thead>
 						<tr>
 							<th scope="col">Selected</th>
 							<th scope="col">Player</th>
-							<th scope="col">Positions</th>
-							<th scope="col">NBA team</th>
+							<th scope="col">Detail</th>
+							<th scope="col">Held by</th>
 							<th scope="col">Minor League Eligibility</th>
 						</tr>
 					</thead>
@@ -150,8 +161,8 @@
 									</label>
 								</td>
 								<th scope="row" class="cell-player">{player.playerName}</th>
-								<td class="cell-detail">Positions: {player.positions}</td>
-								<td class="cell-detail">NBA team: {player.nbaTeam}</td>
+								<td class="cell-detail">{player.detail}</td>
+								<td class="cell-detail">{player.heldBy}</td>
 								<td class="cell-state">
 									<span class="state-label">
 										{player.eligible ? 'Minor League Eligible' : 'Not Minor League Eligible'}

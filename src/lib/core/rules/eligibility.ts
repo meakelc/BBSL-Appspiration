@@ -7,8 +7,8 @@
  *   1. **The no-op.** A set/unset that would not change a Player's current
  *      value appends NO event and is reported as unchanged, so "before and
  *      after values" always mean something in the Audit Log.
- *   2. **The unknown id.** A Player id not in the live pool is refused BY
- *      NAME, never silently skipped.
+ *   2. **The unknown id.** A Player id that names neither a pooled Player nor
+ *      a rostered Contract is refused BY NAME, never silently skipped.
  *   3. **The consequence.** `ELIGIBILITY_CONSEQUENCE` is the one statement of
  *      what the flag does to a Team; the surface prints a sentence built from
  *      it rather than showing a bare checkbox (EXPERIENCE.md's voice rule:
@@ -23,11 +23,21 @@
  */
 
 /**
- * One pooled Player as the planner sees them: identity, the name a refusal
- * or a row sentence uses, and their CURRENT eligibility — which the caller
- * takes from the fold of the log, never from a column it read separately.
+ * One Player the flag can be set on, as the planner sees them: identity, the
+ * name a refusal or a row sentence uses, and their CURRENT eligibility —
+ * which the caller takes from the fold of the log, never from a column it
+ * read separately.
+ *
+ * **A candidate is a pooled Player OR a rostered Contract.** The flag answers
+ * "may this Player occupy a Minor League Slot", and FR-44 asks that of a
+ * Contract already on a Roster as readily as of one still in the pool:
+ * `mayOccupyMinorLeague` (`rules/roster-rearrange.ts`) is the union of this
+ * flag and the observation fold, so a rostered Player who has never been
+ * observed in a Minor League Slot has no other way for the app to be told he
+ * may occupy one. This type is deliberately indifferent to which of the two a
+ * candidate is, and nothing downstream of here branches on it.
  */
-export type PooledPlayerEligibility = {
+export type EligibilityCandidate = {
 	readonly fantraxPlayerId: string;
 	readonly playerName: string;
 	readonly eligible: boolean;
@@ -94,16 +104,24 @@ export function eligibilityRowSentence(playerName: string, eligible: boolean): s
  * before/after pair in the Audit Log whose `before` was already stale by the
  * time it was written.
  *
- * Order is the submission's order for `unknownIds`, and the pool's order for
- * the other two — the pool arrives sorted by name, so the sentences come out
+ * Order is the submission's order for `unknownIds`, and the candidates' order
+ * for the other two — they arrive sorted by name, so the sentences come out
  * in a stated order rather than the order a form serialised its checkboxes.
+ *
+ * A candidate id appearing twice — which the caller's read must not produce,
+ * and which this function must not depend on it never producing — collapses
+ * to its first occurrence, so one Player yields at most one change or one
+ * no-op no matter how many rows named him.
  */
 export function planEligibilityChanges(
-	pool: readonly PooledPlayerEligibility[],
+	candidates: readonly EligibilityCandidate[],
 	ids: readonly string[],
 	target: boolean
 ): EligibilityPlan {
-	const byId = new Map(pool.map((player) => [player.fantraxPlayerId, player]));
+	const byId = new Map<string, EligibilityCandidate>();
+	for (const candidate of candidates) {
+		if (!byId.has(candidate.fantraxPlayerId)) byId.set(candidate.fantraxPlayerId, candidate);
+	}
 
 	const seen = new Set<string>();
 	const requested: string[] = [];
@@ -117,7 +135,9 @@ export function planEligibilityChanges(
 
 	const changes: EligibilityChange[] = [];
 	const unchanged: UnchangedPlayer[] = [];
-	for (const player of pool) {
+	// `byId.values()` rather than `candidates`: a Map keeps insertion order, so
+	// this is still the caller's name order, with any duplicate id collapsed.
+	for (const player of byId.values()) {
 		if (!seen.has(player.fantraxPlayerId)) continue;
 		if (player.eligible === target) {
 			unchanged.push({
@@ -144,7 +164,7 @@ export function planEligibilityChanges(
  * Why an eligibility change was refused.
  *
  * `phase` and `unknown_players` are re-derived INSIDE the transaction, from
- * the log and the live pool respectively. The other three are decided by the
+ * the log and the live candidate set respectively. The other three are decided by the
  * route before the transaction opens: `empty_selection` because there is
  * nothing to decide about, `unstated_direction` because which way the change
  * was meant is unknowable from the submission, and `unbound_actor` because
@@ -186,8 +206,8 @@ export function eligibilityRefusalDetail(refusal: EligibilityRefusal): string {
 			);
 		case 'unknown_players':
 			return (
-				'The change was refused: no Player in the Free Agent pool carries ' +
-				`${refusal.fantraxPlayerIds.length === 1 ? 'this Fantrax id' : 'these Fantrax ids'}: ` +
+				'The change was refused: no Player in the Free Agent pool and no rostered ' +
+				`Contract carries ${refusal.fantraxPlayerIds.length === 1 ? 'this Fantrax id' : 'these Fantrax ids'}: ` +
 				`${refusal.fantraxPlayerIds.join(', ')}. Nothing was written.`
 			);
 		case 'empty_selection':

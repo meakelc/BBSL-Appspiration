@@ -28,11 +28,14 @@ type PoolPlayer = { id: string; name: string };
  */
 function fakeGateway(options: {
 	pool?: PoolPlayer[];
+	/** Rostered Contracts, which the candidate read unions in behind the pool. */
+	rosters?: PoolPlayer[];
 	events?: QueryResultRow[];
 	/** The first statement matching this pattern throws. */
 	throwOn?: RegExp;
 }) {
 	const pool = options.pool ?? [];
+	const rosters = options.rosters ?? [];
 	const order: string[] = [];
 	const appendedEvents: QueryResultRow[] = [];
 	/** The live `minor_league_eligible` column, as committed. */
@@ -62,12 +65,24 @@ function fakeGateway(options: {
 				return { rows: options.events ?? [] };
 			}
 			if (/^select fantrax_player_id, player_name/i.test(sql)) {
-				order.push('read-pool');
+				order.push('read-candidates');
+				// The real query is `distinct on (fantrax_player_id)` over
+				// free_agent_players UNION ALL team_rosters, pool first, then
+				// sorted by name. The fake reproduces all three properties, so a
+				// duplicate id and the name ordering are testable here.
+				expect(sql).toMatch(/free_agent_players/);
+				expect(sql).toMatch(/team_rosters/);
+				const byId = new Map<string, PoolPlayer>();
+				for (const player of [...pool, ...rosters]) {
+					if (!byId.has(player.id)) byId.set(player.id, player);
+				}
 				return {
-					rows: pool.map((player) => ({
-						fantrax_player_id: player.id,
-						player_name: player.name
-					}))
+					rows: [...byId.values()]
+						.sort((left, right) => left.name.localeCompare(right.name))
+						.map((player) => ({
+							fantrax_player_id: player.id,
+							player_name: player.name
+						}))
 				};
 			}
 			if (/^insert into auction_events/i.test(sql)) {
@@ -319,6 +334,102 @@ describe('setEligibility — setting the flag', () => {
 	});
 });
 
+describe('setEligibility — a rostered Contract is a candidate too', () => {
+	// FR-44: `mayOccupyMinorLeague` is the union of this flag and the
+	// observation fold, so a rostered Player the app has never seen in a Minor
+	// League Slot can only be admitted by setting the flag on him. Before this,
+	// his id was refused as unknown because the candidate read saw the pool
+	// alone.
+	it('sets the flag on a Player who is on a Roster and not in the pool', async () => {
+		const harness = fakeGateway({
+			pool: [{ id: 'p-pooled', name: 'Pooled Player' }],
+			rosters: [{ id: 'p-rostered', name: 'Rostered Contract' }]
+		});
+
+		const { outcome, plan } = await setEligibility(
+			harness.gateway,
+			ACTOR,
+			['p-rostered'],
+			true
+		);
+
+		expect(outcome.kind).toBe('accepted');
+		expect(plan?.changes.map((change) => change.fantraxPlayerId)).toEqual(['p-rostered']);
+		expect(plan?.unknownIds).toEqual([]);
+		expect(harness.appendedEvents).toHaveLength(1);
+		const payload = harness.appendedEvents[0]?.payload as MinorLeagueEligibilitySetPayload;
+		expect(payload.fantraxPlayerId).toBe('p-rostered');
+		expect(payload.before).toBe(false);
+		expect(payload.after).toBe(true);
+	});
+
+	it('leaves the column alone for a rostered id, because no pool row carries it', async () => {
+		const harness = fakeGateway({
+			pool: [{ id: 'p-pooled', name: 'Pooled Player' }],
+			rosters: [{ id: 'p-rostered', name: 'Rostered Contract' }]
+		});
+
+		await setEligibility(harness.gateway, ACTOR, ['p-rostered'], true);
+
+		// The projection statement still ran and still received the whole fold —
+		// the rostered id simply matches no row. The fold is the authority; the
+		// column is the pooled subset of it.
+		expect(harness.order).toContain('apply-projection');
+		expect(harness.state.column).toEqual(['p-rostered']);
+	});
+
+	it('sets pooled and rostered Players in ONE transaction, one event each', async () => {
+		const harness = fakeGateway({
+			pool: [{ id: 'p-pooled', name: 'Pooled Player' }],
+			rosters: [{ id: 'p-rostered', name: 'Rostered Contract' }]
+		});
+
+		const { outcome, plan } = await setEligibility(
+			harness.gateway,
+			ACTOR,
+			['p-pooled', 'p-rostered'],
+			true
+		);
+
+		expect(outcome.kind).toBe('accepted');
+		expect(plan?.changes).toHaveLength(2);
+		expect(harness.appendedEvents).toHaveLength(2);
+		expect(harness.order.filter((step) => step === 'commit')).toHaveLength(1);
+	});
+
+	it('still refuses an id that is in neither the pool nor a Roster', async () => {
+		const harness = fakeGateway({
+			pool: [{ id: 'p-pooled', name: 'Pooled Player' }],
+			rosters: [{ id: 'p-rostered', name: 'Rostered Contract' }]
+		});
+
+		const { outcome } = await setEligibility(harness.gateway, ACTOR, ['ghost'], true);
+
+		const rejection = rejectionOf(outcome);
+		expect(rejection.refusal.kind).toBe('unknown_players');
+		// The sentence names both halves, so it cannot read as "not in the pool"
+		// to a Commissioner who just ticked a rostered Player.
+		expect(rejection.detail).toContain('Free Agent pool');
+		expect(rejection.detail).toContain('rostered');
+		expect(harness.appendedEvents).toEqual([]);
+	});
+
+	it('writes ONE event for a Player the two tables both name', async () => {
+		// The tables are disjoint in practice; `distinct on` makes that a
+		// property of the query rather than a hope. Two rows for one Player
+		// would append a second event whose `before` was already stale.
+		const harness = fakeGateway({
+			pool: [{ id: 'p-both', name: 'Two Rows' }],
+			rosters: [{ id: 'p-both', name: 'Two Rows' }]
+		});
+
+		const { plan } = await setEligibility(harness.gateway, ACTOR, ['p-both'], true);
+
+		expect(plan?.changes).toHaveLength(1);
+		expect(harness.appendedEvents).toHaveLength(1);
+	});
+});
+
 describe('setEligibility — the refusals, re-derived inside the transaction', () => {
 	it('refuses an unknown Player id by name, and writes nothing', async () => {
 		const harness = fakeGateway({ pool: poolOf(2) });
@@ -388,7 +499,7 @@ describe('setEligibility — the refusals, re-derived inside the transaction', (
 		// The pure gate, driven directly, so the WORDING is asserted
 		// independently of a log that can reach it.
 		const refusal = refuseEligibilityChange(
-			{ phase: 'Auction', pool: [], eligible: new Set<string>() },
+			{ phase: 'Auction', candidates: [], eligible: new Set<string>() },
 			['p-00'],
 			{ changes: [], unchanged: [], unknownIds: ['p-00'] }
 		);
@@ -403,7 +514,7 @@ describe('setEligibility — the refusals, re-derived inside the transaction', (
 
 	it('refuses on the phase before it complains about an unknown id', () => {
 		const refusal = refuseEligibilityChange(
-			{ phase: 'Auction', pool: [], eligible: new Set<string>() },
+			{ phase: 'Auction', candidates: [], eligible: new Set<string>() },
 			[],
 			{ changes: [], unchanged: [], unknownIds: ['ghost'] }
 		);
@@ -431,10 +542,66 @@ describe('setEligibility — a failure mid-write', () => {
 });
 
 describe('loadEligibilityPool', () => {
-	function fakeClient(rows: unknown[] | null, error: { message: string } | null = null) {
-		const order = vi.fn(async () => ({ data: rows, error }));
+	/**
+	 * A table-aware fake PostgREST client. The list is now a union of three
+	 * reads — the pool, the Rosters and `auction_events` for the half no column
+	 * materialises — so a single `from()` stub would answer for all of them and
+	 * prove nothing about which table produced which row.
+	 */
+	function fakeClient(
+		rows: unknown[] | null,
+		error: { message: string } | null = null,
+		extras: {
+			rosters?: unknown[];
+			teams?: unknown[];
+			events?: unknown[];
+			rosterError?: { message: string };
+			teamError?: { message: string };
+		} = {}
+	) {
+		// Every read pages with `.range()`, so the fake serves slices and the
+		// "PostgREST caps a page at 1,000 rows" case is reproducible here.
+		const PAGE = 1000;
+		const pageOf = (source: unknown[]) => (from: number, to: number) =>
+			source.slice(from, Math.min(to + 1, from + PAGE));
+		const range = vi.fn(async (from: number, to: number) => {
+			if (error !== null) return { data: null, error };
+			return { data: pageOf(rows ?? [])(from, to), error: null };
+		});
+		const order = vi.fn(() => ({ range }));
 		const select = vi.fn(() => ({ order }));
-		const from = vi.fn(() => ({ select }));
+		let eventsServed = false;
+
+		const from = vi.fn((table: string) => {
+			if (table === 'free_agent_players') return { select };
+			if (table === 'team_rosters') {
+				const rosterRange = vi.fn(async (from: number, to: number) => {
+					if (extras.rosterError !== undefined) return { data: null, error: extras.rosterError };
+					return { data: pageOf(extras.rosters ?? [])(from, to), error: null };
+				});
+				return { select: vi.fn(() => ({ order: vi.fn(() => ({ range: rosterRange })) })) };
+			}
+			if (table === 'teams') {
+				const teamRange = vi.fn(async (from: number, to: number) => {
+					if (extras.teamError !== undefined) return { data: null, error: extras.teamError };
+					return { data: pageOf(extras.teams ?? [])(from, to), error: null };
+				});
+				return { select: vi.fn(() => ({ order: vi.fn(() => ({ range: teamRange })) })) };
+			}
+			if (table === 'auction_events') {
+				// `loadAppendedEvents` pages until a read comes back empty, calling
+				// `from()` afresh each page — so the served flag lives OUTSIDE this
+				// branch. A flag scoped here would reset every page and never end.
+				const range = vi.fn(async () => {
+					if (eventsServed) return { data: [], error: null };
+					eventsServed = true;
+					return { data: extras.events ?? [], error: null };
+				});
+				return { select: vi.fn(() => ({ order: vi.fn(() => ({ range })) })) };
+			}
+			throw new Error(`unexpected table: ${table}`);
+		});
+
 		return { client: { from } as never, from, select, order };
 	}
 
@@ -460,7 +627,10 @@ describe('loadEligibilityPool', () => {
 
 		expect(from).toHaveBeenCalledWith('free_agent_players');
 		expect(select).toHaveBeenCalled();
-		expect(order).toHaveBeenCalledWith('player_name', { ascending: true });
+		// Ordered by the unique id, not by name: paging needs a stable key, and
+		// two Players can share a name. The NAME order the surface shows is the
+		// explicit sort over the merged list, asserted below.
+		expect(order).toHaveBeenCalledWith('fantrax_player_id', { ascending: true });
 		// Pinned to the core's own output, so a second renderer cannot pass.
 		const { eligibilityRowSentence } = await import('../../src/lib/core/rules/eligibility.ts');
 		expect(pool.players[0]?.consequence).toBe(eligibilityRowSentence('Alice', true));
@@ -477,5 +647,129 @@ describe('loadEligibilityPool', () => {
 	it('throws a descriptive error on a read failure', async () => {
 		const { client } = fakeClient(null, { message: 'permission denied' });
 		await expect(loadEligibilityPool(client)).rejects.toThrow(/permission denied/);
+	});
+
+	it('lists rostered Contracts alongside the pool, filed by name', async () => {
+		const { client } = fakeClient(
+			[
+				{
+					fantrax_player_id: 'p-1',
+					player_name: 'Alice',
+					positions: 'PG',
+					nba_team: 'LAL',
+					minor_league_eligible: false
+				}
+			],
+			null,
+			{
+				rosters: [
+					{
+						fantrax_player_id: 'p-9',
+						player_name: 'Bob',
+						roster_slot_kind: 'active_bench',
+						team_id: 'team-1'
+					}
+				],
+				teams: [{ id: 'team-1', name: 'Utah Jazz' }]
+			}
+		);
+
+		const pool = await loadEligibilityPool(client);
+
+		// One merged list in name order, not the pool followed by a roster block.
+		expect(pool.players.map((player) => player.playerName)).toEqual(['Alice', 'Bob']);
+		expect(pool.players[1]?.detail).toBe('Active/Bench Slot');
+		expect(pool.players[1]?.heldBy).toBe('Utah Jazz');
+		expect(pool.players[0]?.detail).toBe('Positions: PG');
+		expect(pool.players[0]?.heldBy).toBe('Free Agent pool · LAL');
+	});
+
+	it('folds the flag for a rostered Contract from the log, the only place it lives', async () => {
+		const { client } = fakeClient([], null, {
+			rosters: [
+				{
+					fantrax_player_id: 'p-9',
+					player_name: 'Bob',
+					roster_slot_kind: 'minor_league',
+					team_id: 'team-1'
+				}
+			],
+			teams: [{ id: 'team-1', name: 'Utah Jazz' }],
+			events: [
+				{
+					seq: 1,
+					occurred_at: '2026-08-25T08:00:00.000Z',
+					schema_version: 1,
+					core_version: 1,
+					manager_id: 'm-1',
+					team_id: 't-1',
+					event_type: MINOR_LEAGUE_ELIGIBILITY_SET,
+					payload: { fantraxPlayerId: 'p-9', playerName: 'Bob', before: false, after: true }
+				}
+			]
+		});
+
+		const pool = await loadEligibilityPool(client);
+
+		// `team_rosters` has no `minor_league_eligible` column to read, so this
+		// can only have come from the fold.
+		expect(pool.players[0]?.eligible).toBe(true);
+		const { eligibilityRowSentence } = await import('../../src/lib/core/rules/eligibility.ts');
+		expect(pool.players[0]?.consequence).toBe(eligibilityRowSentence('Bob', true));
+	});
+
+	it('skips a rostered Contract the pool already names, so no Player is listed twice', async () => {
+		const { client } = fakeClient(
+			[
+				{
+					fantrax_player_id: 'p-1',
+					player_name: 'Alice',
+					positions: 'PG',
+					nba_team: 'LAL',
+					minor_league_eligible: true
+				}
+			],
+			null,
+			{
+				rosters: [
+					{
+						fantrax_player_id: 'p-1',
+						player_name: 'Alice',
+						roster_slot_kind: 'active_bench',
+						team_id: 'team-1'
+					}
+				],
+				teams: [{ id: 'team-1', name: 'Utah Jazz' }]
+			}
+		);
+
+		const pool = await loadEligibilityPool(client);
+
+		expect(pool.players).toHaveLength(1);
+		expect(pool.players[0]?.heldBy).toBe('Free Agent pool · LAL');
+	});
+
+	it('lists a pool larger than one PostgREST page, which a single select truncates', async () => {
+		// The live pool is 1,467 Players and PostgREST caps a page at 1,000. The
+		// unbounded select this replaced returned the first 1,000 with NO error,
+		// so 467 Players never rendered and could not be ticked.
+		const many = Array.from({ length: 1467 }, (_unused, index) => ({
+			fantrax_player_id: `p-${String(index).padStart(4, '0')}`,
+			player_name: `Player ${String(index).padStart(4, '0')}`,
+			positions: 'PG',
+			nba_team: 'LAL',
+			minor_league_eligible: false
+		}));
+		const { client } = fakeClient(many);
+
+		const pool = await loadEligibilityPool(client);
+
+		expect(pool.players).toHaveLength(1467);
+		expect(pool.players.at(-1)?.playerName).toBe('Player 1466');
+	});
+
+	it('throws a descriptive error when the Roster read fails', async () => {
+		const { client } = fakeClient([], null, { rosterError: { message: 'roster denied' } });
+		await expect(loadEligibilityPool(client)).rejects.toThrow(/team_rosters read failed/);
 	});
 });

@@ -35,6 +35,12 @@
  * these tables from that column, nor a mutable-reference-data licence for
  * that column from the rest.
  *
+ * The column materialises the POOLED subset of that fold. The flag may also
+ * be set on a rostered Contract, which `team_rosters` has no column to carry,
+ * so the authority is the folded `EligibilitySet` and the column is a partial
+ * copy — see `server/eligibility.ts`. Promotion is unaffected: it writes the
+ * pool, and the statement it calls already ignores an id no pool row carries.
+ *
  * **Every gate is re-derived here, server-side, inside the transaction.** The
  * confirm checkbox on the page is never the check, and neither is
  * `locals.phase` — that was folded when the page loaded and says nothing

@@ -14,7 +14,7 @@ import {
 	eligibilityRowSentence,
 	planEligibilityChanges
 } from '../../src/lib/core/rules/eligibility.ts';
-import type { PooledPlayerEligibility } from '../../src/lib/core/rules/eligibility.ts';
+import type { EligibilityCandidate } from '../../src/lib/core/rules/eligibility.ts';
 import type { AppendedEvent } from '../../src/lib/core/types.ts';
 
 /** One appended event, as the log hands it back. */
@@ -43,7 +43,7 @@ function setEvent(seq: number, id: string, before: boolean, after: boolean): App
 	});
 }
 
-const POOL: readonly PooledPlayerEligibility[] = [
+const POOL: readonly EligibilityCandidate[] = [
 	{ fantraxPlayerId: 'p-1', playerName: 'Alice', eligible: false },
 	{ fantraxPlayerId: 'p-2', playerName: 'Bob', eligible: true },
 	{ fantraxPlayerId: 'p-3', playerName: 'Carla', eligible: false }
