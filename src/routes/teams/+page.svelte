@@ -67,6 +67,14 @@
 	 */
 	let sort = $state<TeamsSort>(DEFAULT_TEAMS_SORT);
 
+	/**
+	 * Whether the sort's choices are showing. View state about VIEW STATE: it
+	 * reorders nothing and narrows nothing, it only decides whether the radios
+	 * are on screen. Closed to begin with — see the disclosure's own note in
+	 * the markup below.
+	 */
+	let sortOpen = $state(false);
+
 	/** The list in the order the reader asked for. Nothing else moves. */
 	const shown = $derived(sortTeamsIndex(index.rows, sort));
 
@@ -138,24 +146,49 @@
 	{:else}
 		<!-- Sorting is view state. It posts nothing, reloads nothing, and
 		     changes no figure — the list is reordered and nothing else. Native
-		     radios in a fieldset, `board/+page.svelte:292-322`'s pattern, so
-		     the rule is visible in the markup rather than asserted in a
-		     comment. -->
-		<fieldset class="controls">
-			<legend class="section-label">{TEAMS_SORT_LEGEND}</legend>
-			{#each TEAMS_SORT_KEYS as key (key)}
-				<label class="choice" for={`teams-sort-${key}`}>
-					<input
-						id={`teams-sort-${key}`}
-						type="radio"
-						name="teams-sort"
-						value={key}
-						bind:group={sort}
-					/>
-					<span class="prose">{TEAMS_SORT_LABELS[key]}</span>
-				</label>
-			{/each}
-		</fieldset>
+		     radios in a fieldset, `board/+page.svelte`'s pattern, so the rule
+		     is visible in the markup rather than asserted in a comment.
+
+		     CLOSED by default, behind the board's own disclosure: four radios
+		     standing permanently between the masthead and the first Team is
+		     most of a 375px first screen spent on a view that is almost always
+		     the default one. The closed row is not a hidden control — it prints
+		     the order in force, so the answer the radios gave by which one is
+		     ticked is now given in words. `<details>`/`<summary>` and one flag:
+		     it opens on tap AND on Enter and is announced expanded or
+		     collapsed. Choosing closes it, because the choice is the whole
+		     reason it was opened and the list beneath is what the Manager came
+		     to read. -->
+		<details class="controls-disclosure" bind:open={sortOpen}>
+			<summary>
+				<span class="section-label">{TEAMS_SORT_LEGEND}</span>
+				<span class="prose controls-current">{TEAMS_SORT_LABELS[sort]}</span>
+				<span class="controls-mark" aria-hidden="true">
+					<svg viewBox="0 0 16 16" width="16" height="16" focusable="false">
+						<path d="M4 6.5 8 10.5 12 6.5" />
+					</svg>
+				</span>
+			</summary>
+			<fieldset class="controls">
+				<!-- The legend still names the group for a screen reader reading
+				     the radios; the summary above is what names it on screen,
+				     and two visible copies would be the control titled twice. -->
+				<legend class="visually-hidden">{TEAMS_SORT_LEGEND}</legend>
+				{#each TEAMS_SORT_KEYS as key (key)}
+					<label class="choice" for={`teams-sort-${key}`}>
+						<input
+							id={`teams-sort-${key}`}
+							type="radio"
+							name="teams-sort"
+							value={key}
+							bind:group={sort}
+							onchange={() => (sortOpen = false)}
+						/>
+						<span class="prose">{TEAMS_SORT_LABELS[key]}</span>
+					</label>
+				{/each}
+			</fieldset>
+		</details>
 
 		<ul class="rows" id="teams-rows">
 			{#each shown as row (row.teamId)}
@@ -176,33 +209,65 @@
 					     `of 12` beside it is one step quieter. Both halves come
 					     from the core — this file never searches a string for
 					     ` of `. The whole sentence rides on `aria-label` so a
-					     screen reader gets it unbroken. -->
-					<p class="figure" aria-label={row.rosterCountHalves.full}>
-						<span>{row.rosterCountHalves.lead}</span><span class="figure-qualifier"
-							>{row.rosterCountHalves.qualifier}</span
-						>
-					</p>
-					<!-- Outstanding Bids against the allowance, and open lottery
-					     entries, as TWO figures and never one (UX-DR36): an
-					     entry consumes no allowance, so a combined figure would
-					     state a ceiling that does not exist. Both come worded
-					     from the core, in the same two registers as the slot
-					     sentences above — this file words nothing and, at
-					     parity, gives the figure no colour, badge or warning
-					     treatment (UX-DR35).
+					     screen reader gets it unbroken.
 
-					     Either may be ABSENT rather than zero, and the core
-					     decides which: both go outside the Auction Phase, when
-					     no Bid is accepted at any amount, and the entries
-					     figure goes for a Team holding none, because entries
-					     have no ceiling and a zero there states nothing. -->
-					{#if row.outstandingBidsHalves !== null}
-						<p class="figure" aria-label={row.outstandingBidsHalves.full}>
-							<span>{row.outstandingBidsHalves.lead}</span><span class="figure-qualifier"
-								>{row.outstandingBidsHalves.qualifier}</span
+					     PAIRED ACROSS, not stacked: the roster count with the
+					     Outstanding Bids beside it, and the Minor League count
+					     with Injury Reserve beside it, each pair read as one
+					     phrase behind a `·` — `PersistentStrip.svelte`'s
+					     construction, which is where a Manager has already
+					     learnt to read `7 of 12 · 2 of 3`.
+					     Six figures on six lines made one card most of a phone
+					     screen tall, and thirty of them a scroll nobody finishes
+					     — which on a surface whose whole job is comparing Teams
+					     is the thing that breaks it. The pairing costs nothing
+					     legibility can miss: each figure keeps its own
+					     `aria-label`ed sentence and its own register, the `·`
+					     between them is `aria-hidden` so neither sentence is
+					     interrupted, and at a width where two would collide they
+					     wrap and stack again. -->
+					<div class="row-line">
+						<p class="figure" aria-label={row.rosterCountHalves.full}>
+							<span>{row.rosterCountHalves.lead}</span><span class="figure-qualifier"
+								>{row.rosterCountHalves.qualifier}</span
 							>
 						</p>
-					{/if}
+						<!-- Outstanding Bids against the allowance, and open
+						     lottery entries, as TWO figures and never one
+						     (UX-DR36): an entry consumes no allowance, so a
+						     combined figure would state a ceiling that does not
+						     exist. That is why the entries figure keeps its OWN
+						     line below rather than joining this pair — two bid
+						     figures at the two ends of one line is the reading
+						     UX-DR36 forbids, while the roster count opposite is
+						     a different kind of thing entirely. Both come worded
+						     from the core, in the same two registers as the slot
+						     sentences above — this file words nothing and, at
+						     parity, gives the figure no colour, badge or warning
+						     treatment (UX-DR35).
+
+						     Either may be ABSENT rather than zero, and the core
+						     decides which: both go outside the Auction Phase,
+						     when no Bid is accepted at any amount, and the
+						     entries figure goes for a Team holding none, because
+						     entries have no ceiling and a zero there states
+						     nothing. The separator LEADS this figure rather than
+						     trailing the roster count, which is what keeps a
+						     single `·` between the pair whether or not this half
+						     is present — the strip's own arrangement, for the
+						     same reason. An absent Bids figure leaves the roster
+						     count alone on the card's left margin, where it
+						     already sits — nothing slides along to fill the
+						     gap. -->
+						{#if row.outstandingBidsHalves !== null}
+							<span class="row-separator" aria-hidden="true">·</span>
+							<p class="figure" aria-label={row.outstandingBidsHalves.full}>
+								<span>{row.outstandingBidsHalves.lead}</span><span class="figure-qualifier"
+									>{row.outstandingBidsHalves.qualifier}</span
+								>
+							</p>
+						{/if}
+					</div>
 					{#if row.contentionEntriesHalves !== null}
 						<p class="figure" aria-label={row.contentionEntriesHalves.full}>
 							<span>{row.contentionEntriesHalves.lead}</span><span class="figure-qualifier"
@@ -210,19 +275,28 @@
 							>
 						</p>
 					{/if}
-					<p class="figure" aria-label={row.minorLeagueHalves.full}>
-						<span>{row.minorLeagueHalves.lead}</span><span class="figure-qualifier"
-							>{row.minorLeagueHalves.qualifier}</span
-						>
-					</p>
-					<!-- Injury Reserve in `text-tertiary` and visibly outside
-					     the twelve — the figure most often wrongly folded into
-					     it. -->
-					<p class="figure-tertiary" aria-label={row.injuryReserveHalves.full}>
-						<span>{row.injuryReserveHalves.lead}</span><span class="figure-qualifier"
-							>{row.injuryReserveHalves.qualifier}</span
-						>
-					</p>
+					<div class="row-line">
+						<p class="figure" aria-label={row.minorLeagueHalves.full}>
+							<span>{row.minorLeagueHalves.lead}</span><span class="figure-qualifier"
+								>{row.minorLeagueHalves.qualifier}</span
+							>
+						</p>
+						<!-- Injury Reserve in `text-tertiary` and visibly outside
+						     the twelve — the figure most often wrongly folded
+						     into it. Beside the Minor League count now rather
+						     than under it, and the quieter register is what keeps
+						     the pairing from reading as one group of slots: the
+						     two are set in two different colours and each states
+						     its own ceiling. Its separator is unconditional
+						     because, unlike the Bids figure above, this half is
+						     never absent. -->
+						<span class="row-separator" aria-hidden="true">·</span>
+						<p class="figure-tertiary" aria-label={row.injuryReserveHalves.full}>
+							<span>{row.injuryReserveHalves.lead}</span><span class="figure-qualifier"
+								>{row.injuryReserveHalves.qualifier}</span
+							>
+						</p>
+					</div>
 					<!-- Dead Money, in the same quiet register and for the same
 					     reason: money charged for Contracts the Team has
 					     released, outside the twelve (FR-43). ABSENT rather
@@ -384,6 +458,52 @@
 		color: var(--color-text-secondary);
 	}
 
+	/*
+	 * A PAIR of figures read as one phrase behind a `·` —
+	 * `PersistentStrip.svelte`'s own construction, which is where a Manager has
+	 * already learnt to read `7 of 12 · 2 of 3`. The two halves were at
+	 * opposite ends of the line for one revision, and split like that they read
+	 * as two unrelated readouts that happened to share a row; the strip's
+	 * answer is better and it is already built.
+	 *
+	 * `flex-start` rather than `space-between`, so the two stay together
+	 * however short they are, and a pair whose trailing half is ABSENT leaves
+	 * the leading one exactly where it already sits rather than sliding along
+	 * the row. Every line of the card therefore starts on the same left margin
+	 * — the Team name above and the Cap Space cells below share it, so the card
+	 * reads as one block down one edge rather than two columns of text pulling
+	 * apart. Stated rather than left to the default, because the whole point of
+	 * this rule is WHICH edge the pair sits on.
+	 *
+	 * `--space-card-gap` is the strip's gap around its own separators, not this
+	 * page's tighter row gap: the `·` needs air on both sides or it reads as
+	 * punctuation inside one of the figures.
+	 *
+	 * Baseline-aligned, because the halves are set at different sizes — the
+	 * 15px Minor League count against the 12.5px Injury Reserve — and centring
+	 * would float the smaller one off the larger's baseline. Wrapping, so a
+	 * width that genuinely cannot fit the pair stacks it instead of scrolling
+	 * sideways.
+	 */
+	.row-line {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		justify-content: flex-start;
+		gap: var(--space-card-gap);
+	}
+
+	/*
+	 * `.strip-separator`'s own two declarations, so the dot between two figures
+	 * is the same dot in both places it appears in the product. `aria-hidden`
+	 * in the markup: each figure already rides on its own `aria-label`ed
+	 * sentence, and a spoken "middle dot" between them is noise.
+	 */
+	.row-separator {
+		font-size: var(--size-12);
+		color: var(--color-text-tertiary);
+	}
+
 	.money {
 		display: grid;
 		grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -400,16 +520,109 @@
 	 * The controls are a plain wrapping row of radios at the touch floor, not
 	 * a select — `board/+page.svelte`'s own block, copied because it is the
 	 * built, tested and accessible precedent for "sorting is view state" being
-	 * visible in the markup.
+	 * visible in the markup. The board's disclosure came with it, for the same
+	 * reason: the radios are still radios, every choice visible at once with
+	 * the one in force marked, once the row above is opened.
 	 */
 	.controls {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
-		gap: var(--space-row-gap);
+		/*
+		 * The two axes are NOT the same gap. Across, the gap is what keeps two
+		 * choices from reading as one phrase. Down — which is what happens at
+		 * 375px, where the choices stack — each already carries a touch-floor
+		 * box, so a gap between two of them adds to slack that is there anyway
+		 * and the stack drifts apart. The rows meet; their boxes do the
+		 * spacing.
+		 */
+		column-gap: var(--space-row-gap);
+		row-gap: 0;
 		border: 0;
 		padding: 0;
 		margin: 0;
+	}
+
+	/*
+	 * The closed row: the control's name, the order in force, and the mark
+	 * that says there is more behind it.
+	 *
+	 * NO `--control-height` and no `--touch-min` — `board/+page.svelte`'s own
+	 * call, for its own reason. A touch-floor box around a body-size line
+	 * leaves most of its height empty above and below, which between the
+	 * masthead and the first Team is a band of empty page.
+	 *
+	 * The target is not lost with it: the summary spans the full width, so the
+	 * row is a wide target however short it is, and this is a control whose
+	 * mis-tap costs nothing — it opens a list of radios, each of which keeps
+	 * the floor on its own row. The floor stays, untouched, on every control
+	 * that spends something.
+	 */
+	.controls-disclosure > summary {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--space-row-gap);
+		cursor: pointer;
+		/* The mark below carries the affordance; the default triangle beside
+		   it would be two of them stacked. */
+		list-style: none;
+	}
+
+	.controls-disclosure > summary::-webkit-details-marker {
+		display: none;
+	}
+
+	.controls-disclosure > summary:focus-visible {
+		outline: 2px solid var(--color-text);
+		outline-offset: 2px;
+	}
+
+	/*
+	 * The order in force, set at the body size against the small uppercase
+	 * label beside it: the LABEL says which control this is and the value is
+	 * the thing being read, so the value is the one that carries the weight.
+	 */
+	.controls-current {
+		color: var(--color-text);
+	}
+
+	/*
+	 * The chevron, pushed to the trailing edge, drawn in `em` off the summary's
+	 * own font and stroked from `currentColor` — the board's construction,
+	 * character for character, so every disclosure in this codebase carries
+	 * one affordance rather than three.
+	 */
+	.controls-mark {
+		display: flex;
+		flex-shrink: 0;
+		margin-left: auto;
+		color: var(--color-text-tertiary);
+	}
+
+	.controls-mark svg {
+		width: 1.1em;
+		height: 1.1em;
+		stroke: currentColor;
+		stroke-width: 1.5;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+		fill: none;
+	}
+
+	/* Open or closed, the same mark; it turns to point at what it opened. */
+	.controls-disclosure[open] > summary .controls-mark {
+		color: var(--color-text);
+		transform: rotate(180deg);
+	}
+
+	/*
+	 * Open, the row needs no margin of its own: the first radio below it
+	 * carries a full touch-floor box, which is already more separation than a
+	 * gap would add.
+	 */
+	.controls-disclosure[open] > .controls {
+		margin-bottom: calc(-1 * var(--space-row-gap));
 	}
 
 	.choice {

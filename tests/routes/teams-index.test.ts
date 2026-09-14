@@ -314,14 +314,70 @@ describe('the Teams index page — what it renders', () => {
 	it('sorts through the core’s own function, held in one piece of view state', () => {
 		expect(PAGE).toContain('let sort = $state<TeamsSort>(DEFAULT_TEAMS_SORT)');
 		expect(PAGE).toContain('$derived(sortTeamsIndex(index.rows, sort))');
-		// Native radios in a fieldset — `board/+page.svelte:292-322`'s pattern,
-		// which makes "sorting is view state" visible in the markup.
+		// Native radios in a fieldset — `board/+page.svelte`'s pattern, which
+		// makes "sorting is view state" visible in the markup.
 		expect(PAGE).toContain('<fieldset class="controls">');
 		expect(PAGE).toContain('bind:group={sort}');
 		expect(PAGE).toContain("type=\"radio\"");
 		// No form, no navigation: a sort posts nothing and reloads nothing.
 		expect(PAGE_CODE).not.toContain('goto(');
 		expect(PAGE_CODE).not.toMatch(/<form/);
+	});
+
+	it('holds the sort behind the board’s collapsible control, closed and naming the order in force', () => {
+		// `<details>`/`<summary>`, the board's own disclosure — not a custom
+		// button: it opens on tap AND on Enter and is announced expanded or
+		// collapsed without a line of script.
+		expect(PAGE).toContain('<details class="controls-disclosure" bind:open={sortOpen}>');
+		// CLOSED to begin with. The first screen of the index is the index.
+		expect(PAGE).toContain('let sortOpen = $state(false)');
+		// The closed row still says which order is in force, so nothing the
+		// radios used to answer is hidden by the control that holds them.
+		expect(PAGE).toContain('<span class="prose controls-current">{TEAMS_SORT_LABELS[sort]}</span>');
+		// The legend is not printed twice: the summary names the control on
+		// screen, the legend names it for a screen reader reading the radios.
+		expect(PAGE).toContain('<legend class="visually-hidden">{TEAMS_SORT_LEGEND}</legend>');
+		expect(PAGE).not.toContain('<legend class="section-label">');
+		// Choosing closes it — the choice is the whole reason it was opened.
+		expect(PAGE).toContain('onchange={() => (sortOpen = false)}');
+	});
+
+	it('pairs the roster count with Bids and the Minor League count with Injury Reserve, on one line each', () => {
+		// Two figures read as one phrase behind a `·`, on the card's own left
+		// margin — `PersistentStrip.svelte`'s construction, down to the
+		// separator's two declarations, so the dot between two figures is the
+		// same dot in both places it appears in the product.
+		expect(PAGE).toContain('<div class="row-line">');
+		expect(PAGE).toContain('justify-content: flex-start');
+		expect(PAGE).toContain('flex-wrap: wrap');
+		expect(PAGE).toContain('<span class="row-separator" aria-hidden="true">·</span>');
+		// The separator LEADS the optional Bids figure, so the pair carries a
+		// single `·` whether or not that half is present — and none at all when
+		// it is absent. The strip's arrangement, for the strip's reason.
+		expect(PAGE).toMatch(
+			/{#if row\.outstandingBidsHalves !== null}\s*<span class="row-separator"/
+		);
+		// The open-entries figure is NOT in a pair: two bid figures at the two
+		// ends of one line is the single combined reading UX-DR36 forbids.
+		const pairs = PAGE.split('<div class="row-line">')
+			.slice(1)
+			.map((segment) => segment.slice(0, segment.indexOf('</div>')));
+		expect(pairs).toHaveLength(2);
+		expect(pairs[0]).toContain('row.rosterCountHalves');
+		expect(pairs[0]).toContain('row.outstandingBidsHalves');
+		expect(pairs[0]).not.toContain('row.contentionEntriesHalves');
+		expect(pairs[1]).toContain('row.minorLeagueHalves');
+		expect(pairs[1]).toContain('row.injuryReserveHalves');
+		// Pairing is layout and nothing else: every figure keeps its own
+		// unbroken sentence for a screen reader.
+		for (const half of [
+			'rosterCountHalves',
+			'outstandingBidsHalves',
+			'minorLeagueHalves',
+			'injuryReserveHalves'
+		]) {
+			expect(PAGE).toContain(`aria-label={row.${half}.full}`);
+		}
 	});
 
 	it('links every row to that Team’s page through the core’s href', () => {
