@@ -230,7 +230,7 @@ export type BoardCard = {
  * this card links to.
  */
 export const AUCTION_STATE_LABELS: Readonly<Record<BoardCardState, string>> = Object.freeze({
-	awaiting_opening_bid: 'Awaiting Opening Bid',
+	awaiting_opening_bid: 'Unbid',
 	standard: 'Open',
 	minimum_bid: MINIMUM_LOTTERY_LABEL,
 	closed: CLOSED_LABEL
@@ -241,11 +241,10 @@ export const AUCTION_STATE_LABELS: Readonly<Record<BoardCardState, string>> = Ob
  *
  * A complete record rather than an override map, so a surface indexes ONE
  * thing by the state it holds and cannot fall through to a missing key. The
- * other three states are the same string in both: `Open` and `Closed` are
- * already short, and `Awaiting Opening Bid` is not shortened here because no
- * one has said what it should shorten TO — inventing a spelling for it would
- * be a second name nothing asked for, which is the whole cost the header above
- * warns about.
+ * other three states are the same string in both: `Open`, `Closed` and
+ * `Unbid` are already one word each, so there is nothing left to shorten and
+ * a narrow spelling would only be a second name nothing asked for, which is
+ * the whole cost the header above warns about.
  */
 export const AUCTION_STATE_LABELS_NARROW: Readonly<Record<BoardCardState, string>> = Object.freeze({
 	awaiting_opening_bid: AUCTION_STATE_LABELS.awaiting_opening_bid,

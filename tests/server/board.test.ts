@@ -260,7 +260,7 @@ describe('loadBoard — executed against a fake client', () => {
 		expect(card?.priceLabel).toBe('No opening bid');
 		expect(card?.leadingBidder).toBe('No Team leads this Auction yet.');
 		expect(card?.closesAt).toBeNull();
-		expect(card?.auctionStateLabel).toBe('Awaiting Opening Bid');
+		expect(card?.auctionStateLabel).toBe('Unbid');
 		// No metadata row for this Player, so the line is omitted, not blanked.
 		expect(card?.metadata).toBeNull();
 	});

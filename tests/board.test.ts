@@ -452,7 +452,7 @@ describe('every state carries a word AND a shape', () => {
 			'minimum_bid',
 			'standard'
 		]);
-		expect(AUCTION_STATE_LABELS.awaiting_opening_bid).toBe('Awaiting Opening Bid');
+		expect(AUCTION_STATE_LABELS.awaiting_opening_bid).toBe('Unbid');
 		expect(AUCTION_STATE_LABELS.standard).toBe('Open');
 		// The contention's CARD name from the fold that decides it, reused
 		// rather than respelled. Not the glossary term: a board card's identity

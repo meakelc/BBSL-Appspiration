@@ -315,7 +315,7 @@ describe('the Auction page — what it renders', () => {
 		expect(PAGE).toContain('AUCTION_STATE_ICONS[gateState.contention]');
 		expect(PAGE).toContain("from '$lib/core/board.ts'");
 		// Never worded here, and never a second record keyed the same way.
-		expect(PAGE_CODE).not.toMatch(/'Open'|Awaiting Opening Bid/);
+		expect(PAGE_CODE).not.toMatch(/'Open'|'Unbid'/);
 	});
 
 	it('carries an icon AND a word, and is never a chip', () => {

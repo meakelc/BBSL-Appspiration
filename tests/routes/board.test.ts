@@ -247,7 +247,7 @@ describe('the board page — what it renders', () => {
 		// the word still originates in `src/lib/core/` and this file prints a
 		// field. No literal spelling of any state, count or notice appears here.
 		expect(PAGE_CODE).not.toMatch(/You lead|Outbid|Contender|Not involved/);
-		expect(PAGE_CODE).not.toMatch(/Awaiting Opening Bid|Minimum-Bid Contention/);
+		expect(PAGE_CODE).not.toMatch(/'Unbid'|Minimum-Bid Contention/);
 		expect(PAGE_CODE).not.toMatch(/No opening bid/);
 		expect(PAGE_CODE).not.toMatch(/Auctions are (open|hidden)/);
 		expect(PAGE_CODE).not.toMatch(/h unbid|unbid for/);
@@ -288,7 +288,7 @@ describe('the board page — what it renders', () => {
 	it('gives a chip to You lead and Outbid ONLY — ambient states stay plain', () => {
 		// DESIGN.md:194 reserves the chip for the two states that concern the
 		// reader: filled `attention` for Outbid, outlined `border-strong` for
-		// You lead. Open, Awaiting Opening Bid, Contender and Not involved are
+		// You lead. Open, Unbid, Contender and Not involved are
 		// ambient and take a plain `text-secondary` label with no chip — so
 		// the chip keeps meaning "this one is about you" instead of
 		// decorating every line on the card.
