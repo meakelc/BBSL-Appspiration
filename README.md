@@ -495,8 +495,26 @@ a local stack up and `.env` naming a hosted project, and the fixtures seed one
 database while the write path targets another — producing a foreign-key
 violation that reads exactly like a bug in `write.ts` and is not one.
 
-⚠️ **CI runs no Postgres**, so every integration test silently self-skips there.
-A green CI run is not evidence that any integration assertion executed.
+⚠️ **CI runs the integration tests; your machine probably does not.** The
+workflow starts a real local Supabase stack and points `SUPABASE_DB_URL` at
+`127.0.0.1:54322`, so all 4,335 tests execute there. Without Docker running
+locally, the ~20 integration tests **self-skip silently** and a green local run
+is not evidence that any integration assertion executed — the inversion of what
+this note said until 2026-09-14, and the direction that actually bites, because
+the machine you develop on is the one lying to you.
+
+Story 9.8 found this the expensive way: an integration test asserting a
+constraint that a migration had deliberately dropped passed locally by skipping
+and failed in CI, which was the first thing to run it since the change.
+
+Run them yourself with Docker up:
+
+```bash
+npx supabase start
+set -a; . ./.env; set +a
+SUPABASE_DB_URL='postgresql://postgres:postgres@127.0.0.1:54322/postgres' npx vitest run
+npx supabase stop
+```
 
 ---
 
