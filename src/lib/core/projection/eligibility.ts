@@ -8,11 +8,19 @@
  * — by `resolveLeaguePhase`, and inside both write transactions — but the
  * phase is derived on demand and stored nowhere. `free_agent_players` holds
  * one app-owned column — `minor_league_eligible` — and that column is the
- * fold of these events, written only through the one projection updater and
- * reproducible from the log at any point. Every other column of that table
- * remains imported reference data and is NOT rebuildable from the log; the
- * two halves live in one table on purpose and neither generalises to the
- * other.
+ * fold of these events RESTRICTED TO POOLED PLAYERS, written only through the
+ * one projection updater and reproducible from the log at any point. Every
+ * other column of that table remains imported reference data and is NOT
+ * rebuildable from the log; the two halves live in one table on purpose and
+ * neither generalises to the other.
+ *
+ * **The set below is the authority; the column is a partial copy of it.** An
+ * id here may name a pooled Player or a rostered Contract — the flag answers
+ * "may this Player occupy a Minor League Slot" (FR-44), which is asked of
+ * both — and `team_rosters` has no such column. So the column can only ever
+ * materialise the pooled subset, and every rule reads this fold instead
+ * (`isEligible`, at eleven call sites). Nothing in this file cares which of
+ * the two an id is, and nothing should be added that does.
  *
  * The `default: return state` discipline is `phase.ts`'s, for the same
  * reason: an event type this reducer has not been taught is not an error, it

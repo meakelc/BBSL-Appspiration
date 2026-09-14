@@ -25,11 +25,6 @@
 		<p class="section-label">BBSL offseason free agent auction</p>
 	</header>
 
-	<section class="panel">
-		<p class="section-label">Phase</p>
-		<p class="prose">{data.phase.sentence}</p>
-	</section>
-
 	<!--
 		Both controls are disabled, and both state their reason in words beside
 		them, associated by aria-describedby rather than merely adjacent. That

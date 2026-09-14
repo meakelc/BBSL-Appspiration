@@ -87,10 +87,11 @@
  * FR-13's "only the Roster Reserve check and the ordinary increment rules
  * apply there". The figure renders in WORDS, never as a number.
  *
- * **`slots` is the second, independent ground** (Story 2.7, FR-37): it
- * refuses on `Roster Count + Projected Active/Bench Additions >
- * ACTIVE_BENCH_SLOTS`, that comparison lives in `evaluateSlots` below, and
- * it reads NO amount and NO Maximum Bid — so a Team can fail it with
+ * **`slots` is the second, independent ground** (Story 2.7, FR-37, widened
+ * by Story 10.1): it passes when Projected Active/Bench Additions is zero,
+ * or when the Team holds a Free Active/Bench Slot and its projected
+ * additions are within that free count plus the Outstanding Bid Allowance.
+ * That comparison lives in `evaluateSlots` below, and it reads NO amount and NO Maximum Bid — so a Team can fail it with
  * unlimited Cap Space and pass it with none. Neither gate short-circuits,
  * subsumes or gates the other; `evaluate()` returns both outcomes with their
  * own arithmetic whether or not the other passed. Reporting a capacity
@@ -169,7 +170,8 @@ import {
 	AUCTION_CLOCK,
 	MINIMUM_BID,
 	MINIMUM_INCREMENT,
-	MINOR_LEAGUE_SLOTS
+	MINOR_LEAGUE_SLOTS,
+	OUTSTANDING_BID_ALLOWANCE
 } from '../constants.ts';
 import { hash } from '../hash.ts';
 import { parseInstant, relativePhrase } from '../instant.ts';
@@ -196,7 +198,7 @@ import {
 	subtractMoney
 } from '../money.ts';
 import type { LeaguePhase } from '../projection/phase.ts';
-import { PLACE_BID_GATES } from '../types.ts';
+import { PLACE_BID_GATES, RESTORE_LEADING_BID_GATES } from '../types.ts';
 import type {
 	Accepted,
 	CapGateOutcome,
@@ -213,6 +215,8 @@ import type {
 	PlaceBidGate,
 	PlaceBidGateResults,
 	Rejected,
+	RestoreLeadingBid,
+	RestoreLeadingBidGateResults,
 	SelfBidGateOutcome,
 	SlotsGateOutcome
 } from '../types.ts';
@@ -396,11 +400,29 @@ export type BidState = {
  * recognises — §10 example 19's refusal names the specific earlier Auction.
  * Neither is read by any comparison; `fantraxPlayerId` is also the AD-5
  * tiebreak that makes the exposure sum's input an ordered sequence.
+ *
+ * **`isContentionEntry` is carried because a NAME and an AMOUNT were not
+ * enough to recover it** (Story 10.2, FR-18 as amended 2026-09-08). A
+ * Minimum-Bid Contention entry is held at exactly `MINIMUM_OPENING_BID`, and
+ * so is an ordinary Opening Bid nobody has raised — two facts this shape
+ * would otherwise render identically, and only one of them is exempt from
+ * Roster Capacity. Re-deriving it downstream would mean re-reading the
+ * Auction fold outside the one loop that already walked it, which is a
+ * second answer to a question `teamMoneyStateFor` has already asked. It is a
+ * CLASSIFICATION rather than a magnitude, which is what keeps the capacity
+ * gate structurally unable to see a price while still telling a lottery
+ * entry apart from a commitment.
  */
 export type LeadingBidElsewhere = {
 	readonly fantraxPlayerId: string;
 	readonly playerName: string;
 	readonly amount: Money;
+	/**
+	 * Whether this is a Minimum-Bid Contention entry rather than a lead the
+	 * Team holds alone. Set from the SAME `contends` test that put it in the
+	 * list; never re-derived from `amount`.
+	 */
+	readonly isContentionEntry: boolean;
 };
 
 /**
@@ -520,7 +542,19 @@ export function bidStateFor(
 	}
 	return {
 		phase,
-		leadingBid: { teamId: auction.leadingBid.teamId, amount: auction.leadingBid.amount },
+		// **Nullable since Story 10.3, and the `null` reads as the state
+		// `bidStateFor` already models.** FR-40 can leave an Auction leaderless
+		// — every Bid on it cancelled, or the leader cancelled and no
+		// restoration recorded yet — while its history stands. That is the same
+		// "there is nobody to bid against" the `auction === null` branch above
+		// returns, so `selfBid` steps aside, `increment` reports that no rule
+		// applies, and the pre-fill falls back to the opening minimum. Not one
+		// gate needed a branch of its own: `BidState.leadingBid` has been
+		// nullable since Story 2.5 for the no-Auction case.
+		leadingBid:
+			auction.leadingBid === null
+				? null
+				: { teamId: auction.leadingBid.teamId, amount: auction.leadingBid.amount },
 		closesAt: auction.closesAt,
 		contention: auction.contention,
 		// The published commitment, straight off the fold — never re-derived
@@ -621,16 +655,42 @@ export function teamMoneyStateFor(input: {
 		// inferred from the list being empty. A dissolved contention (3.3)
 		// keeps its Contenders — the draw and the reveal are derived from them
 		// — while committing nobody, and this is the line that makes that safe.
-		const leads = auction.leadingBid.teamId === input.teamId;
+		//
+		// **Split by contention since Story 10.3, and only so the amount can
+		// be narrowed without an assertion.** `Auction.leadingBid` is nullable
+		// now — FR-40 leaves a leaderless Auction behind — and the two branches
+		// answer the two halves of the same test the one expression used to:
+		// inside a lottery the commitment is the flat `MINIMUM_OPENING_BID`
+		// every Contender holds, and a null leader there does not release
+		// anybody; outside one the commitment IS the leading amount, so a Team
+		// leads or it has no commitment at all. A leaderless Standard Auction
+		// therefore commits nobody, which is precisely the capital release
+		// FR-40 requires and never writes.
+		const leader = auction.leadingBid;
 		const contends =
 			auction.contention === 'minimum_bid' &&
 			auction.contenders.some((contender) => contender.teamId === input.teamId);
-		if (!leads && !contends) continue;
+		const leads = leader !== null && leader.teamId === input.teamId;
+		let amount: Money;
+		if (auction.contention === 'minimum_bid') {
+			if (!leads && !contends) continue;
+			amount = MINIMUM_OPENING_BID;
+		} else {
+			if (leader === null || leader.teamId !== input.teamId) continue;
+			amount = leader.amount;
+		}
 		const entry: LeadingBidElsewhere = {
 			fantraxPlayerId: playerId,
 			playerName: input.playerNameFor(playerId),
-			amount:
-				auction.contention === 'minimum_bid' ? MINIMUM_OPENING_BID : auction.leadingBid.amount
+			amount,
+			// Story 10.2: the SAME `contends` above, recorded rather than asked
+			// again. `contends` is already `contention === 'minimum_bid'` AND
+			// this Team on the Contender list, which is exactly FR-18's "is this
+			// a lottery entry" — so the slots side gets the classification for
+			// free, and no downstream caller has to compare an amount to
+			// `MINIMUM_OPENING_BID` and guess. An Opening Bid of $1,000,000 on a
+			// Standard Contention is `false` here, which is the whole point.
+			isContentionEntry: contends
 		};
 		// The partition, and the only place either list is written.
 		if (input.isMinorLeagueEligible(playerId)) eligibleLeading.push(entry);
@@ -1014,10 +1074,20 @@ const NO_MONEY: Money = parseMoney(0);
  * copies of a formula that must agree, which is the drift this module
  * refuses everywhere else.
  *
- * **The clamp is kept** although FR-37's ceiling makes it unreachable in
- * ordinary play, because a Commissioner override (Story 7.x) can still put a
- * Team above 12 — at which point an unclamped count would go negative and
- * hand that Team extra spending power as a reward for the override.
+ * **The clamp is now REACHABLE IN ORDINARY PLAY**, which it was not before
+ * Story 10.1. The Outstanding Bid Allowance (FR-37, amended 2026-09-08) lets
+ * a Team hold one outstanding Bid beyond its free Slots, so §10 example 29
+ * evaluates `max(0, 12 − 13)` with no Commissioner override anywhere near
+ * it. A Commissioner override (Story 7.x) can still put a Team above 12 as
+ * well, and the clamp answers both: an unclamped count would go negative and
+ * hand that Team extra spending power.
+ *
+ * **`unfilledSlots(rosterCount, 0)` IS Free Active/Bench Slots** — the same
+ * clamped subtraction evaluated with no additions — and `evaluateSlots`
+ * reads its `F` from exactly that call rather than writing a second one. The
+ * clamp is what stops a Team overridden to Roster Count 13 from computing a
+ * negative `F`, an allowance of 0, and passing the precondition by
+ * arithmetic accident.
  */
 function unfilledSlots(rosterCount: number, projectedAdditions: number): number {
 	return Math.max(0, ACTIVE_BENCH_SLOTS - (rosterCount + projectedAdditions));
@@ -1047,10 +1117,20 @@ function boundStateFor(state: BidState, team: TeamMoneyState): BoundBidState {
 /**
  * The Minors arithmetic, in COUNTS ALONE — `M`, `N` and `Overflow Count`.
  *
- * **This is the single hinge of Story 2.8, and it deliberately cannot see a
- * dollar.** `evaluateSlots`, `projectedAdditionsFor` and `evaluateCap` all
- * call it; only `evaluateCap` goes on to call `minorsExposureFor` for the
- * money. Splitting the derivation in two is what keeps `SlotsGateOutcome`
+ * **This is the MONEY side, and since Story 10.2 that is a restriction
+ * rather than a description.** `Overflow Count` INCLUDES Minimum-Bid
+ * Contention entries, because a Contender who wins costs real money and the
+ * cap must carry that exposure however unlikely each win is (PRD §3,
+ * FR-18). It is therefore NOT the figure Roster Capacity may read: FR-18
+ * exempts entries from Roster Capacity but not from the cap, so the slots
+ * side calls `activeBenchOverflowFor` below instead. `evaluateCap` is the
+ * only gate that calls this one, and calling it from the slots path — which
+ * an earlier revision did, deliberately, with a comment saying the two
+ * counts could not disagree — is now the defect.
+ *
+ * **It deliberately cannot see a dollar.** `evaluateCap` and
+ * `activeBenchOverflowFor` both call it; only `evaluateCap` goes on to call
+ * `minorsExposureFor` for the money. Splitting the derivation in two is what keeps `SlotsGateOutcome`
  * free of an `offered` field and of any money figure at all, so FR-37's "a
  * Team can fail it with unlimited Cap Space and pass it with none" stays a
  * property of the signatures rather than a claim to verify by reading. A
@@ -1087,6 +1167,68 @@ function minorsCountsFor(state: BoundBidState): MinorsCounts {
 		freeMinorLeagueSlots,
 		eligibleLeadingBids,
 		overflowCount: Math.max(0, eligibleLeadingBids - freeMinorLeagueSlots)
+	};
+}
+
+/**
+ * **Active/Bench Overflow** — the SLOTS-side counterpart to `Overflow
+ * Count`, and the only overflow figure that reaches Projected Active/Bench
+ * Additions (Story 10.2, PRD §3).
+ *
+ * The two derivations are one subtraction apart and they are two functions
+ * on purpose:
+ *
+ *   N_money = eligibleLeading.length                    + (eligible ? 1 : 0)
+ *   N_slots = eligibleLeading.filter(!entry).length     + (eligible ∧ ¬entry ? 1 : 0)
+ *   Overflow Count        = max(0, N_money − M)   → Minors Exposure, `evaluateCap`
+ *   Active/Bench Overflow = max(0, N_slots − M)   → this gate's projection
+ *
+ * **Why they must differ, and why a shared call is the defect.** FR-18 as
+ * amended on 2026-09-08 exempts a Minimum-Bid Contention entry from Roster
+ * Capacity entirely — the expected outcome of a lottery is losing, and a
+ * capacity rule sized as though a Team would win them all rations entries
+ * against an outcome that will probably not happen. It grants no such
+ * exemption from the cap: a Contender who DOES win pays, so every entry
+ * stays inside `Overflow Count` and inside Minors Exposure. §10 example 35
+ * is where the two are visibly different numbers for one Team at one
+ * instant — `Overflow Count 2` against `Active/Bench Overflow 0` — and both
+ * are correct. Computing one and using it for both would either ration
+ * lotteries the PRD unlimits, or under-commit capital the cap requires.
+ *
+ * `thisBidIsEntry` is the contention gate's own verdict, threaded down from
+ * `evaluateSlots`. It is never re-derived from the amount here — this
+ * function, like everything on the slots path, cannot see one.
+ *
+ * `M` comes from `minorsCountsFor` — the same FUNCTION the money side
+ * calls, though not the same call: this is its own invocation, and what is
+ * shared is the expression rather than the result. That is deliberate.
+ * `max(0, 3 − occupied)` is written once and both figures read it, so the
+ * two overflows differ in their NUMERATOR alone; a second subtraction
+ * spelled out here would be a second thing to keep in step. The function is
+ * pure and takes three integers, so calling it twice cannot disagree with
+ * calling it once.
+ */
+type ActiveBenchOverflowCounts = {
+	readonly freeMinorLeagueSlots: number;
+	readonly eligibleLeadingBidsExcludingEntries: number;
+	readonly activeBenchOverflow: number;
+};
+
+function activeBenchOverflowFor(
+	state: BoundBidState,
+	thisBidIsEntry: boolean
+): ActiveBenchOverflowCounts {
+	const { freeMinorLeagueSlots } = minorsCountsFor(state);
+	const eligibleLeadingBidsExcludingEntries =
+		state.team.eligibleLeading.filter((lead) => !lead.isContentionEntry).length +
+		(state.playerIsMinorLeagueEligible && !thisBidIsEntry ? 1 : 0);
+	return {
+		freeMinorLeagueSlots,
+		eligibleLeadingBidsExcludingEntries,
+		activeBenchOverflow: Math.max(
+			0,
+			eligibleLeadingBidsExcludingEntries - freeMinorLeagueSlots
+		)
 	};
 }
 
@@ -1187,15 +1329,30 @@ function minorsExposureFor(
 
 /**
  * Projected Active/Bench Additions — the non-eligible Auctions this Team
- * already leads, plus the Overflow, plus the Bid being placed when it is not
- * one a Minor League Slot can absorb.
+ * already leads, MINUS its Minimum-Bid Contention entries, plus the
+ * Active/Bench Overflow, plus the Bid being placed when it is neither one a
+ * Minor League Slot can absorb nor an entry of its own.
  *
- * **One expression, two gates**, the discipline `unfilledSlots` above already
- * sets. `evaluateCap` feeds it to Roster Reserve and `evaluateSlots` compares
- * it to the ceiling; if either recomputed it the two could disagree about the
- * count while agreeing they describe the same roster, which is the defect
- * "reporting a capacity refusal as a cap refusal" (AD-7) arriving from the
- * other direction.
+ * **One expression, two gates — and since Story 10.2 the two gates may
+ * legitimately hand it different arguments.** The comment that stood here
+ * said the two could not disagree about the count. That is no longer the
+ * claim to make, and stating it while it was false would be worse than
+ * saying nothing: FR-18 exempts a lottery entry from Roster Capacity and
+ * from nothing else, so the money side and the slots side are asking two
+ * different questions of one Team.
+ *
+ * Both callers exclude the entries the Team ALREADY holds — the PRD §3
+ * glossary defines Projected Active/Bench Additions with entries excluded
+ * "however many the Team holds", and Roster Reserve reads that same
+ * definition, which makes the reserve larger and therefore stricter. What
+ * they differ on is `thisBidIsEntry`, and only `evaluateSlots` can supply
+ * it: `evaluateContention` has classified the Bid in front of it and the
+ * slots gate is handed that verdict. `evaluateCap` calls this UNCHANGED, so
+ * the parameter defaults to `false` and the money side counts the
+ * prospective Bid as an ordinary commitment. That is the stricter reading
+ * and the deliberate one — §10 example 34's ninth entry passes on money at
+ * exactly `Maximum Bid = $1,000,000` because of it, and its tenth is
+ * refused there rather than on capacity.
  *
  * **The POST-BID basis is not optional**: PRD FR-12 and the §3 glossary both
  * define Projected Active/Bench Additions as counting the bid being placed,
@@ -1210,23 +1367,114 @@ function minorsExposureFor(
  * was refused on capacity, which `deferred-work.md` logged as a boundary
  * rather than a branch written against figures that did not exist.
  *
- * **`overflowCount` is what keeps that from being a carve-out.** An eligible
- * win with no Free Minor League Slot to land in takes an Active/Bench Slot at
- * full price, so it is counted here exactly as a non-eligible win is — which
- * is §10 example 25's fourth stash being refused on capacity, `12 + 1 = 13`,
- * even though the money is there. There is no automatic Slot Placement to
- * wait for: an overflow with nowhere to land is refused at the Bid.
+ * **`activeBenchOverflow` is what keeps that from being a carve-out.** An
+ * eligible win with no Free Minor League Slot to land in takes an
+ * Active/Bench Slot at full price, so it is counted here exactly as a
+ * non-eligible win is — which is §10 example 25's fourth stash being refused
+ * on capacity, `12 + 1 = 13`, even though the money is there. There is no
+ * automatic Slot Placement to wait for: an overflow with nowhere to land is
+ * refused at the Bid. It is the SLOTS-side overflow and never
+ * `minorsCountsFor`'s: an eligible ENTRY that overflows on the money side
+ * still lands nothing on Active/Bench until it is drawn, and §10 example 35
+ * is a Team for which the two figures are 2 and 0.
  *
- * `team.leading` is already the non-eligible leads alone: `teamMoneyStateFor`
- * skips the Auction being bid on and the Auctions another Team leads, and
- * routes the eligible ones into `eligibleLeading` — so the count needs no
- * filtering of its own, and no eligible lead is ever counted twice.
+ * **Story 10.2's two subtractions.** `team.leading` is already the
+ * non-eligible leads alone — `teamMoneyStateFor` skips the Auction being bid
+ * on and the Auctions another Team leads, and routes the eligible ones into
+ * `eligibleLeading`, so no eligible lead is ever counted twice — but it is
+ * no longer the non-eligible COMMITMENTS alone, because a non-eligible
+ * lottery entry sits in it too. `isContentionEntry` is what takes them back
+ * out, and the `+ 1` is suppressed for an entry for the same reason: an
+ * entry contributes nothing to this count and spends no allowance, however
+ * many of them a Team holds (FR-18, §10 example 34).
  */
-function projectedAdditionsFor(state: BoundBidState): number {
-	const { overflowCount } = minorsCountsFor(state);
+function projectedAdditionsFor(
+	state: BoundBidState,
+	thisBidIsEntry = false,
+	// **The counts, injected so ONE derivation serves the whole gate.**
+	// `evaluateSlots` needs these figures for its own outcome as well as for
+	// this sum, and computing them twice from the same arguments is the
+	// duplication this module argues against everywhere else. The default is
+	// what keeps `evaluateCap`'s call site a single argument: the money gate
+	// wants only the number, so it lets the derivation run here.
+	counts: ActiveBenchOverflowCounts = activeBenchOverflowFor(state, thisBidIsEntry)
+): number {
+	const { activeBenchOverflow } = counts;
 	return (
-		state.team.leading.length + (state.playerIsMinorLeagueEligible ? 0 : 1) + overflowCount
+		state.team.leading.filter((lead) => !lead.isContentionEntry).length +
+		(state.playerIsMinorLeagueEligible || thisBidIsEntry ? 0 : 1) +
+		activeBenchOverflow
 	);
+}
+
+/**
+ * What a Team holds RIGHT NOW against its Outstanding Bid Allowance, and how
+ * many open lotteries it has entered (Story 10.6, FR-37, FR-18).
+ *
+ * **One derivation, two surfaces.** The persistent strip and the Teams index
+ * both state this figure, and `teamViewFor` reads it from here rather than
+ * spelling it a second time — which is what makes the strip and the row
+ * structurally incapable of disagreeing.
+ *
+ * **It is deliberately NOT `projectedAdditions`.** That figure counts a
+ * PROSPECTIVE Bid: it answers "if I bid now, what would this be", which is
+ * the question the gate asks and not the question a standing figure asks.
+ * This is the same expression WITHOUT its prospective `+ 1` — built from the
+ * same parts rather than by probing the gate and subtracting one, because a
+ * subtraction is something a reader has to justify every time they meet it.
+ *
+ * The `max(0, N_slots − M)` half is `activeBenchOverflowFor`'s own call, not
+ * a second subtraction written out here, so the two figures differ in nothing
+ * at all. The state it is called with is the no-prospective-Bid one — the
+ * SAME `false` the strip's baseline passes for `playerIsMinorLeagueEligible`
+ * (`strip.ts`) — under which both of that function's prospective terms
+ * contribute zero whatever `thisBidIsEntry` says.
+ *
+ * **Entries are counted SEPARATELY and never summed in** (UX-DR36). A
+ * Minimum-Bid Contention entry consumes no allowance and a Team may hold any
+ * number of them, so folding them into the bids figure would state a ceiling
+ * that does not exist. `isContentionEntry` is the classification
+ * `teamMoneyStateFor` already recorded per Bid, so this is a filter and never
+ * a comparison against an amount.
+ *
+ * **Every figure is nulled TOGETHER for a viewer bound to no Team**, the way
+ * `evaluateCap` nulls its own: a Team that does not exist holds no bids
+ * against no allowance, and `0 of 0` would be an invented figure rather than
+ * an absent one.
+ */
+export type OutstandingBidFigures = {
+	/**
+	 * Outstanding NON-ENTRY Bids — the slots-side count, which is what the
+	 * allowance bounds. Never `overflowCount`, which counts entries because
+	 * the cap must carry them (see `minorsCountsFor`).
+	 */
+	readonly outstandingBids: number;
+	/** `Free Active/Bench Slots + OUTSTANDING_BID_ALLOWANCE` — what is permitted. */
+	readonly allowance: number;
+	/** Open Minimum-Bid Contention entries. Bounded by money alone (FR-18). */
+	readonly openContentionEntries: number;
+};
+
+export function outstandingBidFiguresFor(team: TeamMoneyState): OutstandingBidFigures;
+export function outstandingBidFiguresFor(team: TeamMoneyState | null): OutstandingBidFigures | null;
+export function outstandingBidFiguresFor(
+	team: TeamMoneyState | null
+): OutstandingBidFigures | null {
+	if (team === null) return null;
+	// The no-prospective-Bid state: there is no Player being bid on here, so
+	// nothing is eligible and nothing is an entry.
+	const bound: BoundBidState = { team, playerIsMinorLeagueEligible: false };
+	const { activeBenchOverflow } = activeBenchOverflowFor(bound, false);
+	return {
+		outstandingBids:
+			team.leading.filter((lead) => !lead.isContentionEntry).length + activeBenchOverflow,
+		// `unfilledSlots` with no additions IS Free Active/Bench Slots, clamp
+		// and all — the same one expression `evaluateSlots` reads its `F` from.
+		allowance: unfilledSlots(team.rosterCount, 0) + OUTSTANDING_BID_ALLOWANCE,
+		openContentionEntries:
+			team.leading.filter((lead) => lead.isContentionEntry).length +
+			team.eligibleLeading.filter((lead) => lead.isContentionEntry).length
+	};
 }
 
 /**
@@ -1264,10 +1512,13 @@ const SUBTRACTED = '−';
  * `core/constants.ts` already names both jobs, so there is no second
  * constant and nothing for a second constant to drift from.
  *
- * **The clamp is kept** although FR-37's ceiling makes it unreachable in
- * ordinary play, because a Commissioner override (Story 7.x) can still put a
- * Team above 12 — at which point an unclamped reserve would go NEGATIVE and
- * hand that Team extra spending power as a reward for the override.
+ * **The clamp is kept, and since Story 10.1 it is reachable in ORDINARY
+ * play**: the Outstanding Bid Allowance lets a Team hold one Bid beyond its
+ * free Slots, so §10 example 29's Roster Count 11 with two projected
+ * additions computes `max(0, 12 − 13)` and a $0 reserve with no override
+ * involved. A Commissioner override (Story 7.x) can still put a Team above
+ * 12 too. Either way an unclamped reserve would go NEGATIVE and hand that
+ * Team extra spending power.
  *
  * **"At or below" passes.** A Bid exactly equal to Maximum Bid is legal;
  * only one exceeding it is refused (FR-13, "any Bid exceeding").
@@ -1301,8 +1552,8 @@ const SUBTRACTED = '−';
  * and a false one are the same false.
  */
 function evaluateCap(state: BidState, fantraxPlayerId: string, amount: Money): CapGateOutcome {
-	const team = state.team;
-	if (team === null) {
+	const figures = teamSolvencyFiguresFor(state, fantraxPlayerId, amount);
+	if (figures === null) {
 		return {
 			passed: true,
 			offered: amount,
@@ -1323,6 +1574,71 @@ function evaluateCap(state: BidState, fantraxPlayerId: string, amount: Money): C
 		};
 	}
 
+	return {
+		// **The one expression in this function that is about the AMOUNT**, and
+		// everything above it is about the Team. `teamSolvencyFiguresFor` holds
+		// the arithmetic; this holds FR-13's comparison, unchanged in meaning
+		// from the day it was written.
+		passed: figures.unbounded
+			? compareMoney(figures.maximumBid, NO_MONEY) >= 0
+			: compareMoney(amount, figures.maximumBid) <= 0,
+		offered: amount,
+		...figures
+	};
+}
+
+/**
+ * A Team's SOLVENCY, as the money gate computes it — everything
+ * `CapGateOutcome` carries except the offer and the verdict on it (Story
+ * 7.7, AR-42).
+ *
+ * **Extracted rather than copied, because a second Team-solvency arithmetic
+ * is the one thing this module refuses everywhere else.** `evaluateCap` is
+ * the only gate that decides from an amount; every figure below it —
+ * Committed Bids, Minors Exposure, Available Cap Space, Projected
+ * Active/Bench Additions, Roster Reserve and Maximum Bid — answers "what can
+ * this Team still carry", which is a question a Roster Trade asks with no
+ * amount at all (FR-41). `rules/roster-trade.ts` reads `maximumBid` from here
+ * and compares it to nothing but zero, which is the identical test the
+ * `unbounded` branch below already makes.
+ *
+ * `null` for a Team that is not bound, exactly as the gate answers `null`
+ * figures: there is no arithmetic to do, and inventing zeroes for one would
+ * be inventing a Team.
+ *
+ * `prospectiveBidIsExempt` is `projectedAdditionsFor`'s `thisBidIsEntry`,
+ * widened in DOCUMENTATION and not in behaviour. It is `true` for a
+ * Minimum-Bid Contention entry, which projects no Active/Bench addition
+ * (FR-18) — and `true` for a Roster Trade, which projects none because there
+ * is no prospective Bid to project. `evaluateCap` passes `false` and is
+ * unchanged.
+ */
+export type TeamSolvencyFigures = {
+	readonly capSpace: Money;
+	readonly committedBids: Money;
+	readonly minorsExposure: Money;
+	readonly availableCapSpace: Money;
+	readonly rosterCount: number;
+	readonly projectedAdditions: number;
+	readonly rosterReserve: Money;
+	readonly maximumBid: Money;
+	readonly freeMinorLeagueSlots: number;
+	readonly eligibleLeadingBids: number;
+	readonly overflowCount: number;
+	readonly unbounded: boolean;
+	readonly exposingBids: readonly ExposingBid[];
+	readonly exposureIncludesThisBid: boolean;
+};
+
+export function teamSolvencyFiguresFor(
+	state: BidState,
+	fantraxPlayerId: string,
+	amount: Money,
+	prospectiveBidIsExempt = false
+): TeamSolvencyFigures | null {
+	const team = state.team;
+	if (team === null) return null;
+
 	const bound = boundStateFor(state, team);
 	// The ONE counts expression both gates read — `evaluateSlots` calls the
 	// identical function, so neither can hold a different `M`, `N` or
@@ -1341,7 +1657,7 @@ function evaluateCap(state: BidState, fantraxPlayerId: string, amount: Money): C
 	}
 
 	const availableCapSpace = subtractMoney(team.capSpace, committedBids);
-	const projectedAdditions = projectedAdditionsFor(bound);
+	const projectedAdditions = projectedAdditionsFor(bound, prospectiveBidIsExempt);
 	const rosterReserve = multiplyMoney(
 		MINIMUM_OPENING_BID,
 		unfilledSlots(team.rosterCount, projectedAdditions)
@@ -1353,10 +1669,6 @@ function evaluateCap(state: BidState, fantraxPlayerId: string, amount: Money): C
 	const unbounded = state.playerIsMinorLeagueEligible && counts.overflowCount === 0;
 
 	return {
-		passed: unbounded
-			? compareMoney(maximumBid, NO_MONEY) >= 0
-			: compareMoney(amount, maximumBid) <= 0,
-		offered: amount,
 		capSpace: team.capSpace,
 		committedBids,
 		minorsExposure,
@@ -1384,26 +1696,77 @@ function evaluateCap(state: BidState, fantraxPlayerId: string, amount: Money): C
  * it with none" is then a property of the signature rather than a claim a
  * reviewer has to verify by reading the body.
  *
- *   Roster Count + Projected Active/Bench Additions > 12  →  refused
+ * **Two branches, and the ORDER between them is the rule** (FR-37, amended
+ * 2026-09-08 by the Outstanding Bid Allowance):
  *
- * on the same POST-BID basis Roster Reserve uses: `projectedAdditionsFor`
- * counts the Bid being placed, and it is the identical call `evaluateCap`
- * makes, so the two gates cannot disagree about the count while agreeing
- * they describe the same roster. What they do NOT share is the outcome:
- * this returns its own `rosterCount`, its own `projectedAdditions` and its
- * own `ceiling`, because reporting a capacity refusal as a cap refusal is a
- * defect (AD-7) and two rows each stating their own arithmetic cannot be
- * read as one.
+ *   F = max(0, 12 − Roster Count)          — Free Active/Bench Slots
+ *   A = F + OUTSTANDING_BID_ALLOWANCE      — outstanding Bids permitted
  *
- * **"At the ceiling" passes.** A Bid that fills the twelfth hole leaves
- * `12 ≤ 12` and is legal; only one that would take a Team past it is
- * refused. §10 example 23 is that case and §10 example 24 is the other.
+ *   pass  ⟺  P = 0                         — the Minor-League carve-out
+ *         ∨  (F ≥ 1  ∧  P ≤ A)             — the allowance, and its guard
  *
- * **No clamp here, deliberately** — `unfilledSlots` keeps its `max(0, …)`
- * so a Commissioner override (Story 7.x) cannot hand a Team extra spending
- * power, and this gate is the other half of that pairing: an overridden Team
- * above the ceiling is REFUSED on capacity rather than rewarded, and the
- * comparison has to see the true count to say so.
+ * **The precondition `F ≥ 1` is tested before the arithmetic `P ≤ A`, and
+ * that is not a micro-optimisation.** At `F = 0` the allowance is still 1,
+ * so a full roster placing its first Bid has `P = 1 ≤ 1` and would be
+ * ADMITTED — it would go on to win a thirteenth Player, with no other Close
+ * available to cancel the surplus first. §10 example 30 is that
+ * counterfactual stated as arithmetic and §10 example 24 is it stated in
+ * play. Reordering the two conjuncts breaks the ceiling this gate exists to
+ * defend, silently, in the ordinary case.
+ *
+ * **The ceiling of 12 is UNCHANGED.** What widened is how many outstanding
+ * Bids may stand against it, not how many Players may land. §10 example 29's
+ * pass leaves `11 + 2 = 13`, which is legal precisely because FR-40 cancels
+ * the surplus commitment at the Close that fills the Slot — so `ceiling` is
+ * still reported on every evaluation, pass and refusal alike. A refusal
+ * quoting only the allowance would imply thirteen players are legal.
+ *
+ * `F` comes from `unfilledSlots(rosterCount, 0)` — the SAME clamped
+ * subtraction Roster Reserve does, evaluated with no additions — rather than
+ * from a second expression that must agree with it. The clamp matters here:
+ * a Team a Commissioner override put at Roster Count 13 gets `F = 0` and
+ * fails the precondition, instead of a negative `F` that would compute an
+ * allowance of 0 and pass by accident.
+ *
+ * The counts are on the same POST-BID basis Roster Reserve uses:
+ * `projectedAdditionsFor` counts the Bid being placed. It is the same
+ * FUNCTION `evaluateCap` calls, but since Story 10.2 it is no longer the
+ * identical CALL and the two gates may report different counts — this one
+ * passes `isContentionEntry`, so a lottery entry adds nothing here while
+ * still costing the cap a commitment (FR-18). The old claim that the two
+ * "cannot disagree about the count" has been removed rather than softened,
+ * because it is now false in exactly the case this story exists for. What
+ * they still do NOT share is the outcome: this returns its own
+ * `rosterCount`, its own `projectedAdditions` and its own `ceiling`,
+ * because reporting a capacity refusal as a cap refusal is a defect (AD-7)
+ * and two rows each stating their own arithmetic cannot be read as one.
+ *
+ * **FR-18's landing test comes FIRST and is the whole verdict for an
+ * entry** (Story 10.2). A Minimum-Bid Contention entry is permitted iff
+ * `freeActiveBenchSlots >= 1` OR (`playerIsMinorLeagueEligible` AND
+ * `freeMinorLeagueSlots >= 1`). Roster Count, the allowance and
+ * `projectedAdditions` bear on it not at all — which is why the branch
+ * cannot simply fall through to `P = 0`: an entry at a full roster with no
+ * minors room has `P = 0` too, and the zero branch would ADMIT it. §10
+ * example 34 is the pass at `F = 1` however many entries are already held;
+ * §10 example 35 is the pass on the eligible branch at `F = 0`.
+ *
+ * **The entry verdict is an INPUT, never a short-circuit** (AD-7). Both
+ * gates are still evaluated on every Bid and both outcomes are returned;
+ * `evaluate` hoists the contention outcome and hands this one its `entry`
+ * classification, so the judgement is made once, by the gate that owns it.
+ * The signature still takes no amount, and `SlotsGateOutcome` still carries
+ * no money field.
+ *
+ * **"At the ceiling" passes, and now with room to spare.** A Bid that fills
+ * the twelfth hole leaves `F = 1` and `P = 1 ≤ 2`, so §10 example 23's Team
+ * could hold a SECOND outstanding Bid as well. §10 example 24 is the other
+ * side: a Team already at twelve has `F = 0` and no allowance at all.
+ *
+ * **An overridden Team above the ceiling is REFUSED rather than rewarded.**
+ * `unfilledSlots`' clamp gives it `F = 0`, the precondition fails, and it
+ * gets no allowance — the same answer a Team at exactly twelve gets, which
+ * is the only defensible one.
  *
  * **Story 2.8 gives it the Overflow term, in COUNTS, and no more.** An
  * eligible win a Free Minor League Slot absorbs adds nothing to
@@ -1426,32 +1789,150 @@ function evaluateCap(state: BidState, fantraxPlayerId: string, amount: Money): C
  * then, because `ACTIVE_BENCH_SLOTS` is a league constant and is true of a
  * Team that does not exist.
  */
-function evaluateSlots(state: BidState): SlotsGateOutcome {
-	const team = state.team;
-	if (team === null) {
+function evaluateSlots(state: BidState, entry: ContentionGateOutcome['entry']): SlotsGateOutcome {
+	// The contention gate's own classification, narrowed to the one bit this
+	// gate may act on. `converts` is NOT an entry — a $5,000,000 conversion
+	// takes an Active/Bench commitment like any other raise — and
+	// `not_a_contention` covers the Opening Bid at exactly $1,000,000, which
+	// this gate cannot see the amount of and therefore gates as an ordinary
+	// Bid. `already_contending` is an entry that the contention gate itself
+	// refuses; it is classified honestly here anyway, because neither gate
+	// short-circuits the other (AD-7).
+	const isContentionEntry = entry === 'joins' || entry === 'already_contending';
+	const figures = slotCapacityFiguresFor(state, isContentionEntry);
+	if (figures === null) {
 		return {
 			passed: true,
 			rosterCount: null,
 			projectedAdditions: null,
 			ceiling: ACTIVE_BENCH_SLOTS,
+			freeActiveBenchSlots: null,
+			allowance: null,
 			freeMinorLeagueSlots: null,
-			eligibleLeadingBids: null,
-			overflowCount: null
+			eligibleLeadingBidsExcludingEntries: null,
+			activeBenchOverflow: null,
+			// Not a count, so not nulled with them: the classification is true
+			// of a Bid whether or not a Team is bound to place it.
+			isContentionEntry
 		};
 	}
 
-	const bound = boundStateFor(state, team);
-	// The IDENTICAL call `evaluateCap` makes — counts only, no amount.
-	const counts = minorsCountsFor(bound);
-	const projectedAdditions = projectedAdditionsFor(bound);
 	return {
-		passed: team.rosterCount + projectedAdditions <= ACTIVE_BENCH_SLOTS,
+		// FR-18's landing test, then FR-37's two branches — and the entry
+		// branch REPLACES them rather than joining them. An entry at a full
+		// roster has `P = 0`, so falling through would let the zero branch
+		// admit a win with nowhere to land.
+		passed: isContentionEntry
+			? figures.freeActiveBenchSlots >= 1 ||
+				(state.playerIsMinorLeagueEligible && figures.freeMinorLeagueSlots >= 1)
+			: // FR-37's two branches, in the ONE expression `activeBenchCapacityHolds`
+				// holds — read here and read again by `rules/roster-trade.ts`, so the
+				// two commands cannot drift apart about what a full roster is.
+				activeBenchCapacityHolds(figures),
+		...figures,
+		isContentionEntry
+	};
+}
+
+/**
+ * A Team's CAPACITY, as the slots gate computes it — everything
+ * `SlotsGateOutcome` carries except the classification and the verdict
+ * (Story 7.7, AR-42).
+ *
+ * `teamSolvencyFiguresFor`'s counterpart, extracted for its reason and in the
+ * same diff: FR-41 asks "has this Team still got somewhere to put what it
+ * holds" of two Teams at once and with no Bid anywhere in sight, and a second
+ * spelling of `F`, `A` or Active/Bench Overflow would be the first thing to
+ * drift from the rule that admits a Bid.
+ *
+ * **It still cannot see an amount**, which is the property FR-37 asks of the
+ * gate and is preserved here structurally: the signature takes a `BidState`
+ * and a boolean, exactly as `evaluateSlots` does.
+ *
+ * `ceiling` is stated even for an unbound Team, which is why the gate's own
+ * `null` branch restates it rather than reading it from a `null` figure set:
+ * `ACTIVE_BENCH_SLOTS` is a league constant and is true of a Team that does
+ * not exist.
+ */
+export type SlotCapacityFigures = {
+	readonly rosterCount: number;
+	readonly projectedAdditions: number;
+	readonly ceiling: number;
+	readonly freeActiveBenchSlots: number;
+	readonly allowance: number;
+	readonly freeMinorLeagueSlots: number;
+	readonly eligibleLeadingBidsExcludingEntries: number;
+	readonly activeBenchOverflow: number;
+};
+
+/**
+ * FR-37's two branches, as ONE expression both commands read (Story 7.7).
+ *
+ *   pass  ⟺  P = 0                         — the Minor-League carve-out
+ *         ∨  (F ≥ 1  ∧  P ≤ A)             — the allowance, and its guard
+ *
+ * **The precondition `F ≥ 1` is tested before the arithmetic `P ≤ A`**, and
+ * `&&` is what enforces that ordering: at `F = 0` the allowance is still 1, so
+ * a full roster placing its first Bid would compute `P = 1 ≤ 1` and be
+ * ADMITTED — it would go on to win a thirteenth Player with no Close available
+ * to cancel the surplus first. §10 example 30 is that counterfactual as
+ * arithmetic and §10 example 24 is it in play.
+ *
+ * **Extracted because a Roster Trade asks the identical question** (FR-41).
+ * `rules/roster-trade.ts` judges two Teams against this expression with no Bid
+ * anywhere in sight, and a character-for-character second copy of it is the
+ * one thing that could let a Trade admit a roster a Bid would be refused for.
+ * The cap side avoided the same duplication by reading `maximumBid` off
+ * `teamSolvencyFiguresFor`; this is the capacity side's equivalent.
+ *
+ * It takes the three FIGURES rather than a `BidState`, so it cannot see an
+ * amount, cannot see a Team and cannot acquire a second job. FR-18's entry
+ * branch is deliberately NOT here: an entry REPLACES these branches rather
+ * than joining them, and folding the two into one predicate is what would
+ * make an entry at a full roster fall through to `P = 0` and be admitted.
+ */
+export function activeBenchCapacityHolds(figures: {
+	readonly projectedAdditions: number;
+	readonly freeActiveBenchSlots: number;
+	readonly allowance: number;
+}): boolean {
+	return (
+		figures.projectedAdditions === 0 ||
+		(figures.freeActiveBenchSlots >= 1 && figures.projectedAdditions <= figures.allowance)
+	);
+}
+
+export function slotCapacityFiguresFor(
+	state: BidState,
+	isContentionEntry: boolean
+): SlotCapacityFigures | null {
+	const team = state.team;
+	if (team === null) return null;
+
+	const bound = boundStateFor(state, team);
+	// The SLOTS-side overflow — entries removed. `evaluateCap` calls
+	// `minorsCountsFor` for the money-side pair, and §10 example 35 is the
+	// Team for which the two figures are 2 and 0.
+	const counts = activeBenchOverflowFor(bound, isContentionEntry);
+	// The SAME counts, handed on rather than derived a second time from the
+	// same two arguments.
+	const projectedAdditions = projectedAdditionsFor(bound, isContentionEntry, counts);
+	// `unfilledSlots` with no additions IS Free Active/Bench Slots, clamp and
+	// all — one expression, not a second subtraction that has to agree.
+	const freeActiveBenchSlots = unfilledSlots(team.rosterCount, 0);
+	const allowance = freeActiveBenchSlots + OUTSTANDING_BID_ALLOWANCE;
+	return {
 		rosterCount: team.rosterCount,
 		projectedAdditions,
 		ceiling: ACTIVE_BENCH_SLOTS,
+		freeActiveBenchSlots,
+		// Raw `F + 1` even at `F = 0`: §10 example 30's lesson IS that
+		// counterfactual. The precondition sentence must never quote it, and
+		// the entry sentence must not either — an entry spends none of it.
+		allowance,
 		freeMinorLeagueSlots: counts.freeMinorLeagueSlots,
-		eligibleLeadingBids: counts.eligibleLeadingBids,
-		overflowCount: counts.overflowCount
+		eligibleLeadingBidsExcludingEntries: counts.eligibleLeadingBidsExcludingEntries,
+		activeBenchOverflow: counts.activeBenchOverflow
 	};
 }
 
@@ -1548,6 +2029,14 @@ function evaluateExpiry(state: BidState, now: string): ExpiryGateOutcome {
  * state alone.
  */
 export function evaluate(state: BidState, command: PlaceBid, now: string): PlaceBidGateResults {
+	// Hoisted because the slots gate reads its `entry` classification (Story
+	// 10.2). ONE judgement, made by the gate that owns it: re-deriving "is
+	// this a lottery entry" beside the capacity arithmetic would be a second
+	// answer to a question already answered, and would have to compare an
+	// amount inside a gate that must stay unable to see one. The verdict is
+	// an INPUT, not a skip — both gates are still evaluated and both outcomes
+	// are still returned, whichever way each of them goes (AD-7).
+	const contention = evaluateContention(state, command.amount, command.teamId);
 	return {
 		// First in `PLACE_BID_GATES` and first here, so the declared order and
 		// the construction order agree on sight (Story 3.7). It is handed
@@ -1563,7 +2052,7 @@ export function evaluate(state: BidState, command: PlaceBid, now: string): Place
 		// handed the acting Team because "are you already a Contender" is the
 		// one question in the set that is about WHO is bidding as well as how
 		// much — the same pair `selfBid` reads, for a different rule.
-		contention: evaluateContention(state, command.amount, command.teamId),
+		contention,
 		selfBid: evaluateSelfBid(state, command.teamId),
 		increment: evaluateIncrement(state, command.amount),
 		granularity: evaluateGranularity(command.amount),
@@ -1573,9 +2062,74 @@ export function evaluate(state: BidState, command: PlaceBid, now: string): Place
 		// it.
 		cap: evaluateCap(state, command.fantraxPlayerId, command.amount),
 		// No amount is passed, and that is the whole design: neither gate
-		// short-circuits the other and neither can see the other's ground.
-		slots: evaluateSlots(state)
+		// short-circuits the other and neither can see the other's ground. The
+		// contention verdict that IS passed is a classification, not a
+		// magnitude — `SlotsGateOutcome` still carries no money field.
+		slots: evaluateSlots(state, contention.entry)
 	};
+}
+
+/**
+ * Run `RESTORE_LEADING_BID_GATES` over a candidate for restoration — the
+ * total function for the SECOND fixed gate set (Story 10.4, FR-40, AR-37).
+ *
+ * **The same two gates `evaluate` runs last, and no arithmetic of its own.**
+ * `evaluateCap` and `evaluateSlots` are called here exactly as they are
+ * called there, with the identical arguments, so a Team judged able to keep a
+ * commitment is judged by the rule that admitted it. There is no second
+ * statement of the allowance, of Minors Exposure or of the eligible carve-out
+ * anywhere in `rules/restore.ts`, and there could not be: this is the only
+ * door.
+ *
+ * **`evaluateContention` is asked, and its verdict is not a gate here.**
+ * `evaluateSlots` reads the contention gate's own `entry` classification to
+ * know whether the commitment is a lottery entry — FR-18's exemption — so the
+ * classification has to be OBTAINED rather than invented. Asking the gate is
+ * how `evaluate` obtains it, and asking it a second way here would be a
+ * second answer to a question `rules/bidding.ts` already owns. Its `passed`
+ * is deliberately discarded: `already_contending` refuses a Team joining a
+ * lottery twice, which is a rule about the ACT of joining and says nothing
+ * about a join already made.
+ *
+ * **`now` is accepted and read by nothing**, and that is the point rather
+ * than an oversight. The signature is `evaluate`'s — `(state, command, now)`
+ * — because a caller must not have to remember which of the two evaluators
+ * takes an instant, and because `expiry` is the one gate that asks what time
+ * it is and this set does not contain it. A restored Bidder inherits whatever
+ * is left of the Auction Clock, including very little (FR-40); refusing the
+ * restoration because that clock is nearly out would strand the Auction
+ * leaderless for the one reason FR-40 rules out.
+ *
+ * Every key is always present with its own outcome and its own arithmetic,
+ * whether or not that gate passed, exactly as `PlaceBidGateResults` is
+ * (AD-1). Neither gate short-circuits the other.
+ */
+export function evaluateRestore(
+	state: BidState,
+	command: RestoreLeadingBid,
+	/** Unread, and declared anyway — see above. */
+	now: string
+): RestoreLeadingBidGateResults {
+	void now;
+	const contention = evaluateContention(state, command.amount, command.teamId);
+	return {
+		cap: evaluateCap(state, command.fantraxPlayerId, command.amount),
+		slots: evaluateSlots(state, contention.entry)
+	};
+}
+
+/**
+ * Whether every gate in `RESTORE_LEADING_BID_GATES` passed.
+ *
+ * Iterated over the declared list rather than over `Object.values`, for
+ * `allGatesPassed`'s reason: the list is the sequence, fixed and ordered at
+ * the one place the gate set lives.
+ */
+export function allRestoreGatesPassed(gates: RestoreLeadingBidGateResults): boolean {
+	for (const gate of RESTORE_LEADING_BID_GATES) {
+		if (!gates[gate].passed) return false;
+	}
+	return true;
 }
 
 /**
@@ -1843,34 +2397,122 @@ function gateSentence(gates: PlaceBidGateResults, gate: PlaceBidGate): string | 
 			if (
 				outcome.passed ||
 				outcome.rosterCount === null ||
-				outcome.projectedAdditions === null
+				outcome.projectedAdditions === null ||
+				outcome.freeActiveBenchSlots === null ||
+				outcome.allowance === null
 			) {
 				return null;
 			}
-			// No money anywhere in it, and that is the point: a capacity
-			// refusal that quoted a cap figure as its ground would be the
-			// defect AD-7 names. The counts are stated, then the sum they
-			// make, then the ceiling it passes — nobody has to add at 4am.
+			// No money anywhere in either sentence, and that is the point: a
+			// capacity refusal that quoted a cap figure as its ground would be
+			// the defect AD-7 names. The counts are stated, then the sum they
+			// make, then the ceiling — nobody has to add at 4am.
+			// **FR-18's refusal, and it comes first because its GROUND is
+			// different** (Story 10.2). A lottery entry spends no allowance and
+			// is not measured against Roster Capacity at all; what it lacks is
+			// somewhere for a win to land. Telling this Manager their allowance
+			// is spent, or quoting a projection the rule never read, would send
+			// them after the wrong remedy — and the remedy here is the same one
+			// the precondition has, which is exactly why the two sentences must
+			// not be the same sentence.
+			if (outcome.isContentionEntry) {
+				return (
+					'A lottery entry needs somewhere for the win to land: your Team has no ' +
+					'Active/Bench Slot free, and no Minor League Slot this Player could take. ' +
+					`Roster Count is ${String(outcome.rosterCount)} against a Roster Capacity of ` +
+					`${String(outcome.ceiling)}. Entering a lottery spends none of your ` +
+					'Outstanding Bid Allowance, so it is the landing place you lack rather than ' +
+					'the room to bid. You may enter again once a Slot frees up.'
+				);
+			}
+
 			const projected = outcome.rosterCount + outcome.projectedAdditions;
 			// §10 example 25's overflow, named in COUNTS alone — there is no
-			// amount on this outcome to name it in anything else.
+			// amount on this outcome to name it in anything else. It rides
+			// BOTH refusals: an overflow can be what spent the allowance just
+			// as easily as what met a full roster. It is the SLOTS-side figure
+			// (Story 10.2): quoting the money side's Overflow Count here would
+			// state a number this gate never read.
 			const overflow =
-				outcome.overflowCount === null || outcome.overflowCount === 0
+				outcome.activeBenchOverflow === null || outcome.activeBenchOverflow === 0
 					? ''
-					: `Eligible Leading Bids ${String(outcome.eligibleLeadingBids)} against Free ` +
-						`Minor League Slots ${String(outcome.freeMinorLeagueSlots)} leaves an Overflow ` +
-						`Count of ${String(outcome.overflowCount)}, and an eligible win with no Free ` +
-						'Minor League Slot to land in takes an Active/Bench Slot. ';
+					: `Eligible Leading Bids ${String(outcome.eligibleLeadingBidsExcludingEntries)} ` +
+						`against Free Minor League Slots ${String(outcome.freeMinorLeagueSlots)} leaves ` +
+						`an Active/Bench Overflow of ${String(outcome.activeBenchOverflow)}, and an ` +
+						'eligible win with no Free Minor League Slot to land in takes an ' +
+						'Active/Bench Slot. ';
+			const arithmetic =
+				`Roster Count is ${String(outcome.rosterCount)} and Projected Active/Bench ` +
+				`Additions is ${String(outcome.projectedAdditions)}, so winning would put your ` +
+				`Team at ${String(projected)} against a Roster Capacity of ` +
+				`${String(outcome.ceiling)}. ` +
+				overflow;
+
+			// **The PRECONDITION refusal** (§10 examples 24, 25, 30): no Free
+			// Active/Bench Slot at all, so the allowance never applies. It
+			// must NOT quote `allowance` — that figure is still 1 here, and
+			// saying "1 permitted" while permitting none is precisely the
+			// confusion two separate sentences exist to avoid. The remedy is
+			// a Slot freeing up, and it lasts until one does.
+			if (outcome.freeActiveBenchSlots === 0) {
+				return (
+					'Your Team has no roster slot for this Player: with no free Active/Bench Slot, ' +
+					`no bid on this Player is permitted. ${arithmetic}` +
+					'You may bid again once a Slot frees up.'
+				);
+			}
+
+			// **The ALLOWANCE refusal** (§10 example 29's tail): the Team has
+			// room and has already used it plus its one extra outstanding
+			// Bid. A different fact and a different remedy — this one
+			// resolves itself at the next close — so UX-DR32 requires it
+			// never collapse into the sentence above.
+			const slots =
+				outcome.freeActiveBenchSlots === 1
+					? '1 free Active/Bench Slot permits'
+					: `${String(outcome.freeActiveBenchSlots)} free Active/Bench Slots permit`;
 			return (
-				'Your Team has no roster slot for this Player. Roster Count is ' +
-				`${String(outcome.rosterCount)} and Projected Active/Bench Additions is ` +
-				`${String(outcome.projectedAdditions)}, so winning would put your Team at ` +
-				`${String(projected)} against a Roster Capacity of ${String(outcome.ceiling)}. ` +
-				overflow +
-				'You may bid again once a Slot frees up.'
+				`This would be your ${ordinal(outcome.projectedAdditions)} outstanding bid, and ` +
+				`${slots} ${String(outcome.allowance)}. ${arithmetic}` +
+				'You may bid again once one of your bids closes or a Slot frees up.'
 			);
 		}
 	}
+}
+
+/**
+ * `1` as `1st` — the ordinal a bid count is spoken in.
+ *
+ * The slots wording counts outstanding bids in both directions ("your 2nd of
+ * 2 permitted bids", "this would be your 3rd outstanding bid"), and a
+ * Manager reads a position, not a cardinal. One function rather than two
+ * inline expressions, for the reason every glyph here is one: the passing
+ * figure and the refusing sentence must not spell the same number two ways.
+ *
+ * **The caller only ever passes 1 or more, and that is an invariant rather
+ * than a coincidence.** `projectedAdditions` of 0 is the zero branch, which
+ * both `gateSentence` and `gateFigure` answer BEFORE reaching an ordinal:
+ * the gate passes there and the row prints the bare roster figure, so
+ * `your 0th of 3 permitted bids` is unreachable. Anything that moves those
+ * branch tests has to keep that true, because `0th` is the one reading this
+ * function has no sensible answer for.
+ *
+ * **The 11–13 exception is real English, and it is reachable without a
+ * Commissioner override.** Story 10.2 took Minimum-Bid Contention entries
+ * out of `projectedAdditions`, so the old justification — eleven open
+ * lotteries — no longer reaches these values. Ordinary leads still do, and
+ * more directly: `allowance` is `max(0, 12 − rosterCount) + 1`, so a Team at
+ * Roster Count 0 may hold 13 outstanding bids and its passing row reads
+ * `your 13th of 13 permitted bids`, with `11th` and `12th` on the way there.
+ * A fourteenth is refused and prints `your 14th outstanding bid`. Without
+ * the exception those three would read `11st`, `12nd` and `13rd`.
+ */
+export function ordinal(value: number): string {
+	const suffix =
+		value % 100 >= 11 && value % 100 <= 13
+			? 'th'
+			: ['th', 'st', 'nd', 'rd'][value % 10] ?? 'th';
+	return `${String(value)}${suffix}`;
 }
 
 /**
@@ -1942,7 +2584,41 @@ export type CapBreakdownLine = {
 	/** `'−'` where the column subtracts this term, empty otherwise. */
 	readonly operator: string;
 	readonly kind: 'term' | 'detail' | 'subtotal';
+	/**
+	 * Whether this row stands while the column is COLLAPSED.
+	 *
+	 * The column is the answer to "how much may I bid", and the whole ledger
+	 * is how that answer is checked. Most Managers, most of the time, want the
+	 * answer: what they started from and what they arrived at. So a collapsed
+	 * column carries `Cap Space` and `Maximum Bid` always, and a term that is
+	 * ACTUALLY BITING — a non-zero `Committed Bids` or `Roster Reserve` —
+	 * because a figure that moved the answer may not be hidden behind a
+	 * control. A term at $0 moved nothing and states nothing by standing
+	 * there.
+	 *
+	 * Decided HERE and not by the surface, for `kind`'s reason: this is a
+	 * judgement about the arithmetic, made beside the arithmetic, and a
+	 * component reading `$0.0M` back out of a rendered string to make it
+	 * would be formatting money in the one place that must not.
+	 *
+	 * Expanding is always available and never lossy — every row is still
+	 * there, in ledger order, and the column still sums as displayed once it
+	 * is open. A surface that shows the column WHOLE (the refusal panel,
+	 * where a breakdown a Manager has to ask for is a breakdown they will not
+	 * check) simply ignores this field.
+	 */
+	readonly summary: boolean;
 };
+
+/**
+ * The two words the collapsed column's own control goes by.
+ *
+ * Here rather than in the component for every other sentence's reason: one
+ * definition, so the control a test asserts and the control a Manager reads
+ * cannot drift apart.
+ */
+export const CAP_BREAKDOWN_EXPAND = 'Show the full calculation';
+export const CAP_BREAKDOWN_COLLAPSE = 'Hide the full calculation';
 
 /**
  * The Maximum Bid breakdown, as rows a surface prints in order.
@@ -2007,12 +2683,22 @@ export function capBreakdown(outcome: CapGateOutcome): readonly CapBreakdownLine
 	}
 	const holes = unfilledSlots(outcome.rosterCount, outcome.projectedAdditions);
 	return [
-		{ label: 'Cap Space', figure: describeAmount(outcome.capSpace), operator: '', kind: 'term' },
+		{
+			label: 'Cap Space',
+			figure: describeAmount(outcome.capSpace),
+			operator: '',
+			kind: 'term',
+			// Where the answer starts. Always stands.
+			summary: true
+		},
 		{
 			label: 'Committed Bids',
 			figure: describeAmount(outcome.committedBids),
 			operator: SUBTRACTED,
-			kind: 'term'
+			kind: 'term',
+			// Stands when it BIT. A Team with nothing committed learns nothing
+			// from a row saying so.
+			summary: outcome.committedBids > 0
 		},
 		{
 			// Inside Committed Bids already — commentary, never a second
@@ -2023,7 +2709,8 @@ export function capBreakdown(outcome: CapGateOutcome): readonly CapBreakdownLine
 			label: 'of which Minors Exposure',
 			figure: describeAmount(outcome.minorsExposure),
 			operator: '',
-			kind: 'detail'
+			kind: 'detail',
+			summary: false
 		},
 		{
 			// The three counts the figure above came from, in the shape the
@@ -2036,19 +2723,25 @@ export function capBreakdown(outcome: CapGateOutcome): readonly CapBreakdownLine
 				`${String(outcome.freeMinorLeagueSlots)} Free Minor League Slots`,
 			figure: `Overflow Count ${String(outcome.overflowCount)}`,
 			operator: '',
-			kind: 'detail'
+			kind: 'detail',
+			summary: false
 		},
 		{
 			label: 'Available Cap Space',
 			figure: describeAmount(outcome.availableCapSpace),
 			operator: '',
-			kind: 'subtotal'
+			kind: 'subtotal',
+			// A step ON the way, not the answer: it is what the full column is
+			// opened to read.
+			summary: false
 		},
 		{
 			label: 'Roster Reserve',
 			figure: describeAmount(outcome.rosterReserve),
 			operator: SUBTRACTED,
-			kind: 'term'
+			kind: 'term',
+			// Stands when it BIT — a Reserve of $0 held nothing back.
+			summary: outcome.rosterReserve > 0
 		},
 		{
 			label: `${formatMoney(MINIMUM_OPENING_BID)} × ${String(holes)} unfilled Active/Bench Slots`,
@@ -2058,7 +2751,8 @@ export function capBreakdown(outcome: CapGateOutcome): readonly CapBreakdownLine
 				`Roster Count ${String(outcome.rosterCount)}, Projected Active/Bench Additions ` +
 				`${String(outcome.projectedAdditions)}, of ${String(ACTIVE_BENCH_SLOTS)}`,
 			operator: '',
-			kind: 'detail'
+			kind: 'detail',
+			summary: false
 		},
 		{
 			label: 'Maximum Bid',
@@ -2070,7 +2764,9 @@ export function capBreakdown(outcome: CapGateOutcome): readonly CapBreakdownLine
 			// Manager they may bid $1.0M on a Player they may bid anything on.
 			figure: outcome.unbounded ? 'no cap limit' : describeAmount(outcome.maximumBid),
 			operator: '',
-			kind: 'subtotal'
+			kind: 'subtotal',
+			// The answer. Always stands.
+			summary: true
 		},
 		// ...and the breakdown says WHY, which is the half EXPERIENCE.md asks
 		// for by name. Present only when it is true: a row explaining an
@@ -2083,7 +2779,10 @@ export function capBreakdown(outcome: CapGateOutcome): readonly CapBreakdownLine
 							'A Free Minor League Slot absorbs this Player at a $0 Cap Hit, so no amount ' +
 							'is too large — but Roster Reserve must still be covered.',
 						operator: '',
-						kind: 'detail' as const
+						kind: 'detail' as const,
+						// The reason the answer is what it is — read on opening the
+						// column, beside the terms it is about.
+						summary: false
 					}
 				]
 			: [])
@@ -2125,6 +2824,13 @@ export function describeAmount(amount: Money): string {
  * it, in the register of a readout. The full sentence lives one part further
  * up the panel, in the delta, so a row that repeated it would print the same
  * words twice on the most carefully-worded surface in the product.
+ *
+ * **Story 10.1 puts a clause in front of the slots row** — `your 2nd of 2
+ * permitted bids; Roster Count would be 13 of 12` — because the Outstanding
+ * Bid Allowance made the roster arithmetic ambiguous on its own: at the
+ * allowance a PASS and a refused thirteenth Player both read `13 of 12`. It
+ * is still a readout and still not the sentence; it just names one more
+ * count, which is what the gate now decides on.
  *
  * Reporting a PASSING gate is the part that exceeds the SPEC, deliberately:
  * it proves every check ran and this is the only obstacle, which forecloses
@@ -2290,20 +2996,81 @@ function gateFigure(gates: PlaceBidGateResults, gate: PlaceBidGate): string {
 		}
 		case 'slots': {
 			const outcome = gates.slots;
-			if (outcome.rosterCount === null || outcome.projectedAdditions === null) {
+			if (
+				outcome.rosterCount === null ||
+				outcome.projectedAdditions === null ||
+				outcome.freeActiveBenchSlots === null ||
+				outcome.allowance === null ||
+				// Read by the entry form, and null with the rest of them.
+				outcome.freeMinorLeagueSlots === null
+			) {
 				return 'no Team, so no Roster Count';
 			}
-			// `EXPERIENCE.md`'s shape verbatim — `Roster Count would be 10 of
-			// 12` — and ONE branch serving passed and refused alike, because
-			// the row states the arithmetic and the chip beside it states the
-			// outcome. A second branch would be a second place for the two to
-			// disagree.
+			// **The one-branch rule no longer holds, and it is the rule that
+			// changed rather than the rendering.** Until Story 10.1 the gate
+			// was a single comparison, so the row could state that one
+			// arithmetic and let the chip beside it state the verdict. FR-37
+			// now decides on one of THREE — the allowance met, the allowance
+			// spent, or the precondition failed before the allowance is
+			// reached — and a row stating only `Roster Count would be 13 of
+			// 12` cannot tell a permitted second bid apart from a refused
+			// thirteenth Player. Each form names the figure its own branch
+			// actually read.
 			const projected = outcome.rosterCount + outcome.projectedAdditions;
-			const figure = `Roster Count would be ${String(projected)} of ${String(outcome.ceiling)}`;
+			const roster = `Roster Count would be ${String(projected)} of ${String(outcome.ceiling)}`;
 			// Counts only — this outcome carries no amount to name it in
-			// anything else, which is exactly the design (FR-37).
-			if (outcome.overflowCount === null || outcome.overflowCount === 0) return figure;
-			return `${figure}, Overflow Count ${String(outcome.overflowCount)}`;
+			// anything else, which is exactly the design (FR-37). The SLOTS-side
+			// overflow, never the money side's (Story 10.2).
+			const overflow =
+				outcome.activeBenchOverflow === null || outcome.activeBenchOverflow === 0
+					? ''
+					: `, Active/Bench Overflow ${String(outcome.activeBenchOverflow)}`;
+
+			// **The fifth form: a lottery entry, passing or refused.** It names
+			// the two figures FR-18's branch actually read and no others —
+			// quoting a permitted-bid count would be false in both directions,
+			// since an entry neither spends the allowance nor is bounded by it.
+			// One form for both verdicts, because the chip beside it already
+			// states which, and the arithmetic a Manager needs is the same
+			// either way.
+			if (outcome.isContentionEntry) {
+				return (
+					`a lottery entry against ${String(outcome.freeActiveBenchSlots)} free ` +
+					`Active/Bench and ${String(outcome.freeMinorLeagueSlots)} free Minor League ` +
+					`Slots; ${roster}${overflow}`
+				);
+			}
+
+			if (outcome.passed) {
+				// The `P = 0` branch needs no free Slot and spends no
+				// allowance, so counting it as a permitted bid would print
+				// `your 0th of 3` on a stash. `EXPERIENCE.md`'s original row,
+				// unchanged, is the honest figure there.
+				if (outcome.projectedAdditions === 0) return `${roster}${overflow}`;
+				// The allowance met. The permitted-bid count comes FIRST
+				// because at the allowance `projected` legitimately exceeds
+				// the ceiling — §10 example 29 passes at 13 of 12 — and a
+				// row opening on that number beside a `Passed` chip reads as
+				// a contradiction until the clause before it explains why.
+				return (
+					`your ${ordinal(outcome.projectedAdditions)} of ` +
+					`${String(outcome.allowance)} permitted bids; ${roster}${overflow}`
+				);
+			}
+
+			// Refused on the precondition: no free Slot, so the allowance
+			// never applied. The figure does not quote it, for the same
+			// reason the sentence does not.
+			if (outcome.freeActiveBenchSlots === 0) {
+				return `no free Active/Bench Slot; ${roster}${overflow}`;
+			}
+
+			// Refused at the allowance: there was room, and this bid is one
+			// past what it permits.
+			return (
+				`your ${ordinal(outcome.projectedAdditions)} outstanding bid against ` +
+				`${String(outcome.allowance)} permitted; ${roster}${overflow}`
+			);
 		}
 	}
 	// Unreachable: every gate above returns. Present so a gate added to
@@ -2727,6 +3494,45 @@ export function bidAppendedSentence(seq: string): string {
 	);
 }
 
+/**
+ * The one word an Auction history row carries when the Bid on it was
+ * cancelled (Story 10.6, FR-40).
+ *
+ * **It is not "void", and the distinction is the whole point** (UX-DR38). A
+ * void says somebody decided the Bid should not have stood. A cancellation
+ * says nothing of the kind: the Bid was good, it stood, and it was taken back
+ * automatically when the bidding Team's roster filled elsewhere. One word here
+ * and one sentence below, so no surface has to choose between two framings.
+ */
+export const BID_CANCELLED_LABEL = 'cancelled';
+
+/**
+ * Why a Bid in this Auction's history no longer stands, naming the win that
+ * caused it.
+ *
+ * **The cause is named by its PLAYER.** `BidCancellation` carries
+ * `causeFantraxPlayerId` and `causePlayerName` and no cause Team name
+ * (`projection/auctions.ts`) — and it needs none, because the Team that won
+ * elsewhere is the same Team this cancelled row already names as its bidder.
+ * The cascade only ever takes back the WINNING Team's own leftover
+ * commitments.
+ *
+ * `restored` is `cancellation.restoration !== null` — whether anyone took the
+ * lead behind it. `false` is never "there was nobody below": it is "nobody
+ * below could still keep it", which is why the second form states the
+ * consequence for the Auction rather than the state of its history. The
+ * Auction then renders as the unbid nomination the board already has, with
+ * this history intact.
+ *
+ * No apology, no alarm, and no verb suggesting anyone judged the Bid.
+ */
+export function bidCancelledSentence(causePlayerName: string, restored: boolean): string {
+	const cause = `Cancelled when this Team won ${causePlayerName}.`;
+	return restored
+		? `${cause} The next-highest Bid now leads.`
+		: `${cause} No surviving Bid could take the lead.`;
+}
+
 // --- decide() --------------------------------------------------------------
 
 /**
@@ -3003,8 +3809,24 @@ export function decide(
 	// opening half; the `contention` gate cannot answer this, because it
 	// reports on the contention already running rather than the one about to
 	// start.
+	//
+	// **A lottery ALREADY running is not one about to start** (Story 10.5).
+	// Until 10.5 the two halves could not disagree: an Auction with no leader
+	// was never in a Minimum-Bid Contention, so `leadingBid === null` alone
+	// meant `contention !== 'minimum_bid'` too. 10.5 created the pairing —
+	// FR-40's cascade can cancel every join, and the lottery keeps its
+	// contention and its fixed clock so the empty outcome can be recorded. A
+	// Team bidding `MINIMUM_BID` into that Auction is JOINING it, not opening
+	// a second one: the commitment was published at the real opening and the
+	// sealed seed row still exists. Without this clause the join would demand
+	// a fresh seed the shell correctly did not supply — it passes the SEALED
+	// one inside a live contention — and throw, and a second `seedHash` on the
+	// payload would fire `recordContentionSeed` against a primary key that
+	// already holds a row.
 	const opensContention =
-		state.leadingBid === null && contentionForAmount(command.amount) === 'minimum_bid';
+		state.contention !== 'minimum_bid' &&
+		state.leadingBid === null &&
+		contentionForAmount(command.amount) === 'minimum_bid';
 	// **A missing or wrong-kinded seed is a shell bug and THROWS** (AD-1), on
 	// both halves of the commit-reveal. `seedFor` is the one narrowing, so the
 	// two branches below hold a `string` rather than a union nothing has ruled

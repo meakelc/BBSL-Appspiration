@@ -19,7 +19,7 @@ import { closedPayload } from '../fixtures/closed-event.ts';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { AUCTION_CLOCK, SALARY_CAP } from '../../src/lib/core/constants.ts';
+import { AUCTION_CLOCK, CORE_VERSION, SALARY_CAP } from '../../src/lib/core/constants.ts';
 import {
 	AUCTION_EXPIRED,
 	BID_PLACED_EVENT,
@@ -96,7 +96,7 @@ function auctionOpened(occurredAt = '2026-08-25T09:00:00.000Z'): QueryResultRow 
 		seq: 0,
 		occurred_at: new Date(occurredAt),
 		schema_version: 1,
-		core_version: 1,
+		core_version: CORE_VERSION,
 		manager_id: 'm-commissioner',
 		team_id: 't-commissioner',
 		event_type: AUCTION_OPENED_EVENT,
@@ -328,7 +328,7 @@ function logEvent(
 		seq,
 		occurred_at: new Date(occurredAt),
 		schema_version: 1,
-		core_version: 1,
+		core_version: CORE_VERSION,
 		manager_id: envelope.managerId ?? 'm-0',
 		team_id: envelope.teamId ?? 't-0',
 		event_type: type,
@@ -499,7 +499,7 @@ describe('placeBid — the gate holds (AC4)', () => {
 		// The database clock, read once by the shell (AD-3) — never Date.now().
 		expect(event?.occurredAt).toBe(NOW.toISOString());
 		expect(event?.schemaVersion).toBe(1);
-		expect(event?.coreVersion).toBe(1);
+		expect(event?.coreVersion).toBe(CORE_VERSION);
 		expect(harness.state.committed).toBe(true);
 		expect(harness.state.released).toBe(1);
 	});
@@ -1072,7 +1072,7 @@ describe('placeBid — Minors Exposure refuses under the lock, and writes nothin
 		// will use.
 		expect(loaded.bid.team?.leading).toEqual([]);
 		expect(loaded.bid.team?.eligibleLeading).toEqual([
-			{ fantraxPlayerId: 'p-stash', playerName: 'Ausar Bright', amount: 30_000_000 }
+			{ fantraxPlayerId: 'p-stash', playerName: 'Ausar Bright', amount: 30_000_000, isContentionEntry: false }
 		]);
 		// Occupancy from `team_rosters`; Cap Space and Roster Count unmoved by
 		// the two Minor League contracts.
@@ -1112,7 +1112,7 @@ describe('placeBid — Minors Exposure refuses under the lock, and writes nothin
 		// Minors Exposure, and is reported beside the refusal rather than
 		// left for a reader to wonder about.
 		expect(rejection.gates?.slots.passed).toBe(true);
-		expect(rejection.gates?.slots.overflowCount).toBe(1);
+		expect(rejection.gates?.slots.activeBenchOverflow).toBe(1);
 		// The sentence names the earlier Auction by Player and amount.
 		expect(rejection.detail).toContain('Ausar Bright');
 		expect(rejection.detail).toContain('$30.0M');
@@ -1136,7 +1136,7 @@ describe('placeBid — Minors Exposure refuses under the lock, and writes nothin
 		await harness.client.query('begin');
 		const loaded = await loadBidState(harness.client, 'p-second', 't-2');
 		expect(loaded.bid.team?.eligibleLeading).toEqual([
-			{ fantraxPlayerId: 'p-stash', playerName: 'Ausar Bright', amount: 30_000_000 }
+			{ fantraxPlayerId: 'p-stash', playerName: 'Ausar Bright', amount: 30_000_000, isContentionEntry: false }
 		]);
 	});
 });
@@ -1604,11 +1604,14 @@ describe('placeBid — the lottery seed (AC5, AD-14)', () => {
 		expect(dissolved.seedHash).toBeNull();
 
 		// ...and the READ path, over the log this transaction produced.
-		const view = await loadAuctionPage(
+		const read = await loadAuctionPage(
 			pageGateway([nominated(), bidLogged(2, 1_000_000), ...harness.appendedEvents]),
 			'p-1',
 			null
 		);
+		// The read is discriminated now — an open Auction or a closed one — and
+		// this contention is still running, so the assertion states which.
+		const view = read !== null && read.kind === 'open' ? read : null;
 
 		expect(view?.seed).toBe(SEALED_SEED);
 		expect(view?.seedHash).toBeNull();
@@ -1785,7 +1788,7 @@ describe('loadBidState — a won contract is in the three figures (AC4)', () => 
 
 		const open = await bidStateWith(stashEvents);
 		expect(open.loaded?.bid.team?.eligibleLeading).toEqual([
-			{ fantraxPlayerId: 'p-stash', playerName: 'Ausar Bright', amount: 30_000_000 }
+			{ fantraxPlayerId: 'p-stash', playerName: 'Ausar Bright', amount: 30_000_000, isContentionEntry: false }
 		]);
 
 		const closed = await bidStateWith([

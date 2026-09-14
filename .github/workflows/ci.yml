@@ -8,8 +8,18 @@
 name: CI
 
 on:
+  # `pilot` is here because it DEPLOYS. Netlify builds a branch deploy from it
+  # on every push, and the build path above runs neither vitest nor
+  # svelte-check — so without this line a red suite reaches the league's
+  # moderators mid-auction with nothing anywhere reporting it.
+  #
+  # Note what this buys and what it does not. CI runs ALONGSIDE the deploy,
+  # never in front of it: Netlify does not wait for this workflow, so a bad
+  # push still ships and what you get is a fast red X to revert against.
+  # Gating needs a pull request, which `pull_request:` below already covers
+  # for anything worth the ceremony — a deploy preview included.
   push:
-    branches: [main]
+    branches: [main, pilot]
   pull_request:
 
 # The suite reads the tree and nothing else.

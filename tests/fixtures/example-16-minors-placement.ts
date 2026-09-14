@@ -90,6 +90,10 @@ export function nominationOf(fantraxPlayerId: string, playerName: string) {
 		// The nominating Manager (Story 3.7). No close reads it — an
 		// `AuctionTerminated` does, and the fold carries it for both.
 		managerId: 'm-n',
+		// An ordinary Manager nomination, which spent the Team's one Slot
+		// (Story 9.8). The Commissioner exemption is exercised in
+		// `tests/core/nomination.test.ts`; nothing about a close depends on it.
+		holdsSlot: true,
 		occurredAt: '2026-08-26T08:00:00.000Z'
 	};
 }
@@ -119,8 +123,17 @@ export const STATE_16: CloseState = {
 	playerIsMinorLeagueEligible: true,
 	// "Team M holds two players in Minor League Slots"
 	minorLeagueOccupied: minorLeagueOccupiedIn(TEAM_M_IMPORTED),
+	// **Story 10.3's cascade inputs.** `auctions` is empty here, so Team M
+	// holds no other commitment and FR-40's cascade has nothing to cancel
+	// whichever way the figures beside it go.
+	auctions: { byPlayer: {} },
+	capSpace: parseMoney(0),
+	rosterCount: 0,
+	isMinorLeagueEligible: () => false,
+	playerNameFor: (playerId: string) => playerId,
 	// A Standard Contention: no lottery, no draw, no winner to derive.
-	drawnWinner: null
+	drawnWinner: null,
+	rosterFiguresFor: () => null
 };
 
 const DECIDED_16 = decideClose(STATE_16, CLOSES_AT, null);

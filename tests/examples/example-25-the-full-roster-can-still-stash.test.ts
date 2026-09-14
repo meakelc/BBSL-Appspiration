@@ -4,15 +4,24 @@
  *
  * > Team R, still at Roster Count 12, has all three Minor League Slots free.
  * > It bids $9,000,000 on a Minor League Eligible player: `N+1 = 1 ≤ M = 3`,
- * > Overflow Count 0, Projected Active/Bench Additions 0, capacity
- * > `12 + 0 = 12 ≤ 12` — **permitted**, and Maximum Bid is unbounded. It goes
- * > on to lead all three eligible auctions within its three slots, all
- * > permitted. It then bids on a fourth eligible player: `N = 4` against
- * > `M = 3`, Overflow Count 1, so Projected Active/Bench Additions is 1 and
- * > capacity is `12 + 1 = 13 > 12`. **Refused on capacity**, naming the
- * > overflow — even though the money is there. There is no carve-out for
- * > automatic Slot Placement: an overflow with nowhere to land is refused at
- * > the bid, not resolved at the close.
+ * > Active/Bench Overflow 0, Projected Active/Bench Additions **0** — the
+ * > `P = 0` branch, which needs no free Active/Bench Slot and is therefore
+ * > untouched by the allowance's precondition. **Permitted**, and Maximum
+ * > Bid is unbounded. It goes on to lead all three eligible auctions within
+ * > its three slots, all permitted. It then bids on a fourth eligible
+ * > player: `N = 4` against `M = 3`, Active/Bench Overflow 1, so Projected
+ * > Active/Bench Additions is 1 — no longer zero, and with Free Active/Bench
+ * > Slots at 0 the allowance branch fails its precondition. **Refused on
+ * > capacity**, naming the overflow — even though the money is there. There
+ * > is no carve-out for automatic Slot Placement: an overflow with nowhere
+ * > to land is refused at the bid, not resolved at the close.
+ *
+ * **Amended 2026-09-08 by the Outstanding Bid Allowance (Story 10.1).** The
+ * zero branch is what makes the stash legal, and it is the ONE branch the
+ * allowance's free-Slot precondition cannot touch — a Team with no
+ * Active/Bench room at all still passes it, because the win does not land
+ * there. The fourth bid leaves that branch the moment the overflow appears,
+ * and then meets a precondition it cannot satisfy.
  *
  * **This is example 24's Team, one story later, and the pair is the point.**
  * Example 24 refused Team R's non-eligible Bid on capacity at `12 + 1 = 13`.
@@ -59,7 +68,8 @@ function stash(index: number): LeadingBidElsewhere {
 	return {
 		fantraxPlayerId: `p-${String(index)}`,
 		playerName: `Prospect ${String(index)}`,
-		amount: parseMoney(STASH_AMOUNT)
+		amount: parseMoney(STASH_AMOUNT),
+		isContentionEntry: false
 	};
 }
 
@@ -112,6 +122,11 @@ describe('§10 example 25 — the full roster can still stash', () => {
 		expect(gates.slots.rosterCount).toBe(ACTIVE_BENCH_SLOTS);
 		expect(gates.slots.passed).toBe(true);
 		expect(allGatesPassed(gates)).toBe(true);
+		// The `P = 0` branch needs NO free Active/Bench Slot: Team R has
+		// none, and the allowance's precondition never applies to it. Both
+		// figures are reported on the pass anyway.
+		expect(gates.slots.freeActiveBenchSlots).toBe(0);
+		expect(gates.slots.allowance).toBe(1);
 	});
 
 	it('permits all three, each within the three Slots', () => {
@@ -138,13 +153,18 @@ describe('§10 example 25 — the full roster can still stash', () => {
 	it('refuses the FOURTH on capacity: N = 4 against M = 3, Overflow 1, 13 > 12', () => {
 		const gates = evaluate(stateAfter(3), bidOf(STASH_AMOUNT, 'p-4'), NOW);
 
-		expect(gates.slots.eligibleLeadingBids).toBe(4);
+		expect(gates.slots.eligibleLeadingBidsExcludingEntries).toBe(4);
 		expect(gates.slots.freeMinorLeagueSlots).toBe(3);
-		expect(gates.slots.overflowCount).toBe(1);
+		expect(gates.slots.activeBenchOverflow).toBe(1);
 		// The overflow has nowhere in the minors to land, so it counts here.
 		expect(gates.slots.projectedAdditions).toBe(1);
 		expect(gates.slots.rosterCount).toBe(12);
 		expect(gates.slots.passed).toBe(false);
+		// The overflow took it OUT of the `P = 0` branch, and with no free
+		// Active/Bench Slot the allowance branch fails its precondition — the
+		// same ground example 24's non-eligible bid met.
+		expect(gates.slots.freeActiveBenchSlots).toBe(0);
+		expect(gates.slots.allowance).toBe(1);
 		// "even though the money is there" — capacity is the SOLE ground.
 		expect(failedGates(gates)).toEqual(['slots']);
 		expect(gates.cap.passed).toBe(true);
@@ -155,8 +175,12 @@ describe('§10 example 25 — the full roster can still stash', () => {
 		const detail = bidRefusalDetail({ kind: 'gates', gates });
 
 		expect(detail).toContain('no roster slot');
+		expect(detail).toContain('no free Active/Bench Slot');
 		expect(detail).toContain('Roster Capacity of 12');
-		expect(detail).toContain('Overflow Count of 1');
+		// Story 10.2 renames the SLOTS-side clause. Team R holds no lottery
+		// entry, so the two overflows are both 1 here — but the capacity
+		// sentence must quote the figure its own rule read.
+		expect(detail).toContain('Active/Bench Overflow of 1');
 		expect(detail).toContain('Eligible Leading Bids 4');
 		expect(detail).toContain('Free Minor League Slots 3');
 		// A capacity refusal that quoted a cap figure as its ground would be
@@ -175,7 +199,7 @@ describe('§10 example 25 — the full roster can still stash', () => {
 			const gates = evaluate(state, bidOf(STASH_AMOUNT, 'p-4'), NOW);
 
 			expect(gates.slots.passed, String(capSpace)).toBe(false);
-			expect(gates.slots.overflowCount, String(capSpace)).toBe(1);
+			expect(gates.slots.activeBenchOverflow, String(capSpace)).toBe(1);
 			expect(decide(state, bidOf(STASH_AMOUNT, 'p-4'), NOW, null).kind, String(capSpace)).toBe(
 				'rejected'
 			);
@@ -188,7 +212,9 @@ describe('§10 example 25 — the full roster can still stash', () => {
 		const rowFor = (gate: string) => rows.find((row) => row.gate === gate);
 
 		expect(rowFor('slots')?.chip).toBe('Slots · Refused');
-		expect(rowFor('slots')?.figure).toBe('Roster Count would be 13 of 12, Overflow Count 1');
+		expect(rowFor('slots')?.figure).toBe(
+			'no free Active/Bench Slot; Roster Count would be 13 of 12, Active/Bench Overflow 1'
+		);
 		expect(rowFor('cap')?.chip).toBe('Cap · Passed');
 		// The Overflow Count rides the cap row even when the cap gate PASSED.
 		// Asserted on the row's own text, not merely on the outcome behind it:
@@ -240,7 +266,7 @@ describe('§10 example 25 — the full roster can still stash', () => {
 
 		expect(ask(3, 'p-4').blocked).toBe(true);
 		expect(ask(3, 'p-4').refusingGates).toEqual(['slots']);
-		expect(ask(3, 'p-4').detail).toContain('Overflow Count of 1');
+		expect(ask(3, 'p-4').detail).toContain('Active/Bench Overflow of 1');
 	});
 
 	it('shows "no cap limit" on the first stash and a number on the fourth', () => {

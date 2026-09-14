@@ -3,7 +3,7 @@
  * of them says (Story 4.4).
  *
  * **Five groups, in the wake-up's own order, and that order is not a sort.**
- * Won · Outbid · You lead · Contending · Nomination Slot. It is not viewer
+ * Won · Outbid · Leading · Contending · Nomination Slot. It is not viewer
  * configurable and there is no control that reorders it, because the order IS
  * the answer to "what happened while I was asleep, and what needs me now" —
  * a sort control would turn a designed reading order into thirty renderings
@@ -66,7 +66,7 @@ import { compareMoney } from './money.ts';
 import type { Money } from './money.ts';
 import {
 	CONTENTION_CLOCK_UNMOVED,
-	MINIMUM_BID_CONTENTION_LABEL,
+	MINIMUM_LOTTERY_LABEL,
 	auctionForPlayer,
 	contenderCountSentence
 } from './projection/auctions.ts';
@@ -115,7 +115,7 @@ export const POSITIONS_GROUP_ORDER: readonly PositionsGroup[] = Object.freeze([
  *
  * `outbid` and `you_lead` take `VIEWER_STATE_LABELS`' own words rather than
  * respelling them: the board already calls those two states exactly this, and
- * a heading that said "You're winning" over cards chipped "You lead" would be
+ * a heading that said "You're winning" over cards chipped "Leading" would be
  * two names for one state on two surfaces a Manager moves between.
  */
 export const GROUP_HEADINGS: Readonly<Record<PositionsGroup, string>> = Object.freeze({
@@ -382,28 +382,27 @@ export type WonCard = {
 	/** What it charges against the Cap. `$0` on a minors placement (AD-23). */
 	readonly capHit: Money;
 	readonly placement: SlotPlacement;
-	/** The placement and the Cap Hit, in words. */
-	readonly sentence: string;
 	/** The Auction's own persisted expiry — the surface renders it absolutely. */
 	readonly closedAt: string;
 	/**
-	 * **`null` until a closed Auction has a page.**
+	 * The deep link to this Auction's Closed page.
 	 *
-	 * A close DELETES the Player from `auctionsReducer` and
-	 * `nominationsReducer` (`projection/auctions.ts:806-815`), and
-	 * `routes/auction/[fantraxPlayerId]/+page.server.ts:93` raises `error(404)`
-	 * on that null read — so `auctionPathFor(...)` on a won Player is a link
-	 * to a 404, and the Won group is the FIRST group on the landing page. A
-	 * card that names the Player, the amount, the placement and the Cap Hit
-	 * already carries everything the close produced; a link that refuses adds
-	 * nothing to it and costs the tap that discovers so.
+	 * **It was `null`, and the reason it was is gone.** A close DELETES the
+	 * Player from `auctionsReducer` and `nominationsReducer`
+	 * (`projection/auctions.ts:806-815`), so `/auction/<id>` answered 404 for
+	 * every won Player and a link here would have been a link to a refusal in
+	 * the FIRST group on the landing page. `projection/closed.ts` composes the
+	 * two folds that DO survive a close, and the route now renders that Closed
+	 * state instead of 404ing — so the link resolves, and it resolves to a page
+	 * carrying what this card cannot: the closed instant in full, and for a
+	 * lottery the revealed seed, the published commitment and the ordered
+	 * Contender list AD-14 makes an input to the winner.
 	 *
-	 * `deferred-work.md`'s spec-3-6 entry assigns the closed-Auction surface
-	 * (winner, amount, placement, and the lottery's seed and Contender list)
-	 * to Epic 4. When it exists this becomes `auctionPathFor(...)` and the
-	 * surface's `{#if}` falls away — the one place either changes.
+	 * Never a literal: `auctionPathFor` is the one place that shape is spelled,
+	 * so the link a Manager taps here and the link Discord emits are one shape
+	 * (`core/auction-link.ts`).
 	 */
-	readonly href: string | null;
+	readonly href: string;
 };
 
 /** What an Auction the viewer has been outbid on says. */
@@ -504,35 +503,6 @@ export type Positions = {
 // --- The wording -----------------------------------------------------------
 
 /**
- * What each placement is called, in the glossary's own words.
- *
- * Exported since Story 4.5. A Team view lists a won Player as a roster row and
- * states where he landed, and `wonCardSentence` below is the sentence that
- * says it — but the Team view also groups its roster by slot kind, and the
- * headings for THAT come from `rules/roster-import.ts`'s `SLOT_LABELS`,
- * because this record is the article-form ("an Active/Bench Slot") a sentence
- * needs and holds no `injury_reserve` entry at all. Two spellings already
- * existed for two registers; Story 4.5 adds neither.
- */
-export const PLACEMENT_LABELS: Readonly<Record<SlotPlacement, string>> = Object.freeze({
-	active_bench: 'an Active/Bench Slot',
-	minor_league: 'a Minor League Slot'
-});
-
-/**
- * Where a won Player landed and what it charges, in words.
- *
- * Both facts, always, because they are independent (AD-23): a Minor League
- * placement carries a `$0` Cap Hit while the winning amount stands unchanged,
- * and a card that stated only the amount would let a Manager read a $0 charge
- * as an $11.0M one. No celebration and no exclamation — this is a statement
- * of what the roster now holds.
- */
-export function wonCardSentence(placement: SlotPlacement, capHit: Money): string {
-	return `Placed in ${PLACEMENT_LABELS[placement]} at a ${describeAmount(capHit)} Cap Hit.`;
-}
-
-/**
  * What a lead commits, and when it is released.
  *
  * The release is the half a Manager needs beside the commitment (FR-14:
@@ -556,12 +526,19 @@ export function leadCommitmentSentence(amount: Money): string {
  * The free case states the act is free of obligation, because the one thing
  * that stops a Manager spending a Slot at 7:40am is the belief that
  * nominating commits them to bidding. It does not, and FR says so.
+ *
+ * The spent case names the Player and then the ONE condition that frees the
+ * Slot: winning a Player. Under the amended FR-9 that is not the nominated
+ * Player's Auction ending — a Manager outbid on their own nomination keeps
+ * the Slot held — so this card may name a Player whose Auction closed days
+ * ago, and saying "frees when that Auction ends" would be a promise the rule
+ * no longer makes.
  */
 export function nominationSlotSentence(playerName: string | null): string {
 	if (playerName === null) {
 		return 'Your Nomination Slot is free. Nominating a Free Agent does not oblige you to bid on them.';
 	}
-	return `Your Nomination Slot is spent on ${playerName}, and frees when that Auction ends.`;
+	return `Your Nomination Slot is spent on ${playerName}, and frees when you win a Player.`;
 }
 
 /** The designed empty screen: what the state is, and where to go from it. */
@@ -665,7 +642,7 @@ function highestBidBy(auction: Auction, teamId: string): Money | null {
  * the contention, so a dissolved lottery is `standard` with every former
  * joiner still listed, and the contention test is therefore gated on the
  * contention being LIVE. Ungated, the Team whose raise dissolved it would
- * appear under Contending rather than under You lead, and the Team that raise
+ * appear under Contending rather than under Leading, and the Team that raise
  * genuinely outbid would appear there too — both waiting on a draw that is
  * not running. Restating those tests here would put two copies of that
  * ordering in the core, and a later correction to one would silently leave
@@ -683,6 +660,13 @@ function groupFor(auction: Auction, viewerTeamId: string): PositionsGroup | null
 			return 'you_lead';
 		case 'outbid':
 			return 'outbid';
+		// `won` is unreachable from this call: `viewerStateFor` answers about a
+		// LIVE Auction and only `closedViewerStateFor` ever returns it. The
+		// case is stated rather than left to a default so the switch stays
+		// exhaustive — the Won group is built from `contractsWonBy` above, off
+		// the contracts fold, and never from an Auction row that no longer
+		// exists.
+		case 'won':
 		case 'not_involved':
 			return null;
 	}
@@ -752,11 +736,10 @@ export function positionsFor(input: {
 			winningAmountLabel: describeAmount(contract.winningAmount),
 			capHit: contract.capHit,
 			placement: contract.placement,
-			sentence: wonCardSentence(contract.placement, contract.capHit),
 			closedAt: contract.closedAt,
-			// No link: a closed Auction has no page yet, and the Won group is
-			// the first thing on the landing. See `WonCard.href`.
-			href: null
+			// The Closed page, which exists now. `auctionPathFor` and never a
+			// literal — see `WonCard.href`.
+			href: auctionPathFor(contract.fantraxPlayerId)
 		})
 	);
 
@@ -774,7 +757,31 @@ export function positionsFor(input: {
 
 		const playerName = nameFor(input.metadata, input.nominations, playerId, null);
 		const metadata = metadataFor(input.metadata, playerId);
-		const price = auction.leadingBid.amount;
+		// **A leaderless Auction has no card here** (Story 10.3, FR-40), and it
+		// is the one surface that drops it rather than emptying it — which is
+		// `board.ts`'s one reading applied to a module whose cards are shaped
+		// differently, not a second reading.
+		//
+		// Every card below carries a price and a close instant as REQUIRED
+		// fields, because a Positions card exists to tell a Manager what a
+		// position is costing them and how long they have. A leaderless
+		// Auction has neither: nothing leads, so there is no current price,
+		// and until Story 10.4 restores a leader that is true of the ordinary
+		// Standard case as well — the ex-leader whose Bid was cancelled AND
+		// the rival whose lower Bid still stands both drop off this page for
+		// the one pass it takes. Widening the card shape to make both nullable
+		// would put "—" where a figure belongs on the one screen that exists
+		// to carry figures; the board and the Auction page still show the
+		// Auction, with no price, which is where a Manager sees it meanwhile.
+		//
+		// A lottery is the exception that needs no branch: its lead is a fold
+		// artifact that moves to the next surviving join, so it is never
+		// leaderless while anybody is still in it, and a Contender's card is
+		// never dropped.
+		const leader = auction.leadingBid;
+		const closesAt = auction.closesAt;
+		if (leader === null || closesAt === null) continue;
+		const price = leader.amount;
 
 		if (group === 'contending') {
 			contending.push({
@@ -783,9 +790,9 @@ export function positionsFor(input: {
 				metadata,
 				price,
 				priceLabel: priceLabel(price),
-				closesAt: auction.closesAt,
+				closesAt,
 				contention: auction.contention,
-				contentionLabel: MINIMUM_BID_CONTENTION_LABEL,
+				contentionLabel: MINIMUM_LOTTERY_LABEL,
 				stateLabel: VIEWER_STATE_LABELS.contender,
 				stateIcon: VIEWER_STATE_ICONS.contender,
 				contenderCount: auction.contenders.length,
@@ -803,7 +810,7 @@ export function positionsFor(input: {
 				metadata,
 				price,
 				priceLabel: priceLabel(price),
-				closesAt: auction.closesAt,
+				closesAt,
 				contention: auction.contention,
 				stateLabel: VIEWER_STATE_LABELS.you_lead,
 				stateIcon: VIEWER_STATE_ICONS.you_lead,
@@ -826,10 +833,10 @@ export function positionsFor(input: {
 			priceLabel: priceLabel(price),
 			yourBid,
 			yourBidLabel: describeAmount(yourBid),
-			leadingTeamId: auction.leadingBid.teamId,
-			leadingTeamName: auction.leadingBid.teamName,
-			leadingManagerId: auction.leadingBid.managerId,
-			closesAt: auction.closesAt,
+			leadingTeamId: leader.teamId,
+			leadingTeamName: leader.teamName,
+			leadingManagerId: leader.managerId,
+			closesAt,
 			contention: auction.contention,
 			stateLabel: VIEWER_STATE_LABELS.outbid,
 			stateIcon: VIEWER_STATE_ICONS.outbid,

@@ -38,6 +38,51 @@ export type PooledClient = {
 };
 
 /**
+ * Present an `int8` the way `pg` does: as a string.
+ *
+ * **This is a driver difference, not a rule.** `deno-postgres` decodes `int8`
+ * to a JavaScript `bigint`; `pg` decodes it to a `string`, and PostgREST hands
+ * back a `number`. `src/lib/core/money.ts` states its contract in exactly
+ * those two terms — "a `string` from node-postgres, a `number` from
+ * PostgREST" — so a `bigint` reaching `parseMoney` throws `money must arrive
+ * as a string or a number, received bigint` and the close fails. Observed on
+ * the dev project on 2026-09-09, the first time the schedule was ever enabled
+ * with overdue Auctions to close: every 10-second pass recorded
+ * `completed_with_failures` against two Auctions and closed nothing. Story
+ * 3.5's smoke test had passed only because it had nothing to close, so this
+ * path had never once executed successfully.
+ *
+ * **Normalising HERE rather than widening the core is the whole point of this
+ * file.** AD-2's property is that Deno loads the exact module Node
+ * unit-tests; that only holds if the two runtimes hand those modules the same
+ * SHAPES. A `bigint` branch in `parseMoney` would teach `src/lib/core` about
+ * one driver's decoding, and would fix money alone — leaving every other
+ * `int8` in the schema, ids and counts and versions, still differing between
+ * the runtimes for the next caller to trip over.
+ *
+ * **No precision is lost.** `String(bigint)` is exact for every value an
+ * `int8` can hold, which is why `pg` chose text in the first place: `Number`
+ * rounds silently past 2^53. Whether a particular column's text then fits a
+ * safe integer stays the consumer's decision, and `parseMoney` already refuses
+ * the ones that do not, with a message naming the value.
+ *
+ * Arrays are mapped for `int8[]`. A `jsonb` column is left alone: its contents
+ * arrive already parsed from text and can never hold a `bigint`.
+ */
+function normalise(value: unknown): unknown {
+	if (typeof value === 'bigint') return String(value);
+	if (Array.isArray(value)) return value.map(normalise);
+	return value;
+}
+
+/** Apply {@link normalise} across one row's own columns. */
+function normaliseRow(row: QueryResultRow): QueryResultRow {
+	const normalised: QueryResultRow = {};
+	for (const key of Object.keys(row)) normalised[key] = normalise(row[key]);
+	return normalised;
+}
+
+/**
  * Adapt one pooled `deno-postgres` client to `TransactionalClient`.
  *
  * `queryObject({ text, args })` is the parameterised form — never string
@@ -45,6 +90,9 @@ export type PooledClient = {
  * the caller in charge of quoting. `args` is spread into a mutable array
  * because the driver's signature takes one, while every caller upstream hands
  * over a `readonly` tuple.
+ *
+ * Rows come back through {@link normaliseRow}, so what reaches `src/lib` from
+ * Deno is shaped exactly as `pg` would have delivered it.
  */
 export function adapt(client: PooledClient): TransactionalClient & { release(): void } {
 	return {
@@ -53,7 +101,7 @@ export function adapt(client: PooledClient): TransactionalClient & { release(): 
 				text,
 				args: [...params]
 			});
-			return { rows: result.rows };
+			return { rows: result.rows.map(normaliseRow) };
 		},
 		release() {
 			// **Both failure shapes, because the two drivers differ.**

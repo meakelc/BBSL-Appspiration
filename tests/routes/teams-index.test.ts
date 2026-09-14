@@ -314,14 +314,70 @@ describe('the Teams index page — what it renders', () => {
 	it('sorts through the core’s own function, held in one piece of view state', () => {
 		expect(PAGE).toContain('let sort = $state<TeamsSort>(DEFAULT_TEAMS_SORT)');
 		expect(PAGE).toContain('$derived(sortTeamsIndex(index.rows, sort))');
-		// Native radios in a fieldset — `board/+page.svelte:292-322`'s pattern,
-		// which makes "sorting is view state" visible in the markup.
+		// Native radios in a fieldset — `board/+page.svelte`'s pattern, which
+		// makes "sorting is view state" visible in the markup.
 		expect(PAGE).toContain('<fieldset class="controls">');
 		expect(PAGE).toContain('bind:group={sort}');
 		expect(PAGE).toContain("type=\"radio\"");
 		// No form, no navigation: a sort posts nothing and reloads nothing.
 		expect(PAGE_CODE).not.toContain('goto(');
 		expect(PAGE_CODE).not.toMatch(/<form/);
+	});
+
+	it('holds the sort behind the board’s collapsible control, closed and naming the order in force', () => {
+		// `<details>`/`<summary>`, the board's own disclosure — not a custom
+		// button: it opens on tap AND on Enter and is announced expanded or
+		// collapsed without a line of script.
+		expect(PAGE).toContain('<details class="controls-disclosure" bind:open={sortOpen}>');
+		// CLOSED to begin with. The first screen of the index is the index.
+		expect(PAGE).toContain('let sortOpen = $state(false)');
+		// The closed row still says which order is in force, so nothing the
+		// radios used to answer is hidden by the control that holds them.
+		expect(PAGE).toContain('<span class="prose controls-current">{TEAMS_SORT_LABELS[sort]}</span>');
+		// The legend is not printed twice: the summary names the control on
+		// screen, the legend names it for a screen reader reading the radios.
+		expect(PAGE).toContain('<legend class="visually-hidden">{TEAMS_SORT_LEGEND}</legend>');
+		expect(PAGE).not.toContain('<legend class="section-label">');
+		// Choosing closes it — the choice is the whole reason it was opened.
+		expect(PAGE).toContain('onchange={() => (sortOpen = false)}');
+	});
+
+	it('pairs the roster count with Bids and the Minor League count with Injury Reserve, on one line each', () => {
+		// Two figures read as one phrase behind a `·`, on the card's own left
+		// margin — `PersistentStrip.svelte`'s construction, down to the
+		// separator's two declarations, so the dot between two figures is the
+		// same dot in both places it appears in the product.
+		expect(PAGE).toContain('<div class="row-line">');
+		expect(PAGE).toContain('justify-content: flex-start');
+		expect(PAGE).toContain('flex-wrap: wrap');
+		expect(PAGE).toContain('<span class="row-separator" aria-hidden="true">·</span>');
+		// The separator LEADS the optional Bids figure, so the pair carries a
+		// single `·` whether or not that half is present — and none at all when
+		// it is absent. The strip's arrangement, for the strip's reason.
+		expect(PAGE).toMatch(
+			/{#if row\.outstandingBidsHalves !== null}\s*<span class="row-separator"/
+		);
+		// The open-entries figure is NOT in a pair: two bid figures at the two
+		// ends of one line is the single combined reading UX-DR36 forbids.
+		const pairs = PAGE.split('<div class="row-line">')
+			.slice(1)
+			.map((segment) => segment.slice(0, segment.indexOf('</div>')));
+		expect(pairs).toHaveLength(2);
+		expect(pairs[0]).toContain('row.rosterCountHalves');
+		expect(pairs[0]).toContain('row.outstandingBidsHalves');
+		expect(pairs[0]).not.toContain('row.contentionEntriesHalves');
+		expect(pairs[1]).toContain('row.minorLeagueHalves');
+		expect(pairs[1]).toContain('row.injuryReserveHalves');
+		// Pairing is layout and nothing else: every figure keeps its own
+		// unbroken sentence for a screen reader.
+		for (const half of [
+			'rosterCountHalves',
+			'outstandingBidsHalves',
+			'minorLeagueHalves',
+			'injuryReserveHalves'
+		]) {
+			expect(PAGE).toContain(`aria-label={row.${half}.full}`);
+		}
 	});
 
 	it('links every row to that Team’s page through the core’s href', () => {
@@ -337,8 +393,21 @@ describe('the Teams index page — what it renders', () => {
 	it('sets the Team name in `ui`, not Georgia (DESIGN.md:181)', () => {
 		const block = /\.team-identity\s*\{[\s\S]*?\}/.exec(PAGE)?.[0] ?? '';
 		expect(block).toContain('var(--font-ui)');
-		expect(block).toContain('var(--size-15)');
 		expect(block).not.toContain('--font-display');
+	});
+
+	it('gives the Team name the section-label treatment of Your Positions’ group headers', () => {
+		const block = /\.team-identity\s*\{[\s\S]*?\}/.exec(PAGE)?.[0] ?? '';
+		// `global.css:175`'s own three properties. A deliberate departure from
+		// DESIGN.md:181's 15px sentence case: the name reads as the heading the
+		// row hangs off, so the figures beneath it carry the weight.
+		expect(block).toContain('var(--size-10)');
+		expect(block).toContain('text-transform: uppercase');
+		expect(block).toContain('letter-spacing: 0.16em');
+		// The COLOUR half of that treatment is deliberately NOT taken — the
+		// group headers are `text-tertiary`, and DESIGN.md:187 keeps every Team
+		// name in `text`. The name takes the label's shape, not its quietness.
+		expect(block).not.toContain('var(--color-text-tertiary)');
 	});
 
 	/*
@@ -480,5 +549,39 @@ describe('the Teams index page — what it renders', () => {
 		const styles = /<style>[\s\S]*<\/style>/.exec(PAGE)?.[0] ?? '';
 		expect(styles.length).toBeGreaterThan(0);
 		expect(styles, 'a raw colour').not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
+	});
+});
+
+describe('the Teams index row — the two bids figures (Story 10.6)', () => {
+	it('renders them as TWO figures, in the established register', () => {
+		// Both in `.figure`/`.figure-qualifier`, like the slot sentences above
+		// them, and each reading its own halves off the row.
+		expect(PAGE).toContain('row.outstandingBidsHalves.lead');
+		expect(PAGE).toContain('row.outstandingBidsHalves.qualifier');
+		expect(PAGE).toContain('row.outstandingBidsHalves.full');
+		expect(PAGE).toContain('row.contentionEntriesHalves.lead');
+		expect(PAGE).toContain('row.contentionEntriesHalves.qualifier');
+		expect(PAGE).toContain('row.contentionEntriesHalves.full');
+	});
+
+	it('never sums them, and never words either one itself', () => {
+		// A combined figure would state a ceiling on lottery entries that does
+		// not exist (UX-DR36). The page has no arithmetic for it and no
+		// vocabulary of its own: nothing adds the two counts, the raw counts
+		// are not even read, and every word on the two figures arrives inside
+		// a `Halves` object the core built.
+		expect(PAGE_CODE).not.toContain('outstandingBids +');
+		expect(PAGE_CODE).not.toContain('openContentionEntries');
+		expect(PAGE_CODE).not.toContain('row.outstandingBids}');
+		for (const forbidden of ['lottery', 'allowance', 'permitted']) {
+			expect(PAGE_CODE.toLowerCase(), forbidden).not.toContain(forbidden);
+		}
+	});
+
+	it('gives the figures no colour, badge or warning treatment (UX-DR35)', () => {
+		// At parity the figure alone is the signal. Nothing on the row is
+		// conditioned on the count.
+		expect(PAGE_CODE).not.toMatch(/class:.*[Bb]ids/);
+		expect(PAGE_CODE).not.toMatch(/outstandingBids\s*[<>=]/);
 	});
 });

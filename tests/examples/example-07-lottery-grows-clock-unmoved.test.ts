@@ -207,7 +207,7 @@ describe('§10 example 7 — the lottery grows and the clock does not move', () 
 
 		expect(auction?.closesAt).toBe(CLOSES_AT);
 		// The lead never moved either: a join is never strictly higher.
-		expect(auction?.leadingBid.teamId).toBe('t-e');
+		expect(auction?.leadingBid?.teamId).toBe('t-e');
 		expect(auction?.contention).toBe('minimum_bid');
 	});
 

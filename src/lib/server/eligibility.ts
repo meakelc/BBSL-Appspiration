@@ -11,6 +11,15 @@
  * half generalises to the other. The same note sits at the promotion write
  * site (`import-promotion.ts`).
  *
+ * **The column is the fold RESTRICTED TO THE POOL, and the fold is the
+ * authority.** The flag can also be set on a rostered Contract, which has no
+ * column on `team_rosters` to hold it — so `EligibilitySet`, folded from the
+ * log and keyed by Fantrax player id, is the only complete answer, and it is
+ * what every rule reads (`isEligible`, at eleven call sites). The column
+ * materialises the pooled subset of that fold and nothing else. Do not read
+ * it to decide anything: `loadEligibilityPool` reads it to RENDER the pooled
+ * half of one Commissioner-only list, and that is its whole remaining job.
+ *
  * **The column is written only through `applyEligibilityProjection`.** Here
  * it is registered as a `ProjectionUpdater`, so the write persists inside
  * the very transaction that appends the events it folds (AD-5); promotion
@@ -46,17 +55,20 @@ import {
 	planEligibilityChanges
 } from '../core/rules/eligibility.ts';
 import type {
+	EligibilityCandidate,
 	EligibilityPlan,
-	EligibilityRefusal,
-	PooledPlayerEligibility
+	EligibilityRefusal
 } from '../core/rules/eligibility.ts';
-import type { EventEnvelope } from '../core/types.ts';
+import { SLOT_LABELS } from '../core/rules/roster-import.ts';
+import type { EventEnvelope, RosterSlotKind } from '../core/types.ts';
 import { runTransactionalWrite } from '../shell/write.ts';
 import type { ConnectionGateway, TransactionalClient, WriteOutcome } from '../shell/write.ts';
-import { loadEventsViaClient } from './event-log.ts';
+import { PAGE_SIZE, loadAppendedEvents, loadEventsViaClient } from './event-log.ts';
 import { serviceRoleClient } from './supabase.ts';
 
 const FREE_AGENT_PLAYERS_TABLE = 'free_agent_players';
+const TEAM_ROSTERS_TABLE = 'team_rosters';
+const TEAMS_TABLE = 'teams';
 
 /** Who acted, resolved server-side from application tables (AD-4). */
 export type EligibilityActor = {
@@ -65,25 +77,35 @@ export type EligibilityActor = {
 };
 
 /**
- * One pooled Player as the surface prints them: identity, the current flag,
- * and the FINISHED consequence sentence.
+ * One Player the surface prints: identity, the current flag, and the FINISHED
+ * consequence sentence.
  *
  * The sentence is rendered here rather than in `+page.svelte` for the reason
  * 1.9 settled at review-loop-iteration 1: the server renders, the surface
  * prints. A `.svelte` file may not reach a server-only module, and it
  * equally must not re-word a rule to work around that.
+ *
+ * `detail` and `heldBy` are finished cell text for the same reason, and they
+ * are two strings rather than the four columns this row carried while the
+ * list was pool-only. A pooled Player has Positions and an NBA team; a
+ * rostered Contract has a Slot and the Team holding it, and neither shape has
+ * the other's columns. Wording both here keeps the narrow layout's
+ * "every cell states its own word" rule true without the surface branching on
+ * where a row came from.
  */
 export type EligibilityPoolRow = {
 	readonly fantraxPlayerId: string;
 	readonly playerName: string;
-	readonly positions: string;
-	readonly nbaTeam: string;
+	/** What this Player is, in the list's own words. */
+	readonly detail: string;
+	/** Where this Player is: the Free Agent pool, or the Team holding them. */
+	readonly heldBy: string;
 	readonly eligible: boolean;
 	/** `eligibilityRowSentence`'s output, verbatim. */
 	readonly consequence: string;
 };
 
-/** The whole pool as the surface receives it, sorted by Player name. */
+/** Everything the flag can be set on, as the surface receives it, by name. */
 export type EligibilityPool = {
 	readonly players: readonly EligibilityPoolRow[];
 };
@@ -96,42 +118,160 @@ type PoolRow = {
 	readonly minor_league_eligible: boolean;
 };
 
-/**
- * Read the live Free Agent pool for the surface, sorted by Player name.
- *
- * This is the READ path and it reads the live column, not the log: the
- * column is the fold, kept true by the one writer below, and re-folding the
- * whole log on every page view would be a second answer to the same
- * question. The transaction, which is the path that can act on the answer,
- * folds the log itself.
- *
- * An empty pool is a legitimate state — nothing has been promoted yet — and
- * comes back as an empty list for the surface to render as such, not as an
- * error.
- */
-export async function loadEligibilityPool(
-	client: SupabaseClient = serviceRoleClient()
-): Promise<EligibilityPool> {
-	const { data, error } = await client
-		.from(FREE_AGENT_PLAYERS_TABLE)
-		.select('fantrax_player_id, player_name, positions, nba_team, minor_league_eligible')
-		.order('player_name', { ascending: true });
+type RosterRow = {
+	readonly fantrax_player_id: string;
+	readonly player_name: string;
+	readonly roster_slot_kind: RosterSlotKind;
+	readonly team_id: string;
+};
 
-	if (error !== null) {
-		throw new Error(`free_agent_players read failed: ${error.message}`);
+type TeamRow = { readonly id: string; readonly name: string };
+
+type PagedResponse = { data: unknown; error: { message: string } | null };
+
+/**
+ * Read every row of a table, paging until a page comes back empty.
+ *
+ * **A single unbounded `select` silently truncates.** PostgREST enforces its
+ * own configured row cap — 1,000 by default — regardless of what a request
+ * asks for, and a page with 1,467 pooled Players got the first 1,000 and no
+ * error. On a page whose whole job is ticking the right Players, the 467 that
+ * never rendered could not be set, and nothing said so.
+ *
+ * The loop is `loadAppendedEvents`' and so is its reasoning: terminate on an
+ * EMPTY page rather than a short one, and advance `offset` by the page's
+ * actual length rather than by the assumed `PAGE_SIZE`, because the cap is a
+ * deployment setting this module cannot read and may be smaller than the page
+ * asked for. Every caller must order by a stable key, or paging re-reads and
+ * skips rows across pages.
+ */
+async function readEveryRow<Row>(
+	label: string,
+	page: (from: number, to: number) => PromiseLike<PagedResponse>
+): Promise<Row[]> {
+	const rows: Row[] = [];
+	let offset = 0;
+
+	for (;;) {
+		const { data, error } = await page(offset, offset + PAGE_SIZE - 1);
+		if (error !== null) throw new Error(`${label} read failed: ${error.message}`);
+		if (!Array.isArray(data)) {
+			throw new Error(`${label} read failed: response was not an array`);
+		}
+		if (data.length === 0) break;
+		for (const row of data as Row[]) rows.push(row);
+		offset += data.length;
 	}
 
-	const players = ((data ?? []) as PoolRow[]).map((row) => {
-		const eligible = row.minor_league_eligible === true;
+	return rows;
+}
+
+/**
+ * Every rostered Contract as a surface row, with its flag folded from the log.
+ *
+ * A Contract that is ALSO in the pool is skipped: the two tables should be
+ * disjoint, but if they ever disagree the pooled row already states the same
+ * Player, and two rows for one Player would post `ids` twice and read as two
+ * different men on a page whose whole job is picking the right ones.
+ *
+ * The Team name comes from a second read rather than a PostgREST embed: the
+ * embed would depend on the foreign key's generated relationship name, which
+ * is schema trivia this module has no other reason to know.
+ */
+async function loadRosteredCandidates(
+	client: SupabaseClient,
+	pooledIds: ReadonlySet<string>
+): Promise<EligibilityPoolRow[]> {
+	const all = await readEveryRow<RosterRow>(TEAM_ROSTERS_TABLE, (from, to) =>
+		client
+			.from(TEAM_ROSTERS_TABLE)
+			.select('fantrax_player_id, player_name, roster_slot_kind, team_id')
+			.order('fantrax_player_id', { ascending: true })
+			.range(from, to)
+	);
+
+	const rostered = all.filter((row) => !pooledIds.has(row.fantrax_player_id));
+	if (rostered.length === 0) return [];
+
+	const teams = await readEveryRow<TeamRow>(TEAMS_TABLE, (from, to) =>
+		client.from(TEAMS_TABLE).select('id, name').order('id', { ascending: true }).range(from, to)
+	);
+
+	const teamNames = new Map(teams.map((row) => [row.id, row.name]));
+
+	// The fold, for the half of the list no column materialises. Same reducer
+	// and same `fold()` the transaction uses, so the two answers cannot drift.
+	const eligibility = fold(
+		INITIAL_ELIGIBILITY,
+		await loadAppendedEvents(client),
+		eligibilityReducer
+	);
+
+	return rostered.map((row) => {
+		const eligible = isEligible(eligibility, row.fantrax_player_id);
 		return {
 			fantraxPlayerId: row.fantrax_player_id,
 			playerName: row.player_name,
-			positions: row.positions,
-			nbaTeam: row.nba_team,
+			detail: `${SLOT_LABELS[row.roster_slot_kind]} Slot`,
+			heldBy: teamNames.get(row.team_id) ?? 'an unnamed Team',
 			eligible,
 			consequence: eligibilityRowSentence(row.player_name, eligible)
 		};
 	});
+}
+
+/**
+ * Read everything the flag can be set on — the live Free Agent pool AND every
+ * rostered Contract — for the surface, sorted by Player name.
+ *
+ * **Why the column cannot answer for a rostered Contract.**
+ * `minor_league_eligible` lives on `free_agent_players` and there is no such
+ * column on `team_rosters`. The AUTHORITATIVE answer was never the column: it
+ * is `EligibilitySet`, folded from the log, which is keyed by Fantrax player
+ * id and has never cared whether that id is in the pool. So the pool half of
+ * this list reads its flag from the column as it always has, and the roster
+ * half folds the log for the same fact. Both halves are the same fold; they
+ * differ only in whether a materialised copy of it existed to read.
+ *
+ * Three reads rather than one join: PostgREST cannot express the union, and
+ * this is a Commissioner-only page that renders once per Setup-phase visit.
+ *
+ * An empty pool is a legitimate state — nothing has been promoted yet — and
+ * an empty roster set likewise. Both come back as an empty list for the
+ * surface to render as such, not as an error.
+ */
+export async function loadEligibilityPool(
+	client: SupabaseClient = serviceRoleClient()
+): Promise<EligibilityPool> {
+	const pooled = await readEveryRow<PoolRow>(FREE_AGENT_PLAYERS_TABLE, (from, to) =>
+		client
+			.from(FREE_AGENT_PLAYERS_TABLE)
+			.select('fantrax_player_id, player_name, positions, nba_team, minor_league_eligible')
+			.order('fantrax_player_id', { ascending: true })
+			.range(from, to)
+	);
+
+	const pooledIds = new Set(pooled.map((row) => row.fantrax_player_id));
+
+	const players: EligibilityPoolRow[] = pooled.map((row) => {
+		const eligible = row.minor_league_eligible === true;
+		return {
+			fantraxPlayerId: row.fantrax_player_id,
+			playerName: row.player_name,
+			detail: `Positions: ${row.positions}`,
+			heldBy: `Free Agent pool · ${row.nba_team}`,
+			eligible,
+			consequence: eligibilityRowSentence(row.player_name, eligible)
+		};
+	});
+
+	for (const row of await loadRosteredCandidates(client, pooledIds)) {
+		players.push(row);
+	}
+
+	// One sort over the merged list, so a rostered Contract files alphabetically
+	// among the pooled Players rather than in a block after them.
+	players.sort((left, right) => left.playerName.localeCompare(right.playerName));
 
 	return { players };
 }
@@ -140,11 +280,17 @@ export async function loadEligibilityPool(
  * Write `minor_league_eligible` for every pooled Player so the column equals
  * `eligible` exactly — the ONE writer of this column.
  *
- * One statement, not one per changed Player: the column IS the fold, so the
- * honest write is "make every row agree with the fold", which is also
- * idempotent and correct for a full rebuild. A Player absent from the set is
- * set to `false` rather than left alone, which is what makes the default
- * fail safe even for a Player who has never appeared in an event.
+ * One statement, not one per changed Player: the column IS the fold
+ * restricted to the pool, so the honest write is "make every row agree with
+ * the fold", which is also idempotent and correct for a full rebuild. A
+ * Player absent from the set is set to `false` rather than left alone, which
+ * is what makes the default fail safe even for a Player who has never
+ * appeared in an event.
+ *
+ * An id in `eligible` that names a rostered Contract rather than a pooled
+ * Player matches no row and writes nothing, which is correct and needs no
+ * filtering: the fold already holds that Player's flag, and this statement
+ * only ever materialises the part of it the pool can carry.
  *
  * `= any($1::text[])` is used rather than two statements so no window exists
  * — even inside the transaction — in which some rows are folded and others
@@ -164,32 +310,53 @@ export async function applyEligibilityProjection(
 /** Everything `decide` needs, read under the lock in one transaction. */
 export type EligibilityState = {
 	readonly phase: string;
-	/** The live pool, each Player carrying their value AS FOLDED from the log. */
-	readonly pool: readonly PooledPlayerEligibility[];
+	/**
+	 * Everything the flag can be set on — pooled Players AND rostered
+	 * Contracts — each carrying their value AS FOLDED from the log.
+	 */
+	readonly candidates: readonly EligibilityCandidate[];
 	/** The fold of the log, which is the state the projection extends. */
 	readonly eligible: EligibilitySet;
 };
 
 /**
- * Read the phase and the live pool on the locked transaction's own client.
+ * Read the phase and the live candidate set on the locked transaction's own
+ * client.
  *
  * Both projections are folded from the same single read of the log, in the
  * same transaction, before any decision is taken. Each Player's CURRENT
  * value comes from that fold rather than from the column, so a "before"
- * value in the Audit Log is the log's own account of itself.
+ * value in the Audit Log is the log's own account of itself — and it is why
+ * a rostered Contract, which has no column anywhere to read, needs no special
+ * handling here at all.
+ *
+ * **The candidate set is the union, and `free_agent_players` wins a tie.**
+ * The two tables are disjoint in practice — a Player is in the pool or on a
+ * Roster, not both — but `distinct on` makes that a property of this query
+ * rather than an assumption about the data. A duplicate id would otherwise
+ * put one Player in the plan twice and write two events for him in one
+ * transaction, the second carrying a `before` that was already stale.
  */
 async function loadEligibilityState(client: TransactionalClient): Promise<EligibilityState> {
 	const events = await loadEventsViaClient(client);
 	const phase = fold(INITIAL_PHASE, events, phaseReducer);
 	const eligible = fold(INITIAL_ELIGIBILITY, events, eligibilityReducer);
 
-	const poolResult = await client.query(
+	const candidateResult = await client.query(
 		`select fantrax_player_id, player_name
-		from ${FREE_AGENT_PLAYERS_TABLE}
+		from (
+			select distinct on (fantrax_player_id) fantrax_player_id, player_name, source
+			from (
+				select fantrax_player_id, player_name, 0 as source from ${FREE_AGENT_PLAYERS_TABLE}
+				union all
+				select fantrax_player_id, player_name, 1 as source from ${TEAM_ROSTERS_TABLE}
+			) both_sources
+			order by fantrax_player_id, source
+		) deduped
 		order by player_name asc`
 	);
 
-	const pool = poolResult.rows.map((row) => {
+	const candidates = candidateResult.rows.map((row) => {
 		const fantraxPlayerId = String(row['fantrax_player_id']);
 		return {
 			fantraxPlayerId,
@@ -198,7 +365,7 @@ async function loadEligibilityState(client: TransactionalClient): Promise<Eligib
 		};
 	});
 
-	return { phase, pool, eligible };
+	return { phase, candidates, eligible };
 }
 
 /**
@@ -276,7 +443,7 @@ export async function setEligibility(
 			return loaded;
 		},
 		decide: ({ state }) => {
-			const candidate = planEligibilityChanges(state.pool, ids, target);
+			const candidate = planEligibilityChanges(state.candidates, ids, target);
 			const refusal = refuseEligibilityChange(state, ids, candidate);
 			if (refusal !== null) {
 				const rejection: EligibilityRejection = {

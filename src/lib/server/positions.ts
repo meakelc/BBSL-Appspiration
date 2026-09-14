@@ -72,7 +72,6 @@ export type WonCardView = {
 	readonly metadata: string | null;
 	readonly winningAmountLabel: string;
 	readonly placement: SlotPlacement;
-	readonly sentence: string;
 	readonly closedAt: string;
 	/** `null` until a closed Auction has a page — see `core/positions.ts`. */
 	readonly href: string | null;
@@ -376,7 +375,6 @@ export async function loadPositions(
 				metadata: card.metadata,
 				winningAmountLabel: card.winningAmountLabel,
 				placement: card.placement,
-				sentence: card.sentence,
 				closedAt: card.closedAt,
 				href: card.href
 			})),

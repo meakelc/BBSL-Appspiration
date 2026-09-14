@@ -2,23 +2,27 @@
  * The nomination gate: the read behind the page, and the one transaction
  * that places a nomination. Server-only (Story 2.1).
  *
- * **Nothing here is stored.** There is no migration in this story and no
- * `nomination_slots` table: board occupancy, Nomination Slot status and the
- * League Clock are all folds of `auction_events`. Story 1.11's own note
- * anticipated a projection table here; the answer on arriving is that
- * nothing needs one, because the log already carries every fact the gate
- * asks about. Story 2.2 adds ONE table, `open_nominations`, and it is not a
- * projection in the reading sense: nothing selects from it. It is a
- * write-side constraint, registered through the `projections` hook because
- * that hook is the one seam that persists inside the appending transaction,
- * and its only job is to make a second writer's insert fail. Story 2.3's
- * acceptance criteria require Slot status to be a FOLD rather than a stored
- * flag that is read, and it still is.
+ * **Nothing here is READ from a table.** Board occupancy, Nomination Slot
+ * status and the League Clock are all folds of `auction_events`. Story 1.11's
+ * own note anticipated a projection table here; the answer on arriving was
+ * that nothing needs one, because the log already carries every fact the gate
+ * asks about. There are now TWO tables — `open_nominations` (Story 2.2) and
+ * `nomination_slots` (FR-9's amendment) — and neither is a projection in the
+ * reading sense: nothing selects from either. They are write-side
+ * constraints, registered through the `projections` hook because that hook is
+ * the one seam that persists inside the appending transaction, and their only
+ * job is to make a second writer's insert fail. Story 2.3's acceptance
+ * criteria require Slot status to be a FOLD rather than a stored flag that is
+ * read, and it still is.
  *
- * **The claim row is written once and deleted once.** Story 2.3 added
- * `releaseNomination`, the delete that clears a claim when a Player's
- * Auction closes, and shipped it unregistered because no `AuctionClosed`
- * producer existed. Story 3.4 is that producer: `server/close.ts` registers
+ * **Two claims now, with two lifetimes.** A nomination writes both: a board
+ * seat keyed on the Player, and — unless the actor is exempt — a Nomination
+ * Slot keyed on the Team. The seat is deleted when that Player's Auction
+ * ENDS, either way it can end. The Slot is deleted only when that Team WINS a
+ * Player, which is the amended FR-9 and the reason one row could no longer
+ * carry both. Story 2.3 added `releaseNomination`, the delete that clears a
+ * claim when a Player's Auction closes, and shipped it unregistered because no
+ * `AuctionClosed` producer existed. Story 3.4 is that producer: `server/close.ts` registers
  * this exact updater, unchanged, in the transaction that appends the close.
  * It is still not on `placeNomination`'s `projections`, because that path
  * appends no close. The Slot's release itself is not this module's doing
@@ -59,6 +63,11 @@
  * transaction rolls it back, leaving no event and no clock reset.
  */
 
+import {
+	INITIAL_AUCTIONS,
+	auctionForPlayer,
+	auctionsReducer
+} from '../core/projection/auctions.ts';
 import { fold } from '../core/projection/fold.ts';
 import {
 	AUCTION_CLOSED_EVENT,
@@ -68,7 +77,7 @@ import {
 	nominationForPlayer,
 	nominationForTeam,
 	nominationsReducer,
-	readClosedPlayerId,
+	readClosedFacts,
 	readTerminatedPlayerId
 } from '../core/projection/nominations.ts';
 import {
@@ -78,8 +87,12 @@ import {
 } from '../core/projection/contracts.ts';
 import { INITIAL_PHASE, phaseReducer } from '../core/projection/phase.ts';
 import {
+	COMMISSIONER_SLOT_STATUS,
+	commissionerConsequenceSentence,
 	nominationConsequenceSentence,
+	nominationPoolStatus,
 	nominationRefusalDetail,
+	nominationSlotStatus,
 	refuseNomination
 } from '../core/rules/nomination.ts';
 import type { NominationRefusal, NominationState } from '../core/rules/nomination.ts';
@@ -103,6 +116,17 @@ export type NominationActor = {
 	readonly teamId: string;
 	/** The acting Team's name — carried into the payload so a refusal can name it. */
 	readonly teamName: string;
+	/**
+	 * Whether this actor's nomination spends their Team's one Nomination Slot
+	 * (Story 9.8).
+	 *
+	 * `false` for a Commissioner, who nominates without limit to keep the
+	 * number of open Auctions high; `true` for every Manager. Resolved from
+	 * `managers.is_commissioner` through the session (AD-15) and NEVER from a
+	 * form field — this is the one flag that decides whether a gate applies,
+	 * so a browser must not be able to assert it.
+	 */
+	readonly spendsSlot: boolean;
 };
 
 /**
@@ -125,6 +149,17 @@ export type NominationPlacedPayload = {
 	readonly teamId: string;
 	readonly teamName: string;
 	readonly managerId: string;
+	/**
+	 * Whether this nomination spent the Team's Nomination Slot (Story 9.8).
+	 *
+	 * Carried in the PAYLOAD rather than inferred at fold time for the reason
+	 * `core/projection/nominations.ts` states at length: a fold must be a
+	 * function of the log, so who is a Commissioner today cannot be allowed to
+	 * change what a nomination placed last week meant. It is written on every
+	 * event from here on; a payload without it folds to `true`, which is what
+	 * every nomination before this story was.
+	 */
+	readonly holdsSlot: boolean;
 };
 
 /**
@@ -198,10 +233,13 @@ export type NominatablePoolRow = {
 	/** Whether this Player is selectable right now, as the render saw it. */
 	readonly available: boolean;
 	/**
-	 * Why this Player is unavailable, worded by the pure core, or `null` when
-	 * they are available. Never re-worded by the surface.
+	 * What state this Player is in, in the core's words — `Available`,
+	 * `Nominated`, `In-Auction`, or `Closed to <Team>`. One phrase, printed in
+	 * the row's own state cell; the refusal PARAGRAPH belongs to a submit and
+	 * is not printed down a list of ~1,470 rows. Never re-worded by the
+	 * surface.
 	 */
-	readonly unavailableDetail: string | null;
+	readonly status: string;
 };
 
 /** Everything the nomination page renders, all worded by the core. */
@@ -215,8 +253,26 @@ export type NominatablePool = {
 	 * `null` when the Team may nominate.
 	 */
 	readonly slotDetail: string | null;
+	/**
+	 * What the Slot is doing, in one line, for the panel that reports it at
+	 * rest. `null` when the Slot is unavailable for a reason that is NOT the
+	 * Team's own nomination — the wrong phase, an unbound actor — because
+	 * those are refusals and `slotDetail` is the sentence that owns them.
+	 */
+	readonly slotStatus: string | null;
 	/** `NOMINATION_CONSEQUENCE` as a finished sentence, for beside the confirm. */
 	readonly consequence: string;
+	/**
+	 * Whether this actor's nomination spends their Team's Slot (Story 9.8).
+	 *
+	 * A RENDERING input and nothing else: the page needs it to ask the core
+	 * for the one sentence that names the Player it chose client-side, which
+	 * the server could not render without knowing the choice. The gate is
+	 * `refuseNomination` under the lock, from the session's own
+	 * `managers.is_commissioner`, so nothing a browser does with this value
+	 * can change what it is allowed to nominate.
+	 */
+	readonly spendsSlot: boolean;
 };
 
 type PoolRow = {
@@ -246,7 +302,8 @@ type PoolRow = {
  */
 export async function loadNominatablePool(
 	gateway: ConnectionGateway,
-	actorTeamId: string | null
+	actorTeamId: string | null,
+	actorSpendsSlot: boolean = true
 ): Promise<NominatablePool> {
 	const client = await gateway.connect();
 	try {
@@ -260,17 +317,40 @@ export async function loadNominatablePool(
 		// the two are resolved per row below exactly as `loadNominationState`
 		// resolves them for the one Player it is asked about.
 		const contracts = fold(INITIAL_CONTRACTS, events, contractsReducer);
+		// A third fold over the SAME loaded events, for one distinction the
+		// row's state makes and the gate does not: whether a nominated
+		// Player's Auction has had a Bid yet. `auctionForPlayer` is `null`
+		// until one lands, which is exactly "Nominated" rather than
+		// "In-Auction". It gates nothing — `refuseNomination` is untouched.
+		const auctions = fold(INITIAL_AUCTIONS, events, auctionsReducer);
 
 		// One statement, left joined, rather than one query per Player: the
 		// contract holder is part of what makes a row unavailable, and asking
 		// per row would be a query per pool Player on every page view.
+		//
+		// THE ORDER IS THE EXPORT'S, not this app's. `source_rank` is the
+		// row's position in the supplied Fantrax CSV, which arrives in
+		// Fantrax's own default order — the order every Manager has been
+		// reading all week in Fantrax itself. Alphabetical, which this query
+		// used until Story 9.8, was never neutral: it silently substituted a
+		// second ranking for the one the file states, and made a Manager scan
+		// ~1,470 names for one they could have found by position.
+		//
+		// This is NOT the app ranking Players. It repeats the file's order and
+		// holds no opinion about it — nothing here reads a Score, and there is
+		// still no suggested Player and no "similar players".
+		//
+		// `player_name` is the tie-break, and it is what makes the list stable
+		// rather than left to the planner (AD-1): a pool staged before the
+		// rank column existed has every row at 0, and falls back to exactly
+		// the alphabetical list this query returned before.
 		const poolResult = await client.query(
 			`select p.fantrax_player_id, p.player_name, p.positions, p.nba_team,
 				t.name as contract_team_name
 			from ${FREE_AGENT_PLAYERS_TABLE} p
 			left join team_rosters r on r.fantrax_player_id = p.fantrax_player_id
 			left join teams t on t.id = r.team_id
-			order by p.player_name asc`
+			order by p.source_rank asc, p.player_name asc`
 		);
 
 		await client.query('rollback');
@@ -302,7 +382,8 @@ export async function loadNominatablePool(
 				// The empty string is not a Team id, so a signed-in Manager
 				// bound to no Team sees each Player's own availability rather
 				// than every row collapsing to a Slot refusal.
-				actorTeamId ?? ''
+				actorTeamId ?? '',
+				actorSpendsSlot
 			);
 
 			// A held Slot is not a property of a Player and must not grey out
@@ -316,7 +397,10 @@ export async function loadNominatablePool(
 				positions: String(row.positions),
 				nbaTeam: String(row.nba_team),
 				available: playerRefusal === null,
-				unavailableDetail: playerRefusal === null ? null : nominationRefusalDetail(playerRefusal)
+				status: nominationPoolStatus(
+					playerRefusal,
+					auctionForPlayer(auctions, fantraxPlayerId) !== null
+				)
 			};
 		});
 
@@ -333,14 +417,47 @@ export async function loadNominatablePool(
 							poolPlayer: { fantraxPlayerId: '', playerName: '' },
 							contractHolderTeamName: null
 						},
-						actorTeamId
+						actorTeamId,
+						actorSpendsSlot
 					);
+
+		// The Player holding this Team's Slot, from the SAME fold every gate
+		// above reads. The panel names them rather than printing the refusal
+		// sentence at rest: a refusal is a reply to an act, and opening the
+		// page is not an act.
+		//
+		// A Commissioner is never asked: they hold no Slot, so there is no
+		// holder to name, and `COMMISSIONER_SLOT_STATUS` is what the panel
+		// prints instead.
+		const held =
+			actorTeamId === null || !actorSpendsSlot
+				? null
+				: nominationForTeam(nominations, actorTeamId);
 
 		return {
 			players,
 			slotAvailable: teamRefusal === null,
 			slotDetail: teamRefusal === null ? null : nominationRefusalDetail(teamRefusal),
-			consequence: nominationConsequenceSentence(null)
+			// Stated for the two cases the Slot itself is the answer to — free,
+			// or held by a named Player. Every other reason the Slot is
+			// unavailable is a refusal, and `slotDetail` is its sentence. A
+			// Commissioner gets the third case (Story 9.8): not a Slot state but
+			// the absence of one, said plainly, because "Open for nomination."
+			// would describe a rule that does not apply to them.
+			slotStatus: !actorSpendsSlot
+				? COMMISSIONER_SLOT_STATUS
+				: teamRefusal === null || teamRefusal.kind === 'slot_in_use'
+					? nominationSlotStatus(held?.playerName ?? null)
+					: null,
+			consequence: actorSpendsSlot
+				? nominationConsequenceSentence(null)
+				: commissionerConsequenceSentence(null),
+			// Passed through so the page can ask the CORE for the one sentence
+			// that names the chosen Player — which it only knows client-side
+			// (Story 9.8). It is a rendering input, never a gate: the gate is
+			// `refuseNomination`, re-derived under the lock, and a browser that
+			// lies about this changes only what it prints to itself.
+			spendsSlot: actorSpendsSlot
 		};
 	} catch (error) {
 		await client.query('rollback').catch(() => {
@@ -360,11 +477,22 @@ export type NominationRejection = {
 
 const OPEN_NOMINATIONS_TABLE = 'open_nominations';
 
+/**
+ * The Slot claims, in their own table since FR-9 was amended
+ * (`20260914000000_nomination_slot_released_on_win.sql`).
+ *
+ * Separate from `open_nominations` because the two claims no longer end at the
+ * same moment: the board seat ends when the Auction ends, and the Slot ends
+ * when the nominating Team WINS a Player. One row deleted on close cannot
+ * express a claim that survives the close.
+ */
+const NOMINATION_SLOTS_TABLE = 'nomination_slots';
+
 /** The PK that makes a Player nominatable once (`20260825000000_open_nominations.sql`). */
 const PLAYER_CLAIM_CONSTRAINT = 'open_nominations_pkey';
 
-/** The unique constraint that makes a Team's Nomination Slot single. */
-const TEAM_CLAIM_CONSTRAINT = 'open_nominations_team_id_key';
+/** The PK that makes a Team's Nomination Slot single. */
+const TEAM_CLAIM_CONSTRAINT = 'nomination_slots_pkey';
 
 /**
  * Insert the claim row for the nomination just appended, on the appending
@@ -387,95 +515,141 @@ export const claimNomination: ProjectionUpdater = async (client, appended) => {
 	for (const event of appended) {
 		if (event.type !== NOMINATION_PLACED_EVENT) continue;
 		const payload = event.payload as NominationPlacedPayload;
+		// `!== false` mirrors the fold's own reading of the same field, so the
+		// rows and the event can never disagree about whether a Slot was spent —
+		// and a payload from some future path that omits it claims a Slot, which
+		// is the stricter answer (Story 9.8).
+		const holdsSlot = payload.holdsSlot !== false;
 		await client.query(
 			`insert into ${OPEN_NOMINATIONS_TABLE}
-				(fantrax_player_id, team_id, seq, occurred_at)
+				(fantrax_player_id, team_id, seq, occurred_at, holds_slot)
+			values ($1, $2, $3, $4, $5)`,
+			[payload.fantraxPlayerId, payload.teamId, event.seq, event.occurredAt, holdsSlot]
+		);
+		// **The second claim, and the one with a different lifetime.** The row
+		// above is deleted when this Player's Auction ends; this one is deleted
+		// only when this Team wins a Player, which is the amended FR-9. A
+		// Commissioner's nomination writes none at all — the exemption is the
+		// absence of the row, exactly as it is the absence of a `byTeam` entry
+		// in the fold, rather than a flag some later statement has to remember
+		// to consult.
+		if (!holdsSlot) continue;
+		await client.query(
+			`insert into ${NOMINATION_SLOTS_TABLE}
+				(team_id, fantrax_player_id, seq, occurred_at)
 			values ($1, $2, $3, $4)`,
-			[payload.fantraxPlayerId, payload.teamId, event.seq, event.occurredAt]
+			[payload.teamId, payload.fantraxPlayerId, event.seq, event.occurredAt]
 		);
 	}
 };
 
 /**
- * Delete the claim row for every `AuctionClosed` — and, since Story 3.7,
- * every `AuctionTerminated` — in the batch just appended, on the appending
- * transaction's own client (Story 2.3).
+ * Clear the claims an ending Auction ends, on the appending transaction's own
+ * client (Story 2.3; FR-9's amendment splits it in two).
  *
- * The mirror image of `claimNomination`, and for the same reasons: it is a
- * WRITE-SIDE statement, never a read, and it goes through the `projections`
- * hook so the delete commits with the close event or not at all (AD-5).
- * Removing the row is what returns the Player to the pool and the Team's
- * Nomination Slot to them at the data layer — the *answer* to "is this Slot
- * held" stays `nominationsReducer`'s fold over `auction_events`, which
- * releases on exactly the same event without consulting this table.
+ * The mirror image of `claimNomination`, and for the same reasons: these are
+ * WRITE-SIDE statements, never reads, and they go through the `projections`
+ * hook so each delete commits with its event or not at all (AD-5). The
+ * *answers* — is this Player on the board, is this Team's Slot held — stay
+ * `nominationsReducer`'s fold over `auction_events`, which releases on exactly
+ * the same events without consulting either table.
  *
- * Keyed on the Player alone, exactly as the fold is: the Slot frees whether
- * the nominator won, lost or never bid, and `open_nominations`' primary key
- * IS `fantrax_player_id`, so one statement clears one claim.
+ * **Two claims, two keys, two lifetimes.** They used to be one row deleted by
+ * one statement, because a board seat and a Nomination Slot ended at the same
+ * moment. They do not any more:
  *
- * **Story 3.7 widens the condition to a second event type, and it MUST.** An
- * `AuctionTerminated` frees the same kind of Slot a close frees — the League
- * Clock ran out with the Player still Awaiting an Opening Bid — and
- * `nominationsReducer` releases on it. A claim row left behind would make the
- * table and the log disagree about that Slot PERMANENTLY: an insert-only log
- * can never be replayed to clear a row, and the nominating Team's next
- * nomination would draw a wrong `slot_in_use` refusal off
- * `open_nominations_team_id_key` for a Player who is back in the pool. That is
- * precisely the divergence AD-5 makes the fold the authority to prevent, and
- * the delete is the write-side half of it.
+ *   - `open_nominations`, keyed on the PLAYER, is deleted when that Player's
+ *     Auction ENDS — by an `AuctionClosed` or an `AuctionTerminated` alike.
+ *     That is what returns the Player to the nominatable pool.
+ *   - `nomination_slots`, keyed on the TEAM, is deleted only by an
+ *     `AuctionClosed`, and keyed on the Team that WON it. Nominating spends
+ *     the Slot; winning a Player is the only thing that gives it back. A
+ *     termination deletes no Slot row at all, because nobody won.
  *
- * **The payload is read through the core's own reader, not cast.** A close
+ * **Story 3.7's argument for widening to `AuctionTerminated` still stands,
+ * and now applies to exactly one of the two deletes.** A claim row left behind
+ * makes the table and the log disagree PERMANENTLY: an insert-only log can
+ * never be replayed to clear a stale row, so the Player would be back in the
+ * pool by the fold and still un-nominatable by `open_nominations_pkey`. The
+ * same reasoning is what forbids deleting the Slot row on a termination — the
+ * fold keeps that Slot held, so a delete here would strand the disagreement in
+ * the other direction and hand a Team a nomination the gate would then refuse.
+ *
+ * **The payloads are read through the core's own readers, not cast.** A close
  * arrives from Story 3.4, not from this module — unlike `claimNomination`,
  * whose payload `placeNomination` builds three lines earlier and therefore
- * knows to be well formed. `readClosedPlayerId` is the same function
- * `nominationsReducer` folds through, so a close naming no Player is skipped
- * here exactly as it is skipped there. Casting instead would diverge two
- * ways on a malformed close: a null payload would throw a `TypeError` inside
- * the appending transaction, rolling back a close the fold would have
- * tolerated, and a missing id would bind null and silently delete nothing
- * while the fold freed the Slot anyway — leaving the log and the claim table
- * disagreeing, so the Team's next nomination would draw a wrong
- * `slot_in_use` refusal off `open_nominations_team_id_key`.
+ * knows to be well formed. `readClosedFacts` is the same function
+ * `nominationsReducer` folds through, so a close naming no Player, no winner
+ * or no parseable price is skipped here exactly as it is skipped there.
+ * Casting instead would diverge two ways on a malformed close: a null payload
+ * would throw a `TypeError` inside the appending transaction, rolling back a
+ * close the fold would have tolerated, and a missing id would bind null and
+ * silently delete nothing while the fold released anyway — leaving the log and
+ * the claim tables disagreeing about a Player or a Slot forever.
  *
- * Idempotent by construction. A close for a Player with no claim row —
- * already released, or never nominated — deletes zero rows and does not
- * raise; there is no `returning`, nothing asserts a row count, and no
- * refusal can come out of here. That is deliberate: unlike the insert, whose
- * collision IS the rule, a delete that finds nothing has already achieved
- * what it was asked to achieve.
+ * Idempotent by construction. A close for a Player with no claim row, or won
+ * by a Team holding no Slot, deletes zero rows and does not raise; there is no
+ * `returning`, nothing asserts a row count, and no refusal can come out of
+ * here. That is deliberate: unlike the inserts, whose collision IS the rule, a
+ * delete that finds nothing has already achieved what it was asked to achieve.
  *
- * **Registered by Story 3.4 and by Story 3.7, and by nothing else.** Story 2.3
- * shipped it tested and deliberately unregistered, because no `AuctionClosed`
- * producer existed and the delete must run inside the transaction that appends
- * the close. `server/close.ts` is that transaction, and registering it there
- * cost the one line 2.3 predicted; `server/phase-end.ts` is the second, and
- * cost the same. It is still NOT on `placeNomination`'s `projections`: that
- * path appends neither event type, so the delete could only ever issue against
- * nothing.
+ * **Registered by `server/close.ts` and by `server/phase-end.ts`, and by
+ * nothing else.** It is still NOT on `placeNomination`'s `projections`: that
+ * path appends neither event type, so the deletes could only ever issue
+ * against nothing.
  */
 export const releaseNomination: ProjectionUpdater = async (client, appended) => {
 	for (const event of appended) {
-		// **Two event types, two readers, one delete.** Each payload is read
-		// through the CORE's own reader for its own event — the same functions
-		// `nominationsReducer` folds through — so what makes each event well
-		// formed is decided in one place and this delete can never act on an
-		// event the fold skipped, or skip one the fold acted on.
-		let fantraxPlayerId: string | null;
+		// **Two event types, two readers, and now two different deletes.** Each
+		// payload is read through the CORE's own reader for its own event — the
+		// same functions `nominationsReducer` folds through — so what makes each
+		// event well formed is decided in one place and this delete can never
+		// act on an event the fold skipped, or skip one the fold acted on.
+		//
+		// A close is read through `readClosedFacts` rather than
+		// `readClosedPlayerId` because the WINNER is load-bearing here since
+		// FR-9's amendment: the Player says which board seat to free, and the
+		// winning Team says whose Slot to free. `nominationsReducer` reads the
+		// identical pair off the identical reader.
 		if (event.type === AUCTION_CLOSED_EVENT) {
-			fantraxPlayerId = readClosedPlayerId(event.payload);
-		} else if (event.type === AUCTION_TERMINATED_EVENT) {
-			fantraxPlayerId = readTerminatedPlayerId(event.payload);
-		} else {
+			const closed = readClosedFacts(event.payload);
+			// A close naming no Player, no winner or no parseable price is not a
+			// well-formed close, identifies no claim row, and is skipped by the
+			// fold for the same reason.
+			if (closed === null) continue;
+			await client.query(
+				`delete from ${OPEN_NOMINATIONS_TABLE}
+				where fantrax_player_id = $1`,
+				[closed.fantraxPlayerId]
+			);
+			// **The Slot, keyed on the WINNER and on nothing else.** Not on the
+			// nominator, and not on the Player: a Team holds at most one Slot, so
+			// winning any Player at all returns whichever Slot they hold — very
+			// often one spent nominating somebody else entirely. A winner holding
+			// no Slot deletes nothing, which is the ordinary case for a
+			// Commissioner and for a Team that has not nominated.
+			await client.query(
+				`delete from ${NOMINATION_SLOTS_TABLE}
+				where team_id = $1`,
+				[closed.teamId]
+			);
 			continue;
 		}
-		// A close or termination naming no Player identifies no claim row, so
-		// there is nothing to delete and no statement to issue. The fold skips
-		// the same event for the same reason.
-		if (fantraxPlayerId === null) continue;
+		if (event.type !== AUCTION_TERMINATED_EVENT) continue;
+		const terminated = readTerminatedPlayerId(event.payload);
+		// A termination naming no Player identifies no claim row, so there is
+		// nothing to delete and no statement to issue.
+		if (terminated === null) continue;
+		// **The board seat ONLY.** Nobody won, so no Slot is released — the
+		// nominating Team keeps the one they spent on a Player nobody bid for,
+		// and `nominationsReducer` leaves `byTeam` untouched on exactly this
+		// event. Deleting the Slot row here would put the table and the fold in
+		// permanent disagreement, and an insert-only log can never be replayed
+		// to put a deleted claim back.
 		await client.query(
 			`delete from ${OPEN_NOMINATIONS_TABLE}
 			where fantrax_player_id = $1`,
-			[fantraxPlayerId]
+			[terminated]
 		);
 	}
 };
@@ -598,7 +772,7 @@ export async function placeNomination(
 			// 2.2). Nothing reads it; it exists so a second writer collides.
 			projections: [claimNomination],
 			decide: ({ state }) => {
-				const refusal = refuseNomination(state, actor.teamId);
+				const refusal = refuseNomination(state, actor.teamId, actor.spendsSlot);
 				if (refusal !== null) {
 					const rejection: NominationRejection = {
 						refusal,
@@ -621,7 +795,10 @@ export async function placeNomination(
 					playerName: player.playerName,
 					teamId: actor.teamId,
 					teamName: actor.teamName,
-					managerId: actor.managerId
+					managerId: actor.managerId,
+					// What the gate just decided, written down so the fold decides
+					// the same thing forever (Story 9.8).
+					holdsSlot: actor.spendsSlot
 				};
 
 				const event: EventEnvelope = {

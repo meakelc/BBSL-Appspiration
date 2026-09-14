@@ -76,11 +76,6 @@
 	</header>
 
 	<section class="panel">
-		<p class="section-label">Phase</p>
-		<p class="prose">{data.phase.sentence}</p>
-	</section>
-
-	<section class="panel">
 		<p class="section-label">What a mute changes</p>
 		<p class="prose">
 			A mute is set per Manager and withholds your own mention. Every notice still posts

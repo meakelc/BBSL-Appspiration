@@ -30,7 +30,22 @@
 
 import pg from 'pg';
 
-/** The 13 migrations, in the order `supabase db push` applies them. */
+/**
+ * Every migration this checkout expects, in the order `supabase db push`
+ * applies them.
+ *
+ * Transcribed deliberately rather than read from `supabase/migrations/`: the
+ * point is an INDEPENDENT statement of what should be there, so a file
+ * deleted from the repository still shows up as missing from the database.
+ * Reading the directory would compare the database to itself.
+ *
+ * No count is stated here on purpose. This comment said "13" while three
+ * later migrations existed, and the check passed anyway -- `missing` is
+ * `EXPECTED_MIGRATIONS` minus `applied`, so a version absent from this array
+ * is not required of the database AT ALL. A database missing two migrations
+ * the checkout needed reported PASS and named neither. Add the version here
+ * in the same commit that adds the file.
+ */
 const EXPECTED_MIGRATIONS = [
 	'20260821000000',
 	'20260821010000',
@@ -44,7 +59,14 @@ const EXPECTED_MIGRATIONS = [
 	'20260901000000',
 	'20260902000000',
 	'20260903000000',
-	'20260904000000'
+	'20260904000000',
+	'20260907000000',
+	'20260910000000',
+	'20260911000000',
+	'20260913000000',
+	'20260914000000',
+	'20260915000000',
+	'20260916000000'
 ];
 
 /**
@@ -55,6 +77,8 @@ const EXPECTED_TABLES = [
 	'auction_contention_seeds',
 	'auction_events',
 	'auction_watermark',
+	'fantrax_divergence_dismissals',
+	'fantrax_reads',
 	'free_agent_players',
 	'import_pool_source',
 	'import_staged_pool_players',
@@ -62,6 +86,7 @@ const EXPECTED_TABLES = [
 	'import_team_sources',
 	'manager_notification_preferences',
 	'managers',
+	'nomination_slots',
 	'notification_outbox',
 	'open_nominations',
 	'team_rosters',
@@ -193,7 +218,11 @@ async function checkMigrations(client) {
 		);
 		applied = rows.map((row) => String(row['version']));
 	} catch {
-		record(false, 'All 13 migrations applied', 'supabase_migrations.schema_migrations is unreadable');
+		record(
+			false,
+			`All ${String(EXPECTED_MIGRATIONS.length)} migrations applied`,
+			'supabase_migrations.schema_migrations is unreadable'
+		);
 		return;
 	}
 
@@ -392,7 +421,7 @@ async function checkTick(client) {
 	}
 
 	const job = rows[0];
-	record(job !== undefined, "The 'bbsl-tick' cron job exists (AD-10: exactly one)", `${String(rows.length)} found`);
+	record(job !== undefined, "The 'bbsl-tick' cron job exists (AD-10: the one CLOSING schedule)", `${String(rows.length)} found`);
 	if (job === undefined) return;
 
 	// AC 3, and the check that matters most on a fresh project: applying the
@@ -404,12 +433,42 @@ async function checkTick(client) {
 		`active=${String(job['active'])}, schedule='${String(job['schedule'])}'`
 	);
 
-	const { rows: allJobs } = await client.query('select count(*)::int as n from cron.job');
+	// AD-10 says "a single Supabase Cron schedule invokes a single Edge
+	// Function", and this check used to count jobs and demand exactly 1. That
+	// counted the wrong thing. AD-10's two stated concerns are both about
+	// CLOSING: "two things could close the same Auction", and a schedule budget
+	// that could exhaust the free invocation cap and stop the sweep silently.
+	// Story 7.9's `bbsl-fantrax-read` does neither -- it closes nothing, takes
+	// no lock, appends no event, and at half-hourly spacing is ~1,440
+	// invocations a month against a 500K cap. AD-10 was amended on 2026-09-14
+	// to say so; this check now enforces the amended rule.
+	//
+	// Naming the jobs is STRICTER than counting them, not looser: a stray third
+	// schedule was previously caught only as a number, and is now caught by
+	// name. A second CLOSING schedule -- the thing AD-10 actually forbids --
+	// would appear here as an unknown name and fail.
+	const KNOWN_JOBS = ['bbsl-fantrax-read', 'bbsl-tick'];
+	const { rows: allJobs } = await client.query('select jobname, active from cron.job order by jobname');
+	const names = allJobs.map((row) => String(row['jobname']));
+	const strays = names.filter((name) => !KNOWN_JOBS.includes(name));
 	record(
-		Number(allJobs[0]?.['n'] ?? 0) === 1,
-		'Exactly one cron job in the project (AD-10)',
-		`${String(allJobs[0]?.['n'] ?? 0)} job(s)`
+		strays.length === 0,
+		'Only the two known cron jobs exist (AD-10, amended 2026-09-14)',
+		strays.length === 0 ? names.join(', ') : `unexpected: ${strays.join(', ')}`
 	);
+
+	// The same reasoning the tick's own INACTIVE check applies, for the same
+	// reason: applying the migrations must not start polling an unauthenticated
+	// third party before anybody has said so. Absent is fine -- a project that
+	// predates Story 7.9 simply has no such job.
+	const fantrax = allJobs.find((row) => String(row['jobname']) === 'bbsl-fantrax-read');
+	if (fantrax !== undefined) {
+		record(
+			fantrax['active'] === false,
+			"'bbsl-fantrax-read' is INACTIVE, as its migration creates it",
+			`active=${String(fantrax['active'])}`
+		);
+	}
 }
 
 function report() {

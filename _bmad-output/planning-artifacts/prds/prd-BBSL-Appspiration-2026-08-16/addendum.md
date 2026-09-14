@@ -18,11 +18,50 @@ Fantrax publishes no official, documented, public API. What the ecosystem has:
 
 Endpoint surface observed via `go-fantrax`: `getPlayerIds`, `getAdp`, `getLeagues`, `getLeagueInfo`, `getDraftPicks`, `getTeamRosters`, `getStandings`.
 
+**Re-verified 2026-09-10** when the commissioner asked whether the API could carry trades. `fantrax.com/developer` still returns **403** to an unauthenticated request; it remains a gated page. Both community wrappers were re-read, and the August findings hold unchanged — with one shape now pinned that matters:
+
+`getTeamRosters` (`GET /fxea/general/getTeamRosters?leagueId=<id>&period=<n>`) returns, per `go-fantrax` v0.1.18:
+
+```
+LeagueRosters { Period, Rosters: map[teamId]TeamRosterInfo }
+  TeamRosterInfo { TeamName, RosterItems: []RosterItem }
+    RosterItem { ID, Position, Status }
+```
+
+**That struct is wrong**, and the correction matters more than the original note. **Called against the real BBSL league on 2026-09-10**, unauthenticated, the endpoint returned all 30 Teams and 303 roster rows shaped like this:
+
+```json
+{"contract":{"smallId":"5","name":"2027"}, "id":"01eon",
+ "position":"F", "salary":2.25E7, "status":"ACTIVE"}
+```
+
+plus `teamName`, a Fantrax team id, and `salaryCap: 165000000.0` per Team. **Salary, contract designation and slot kind are all present.** `go-fantrax` models three fields of a payload that carries six; finding 1 above — *"salaries and contracts are absent from the documented read surface"* — is **false for this endpoint**, and was believed on the strength of a community wrapper rather than a live call. The lesson is the plainer one: a wrapper's struct is evidence about the wrapper, not about the API.
+
+**Finding 2 stands unchanged.** Every method exposed by either wrapper is still a GET; there is no write path to reverse-engineer, not merely no documented one.
+
+**Three integration hazards found in the live payload**, none of which the wrapper documentation would have revealed:
+
+1. **Money is float, and truncation corrupts it.** Salaries arrive as scientific-notation floats carrying representation error — `23499999.999999993`, `46499999.999999985`, `28499999.999999993`. `int()` puts 4 of 303 rows a dollar low and **off the $500,000 grid**; `round()` was clean on all 303. Anything reading this endpoint rounds, then asserts the grid. **The CSV is the safer source for setup** precisely because it carries exact integers (`25,000,000`) with no float in the path.
+2. **Player ids are unwrapped here** (`01eon`) and asterisk-wrapped in the CSV export (`*04ewu*`), which the importer stores verbatim. Compared unnormalised, every row reads simultaneously as a departure and an unknown arrival.
+3. **`status` carries all four slot kinds** — `ACTIVE`, `RESERVE`, `MINORS`, `INJURED_RESERVE` — but the underscore form does not match the CSV importer's `injured reserve` alias. Two mappings, not one.
+
+**One rule confirmed against live data:** `2RK31` appears exactly 30 times, one per Team — this year's second-round class — validating both the five-year term and the *"full term unelapsed"* test FR-43 relies on. The first-round ladder runs `1RK27`–`1RK30` with no `1RK31`, so **first-round scale is four years, not five**; the drop exception is `2RK`-only and unaffected, but nobody should generalise the five-year term to `1RK`.
+
 **Three findings drove the v1 decision:**
 
 1. **Salaries and contracts are absent from the documented read surface.** `go-fantrax` states plainly that player salaries/contracts are not included. That is the single most load-bearing data the app needs, so an API-read path would still require a CSV for the important half.
 2. **There is no documented write path.** Roster edits and transactions appear only behind an undocumented `auth_client` using session cookies. Pushing 60 contracts into the league of record through an unsupported, reverse-engineered, cookie-authenticated endpoint is the highest-consequence failure mode available to this project.
 3. **Auth is a `userSecretId`** taken from a Fantrax user profile — an API-key-shaped shared secret, not OAuth. Fine for a commissioner-operated tool; still a credential to hold.
+
+### What the August assessment got wrong
+
+Finding 1 concluded that a read surface without salaries is useless, because salary is "the single most load-bearing data the app needs." That is correct **for setup**, and it is why FR-1 remains a CSV import. It was then applied too broadly, to a job that had not yet been asked about.
+
+For **reconciliation** the arithmetic reverses. A trade does not change a Contract — it changes who holds it. The app already holds every Contract's Cap Hit, years and Slot kind from the FR-1 import, and under FR-41 those travel with the Player unchanged. So the only fact the app is missing is **which Team holds whom**, and that is precisely the one fact `getTeamRosters` returns.
+
+The endpoint is worthless for establishing state and sufficient for detecting that state has drifted. Those are different jobs, and the August note evaluated it against only the first.
+
+The consequence is FR-42, and it is deliberately shaped so the dependency can never do harm: the read proposes and never writes, it runs hourly rather than per tick, its failure degrades to FR-41 alone, and repeated failure is **stated on the Commissioner's surface** rather than rendering as a clean bill of health. A detector that has silently stopped is worse than no detector, because it displaces the manual check it was meant to support.
 
 ### Why the league can't just use Fantrax's built-in features
 
@@ -38,11 +77,11 @@ Neither can express: a 24h clock that resets per bid, a nomination right gated o
 | Option | Why rejected |
 |---|---|
 | Full automated two-way API sync | Undocumented write endpoints; could corrupt the league of record. Deferred to v2 pending official API access. |
-| API read + CSV write | The read surface omits salaries, so setup still needs a CSV. Buys convenience on the FA pool only, at the cost of a dependency that can break silently between offseasons. Reasonable v1.1. |
+| API read + CSV write | **Partly adopted 2026-09-10, for a different reason than this row assessed.** Rejected for *setup*, which still needs the CSV — the read surface omits salary. Adopted for *reconciliation* (FR-42), where membership alone suffices because the app already holds the money. The "breaks silently between offseasons" objection stands and is answered by FR-42 failing loudly rather than by the dependency being safe. |
 | Scraping the Fantrax web UI | Same fragility as undocumented endpoints, plus ToS exposure, plus no better data. |
 | Running the auction inside Fantrax with manual adjudication | The status quo. It is what the app exists to replace. |
 
-**v2 trigger:** if Fantrax grants documented API access on request (as they evidently have to other developers), revisit — starting with read-side population of the free agent pool, which is the highest-toil part of setup.
+**v2 trigger:** if Fantrax grants documented API access on request (as they evidently have to other developers), revisit — starting with read-side population of the free agent pool, which is the highest-toil part of setup. **Note that the write half may not exist to be granted:** as of 2026-09-10 no write endpoint is documented, undocumented, or reverse-engineered by anyone in the ecosystem, so "Not writing to Fantrax" (PRD §6) should be read as a property of the integration and not only as a v1 scope choice.
 
 ---
 

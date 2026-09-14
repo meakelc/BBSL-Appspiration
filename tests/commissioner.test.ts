@@ -248,7 +248,6 @@ describe('difference 4 — the persistent label', () => {
 		const content = label.get('content');
 		expect(content, '.control-commissioner::before declares no content').toBeDefined();
 		expect(content).toContain('Commissioner');
-		expect(content).toContain('visible only to you');
 	});
 
 	it('renders the label in admin-text', () => {

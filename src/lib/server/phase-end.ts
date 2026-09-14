@@ -6,10 +6,15 @@
  * **Nothing here is stored but the events.** There is no `league_clock`
  * column, no stored countdown and no phase flag: the expiry is
  * `leagueClockExpiry` over the fold, the phase is `phaseReducer` over the
- * fold, and the freed Nomination Slots are `nominationsReducer` over the fold.
- * The one write outside `auction_events` is the claim-row delete
+ * fold, and the freed board seats are `nominationsReducer` over the fold. The
+ * one write outside `auction_events` is the claim-row delete
  * `releaseNomination` performs, and that is a WRITE-SIDE constraint nothing
  * reads (`20260825000000_open_nominations.sql`).
+ *
+ * **It frees no Nomination Slot, and must not.** A termination has no winner,
+ * and since FR-9's amendment a Slot is released by winning a Player and by
+ * nothing else. A Team whose nomination expires unbid keeps the Slot it spent
+ * on that Player.
  *
  * **One module, two runtimes.** Relative `.ts` imports only, no Node builtin,
  * no `$env` and no bare specifier — Deno loads this file through
@@ -135,15 +140,19 @@ export async function loadPhaseEndState(client: TransactionalClient): Promise<Ph
  * actually landed (AD-10).
  *
  * **`releaseNomination` is registered, and it has to be.** `open_nominations`
- * is a real claim table with a primary key on the Player and a unique
- * constraint on the Team, written inside the nomination's own transaction. The
- * fold frees the Slot on an `AuctionTerminated`; if the claim row stayed
- * behind, the table and the log would disagree about that Slot PERMANENTLY —
- * an insert-only log can never be replayed to clear a row, and the nominating
- * Team's next nomination would draw a wrong `slot_in_use` refusal off
- * `open_nominations_team_id_key`. It goes through the `projections` hook
- * because that is the one seam that persists INSIDE the appending transaction
- * (AD-5), so the deletes and the events commit together or neither does.
+ * is a real claim table with a primary key on the Player, written inside the
+ * nomination's own transaction. The fold frees that board seat on an
+ * `AuctionTerminated`; if the claim row stayed behind, the table and the log
+ * would disagree about that Player PERMANENTLY — an insert-only log can never
+ * be replayed to clear a row, and the Player would be back in the pool by the
+ * fold and still un-nominatable by `open_nominations_pkey`. It goes through
+ * the `projections` hook because that is the one seam that persists INSIDE the
+ * appending transaction (AD-5), so the deletes and the events commit together
+ * or neither does.
+ *
+ * On this path it issues exactly that one delete. `releaseNomination`'s Slot
+ * delete fires on an `AuctionClosed`, keyed on the winner, and a termination
+ * is not a close and names none.
  *
  * **No `deviceClass`.** A phase end is not a user action: no browser submitted
  * it and no header describes it, so the NFR §5 measurement column stays null

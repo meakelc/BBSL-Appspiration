@@ -25,6 +25,15 @@ export type Destination = {
 	readonly label: string;
 	readonly href: string;
 	readonly commissionerOnly: boolean;
+	/**
+	 * Whether this entry renders as a row. A catalog entry is a PERMISSION
+	 * first — `requireLiveDestination` refuses out of the same table — and
+	 * `auction` is one that gates a route (`/auction/[fantraxPlayerId]`, on
+	 * the load and on the bid action) without having a page of its own to
+	 * link to. Filtering here rather than in the catalog is what keeps the
+	 * permission intact while the dead row goes.
+	 */
+	readonly listed: boolean;
 };
 
 /** What a render of one destination list needs, split apart. */
@@ -56,11 +65,16 @@ const SIGN_IN_ID = 'sign-in';
  * mislabelling it as a Manager or Commissioner control would misstate an
  * unauthenticated visitor's one action as one of theirs — and every other
  * entry sorted into exactly one of the other two arrays by its
- * `commissionerOnly` flag.
+ * `commissionerOnly` flag. Entries with `listed: false` are permissions with
+ * no menu row and are dropped before the split.
  */
 export function classifyDestinations(destinations: readonly Destination[]): ClassifiedDestinations {
-	const signIn = destinations.find((entry) => entry.id === SIGN_IN_ID);
-	const rest = destinations.filter((entry) => entry.id !== SIGN_IN_ID);
+	// Unlisted entries are dropped before anything else looks at them, so
+	// `hasNothingLive` counts rows a Manager can actually see rather than
+	// permissions they merely hold. Sign-in is always listed.
+	const listed = destinations.filter((entry) => entry.listed);
+	const signIn = listed.find((entry) => entry.id === SIGN_IN_ID);
+	const rest = listed.filter((entry) => entry.id !== SIGN_IN_ID);
 	const managerDestinations = rest.filter((entry) => !entry.commissionerOnly);
 	const commissionerDestinations = rest.filter((entry) => entry.commissionerOnly);
 
@@ -71,4 +85,47 @@ export function classifyDestinations(destinations: readonly Destination[]): Clas
 		hasNothingLive:
 			signIn === undefined && managerDestinations.length === 0 && commissionerDestinations.length === 0
 	};
+}
+
+/**
+ * How many destinations the mobile bar may show at once.
+ *
+ * Five is not a preference, it is what a 320px viewport fits: five buttons
+ * leave 64px each, which clears the 44px touch floor with room for a drawn
+ * icon over a label. A sixth would either drop below that floor or push the
+ * bar into a scrolling row, and a nav bar you have to scroll saves nobody a
+ * tap. The Auction phase's Manager list is exactly five — Your Positions,
+ * Bid Board, Nominate, Teams, Audit Log — so in the phase the product spends
+ * most of its life in, nothing is cut.
+ */
+export const NAV_DESTINATION_LIMIT = 5;
+
+/**
+ * The destinations the mobile bar carries: a Manager's own, in catalog order,
+ * capped at `NAV_DESTINATION_LIMIT`.
+ *
+ * Derived from the SAME resolved list the sheet renders (AD-30) rather than
+ * from a second table of its own — a bar offering a destination the sheet
+ * does not, or in a different phase, would be exactly the second resolution
+ * of "what may this Manager reach" that AR-29/UX-DR19 exists to prevent. So
+ * this only ever SELECTS from what `resolveDestinations` already returned;
+ * it can narrow that set and can never widen it.
+ *
+ * Commissioner-only entries are deliberately excluded. They are
+ * administrative acts — Import, the Export gate, the three roster acts —
+ * performed rarely and not from a thumb bar, and with the Auction phase
+ * alone holding six of them there is no cap under which they and a Manager's
+ * own five could coexist. Every one of them stays one tap away in the sheet,
+ * which the strip carries on every surface.
+ *
+ * Sign-in is excluded for the reason `classifyDestinations` holds it apart:
+ * an unauthenticated visitor's one action is not a Manager's navigation, and
+ * a one-button bar reading "Sign-in" beneath a page that is already the
+ * Sign-in page is not navigation at all.
+ */
+export function navDestinations(
+	destinations: readonly Destination[]
+): readonly Destination[] {
+	const { managerDestinations } = classifyDestinations(destinations);
+	return managerDestinations.slice(0, NAV_DESTINATION_LIMIT);
 }

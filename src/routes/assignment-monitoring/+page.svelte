@@ -103,11 +103,6 @@
 	</header>
 
 	<section class="panel">
-		<p class="section-label">Phase</p>
-		<p class="prose">{data.phase.sentence}</p>
-	</section>
-
-	<section class="panel">
 		<p class="section-label">Completion</p>
 		<p class="prose" id="completion">{monitor.completionSentence}</p>
 		<p class="prose">{monitor.deadlineSentence}</p>

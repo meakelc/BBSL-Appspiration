@@ -1,7 +1,7 @@
 <script lang="ts">
 	// Your Positions (Story 4.4) — the landing.
 	//
-	// Five groups in the wake-up's order and no other: Won · Outbid · You lead
+	// Five groups in the wake-up's order and no other: Won · Outbid · Leading
 	// · Contending · Nomination Slot. The order is not a sort and there is no
 	// control that changes it.
 	//
@@ -44,6 +44,10 @@
 		POSITIONS_YOUR_BID_LABEL,
 		emptyPositionsSentence
 	} from '$lib/core/positions.ts';
+	// The Auction's own state as the Bid Board marks it — the SAME record, so
+	// one state goes by one word with one shape beside it on every surface a
+	// Manager scans.
+	import { AUCTION_STATE_ICONS, AUCTION_STATE_LABELS } from '$lib/core/board.ts';
 	import { closesInPhrase } from '$lib/core/projection/auctions.ts';
 	import type { ContentionState } from '$lib/core/projection/auctions.ts';
 	import { figuresAgeSentence } from '$lib/core/freshness.ts';
@@ -259,17 +263,18 @@
 		<p class="section-label">BBSL offseason free agent auction</p>
 	</header>
 
-	<section class="panel">
-		<p class="section-label">Phase</p>
-		<p class="prose">{data.phase.sentence}</p>
+	<!-- Every figure on this page carries its age in anything but Live
+	     (AD-29). The countdowns are exempt and keep running; the figures
+	     and the re-entry answers are what cannot be confirmed.
 
-		<!-- Every figure on this page carries its age in anything but Live
-		     (AD-29). The countdowns are exempt and keep running; the figures
-		     and the re-entry answers are what cannot be confirmed. -->
-		{#if figuresAge !== null}
+	     The panel is inside the guard rather than around it: in Live there is
+	     no age to state, and a bordered box with nothing in it reads as a
+	     figure that failed to load. -->
+	{#if figuresAge !== null}
+		<section class="panel">
 			<p class="prose" id="positions-figures-age">{figuresAge}</p>
-		{/if}
-	</section>
+		</section>
+	{/if}
 
 	{#if positions.empty}
 		<!-- The designed empty screen, not an edge case: it states what the
@@ -307,29 +312,44 @@
 				<ul class="cards">
 					{#each positions.won as card (card.fantraxPlayerId)}
 						<li class="card">
-							<!-- No link on a won Player: a closed Auction 404s
-							     until Epic 4's closed state exists, and this
-							     is the first group on the landing. The card
-							     already carries everything the close made. -->
-							{#if card.href !== null}
+							<!-- ROW 1 — identity. The NBA team and position ride the
+							     name's own row rather than a line of their own: they
+							     identify the Player, and a card that stacks every field
+							     costs vertical space this landing cannot spare.
+
+							     The name LINKS to the Auction's Closed page, which exists
+							     now: it carries the closed instant in full and, for a
+							     lottery, the revealed seed, the published commitment and
+							     the ordered Contender list — the things this card cannot
+							     hold and a Manager checking a draw came for. The path is
+							     `auctionPathFor`'s, from the core, exactly as every other
+							     card on this page links. -->
+							<div class="card-head">
 								<a class="card-link" href={card.href}>
 									<span class="display card-player">{card.playerName}</span>
 								</a>
-							{:else}
-								<span class="display card-player">{card.playerName}</span>
-							{/if}
-							{#if card.metadata !== null}
-								<p class="card-metadata">{card.metadata}</p>
-							{/if}
-							<p class="section-label">{POSITIONS_WON_LABEL}</p>
-							<p class="card-price">{card.winningAmountLabel}</p>
-							<!-- The placement and the Cap Hit in words: the two are
-							     independent (AD-23), and a card stating only the
-							     amount would let a $0 minors charge read as the
-							     winning figure. -->
-							<p class="prose">{card.sentence}</p>
-							<p class="section-label">{POSITIONS_CLOSED_LABEL}</p>
-							<p class="card-when">
+								{#if card.metadata !== null}
+									<span class="card-metadata">{card.metadata}</span>
+								{/if}
+							</div>
+
+							<!-- ROW 2 — what it went for. The `section-label` row that
+							     stood over this figure is gone: DESIGN.md's card names
+							     no labels, and the group heading above already says
+							     these are the Auctions this Team won. The WORD is not
+							     gone — it is still the core's own constant, rendered
+							     for a screen reader, so a figure is never announced
+							     without its name. -->
+							<p class="card-price">
+								<span class="visually-hidden">{POSITIONS_WON_LABEL}</span>
+								{card.winningAmountLabel}
+							</p>
+							<!-- The footnote line. `Closed` keeps a VISIBLE label: a
+							     bare stamp beneath a placement sentence that names no
+							     instant would be a date with nothing to attach it
+							     to. -->
+							<p class="card-when card-footnote">
+								<span class="section-label">{POSITIONS_CLOSED_LABEL}</span>
 								{#if absolute[card.fantraxPlayerId] !== undefined}
 									{absolute[card.fantraxPlayerId]}
 								{/if}
@@ -346,38 +366,86 @@
 				<ul class="cards">
 					{#each positions.outbid as card (card.fantraxPlayerId)}
 						<li class="card" class:lottery={card.contention === 'minimum_bid'}>
-							<a class="card-link" href={card.href}>
-								<span class="display card-player">{card.playerName}</span>
-							</a>
-							{#if card.metadata !== null}
-								<p class="card-metadata">{card.metadata}</p>
-							{/if}
-
-							<!-- The chip is reserved for Outbid and You lead
+							<!-- ROW 1 — identity, with the state at the far edge. The
+							     chip is reserved for Outbid and Leading
 							     (DESIGN.md:194): filled `attention` here. It carries an
 							     ICON and a WORD together, so a greyscale screenshot
 							     reads identically. -->
-							<p class="state chip chip-outbid">
-								<span class="chip-icon" aria-hidden="true">{card.stateIcon}</span>
-								<span class="chip-word">{card.stateLabel}</span>
-							</p>
+							<div class="card-head">
+								<a class="card-link" href={card.href}>
+									<span class="display card-player">{card.playerName}</span>
+								</a>
+								{#if card.metadata !== null}
+									<span class="card-metadata">{card.metadata}</span>
+								{/if}
+								<!-- The Auction's own state, at the trailing edge — the Bid
+								     Board card's own marker, on the card for the same
+								     Auction. Ambient and never a chip: it describes the
+								     Auction, not the reader. Icon AND word, so a
+								     greyscale screenshot reads identically. Where the
+								     READER stands rides the row below, under this
+								     marker, exactly as it does on a Board card. -->
+								<p class="state state-ambient card-state">
+									<span class="chip-icon" aria-hidden="true"
+										>{AUCTION_STATE_ICONS[card.contention]}</span
+									>
+									<span class="chip-word">{AUCTION_STATE_LABELS[card.contention]}</span>
+								</p>
+							</div>
 
-							<p class="section-label">{POSITIONS_PRICE_LABEL}</p>
-							<p class="card-price">{card.priceLabel}</p>
-							<p class="section-label">{POSITIONS_YOUR_BID_LABEL}</p>
-							<p class="prose card-leader">{card.yourBidLabel}</p>
-							<!-- The rival's Team gets its OWN label. Two bare
-							     lines under one "Your Bid" heading read, in
-							     greyscale, as though `Rockets — Dana` were
-							     part of the viewer's own bid. -->
-							<p class="section-label">{POSITIONS_LEADING_LABEL}</p>
-							<p class="prose card-leader">{card.leadingBidder}</p>
+							<!-- ROW 2 — the standing price, with the viewer's own Bid
+							     beside it. `Your Bid` keeps a VISIBLE label: both
+							     figures on this row are money and both are this
+							     Auction's, and only the label says which is whose. -->
+							<div class="card-figure">
+								<!-- The two figures TOGETHER, as one item on the row, so
+								     `Your Bid` sits in line with the standing price
+								     rather than adrift between it and the chip. Both are
+								     money and both are this Auction's, so only the label
+								     says which is whose — and it stays visible for that
+								     reason. -->
+								<div class="card-figure-lead">
+									<p class="card-price">
+										<span class="visually-hidden">{POSITIONS_PRICE_LABEL}</span>
+										{card.priceLabel}
+									</p>
+									<p class="card-leader">
+										<span class="section-label">{POSITIONS_YOUR_BID_LABEL}</span>
+										{card.yourBidLabel}
+									</p>
+								</div>
+								<!-- Where the READER stands, under the Auction's own
+								     state and opposite the price — the Bid Board card's
+								     own arrangement. The chip is reserved for Outbid and
+								     Leading (DESIGN.md:194): filled `attention` here.
+								     It carries an ICON and a WORD together, so a
+								     greyscale screenshot reads identically. -->
+								<p class="state chip chip-outbid">
+									<span class="chip-icon" aria-hidden="true">{card.stateIcon}</span>
+									<span class="chip-word">{card.stateLabel}</span>
+								</p>
+							</div>
 
-							<p class="section-label">{POSITIONS_CLOSES_LABEL}</p>
-							<!-- Time TWICE: the relative phrase, and the absolute stamp
-							     in the viewer's own timezone. -->
-							<p class="card-when">{closesInPhrase(card.closesAt, nowIso)}</p>
-							<p class="card-when">
+							<!-- ROW 3 — who leads, and how long is left: the two halves
+							     of the same question, read together. The rival's Team
+							     is named on a row of its own and never under the
+							     viewer's own amount, so `Rockets — Dana` cannot read
+							     as part of the Bid above it. -->
+							<div class="card-line">
+								<p class="card-leader">
+									<span class="visually-hidden">{POSITIONS_LEADING_LABEL}</span>
+									{card.leadingBidder}
+								</p>
+								<p class="card-when">
+									<span class="visually-hidden">{POSITIONS_CLOSES_LABEL}</span>
+									{closesInPhrase(card.closesAt, nowIso)}
+								</p>
+							</div>
+
+							<!-- Time TWICE: the relative phrase above, and the absolute
+							     stamp in the viewer's own timezone. Never dropped to
+							     save space. -->
+							<p class="card-when card-footnote">
 								{#if absolute[card.fantraxPlayerId] !== undefined}
 									{absolute[card.fantraxPlayerId]}
 								{/if}
@@ -410,34 +478,79 @@
 				<h2 class="section-label">{GROUP_HEADINGS.you_lead}</h2>
 				<ul class="cards">
 					{#each positions.youLead as card (card.fantraxPlayerId)}
-						<li class="card" class:lottery={card.contention === 'minimum_bid'}>
-							<a class="card-link" href={card.href}>
-								<span class="display card-player">{card.playerName}</span>
-							</a>
-							{#if card.metadata !== null}
-								<p class="card-metadata">{card.metadata}</p>
-							{/if}
-
-							<!-- Outlined, never filled: leading is a standing fact,
-							     not an alert. -->
-							<p class="state chip chip-lead">
-								<span class="chip-icon" aria-hidden="true">{card.stateIcon}</span>
-								<span class="chip-word">{card.stateLabel}</span>
-							</p>
-
-							<p class="section-label">{POSITIONS_PRICE_LABEL}</p>
-							<p class="card-price">{card.priceLabel}</p>
-							<p class="section-label">{POSITIONS_CLOSES_LABEL}</p>
-							<p class="card-when">{closesInPhrase(card.closesAt, nowIso)}</p>
-							<p class="card-when">
-								{#if absolute[card.fantraxPlayerId] !== undefined}
-									{absolute[card.fantraxPlayerId]}
+						<!-- The pale green left edge marks an Auction THIS reader leads.
+						     Every card in this group is one, by construction — the
+						     grouping is computed for the signed-in Manager, so no other
+						     Manager's page carries the mark. It never carries the state
+						     alone: the filled chip on the figure row below carries the
+						     icon and the word. A card that is also in a Minimum-Bid
+						     Contention shows the lottery bar instead: that 3px device is
+						     exclusive, and the chip still says the reader leads. -->
+						<li class="card leading" class:lottery={card.contention === 'minimum_bid'}>
+							<!-- ROW 1 — identity, with the state at the far edge. -->
+							<div class="card-head">
+								<a class="card-link" href={card.href}>
+									<span class="display card-player">{card.playerName}</span>
+								</a>
+								{#if card.metadata !== null}
+									<span class="card-metadata">{card.metadata}</span>
 								{/if}
-							</p>
+								<!-- The Auction's own state, at the trailing edge — the Bid
+								     Board card's own marker, on the card for the same
+								     Auction. Ambient and never a chip: it describes the
+								     Auction, not the reader. Icon AND word, so a
+								     greyscale screenshot reads identically. Where the
+								     READER stands rides the row below, under this
+								     marker, exactly as it does on a Board card. -->
+								<p class="state state-ambient card-state">
+									<span class="chip-icon" aria-hidden="true"
+										>{AUCTION_STATE_ICONS[card.contention]}</span
+									>
+									<span class="chip-word">{AUCTION_STATE_LABELS[card.contention]}</span>
+								</p>
+							</div>
+
+							<!-- ROW 2 — the price, with the time remaining opposite it.
+							     The two `section-label` rows that stood over them are
+							     gone; the words remain, rendered for a screen
+							     reader. -->
+							<div class="card-figure">
+								<!-- The price and how long is left, together as one item
+								     on the row, so the countdown stays in line with the
+								     figure it is about rather than adrift between it and
+								     the chip. -->
+								<div class="card-figure-lead">
+									<p class="card-price">
+										<span class="visually-hidden">{POSITIONS_PRICE_LABEL}</span>
+										{card.priceLabel}
+									</p>
+									<p class="card-when">
+										<span class="visually-hidden">{POSITIONS_CLOSES_LABEL}</span>
+										{closesInPhrase(card.closesAt, nowIso)}
+									</p>
+								</div>
+								<!-- Where the READER stands, under the Auction's own
+								     state — the Bid Board card's own arrangement. Filled
+								     pale green, the Outbid chip's treatment in the
+								     opposite colour, and the word the left edge's mark
+								     stands for. -->
+								<p class="state chip chip-lead">
+									<span class="chip-icon" aria-hidden="true">{card.stateIcon}</span>
+									<span class="chip-word">{card.stateLabel}</span>
+								</p>
+							</div>
+
 							<!-- What the lead commits against the Cap, and when it is
 							     released — a per-Auction consequence, never a
 							     per-Team Maximum Bid. The strip owns that figure. -->
 							<p class="prose">{card.commitmentSentence}</p>
+							<!-- Time TWICE: the absolute stamp in the viewer's own
+							     timezone, never dropped to save space. -->
+							<p class="card-when card-footnote">
+								{#if absolute[card.fantraxPlayerId] !== undefined}
+									{absolute[card.fantraxPlayerId]}
+								{/if}
+							</p>
 						</li>
 					{/each}
 				</ul>
@@ -454,34 +567,63 @@
 						     state alone: the icon and the word beside it are what
 						     make a greyscale screenshot read identically. -->
 						<li class="card lottery">
-							<a class="card-link" href={card.href}>
-								<span class="display card-player">{card.playerName}</span>
-							</a>
-							{#if card.metadata !== null}
-								<p class="card-metadata">{card.metadata}</p>
-							{/if}
-
-							<!-- Ambient, so no chip: a Team in a lottery has not been
-							     outbid and does not lead, it is waiting on a draw. -->
-							<p class="state state-ambient">
-								<span class="chip-icon" aria-hidden="true">{card.stateIcon}</span>
-								<span class="chip-word">{card.stateLabel}</span>
-							</p>
-							<p class="state state-lottery">
-								<span class="chip-word">{card.contentionLabel}</span>
-							</p>
-
-							<p class="section-label">{POSITIONS_PRICE_LABEL}</p>
-							<p class="card-price">{card.priceLabel}</p>
-							<p class="prose">{card.contenderCountSentence}</p>
-							<p class="prose">{card.clockSentence}</p>
-							<p class="section-label">{POSITIONS_CLOSES_LABEL}</p>
-							<p class="card-when">{closesInPhrase(card.closesAt, nowIso)}</p>
-							<p class="card-when">
-								{#if absolute[card.fantraxPlayerId] !== undefined}
-									{absolute[card.fantraxPlayerId]}
+							<!-- ROW 1 — identity, with the contention's own label at
+							     the far edge, beside the accent bar it names. -->
+							<div class="card-head">
+								<a class="card-link" href={card.href}>
+									<span class="display card-player">{card.playerName}</span>
+								</a>
+								{#if card.metadata !== null}
+									<span class="card-metadata">{card.metadata}</span>
 								{/if}
-							</p>
+								<!-- Already the Auction state, and left as it stands: this
+								     group is a Minimum-Bid Contention by construction,
+								     `contentionLabel` is the same string
+								     `AUCTION_STATE_LABELS.minimum_bid` is, and the word
+								     here is deliberately icon-less — it sits beside the
+								     accent bar that carries the state in greyscale. -->
+								<p class="state state-lottery">
+									<span class="chip-word">{card.contentionLabel}</span>
+								</p>
+							</div>
+
+							<!-- ROW 2 — the price, with where the viewer stands opposite
+							     it. Ambient, so no chip: a Team in a lottery has not
+							     been outbid and does not lead, it is waiting on a
+							     draw. -->
+							<div class="card-figure">
+								<p class="card-price">
+									<span class="visually-hidden">{POSITIONS_PRICE_LABEL}</span>
+									{card.priceLabel}
+								</p>
+								<p class="state state-ambient">
+									<span class="chip-icon" aria-hidden="true">{card.stateIcon}</span>
+									<span class="chip-word">{card.stateLabel}</span>
+								</p>
+							</div>
+
+							<!-- The Contender count, the fold's own sentence. The
+							     statement that joining does not move the clock is NOT
+							     repeated here: it is a paragraph of explanation on a
+							     card meant to be scanned, and the Auction page this
+							     card links to carries it in full beside the act it
+							     qualifies. `clockSentence` stays on the payload — the
+							     core still words it once, for that page. -->
+							<p class="prose">{card.contenderCountSentence}</p>
+
+							<!-- Time TWICE, on one row: the relative phrase and the
+							     absolute stamp in the viewer's own timezone. -->
+							<div class="card-line card-footnote">
+								<p class="card-when">
+									<span class="visually-hidden">{POSITIONS_CLOSES_LABEL}</span>
+									{closesInPhrase(card.closesAt, nowIso)}
+								</p>
+								<p class="card-when">
+									{#if absolute[card.fantraxPlayerId] !== undefined}
+										{absolute[card.fantraxPlayerId]}
+									{/if}
+								</p>
+							</div>
 						</li>
 					{/each}
 				</ul>
@@ -554,12 +696,126 @@
 	}
 
 	/*
+	 * The Leading edge: a 2px pale green rule on an Auction the reader leads.
+	 * Deliberately NOT the 3px lottery bar below — that device is exclusive to
+	 * Minimum-Bid Contention — and declared FIRST so that a card which is both
+	 * leading and in a contention takes the lottery bar, never this one.
+	 */
+	.card.leading {
+		border-left: var(--leading-edge-width) solid var(--color-leading);
+	}
+
+	/*
 	 * The 3px left accent bar marking a Minimum-Bid Contention — the one
 	 * structural exception in the design, and no other element on any surface
 	 * may borrow the device. It never carries the state alone.
 	 */
 	.card.lottery {
 		border-left: var(--accent-bar-width) solid var(--color-lottery);
+	}
+
+	/*
+	 * The identity row: the name, the NBA team and position beside it, and the
+	 * card's own state at the far edge. Baseline-aligned, so the small
+	 * metadata sits on the name's baseline rather than its box centre, and
+	 * wrapping, so 375px never scrolls sideways.
+	 *
+	 * The state is pushed out by the free space rather than by a width, so a
+	 * long Player name simply takes the chip to the next line instead of
+	 * squeezing it. Selected by position rather than by a class of its own:
+	 * the chip's class attribute states which state it is and nothing else.
+	 */
+	.card-head {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: var(--space-row-gap);
+	}
+
+	/*
+	 * Pushed to the trailing edge by the free space rather than by a width, so
+	 * a long Player name takes the state word to the next line instead of
+	 * squeezing it.
+	 */
+	.card-head .state {
+		margin-left: auto;
+	}
+
+	/*
+	 * The Auction state takes the Bid Board's own treatment: uppercase at
+	 * `--size-10`, a marker beside the name rather than a sentence.
+	 */
+	.card-head .card-state {
+		text-transform: uppercase;
+		letter-spacing: 0.12em;
+		font-size: var(--size-10);
+	}
+
+	/*
+	 * The figures at the leading edge, as ONE item, so where the reader stands
+	 * still sits at the opposite edge and nothing floats in the middle of the
+	 * row. Baseline-aligned, so a `--size-12` label sits on the `--size-26`
+	 * figure's own line rather than beside its middle, and wrapping, so the
+	 * pair stacks at 375px instead of squeezing the price.
+	 */
+	.card-figure-lead {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: var(--space-card-gap);
+	}
+
+	/*
+	 * The contention's card name takes the same treatment it has on the Bid
+	 * Board — uppercase at `--size-10`, in `lottery-text`, the icon-less word
+	 * beside the accent bar it names. One mark on two surfaces.
+	 */
+	.card-head .state-lottery {
+		text-transform: uppercase;
+		letter-spacing: 0.12em;
+		font-size: var(--size-10);
+	}
+
+	/*
+	 * The price, with whatever stands opposite it — the viewer's own Bid, the
+	 * time remaining, or where they stand in a draw. Centred rather than
+	 * baselined: a chip is a box, and aligning its text baseline to a
+	 * `--size-26` figure would hang it off the bottom of the row.
+	 */
+	.card-figure {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-row-gap);
+	}
+
+	/*
+	 * The two-column lines: who leads and how long is left, or the two
+	 * renderings of one instant. `space-between` with `flex-wrap`, so at 375px
+	 * a long pairing stacks instead of colliding.
+	 */
+	.card-line {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: var(--space-row-gap);
+	}
+
+	/*
+	 * The footnote line is the quietest on the card — DESIGN.md's `--size-11`
+	 * `text-tertiary` for timestamps and footnotes — so the absolute stamp
+	 * sits a step below the rows above it.
+	 */
+	.card-footnote,
+	.card-footnote .card-when {
+		font-size: var(--size-11);
+	}
+
+	/* A footnote's label rides inline with its value, not above it. */
+	.card-footnote .section-label {
+		margin-right: 0.4em;
 	}
 
 	.card-link {
@@ -585,8 +841,14 @@
 		color: var(--color-text);
 	}
 
+	/*
+	 * `text-secondary` at the metadata size, matching the countdown it now
+	 * shares a row with — the two read as one line rather than as a sentence
+	 * with a timestamp appended.
+	 */
 	.card-leader {
 		color: var(--color-text-secondary);
+		font-size: var(--size-12);
 	}
 
 	.card-when {
@@ -628,10 +890,15 @@
 		font-size: var(--size-12-5);
 	}
 
-	/* Outlined, never filled: leading is a standing fact, not an alert. */
+	/*
+	 * Filled pale green, the Outbid chip's own treatment in the opposite
+	 * colour: leading is the one other fact on this card that is about the
+	 * READER, and the two read as a pair. Not `brand`, which may never signal
+	 * leading, and not `attention`, which marks Outbid and nothing else.
+	 */
 	.chip-lead {
-		border: var(--border-width) solid var(--color-border-strong);
-		color: var(--color-text);
+		background-color: var(--color-leading);
+		color: var(--color-leading-ink);
 	}
 
 	/*

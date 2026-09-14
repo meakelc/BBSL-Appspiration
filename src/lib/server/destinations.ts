@@ -15,8 +15,14 @@
  * Setup's Import, Minor League Eligibility, Manager registration and the
  * auction-open gate are Commissioner-only: `EXPERIENCE.md`'s "genuinely
  * global acts" list names exactly this kind of administrative action, the
- * same category Auction's Pause/Resume and Operational health, and Contract
- * Assignment's assignment monitoring and export gate, already sit in.
+ * same category Auction's three roster acts, and Contract Assignment's
+ * assignment monitoring and export gate, already sit in.
+ *
+ * **Pause/Resume and Operational health are NOT in the table below**, though
+ * `EXPERIENCE.md` lists them. Both were catalog rows with no route behind
+ * them — a menu entry that 404s is worse than an absent one — so they were
+ * removed on 2026-09-12 until Story 7.4 and Epic 8 build the surfaces. Add
+ * each row back in the same change that adds its route.
  * Archived carries no Commissioner split — re-downloading the Export is for
  * every Manager, not an administrative act.
  *
@@ -43,16 +49,47 @@ export type Destination = {
 	readonly label: string;
 	readonly href: string;
 	readonly commissionerOnly: boolean;
+	/**
+	 * Whether this entry is RENDERED as a row in the destinations list.
+	 *
+	 * Every entry in this catalog is a permission — `requireLiveDestination`
+	 * answers "may this viewer reach this destination in this phase" out of
+	 * exactly this table, and routes call it before any read. Most permissions
+	 * also have a menu row, and for those the two are the same thing.
+	 *
+	 * `auction` is the one that is not. It gates
+	 * `routes/auction/[fantraxPlayerId]` on both the load and the bid action,
+	 * so it MUST stay in the catalog — dropping it refuses every Auction and
+	 * every Bid for everybody. But it has no page of its own to link to: the
+	 * Auction surface is per-Player, reached from a Discord notification
+	 * landing on the specific Auction (`EXPERIENCE.md:223`) or from the Bid
+	 * Board, which "is one tap away and opens unfiltered" (`:50`) and links
+	 * every card through `auctionPathFor`. The href `/auction` was
+	 * transcribed from `EXPERIENCE.md:31`'s IA row by Story 1.6 and never had
+	 * a route behind it, so the menu offered a 404 beside the Bid Board that
+	 * is already the index.
+	 *
+	 * Splitting the two is what lets the permission stay while the dead row
+	 * goes. The filter is `classifyDestinations`' in `lib/destinations-view.ts`
+	 * — the view layer decides what renders, and this module keeps answering
+	 * only what is live.
+	 */
+	readonly listed: boolean;
 };
 
-/** Build one catalog entry, frozen individually so nothing can mutate it in place. */
+/**
+ * Build one catalog entry, frozen individually so nothing can mutate it in
+ * place. `listed` defaults to `true`, because a permission with no menu row
+ * is the exception and should have to say so at its own call site.
+ */
 function destination(
 	id: string,
 	label: string,
 	href: string,
-	commissionerOnly: boolean
+	commissionerOnly: boolean,
+	listed = true
 ): Destination {
-	return Object.freeze({ id, label, href, commissionerOnly });
+	return Object.freeze({ id, label, href, commissionerOnly, listed });
 }
 
 /** A non-registered viewer's entire destination list, in every phase. */
@@ -74,20 +111,58 @@ const CATALOG: Readonly<Record<LeaguePhase, readonly Destination[]>> = Object.fr
 	Auction: [
 		destination('your-positions', 'Your Positions', '/positions', false),
 		destination('bid-board', 'Bid Board', '/board', false),
-		destination('auction', 'Auction', '/auction', false),
+		// Not listed: a permission, not a menu row. `/auction` has no page —
+		// only `/auction/[fantraxPlayerId]` does, and the Bid Board above is
+		// the index that reaches it. See `Destination.listed`.
+		destination('auction', 'Auction', '/auction', false, false),
 		destination('nominate', 'Nominate', '/nominate', false),
 		destination('teams', 'Teams', '/teams', false),
 		destination('audit-log', 'Audit Log', '/audit-log', false),
-		destination('notification-settings', 'Notification settings', '/notifications', false),
-		destination('pause-resume', 'Pause/Resume', '/pause-resume', true),
-		destination('operational-health', 'Operational health', '/operational-health', true)
+		// Not listed: a permission, not a menu row. The surface holds a single
+		// control — the nomination-slot notification toggle — which does not earn
+		// a standing row beside the Bid Board and Nominate. The permission stays so
+		// the route keeps working, but NOTHING links to it now — it is reachable by
+		// URL alone, which is deliberate while the nomination-slot category's future
+		// is open. Restore the row by dropping the trailing `false`.
+		destination('notification-settings', 'Notification settings', '/notifications', false, false),
+		// The three roster acts, all Commissioner-only, all live in the two
+		// phases FR-41 and FR-44 permit — this list and the Contract Assignment
+		// one below — and all deliberately absent from `Archived`, where
+		// `requireOverridablePhase` refuses them a second time.
+		//
+		// **The Move is Commissioner-only by OPERATOR DECISION, not by FR-44.**
+		// FR-44 gives a Manager the Move on their own Team, and Story 7.11 built
+		// that half: the session-resolved Team, the solid reasonless
+		// `ManagerSheet`, and the route branch behind them are all still here and
+		// still tested. Flipping this flag is what takes it away, because
+		// `requireLiveDestination` resolves through the same filter — so a
+		// Manager is refused server-side on `load` and on the action, not merely
+		// shown no menu row. Re-enable by setting this one argument to `false` in
+		// BOTH phase lists; nothing else has to change. See `deferred-work.md`.
+		destination('roster-move', 'Roster Move', '/roster-move', true),
+		// Story 7.7: recording a trade the League agreed elsewhere.
+		destination('roster-trade', 'Trade', '/roster-trade', true),
+		// Story 7.8: recording a release the Team made in Fantrax.
+		destination('roster-drop', 'Drop', '/roster-drop', true),
+		// Story 7.9: the surface that says an act above is NEEDED. Live in the
+		// same two phases the acts it proposes into are live in, and absent from
+		// Archived for the same reason they are — `requireOverridablePhase`
+		// refuses it a second time there.
+		destination('divergence', 'Fantrax divergence', '/divergence', true)
 	],
 	'Contract Assignment': [
 		destination('contract-assignment', 'Contract Assignment', '/contract-assignment', false),
 		destination('teams', 'Teams', '/teams', false),
 		destination('audit-log', 'Audit Log', '/audit-log', false),
+		// The same three acts, on the same terms as the Auction list above —
+		// including the Move's operator-decision Commissioner flag.
+		destination('roster-move', 'Roster Move', '/roster-move', true),
+		destination('roster-trade', 'Trade', '/roster-trade', true),
+		destination('roster-drop', 'Drop', '/roster-drop', true),
 		destination('assignment-monitoring', 'Assignment monitoring', '/assignment-monitoring', true),
-		destination('export-gate', 'Export gate', '/export-gate', true)
+		destination('export-gate', 'Export gate', '/export-gate', true),
+		// Story 7.9, on the same terms as the Auction list above.
+		destination('divergence', 'Fantrax divergence', '/divergence', true)
 	],
 	Archived: [
 		destination('bid-board', 'Bid Board', '/board', false),

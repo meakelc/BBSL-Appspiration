@@ -4,7 +4,7 @@
 	// Every control here is a MANAGER control in a Manager block. Nothing on
 	// this page is an administrative act: spending the Year Allotment is the
 	// whole reason this phase exists, so the Commissioner classes — dashed,
-	// never filled, labelled "visible only to you" — would be a lie about who
+	// never filled, labelled "Commissioner" — would be a lie about who
 	// this belongs to.
 	//
 	// BOTH acts are two-part, and for the same reason `/nominate`'s nomination
@@ -105,11 +105,6 @@
 		<h1>Assign contract lengths</h1>
 		<p class="section-label">BBSL offseason free agent auction</p>
 	</header>
-
-	<section class="panel">
-		<p class="section-label">Phase</p>
-		<p class="prose">{data.phase.sentence}</p>
-	</section>
 
 	{#if board === null}
 		<section class="manager-block">

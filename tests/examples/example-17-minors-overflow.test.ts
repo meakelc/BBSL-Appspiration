@@ -35,6 +35,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { MINOR_LEAGUE_SLOTS, SALARY_CAP } from '../../src/lib/core/constants.ts';
+import { parseMoney } from '../../src/lib/core/money.ts';
 import { fold } from '../../src/lib/core/projection/fold.ts';
 import {
 	contractForPlayer,
@@ -76,8 +77,18 @@ const STATE: CloseState = {
 	playerIsMinorLeagueEligible: true,
 	// DERIVED from example 16's committed effect, never written as a literal.
 	minorLeagueOccupied: minorLeagueOccupiedIn(ROWS_AFTER_16),
+	// **Story 10.3's cascade inputs.** `auctions` is empty here, so the
+	// winning Team holds no other commitment and FR-40's cascade has nothing
+	// to cancel whichever way the figures beside it go — this example is
+	// about Slot Placement and sequencing, and nothing else.
+	auctions: { byPlayer: {} },
+	capSpace: parseMoney(0),
+	rosterCount: 0,
+	isMinorLeagueEligible: () => false,
+	playerNameFor: (playerId: string) => playerId,
 	// A Standard Contention: no lottery, no draw, no winner to derive.
-	drawnWinner: null
+	drawnWinner: null,
+	rosterFiguresFor: () => null
 };
 
 const DECIDED = decideClose(STATE, CLOSES_AT, null);

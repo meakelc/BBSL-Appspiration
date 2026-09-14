@@ -187,6 +187,46 @@ export function formatMoney(amount: Money): DisplayMoney {
 }
 
 /**
+ * Render an exact figure in full: `$300,000`, `−$6,700,000`. Lossless at any
+ * amount, on the grid or off it.
+ *
+ * **This is a diagnostic renderer, not a second surface rendering.** AD-8's
+ * one-rendering rule is about the figures a Manager reads off a gate outcome,
+ * and those still go through `formatMoney`/`describeAmount` — `$14.5M`,
+ * always. What this is for is the case `describeAmount` cannot serve: a
+ * REFUSAL that has to state its own arithmetic, where the amount may be off
+ * the grid and "an amount that is not on the grid" would leave the
+ * Commissioner unable to check the sum. An off-grid figure is real — the CSV
+ * roster importer asserts no grid, so an imported Cap Hit carries whatever
+ * Fantrax held — and a refusal that cannot name it is a refusal that cannot
+ * be acted on.
+ *
+ * Grouping is by hand for `pool-filter.ts`'s reason: the platform's
+ * locale-aware number formatters read ICU data that differs between Node and
+ * Deno, and `check-core-purity.js` fails the build on `Intl` for exactly that
+ * divergence (AD-2). They are not named here in full, because
+ * `tests/money.test.ts`'s guard is a substring scan over this whole file,
+ * comments included — naming one would disarm the check that forbids it.
+ *
+ * Two older private spellings of this exist — `teams-index.ts`'s
+ * `exactDollars` (grouped, applied to one compile-time constant) and the
+ * off-grid branch of `import-preview.ts`'s `renderCapSpace` (ungrouped).
+ * Neither is folded in here: doing so would change rendered output on two
+ * shipped surfaces, which is a cleanup of its own rather than a line in this
+ * refusal.
+ */
+export function formatExactDollars(amount: Money): string {
+	const negative = amount < 0;
+	const digits = String(negative ? -amount : amount);
+	let grouped = '';
+	for (let i = 0; i < digits.length; i += 1) {
+		if (i > 0 && (digits.length - i) % 3 === 0) grouped += ',';
+		grouped += digits[i];
+	}
+	return `${negative ? MINUS_SIGN : ''}$${grouped}`;
+}
+
+/**
  * Encode for a CSV cell: exact integer dollars, never a rendering (AD-24).
  *
  * The distinct brand is the whole point. A CSV writer accepting `ExportCell`

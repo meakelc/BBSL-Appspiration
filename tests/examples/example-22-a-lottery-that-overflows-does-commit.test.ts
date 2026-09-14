@@ -61,9 +61,9 @@ const TEAM_Q: TeamMoneyState = {
 	// "leading three eligible auctions" — nothing non-eligible.
 	leading: [],
 	eligibleLeading: [
-		{ fantraxPlayerId: 'p-a', playerName: 'Ausar Thompson', amount: parseMoney(5_000_000) },
-		{ fantraxPlayerId: 'p-b', playerName: 'Bilal Coulibaly', amount: parseMoney(4_000_000) },
-		{ fantraxPlayerId: 'p-c', playerName: 'Cason Wallace', amount: parseMoney(3_000_000) }
+		{ fantraxPlayerId: 'p-a', playerName: 'Ausar Thompson', amount: parseMoney(5_000_000), isContentionEntry: false },
+		{ fantraxPlayerId: 'p-b', playerName: 'Bilal Coulibaly', amount: parseMoney(4_000_000), isContentionEntry: false },
+		{ fantraxPlayerId: 'p-c', playerName: 'Cason Wallace', amount: parseMoney(3_000_000), isContentionEntry: false }
 	],
 	// "against its three free slots"
 	minorLeagueOccupied: 0
@@ -137,11 +137,22 @@ describe('§10 example 22 — a lottery that overflows does commit', () => {
 		// A fourth eligible win has nowhere in the minors to land, so it is
 		// compared to a Maximum Bid again: `unbounded` is false.
 		expect(gates.cap.unbounded).toBe(false);
-		// The capacity gate passes and reports anyway — eleven held plus the
-		// one overflowing win is twelve of twelve.
+		// **The capacity gate passes, and since Story 10.2 it passes for a
+		// different reason and on different figures.** The example's
+		// `Overflow Count 1` is the MONEY side and it stands: `N = 4` against
+		// `M = 3`, Minors Exposure $5,000,000, which is what refuses the join.
+		// The slots side removes the join from its own `N`, leaving `3 − 3`
+		// and an Active/Bench Overflow of 0, so the entry projects nothing at
+		// all. It is permitted by FR-18's landing test — Roster Count 11
+		// leaves one free Active/Bench Slot — and not by the `P = 0` branch.
 		expect(gates.slots.passed).toBe(true);
-		expect(gates.slots.projectedAdditions).toBe(1);
-		expect(gates.slots.overflowCount).toBe(1);
+		expect(gates.slots.isContentionEntry).toBe(true);
+		expect(gates.slots.freeActiveBenchSlots).toBe(1);
+		expect(gates.slots.projectedAdditions).toBe(0);
+		expect(gates.slots.eligibleLeadingBidsExcludingEntries).toBe(3);
+		expect(gates.slots.activeBenchOverflow).toBe(0);
+		// The two figures, side by side and disagreeing on purpose.
+		expect(gates.cap.overflowCount).toBe(1);
 		// And the contention gate is unmoved: it reads no Cap figure, so this
 		// is still a join — refused on money, not misclassified.
 		expect(gates.contention.entry).toBe('joins');
@@ -200,9 +211,15 @@ describe('§10 example 22 — a lottery that overflows does commit', () => {
 			playerNameFor: () => 'The Fourth Player'
 		});
 
-		expect(joined.leadingBid.teamId).toBe('t-other');
+		expect(joined.leadingBid?.teamId).toBe('t-other');
 		expect(money.eligibleLeading).toEqual([
-			{ fantraxPlayerId: 'p-d', playerName: 'The Fourth Player', amount: MINIMUM_BID }
+			{
+				fantraxPlayerId: 'p-d',
+				playerName: 'The Fourth Player',
+				amount: MINIMUM_BID,
+				// Story 10.2: the join, carried elsewhere as the entry it is.
+				isContentionEntry: true
+			}
 		]);
 		// Flat, never the leading amount — every Contender holds the same.
 		expect(money.leading).toEqual([]);

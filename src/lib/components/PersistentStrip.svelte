@@ -33,7 +33,7 @@
 	import { MAXIMUM_BID_LABELS } from '$lib/core/freshness.ts';
 	import { describeAmount } from '$lib/core/rules/bidding.ts';
 	import type { TeamMoneyState } from '$lib/core/rules/bidding.ts';
-	import { STRIP_REGION_LABEL, STRIP_SHEET_LABEL, baselineMaximumBid, rosterCountSentence, stripShowsMaximumBid } from '$lib/core/strip.ts';
+	import { STRIP_REGION_LABEL, STRIP_SHEET_LABEL, baselineMaximumBid, outstandingBidLines, rosterCountSentence, stripShowsMaximumBid, stripShowsOutstandingBids } from '$lib/core/strip.ts';
 	import type { LeaguePhase } from '$lib/core/projection/phase.ts';
 	import { freshness } from '$lib/client/freshness.svelte.ts';
 
@@ -47,17 +47,27 @@
 		readonly label: string;
 		readonly href: string;
 		readonly commissionerOnly: boolean;
+		/** False for a permission with no menu row — `classifyDestinations` drops it. */
+		readonly listed: boolean;
 	};
 
 	let {
 		team,
 		phase,
+		phaseSentence,
 		destinations,
 		now
 	}: {
 		/** The FACTS the figure is derived from. Never a derived figure. */
 		team: TeamMoneyState;
 		phase: LeaguePhase;
+		/**
+		 * The ambient phase sentence, already worded by `server/phase.ts`.
+		 * It lived in the header menu until that menu became the second copy
+		 * of this sheet; it is passed through here for the same reason it was
+		 * passed through there, and is worded no more here than it was.
+		 */
+		phaseSentence: string;
 		destinations: readonly Destination[];
 		/** A server instant, for the one gate that asks what time it is. */
 		now: string;
@@ -137,6 +147,27 @@
 	const maximumBidLabel = $derived(MAXIMUM_BID_LABELS[freshness.state]);
 
 	const roster = $derived(rosterCountSentence(team.rosterCount));
+
+	// The bids figure, derived here from the SAME transported facts (AD-7) and
+	// worded by the same core module the Roster Count beside it is worded by.
+	// `null` for a viewer bound to no Team is the core's own answer, and it is
+	// what makes the segment absent rather than `0 of 0`.
+	//
+	// The phase gate is the core's too, and it is its OWN predicate rather
+	// than the money half's: outside the Auction Phase no Bid is accepted at
+	// any amount, so a figure about outstanding Bids would describe an act
+	// nobody can perform. The Roster Count beside it is unaffected.
+	//
+	// **Only `.bids` — the entries figure is deliberately not on the strip.**
+	// UX-DR35 words this strip as the roster figure and the bids figure and
+	// nothing else, and it is inherited by every screen, so a third figure
+	// here is a third figure everywhere. The Teams index and the Team view
+	// carry the entries count; a Manager who wants it goes to a Team record.
+	// `.entries` is therefore never read here rather than computed and
+	// thrown away.
+	const bids = $derived(
+		stripShowsOutstandingBids(phase) ? outstandingBidLines(team).bids : null
+	);
 </script>
 
 <svelte:window on:keydown={onWindowKeydown} on:pointerdown={onWindowPointerdown} />
@@ -156,14 +187,54 @@
 			     VISIBLE on it is two figures rather than a verb. The word is
 			     the core's, like every other on this strip. -->
 			<span class="visually-hidden">{STRIP_SHEET_LABEL}</span>
-			{#if showsMaximumBid && figure !== null}
-				<span class="strip-label">{maximumBidLabel}</span>
-				<span class="strip-figure money">{figure}</span>
-				<span class="strip-separator" aria-hidden="true">·</span>
-			{/if}
-			<span class="strip-roster">{roster}</span>
+			<!-- The hamburger, and it is the whole reason this strip is now the
+			     ONLY menu trigger. What is otherwise visible on the summary is
+			     two figures, which announce a readout and not a control; the
+			     header menu used to be the thing that looked openable, and
+			     removing it took that signal with it. Drawn rather than
+			     lettered, so it costs none of the one line's width — the
+			     figures are the facts and never shrink. `aria-hidden`: the
+			     trigger is already named by the core's word above, and a
+			     second name here would announce the control twice. -->
+			<span class="strip-burger" aria-hidden="true">
+				<svg viewBox="0 0 16 16" width="16" height="16" focusable="false">
+					<path d="M1 3.5h14M1 8h14M1 12.5h14" />
+				</svg>
+			</span>
+			<!-- The facts share a baseline with each other; the row as a whole
+			     is centred in the strip by `.strip-summary`. Two containers
+			     because one cannot do both — `align-items: baseline` pins a
+			     single flex line to the top of the box, which is what left the
+			     text all but touching the top border. -->
+			<span class="strip-facts">
+				<span class="strip-roster">{roster}</span>
+				<!-- The bids figure, behind the SAME `·` the money half already
+				     uses. Plain type and nothing else: at parity the figure
+				     alone is the signal (UX-DR35), and this strip is inherited
+				     by every screen, so a warning treatment here would be a
+				     warning everywhere. -->
+				{#if bids !== null}
+					<span class="strip-separator" aria-hidden="true">·</span>
+					<span class="strip-bids">{bids}</span>
+				{/if}
+				<!-- Maximum Bid LAST, so the one number the app exists to
+				     compute sits hard against the trailing edge the facts are
+				     pushed to. Its separator leads it rather than trails it,
+				     which is what keeps a single `·` between every pair of
+				     segments whether or not the bids half is present. -->
+				{#if showsMaximumBid && figure !== null}
+					<span class="strip-separator" aria-hidden="true">·</span>
+					<span class="strip-label">{maximumBidLabel}</span>
+					<span class="strip-figure money">{figure}</span>
+				{/if}
+			</span>
 		</summary>
 		<div class="strip-sheet">
+			<!-- The ambient phase sentence, which lived in the header menu
+			     until this sheet became the only menu. Same words, same
+			     source, one place. -->
+			<p class="section-label">Phase</p>
+			<p class="prose">{phaseSentence}</p>
 			<DestinationsList {destinations} />
 		</div>
 	</details>
@@ -171,9 +242,23 @@
 
 <style>
 	/*
-	 * Pinned to the bottom on a phone, in the flow at 640px — the one
+	 * Pinned to the TOP on a phone, in the flow at 640px — the one
 	 * breakpoint four route files already use, so this introduces none.
 	 * Sized from `--strip-height`; the 52px literal appears nowhere.
+	 *
+	 * **It was pinned to the bottom until the mobile destination bar
+	 * arrived.** The bottom edge is the thumb's edge, and a five-button nav
+	 * earns it far more than a readout does: the bar saves a tap on every
+	 * navigation, where the strip is read and never pressed for its figures.
+	 * Two fixed elements stacked at the same edge would also have cost 112px
+	 * of a phone's height, so the readout moved to the top rather than
+	 * doubling up. It stays persistent at every width, which is the actual
+	 * requirement (`epic-4-context.md:44`) — which edge it is persistent on
+	 * never was.
+	 *
+	 * Top-pinned also puts the sheet back where a disclosure belongs: it
+	 * opens DOWNWARD over the page, rather than growing upward out of an
+	 * element whose bottom edge is the viewport's.
 	 *
 	 * Legible without colour: the label is the display face and the figure
 	 * the `ui` face a size up, so the two are told apart by typeface and
@@ -184,7 +269,7 @@
 	.strip {
 		position: fixed;
 		inset-inline: 0;
-		bottom: 0;
+		top: 0;
 		/*
 		 * Above page content, below nothing else yet. `HeaderMenu`'s
 		 * disclosure establishes no stacking context of its own and sits
@@ -194,28 +279,64 @@
 		 */
 		z-index: 1;
 		background-color: var(--color-surface);
-		border-top: var(--border-width) solid var(--color-border-strong);
+		/* The strip's edge faces the page it sits above, so the rule is on the
+		   BOTTOM at every width now — there is no longer a top-pinned and a
+		   bottom-pinned case to tell apart. */
+		border-bottom: var(--border-width) solid var(--color-border-strong);
 		/*
 		 * The border is INSIDE the reserved height. `global.css` reserves
 		 * exactly `--strip-height` of room, so a border added on top of a
 		 * `min-height` of the same token would occupy one pixel more than was
-		 * reserved and cover the last row of the page by that much.
+		 * reserved and cover the first row of the page by that much.
+		 *
+		 * `box-sizing` alone did NOT achieve that, and said so for a year.
+		 * It governs an element's OWN specified height, and this element
+		 * specifies none — the `min-height` is on `.strip-summary`, a child,
+		 * where this rule cannot reach it. So the strip stood at 53px against
+		 * 52px of reserved room: it covered a row of the page by exactly the
+		 * pixel the comment promised it would not, and `/nominate`'s sticky
+		 * action bar, which then cleared `--strip-height`, sat 2px over the
+		 * strip.
+		 * The height is subtracted on the summary instead, below, where the
+		 * `min-height` actually is.
 		 */
 		box-sizing: border-box;
 	}
 
 	.strip-summary {
 		display: flex;
-		align-items: baseline;
-		gap: var(--space-card-gap);
-		min-height: var(--strip-height);
-		padding: 0 var(--space-panel-padding);
-		cursor: pointer;
 		/*
-		 * One line, always. The reserved room below the page is a fixed
+		 * The ROW is centred in the strip; the facts inside it share a
+		 * baseline with each other (`.strip-facts`). `align-items: baseline`
+		 * here instead put the single flex line at the top of the box, so the
+		 * text sat all but against the top border with the whole of the
+		 * reserved height empty beneath it.
+		 */
+		align-items: center;
+		gap: var(--space-card-gap);
+		/*
+		 * The strip's border is subtracted HERE, because this is the element
+		 * that carries the height. `.strip` + this row must total exactly
+		 * `--strip-height` — the room `global.css` reserves — and the border
+		 * lives on the parent, so the row is that much shorter.
+		 */
+		min-height: calc(var(--strip-height) - var(--border-width));
+		padding: var(--space-row-gap) var(--space-panel-padding);
+		/* The vertical padding is INSIDE the reserved height, for the same
+		   reason the strip's border is: `global.css` reserves exactly
+		   `--strip-height`, and anything added on top of it covers the last
+		   row of the page by that much. */
+		box-sizing: border-box;
+		cursor: pointer;
+		/* The hamburger IS the disclosure marker now. The browser default
+		   would sit to its left, giving the one control on every page two
+		   affordances stacked against each other. */
+		list-style: none;
+		/*
+		 * One line, always. The reserved room above the page is a fixed
 		 * `--strip-height`; a strip free to wrap to two lines would grow past
-		 * the room reserved for it and cover the last control — the one thing
-		 * the reservation exists to prevent. The figure and the Roster Count
+		 * the room reserved for it and cover the first row of the page — the
+		 * one thing the reservation exists to prevent. The figure and the Roster Count
 		 * are short by construction, and the label is the part that may be
 		 * elided if a narrow viewport genuinely cannot fit all three.
 		 */
@@ -224,9 +345,53 @@
 		overflow: hidden;
 	}
 
+	/* The inner row: the baseline the label, the figure and the Roster Count
+	   share, so a 12px word and a 17px number sit on one line rather than
+	   floating against each other. It carries the one-line discipline too —
+	   it is the element that actually holds the text.
+
+	   Pushed to the trailing edge by the auto margin, so the hamburger keeps
+	   the leading edge and the facts read against the far side of the strip.
+	   An auto margin rather than `justify-content` on the row, because the
+	   burger must stay put whether or not the money half is present — with
+	   `space-between` a strip carrying only the Roster Count would still split
+	   two items to opposite ends, which is the same result by accident. */
+	.strip-facts {
+		display: flex;
+		align-items: baseline;
+		margin-inline-start: auto;
+		gap: var(--space-card-gap);
+		flex-wrap: nowrap;
+		white-space: nowrap;
+		overflow: hidden;
+		min-width: 0;
+	}
+
+	/* Drawn from the token palette and sized in `em` off the summary's own
+	   font, so it tracks the text rather than pinning a second size literal
+	   into the strip. It never shrinks: it is the affordance. */
+	.strip-burger {
+		display: flex;
+		flex-shrink: 0;
+		color: var(--color-text-secondary);
+	}
+
+	.strip-burger svg {
+		width: 1em;
+		height: 1em;
+		stroke: currentColor;
+		stroke-width: 1.5;
+		stroke-linecap: round;
+		fill: none;
+	}
+
 	.strip-figure,
 	.strip-roster {
 		flex-shrink: 0;
+	}
+
+	.strip-summary::-webkit-details-marker {
+		display: none;
 	}
 
 	/*
@@ -267,7 +432,12 @@
 		color: var(--color-text-tertiary);
 	}
 
-	.strip-roster {
+	/*
+	 * The two count figures share one rule: they are one register, read in
+	 * sequence, and a second declaration is a second thing to keep in step.
+	 */
+	.strip-roster,
+	.strip-bids {
 		font-size: var(--size-12);
 		color: var(--color-text-secondary);
 	}
@@ -280,18 +450,19 @@
 	}
 
 	@media (min-width: 640px) {
-		/* In the header, not pinned to the bottom — Maximum Bid stays on
-		   screen and the page keeps its last control.
+		/* In the flow under the header, not pinned — Maximum Bid stays on
+		   screen and the page needs no room reserved for it.
 
 		   This works because the strip is mounted immediately AFTER
 		   `HeaderMenu` in `+layout.svelte` and before the page content:
 		   `static` renders it where it sits in the document, so its DOM
 		   position is what puts it under the header rather than at the foot
-		   of the page. Moving the mount moves the strip. */
+		   of the page. Moving the mount moves the strip.
+
+		   Only the pinning is released. The border already faces the page at
+		   both widths, so nothing about the strip's own edge changes here. */
 		.strip {
 			position: static;
-			border-top: none;
-			border-bottom: var(--border-width) solid var(--color-border-strong);
 		}
 	}
 </style>

@@ -121,10 +121,20 @@ describe('§10 example 21 — a lottery on an eligible player commits nothing', 
 		expect(gates.cap.eligibleLeadingBids).toBe(1);
 		expect(gates.cap.freeMinorLeagueSlots).toBe(MINOR_LEAGUE_SLOTS);
 		expect(gates.cap.overflowCount).toBe(0);
-		// The same three counts on the capacity gate, in counts alone.
-		expect(gates.slots.eligibleLeadingBids).toBe(1);
+		// **The capacity gate's own counts, and Story 10.2 makes them a
+		// different derivation rather than a copy.** The example's `N = 1` is
+		// the MONEY-side count and it includes this join, because a Contender
+		// who wins pays. The slots side excludes it — FR-18 exempts an entry
+		// from Roster Capacity and from nothing else — so `N_slots` is 0 and
+		// Active/Bench Overflow is `max(0, 0 − 3) = 0`. `M` is the one figure
+		// genuinely shared.
+		expect(gates.slots.eligibleLeadingBidsExcludingEntries).toBe(0);
 		expect(gates.slots.freeMinorLeagueSlots).toBe(MINOR_LEAGUE_SLOTS);
-		expect(gates.slots.overflowCount).toBe(0);
+		expect(gates.slots.activeBenchOverflow).toBe(0);
+		// Both overflows are 0 here, but they are 0 for two different
+		// reasons, and the gate records which rule decided the verdict.
+		expect(gates.slots.isContentionEntry).toBe(true);
+		expect(gates.slots.projectedAdditions).toBe(0);
 	});
 
 	it('holds Minors Exposure at $0 and Available Cap Space at $0', () => {
@@ -189,7 +199,7 @@ describe('§10 example 21 — a lottery on an eligible player commits nothing', 
 				{ seq: '2', teamId: 't-q', teamName: 'Team Q', managerId: 'm-q' }
 			]
 		};
-		expect(joined.leadingBid.teamId).toBe('t-other');
+		expect(joined.leadingBid?.teamId).toBe('t-other');
 
 		const money = teamMoneyStateFor({
 			teamId: 't-q',
@@ -209,7 +219,15 @@ describe('§10 example 21 — a lottery on an eligible player commits nothing', 
 		// Minor League Slot can absorb it. That is what makes this example and
 		// example 22 one rule rather than two.
 		expect(money.eligibleLeading).toEqual([
-			{ fantraxPlayerId: 'p-fringe', playerName: 'The Fringe Player', amount: MINIMUM_BID }
+			{
+				fantraxPlayerId: 'p-fringe',
+				playerName: 'The Fringe Player',
+				amount: MINIMUM_BID,
+				// Story 10.2: an ELIGIBLE lottery entry. It stays in
+				// `eligibleLeading` and inside Overflow Count on the money side,
+				// and drops out of the slots side's Active/Bench Overflow.
+				isContentionEntry: true
+			}
 		]);
 		expect(money.leading).toEqual([]);
 	});

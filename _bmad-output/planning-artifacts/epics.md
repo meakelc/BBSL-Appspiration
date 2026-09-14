@@ -1,5 +1,10 @@
 ---
 stepsCompleted: [1, 2, 3]
+updated: 2026-09-12
+amendments:
+  - '2026-09-12 — Stories 7.10 and 7.11 appended to Epic 7 after the approved Sprint Change Proposal 2026-09-12 (the Roster Trade rename, and the within-Team Roster Move). Requirements inventory amended in place: **FR-41 renamed** *Record a Roster Move* -> *Record a Roster Trade* with no change of substance, **FR-44 added**, **AR-44 added**, **UX-DR41 added**; FR-42 given an explicit placement clause; SM-2 and SM-7 extended. Epics 1-6 and 8-10 untouched, as are Stories 7.1-7.9, which are NOT renumbered. The persisted event type `RosterMoveRecorded` is deliberately **not** renamed -- AD-4 forbids mutating the log. The 2026-09-10 entry below keeps its original wording: it names a proposal that was titled "Roster Moves" on the day, and falsifying it would lose the provenance of the rename. Amend this file in place, as every entry here did; `bmad-create-epics-and-stories` has no update path and its step-01 would overwrite the file.'
+  - '2026-09-10 — Stories 7.6 … 7.9 appended to Epic 7 after the approved Sprint Change Proposal 2026-09-10 (Roster Moves, Drops, Dead Money). Requirements inventory amended in place: FR-41, FR-42, FR-43 added, AR-41 … AR-43 added, UX-DR39 … UX-DR40 added. Epics 1–6 and 8–10 and their stories are untouched, as are Stories 7.1–7.5, which are NOT renumbered. Note for whoever runs this next: `bmad-create-epics-and-stories` has no update path — its step-01 instructs a full template overwrite and re-extraction, which would destroy this file. Amend in place, as this entry and the 2026-09-08 one both did.'
+  - '2026-09-08 — Epic 10 (the Outstanding Bid Allowance) appended after the approved Sprint Change Proposal 2026-09-07. Requirements inventory amended in place: FR-15 narrowed, FR-37 rewritten, FR-40 added, AR-36 … AR-40 added, UX-DR32 … UX-DR38 added. Epics 1–9 and their stories are untouched; the shipped ones remain the record their code was verified against.'
 inputDocuments:
   - _bmad-output/planning-artifacts/prds/prd-BBSL-Appspiration-2026-08-16/prd.md
   - _bmad-output/planning-artifacts/prds/prd-BBSL-Appspiration-2026-08-16/addendum.md
@@ -22,7 +27,7 @@ This document provides the complete epic and story breakdown for BBSL-Appspirati
 
 ### Functional Requirements
 
-*Extracted from PRD §4 (FR-1 – FR-39). Numbering is the PRD's own and is non-contiguous by feature because FR-35 – FR-39 were appended as they arrived; each is grouped under the feature it belongs to.*
+*Extracted from PRD §4 (FR-1 – FR-40). Numbering is the PRD's own and is non-contiguous by feature because FR-35 – FR-40 were appended as they arrived; each is grouped under the feature it belongs to.*
 
 **§4.1 League Setup and Fantrax Import**
 
@@ -50,9 +55,9 @@ FR-11: A Manager can bid on any Auction their Team is not leading; a Bid must be
 FR-12: The system continuously computes and displays each Team's Maximum Bid **per open Auction** — `Available Cap Space − Roster Reserve` for a non-eligible Player, unbounded in words for an eligible Player a Free Minor League Slot can absorb — with components broken out, recomputed within one second of any Bid, Close or override, and controls disabled with a stated reason where the figure is below the minimum legal Bid.
 FR-13: The system refuses any Bid exceeding the bidding Team's Maximum Bid before it enters the Auction, showing the full arithmetic; validation is server-side against committed state at submission, so a Bid valid when composed but stale on arrival is refused with current figures.
 FR-14: The system holds a Team's leading money against its cap for the life of an Auction — leading amounts on non-eligible Auctions, $1,000,000 per Contender position in a non-eligible Minimum-Bid Contention, and Minors Exposure for eligible ones — releasing the instant the Team stops leading or loses a draw, and converting to a Cap Hit at Close.
-FR-15: A Bid, once accepted, cannot be withdrawn — no user-facing control to cancel, edit or lower one exists, and only a Commissioner override can void it.
+FR-15: A Bid, once accepted, cannot be withdrawn **by the Team that placed it** — no user-facing control to cancel, edit or lower one exists; a Commissioner override can void it, and the system itself can cancel it under FR-40. *(Retitled and narrowed 2026-09-08.)*
 FR-35: A Team may bid without cap limit on a Minor League Eligible Player its Free Minor League Slots can absorb, constrained only by Minors Exposure — the sum of the Overflow Count largest Eligible Leading Bids; exposure recomputes on every bid so a later cheap eligible bid can be refused for exposing an earlier expensive one, naming the Auction that causes it, and an accepted Bid is never retroactively invalidated.
-FR-37: A Team has exactly 12 Active/Bench Slots and the system refuses any Bid where `Roster Count + Projected Active/Bench Additions > 12` — a second refusal ground independent of Maximum Bid, with no carve-out for eligible overflow, carrying its own arithmetic, and disabling controls across the board (not only at submission) for a Team at the ceiling.
+FR-37: A Team has exactly 12 Active/Bench Slots, and a Bid is refused unless `Projected Active/Bench Additions = 0` **or** the Team holds at least one Free Active/Bench Slot and `Projected Active/Bench Additions ≤ Free Active/Bench Slots + 1` — the **Outstanding Bid Allowance**, which lets a Manager chase one more Player than they have room for. A second refusal ground independent of Maximum Bid, with no carve-out for eligible overflow, carrying its own arithmetic (roster count, projected additions, free slots *and* the allowance), and disabling controls across the board (not only at submission). Minimum-Bid Contention entries are exempt entirely. *(Rewritten 2026-09-08; the ceiling of 12 is unchanged and the allowance is never a thirteenth Slot — FR-40 takes the surplus back.)*
 
 **§4.5 Auction Clock, Contention, and Closing**
 
@@ -63,12 +68,18 @@ FR-19: A Bid of $1,500,000 or more converts a Minimum-Bid Contention to Standard
 FR-20: At Clock expiry in Minimum-Bid Contention the winner is drawn uniformly at `1/n` by Randomizer, recording seed, ordered Contender list as it stood at expiry and selection — permanently visible and sufficient for any Manager to reproduce independently; losing commitments release at the draw.
 FR-21: At Auction Clock expiry the system closes the Auction and awards the Player, applying Slot Placement automatically, recording winning amount and Cap Hit, incrementing Roster Count only on an Active/Bench placement, releasing the nominator's Slot, not resetting the League Clock, and firing within 60 seconds with no user present.
 FR-22: The system ends the Auction Phase when the League Clock expires — a clock reset only by a Nomination or a valid Bid, derived from surviving reset events rather than stored as a countdown, disabling Nomination and bidding league-wide on expiry, terminating Awaiting-Opening-Bid Auctions with no winner, and notifying all Managers.
+FR-40: When an Auction Close leaves a Team holding commitments with no Roster Slot to receive them, the system cancels them **most recent first** — appending a compensating event that never deletes the original Bid, releasing the capital, and notifying the Team with the win that caused it named — then **restores each affected Auction to its next-highest surviving Bid**, re-validating that Team against the money and capacity gates and cascading down on failure; where nothing survives the Auction returns to Awaiting Opening Bid with its Clock cleared. Neither Clock is reset and no prior reset is removed. The trigger is any Close reducing the winning Team's free Slots, Active/Bench **or** Minor League. *(New 2026-09-08 — the other half of FR-37's allowance.)*
 
 **§4.6 The Bid Board**
 
 FR-23: Any Manager can view all open Auctions with live state — identity, price, Leading Bidder, state and time remaining per Auction; sortable and filterable; updating within 5 seconds without manual refresh; countdowns second-accurate and derived from server-authoritative close times; the viewer's Maximum Bid persistently visible on the board itself.
 FR-24: Any Manager can open a single Auction and see its complete history — full Bid history with Team, acting Manager, amount and timestamp and no anonymity; live Contender list and non-resetting-clock wording for a lottery; a bid control pre-filled to the minimum legal Bid that never offers an amount above the viewer's Maximum Bid, says "no cap limit" in words where unbounded, and disables with three distinctly worded reasons (already leading / insufficient Maximum Bid / Roster Capacity exhausted).
 FR-25: Any Manager can view any Team's roster, cap position and auction activity — every Team's Cap Space, Committed Bids, Available Cap Space, Roster Count by Slot kind, Free Active/Bench Slots, Free Minor League Slots, Minors Exposure and Nomination Slot status visible to all Managers, with Maximum Bid alone remaining the viewer's-own-Team figure; won Players appear on the roster at Close before length is assigned.
+FR-41: The Commissioner can record that Contracts have changed hands between two Teams — **both directions in one act**, either side possibly empty, Existing and Auction Contracts alike, each travelling unchanged in value and years. Slot Placement is re-evaluated against the receiving Team's occupancy and **Cap Hit follows placement**, so a stashed Player can arrive charging his full amount. Committed Bids, contention entries, Nomination Slots and Cap Space never move. Both Teams are evaluated **once, after the whole Trade**, against the money and slots gates; either failing **refuses all of it** — and the refusal can be caused by the **sending** Team, since a freed Slot costs $1,000,000 of Roster Reserve. It **never cancels a Bid**. Moving an assigned Auction Contract clears its length, returns the year to the sender's allotment and re-blocks the export. Mandatory reason, one Audit Log entry with before/after for both Teams, **not broadcast to Discord**, one transaction under the global lock. *(New 2026-09-10.)*
+FR-42: The system reads Team membership from Fantrax **at most hourly** and raises any difference as a proposed Roster Trade or Drop — **membership being the only fact taken**, since the endpoint carries no salary and the app already holds every Cap Hit. The comparison excludes Players won in this auction. Paired differences propose a Trade, unpaired departures propose a Drop, and unknown arrivals are reported as an **error**. **A read never writes.** Failure never blocks an auction action, and repeated failure renders as *stopped*, never as *no divergences*. **Contingent** on an endpoint never exercised against this league; if it does not answer usably, FR-42 is dropped and FR-41 stands alone. **A placement difference is not a divergence** — from FR-44 the app *decides* placement and Fantrax *receives* it through the export, so a Slot difference before that export is the expected state and raising it would train the Commissioner to dismiss the detector. *(New 2026-09-10; placement clause added 2026-09-12.)*
+FR-43: The Commissioner can record a Drop, and the system **converts the Player's *charged* Cap Hit into Dead Money at the same amount** — full from Active/Bench (Roster Count falls, so Maximum Bid *drops* by the $1,000,000 reserve on the freed hole), full from Injury Reserve (nothing else moves), and **nothing at all** from a Minor League Slot (he charged $0, so the row is removed and Maximum Bid *rises* via Minors Exposure). The one exception is a second-round rookie Contract of the current draft class — `2RK` plus a full unelapsed term, invariably 5 years — which is removed and releases its Cap Hit. Dead Money charges the Cap, occupies no Slot, counts toward no ceiling, is shown labelled and separate from the roster, is not importable in v1, and is excluded from both exports. Refused on the same gate terms as FR-41. *(New 2026-09-10.)*
+FR-44: A **Manager** can move their **own** Team's Contracts between an Active/Bench Slot and a Minor League Slot as **one act with one evaluation at the end**, and the **Commissioner** can do the same on any Team's behalf. Only a Minor League Eligible Contract may occupy a Minor League Slot, and **eligibility is remembered** — the pool's flag **union** every Contract the app has ever observed in a Minor League Slot — so a demotion is reversible. Injury Reserve is not rearrangeable and Dead Money is not a Slot. **Cap Hit follows placement**, so a Move is a deliberate cap decision that moves Maximum Bid in **both** directions: demoting a stash can *raise* it by reducing Minors Exposure while *lowering* Cap Space. No assigned length is cleared. Both gates once, over post-Move state, through the existing derivations; either failing **refuses all of it**, and it **never cancels a Bid**. A Manager's act needs a confirmation sheet and **no reason**; the Commissioner's needs the reason sheet. Refused while paused, and in Setup and Archived. One transaction under the global lock, one event carrying the whole delta, in the Audit Log, **not broadcast to Discord**. *(New 2026-09-12.)*
+
 FR-39: Any Manager can see all 30 Teams in one index with remaining roster slots and cap position — never paginated, own Team marked but not moved, IR shown visibly outside the twelve, one *median* line (never *average*) taking the lower of the two middle values, no Team coloured/badged/ranked against it, sortable with a Team-name default, columns shifting by phase, computed from the same source as FR-25 so the two cannot disagree, carrying the age of its figures rather than disabling a control it does not have, single-column at 375px and a real table on desktop.
 
 **§4.7 Notifications**
@@ -151,6 +162,16 @@ NFR11: **Measurability.** Every Bid, Nomination, Close and notification dispatch
 - **AR-34 — Two build-time decisions deferred by the architecture.** (a) Discord delivery shape — one message per event or batched against the 30 req/min ceiling, revisited at the rehearsal; (b) outbox implementation — Supabase Queues (pgmq) versus a hand-rolled table. AD-17's contract is unchanged either way.
 - **AR-35 — Archive reachability across the dormant year.** A free-tier project pauses after a week idle and this app idles ~11 months, while FR-31 requires an archived auction remain viewable indefinitely. Options: a paid month, a static export of final state, or accepted manual resume. Revisit at archive time.
 
+- **AR-36 — A cancellation is compensating, records its own restoration, and shares one restorer with the void (AD-31).** `BidCancelled` carries the decision it made — cancelled `seq`, cause, and either the restored Team/`seq`/amount or `null` — and the projection **reads** it rather than re-deriving; re-deriving would mean re-running the gate suite over candidate bidders inside a fold. `close.ts` is the **sole appender**: `AuctionClosed` first, then each `BidCancelled` in cascade order; `restore.ts` decides and appends nothing. Restoration is evaluated against **post-close** state. The selection algorithm lives in **one** pure function consumed by both FR-40 and Story 7.2's void, which differ only in three parameters (erase-vs-retain in the fold, restore-vs-leave the Auction Clock, remove-vs-keep the League Clock reset). Cancellation is triggered only by a Close and never by a restoration — that is what bounds the cascade. **No migration:** `event_type` is a generic `text` column.
+- **AR-37 — The gate set is fixed per command type, and restoration is the second (AD-2).** `RestoreLeadingBid` declares `{cap, slots}` and nothing else. Implementing it as a synthetic `PlaceBid` would re-run the increment rule against a price that has just *fallen* and refuse every restoration that mattered.
+- **AR-38 — Sequential closing is now load-bearing for unlimited lotteries (AD-11).** Each Close commits its cancellations and restorations before the next Close is evaluated. A Team in several simultaneously-expiring lotteries that wins the first is removed from the remainder before they are drawn; under a batched fold it wins two.
+- **AR-39 — A cancellation resets nothing and removes nothing (AD-22).** `BidVoided` and `BidCancelled` are one line apart in any reducer and have **opposite** League Clock semantics: a void removes that Bid's reset (clock recomputes shorter), a cancellation leaves it standing. A reducer treating them alike ends the Auction Phase early every time a roster fills.
+- **AR-41 — The world changes by mutation plus record (AD-32).** A Roster Trade or Drop mutates `team_rosters` **and** appends a record event in one transaction under the global lock. The record is not merely for audit: **every cap and slot figure is a function of the rosters at a given instant**, so a Trade absent from the log makes AD-5's rebuild, AD-21's restore and AD-3's replay fold yesterday's bids against today's rosters. The event carries the **whole delta** — every Player, both Teams, both Slot kinds, both Cap Hits. Existing Contracts move by `UPDATE` of `team_id`, **never** delete-then-insert (`fantrax_player_id` is `not null unique` across every Team); Auction Contracts have no row and move by the event alone, folded latest-transfer-wins.
+- **AR-42 — A world change refuses; it never cancels (AD-32, AD-31).** Re-evaluation calls the **existing** pure gates in `core/rules/bidding.ts` — this work writes no affordability check of its own, the same one-implementation-two-callers posture AR-36 takes for the restorer. Where a gate fails, the whole act is refused and nothing is written. **AD-31's cancellation trigger stays a Close and only a Close**; extending it would reopen the re-entrancy argument AD-31 closed and would let an administrative act strip a Player from a Team that did nothing.
+- **AR-43 — Dead Money is a fourth `RosterSlotKind`, and it needs a migration (AD-32, AD-26).** It charges in full and counts toward no ceiling — Injury Reserve without the ceiling of 2 — so `chargedCapHit` returns the right value by falling through and `SLOT_CEILINGS` gains an unbounded entry. `team_rosters_roster_slot_kind_check` enumerates exactly three kinds (`20260824020000_live_reference_tables.sql:61-62`), so a fourth **is** a schema change: a migration applied dev-first, never a dashboard edit. Contrast `BidCancelled`, which needed none. Separately, `CONTRACT_END_YEAR` in `adapters/fantrax/roster-file.ts` matches the `NRK` rookie prefix in a **non-capturing** group and discards it, so FR-43's exception is unimplementable until that is corrected.
+- **AR-44 — A Roster Move is the fourth command type and the third caller of the shared evaluator (AD-32, AD-1).** `RearrangeRoster` is declared in `core/types.ts` with its own gate set, per AD-1's per-command-type discipline. It calls `core/rules/roster-act.ts` — the module Story 7.8 extracted for exactly this — and writes **no** arithmetic of its own: no affordability check, no second Roster Reserve, no second Minors Exposure (AR-42). One difference from a Trade's arrival must be explicit or the two will be confused: **placement is taken from the command, not derived by `slotPlacementFor`.** FR-21's automatic rule is what a *close* and a *Trade arrival* apply; a Move is the Manager deliberately overriding it, and a Move that re-derived placement would silently undo itself. **Eligibility is a fold, not a column** — the pool flag union every Minor League occupancy the log has ever carried, reconstructed from the reference-data snapshot exactly as AD-32 already specifies for rebuild, restore and replay. That is what makes the act reversible, and it is why FR-44 needs **no migration**: `roster_slot_kind` already admits all four values and `auction_events.event_type` is generic `text`.
+- **AR-40 — Two overflow figures, not one (PRD §3).** `Overflow Count` (money side) counts lottery entries and feeds Minors Exposure; `Active/Bench Overflow` (slots side) excludes them and is the only overflow reaching Projected Active/Bench Additions. They were one figure until 2026-09-08 and are one subtraction apart, so compute-once-use-twice is now wrong in a way no single test announces.
+
 ### UX Design Requirements
 
 *Extracted from the bmad-ux spine pair — `DESIGN.md` (visual identity, tokens, component anatomy) and `EXPERIENCE.md` (information architecture, behaviour, states, flows). Each is scoped to be story-generating.*
@@ -198,9 +219,23 @@ UX-DR29: **Responsive contract** — 375px is the design width and the smallest 
 UX-DR30: **Surfaces with no mock, specified by table and rule only** — Sign-in, Nominate, Audit Log, Notification settings, Import and its 30-Team preview, Minor League Eligibility, the auction-open gate, assignment monitoring, Contract Assignment, Export and archive, and operational health. These carry the highest drift risk and may need a visual reference raised before they are built. (Mocked surfaces: `House`, `Positions`, `Board`, `Auction`, `Commissioner`, `Teams`.)
 UX-DR31: **Deferred UX findings, documented and unfixed** (nine medium, eight low from `review-rubric.md`) — chiefly no Key Flow for override (CAP-14), export (CAP-13) or operational alerting (CAP-16); no cold-load, Contract Assignment or import-error states in State Patterns; the destinations sheet and filter chips unspecified; no flow→capability traceability; and no Inspiration & Anti-patterns section. Carry as known gaps to close during story work.
 
+**The Outstanding Bid Allowance and Bid Cancellation** *(added 2026-09-08)*
+
+UX-DR32: **The refusal panel's slots row carries two figures and three distinct strings.** Passed reads *"Slots · Passed — your 2nd of 2 permitted bids; Roster Count would be 10 of 12"*; refused on the allowance reads *"this would be your 3rd outstanding bid; 1 free slot permits 2"*; refused on the precondition reads *"no free Active/Bench slot, so no bid is permitted"*. The last two must not collapse into one string — "at your allowance" resolves itself at the next close, "no room at all" lasts the whole auction, and the remedies differ.
+UX-DR33: **The gate row wraps rather than truncates** (`DESIGN.md` → Components → Refusal panel). Line-height `1.6`, aligned to the sentence's first line, never centred on the chip. A truncated gate sentence is a gate that did not report.
+UX-DR34: **The bid control names the allowance trade before confirm, once.** *"This is your 2nd of 2 permitted bids. If you win a player before this auction closes, this bid is cancelled and the next highest bid leads."* Not a warning dialog, not a checkbox, and not repeated on later views. This is where the product's obligation is discharged — Key Flow 6 puts its climax here deliberately.
+UX-DR35: **The persistent strip carries bids against the allowance** — `Roster 9 of 12 · 2 of 4 bids`. At parity the figure alone is the signal: no colour, no badge, no warning treatment, because the strip is inherited by every screen and a nag here is a nag everywhere.
+UX-DR36: **The Teams index row gains a bids column**, with open lottery entries counted **separately**. The roster column alone now answers the screen's own question wrongly in both directions. Folding lotteries into one figure would imply a ceiling that does not exist.
+UX-DR37: **"Cancelled and restored" — one event, three notices.** The cancelled Manager gets cause-before-effect, no apology, no alarm styling, no congratulation wrapped around it. The restored Manager gets context re-established, then what it costs their cap and how long they have (the clock did not reset — it may be minutes). The league gets one line in the existing register.
+UX-DR39: **The reason sheet grows a two-Team variant.** Story 7.1's sheet shows before → after for the object being acted on; a Roster Trade acts on **two** Teams at once and must show both — Cap Space, Roster Count and all three Slot occupancies, side by side — with the moved Players named between them. Where a moved Player's Cap Hit changes because Slot Placement was re-evaluated, that consequence is stated **in words** and carries an `attention` note: a Cap Hit rising from $0 to $14,000,000 by the act of moving is the least obvious thing in the requirement.
+UX-DR40: **Say the counterintuitive direction out loud, before commit.** A Drop from Active/Bench *lowers* the Team's Maximum Bid — the freed hole costs $1,000,000 of Roster Reserve while the Cap Hit persists as Dead Money — and every manager's intuition says the opposite. The sheet states it plainly rather than leaving it to be inferred from two figures. Dead Money itself renders on the Team view and Teams index **labelled and separate from the roster**, because an unexplained gap between a Team's players and its Cap Space is the arithmetic-doubt this product exists to remove.
+UX-DR41: **One sheet shape, two controls, and they must never be one control with a conditional field.** A Roster Move's sheet shows before → after for **one** Team — Cap Space, Roster Count and all three Slot occupancies — with every moved Contract named between them, both placements, both Cap Hits, and **the direction Maximum Bid actually moved stated in words** with an `attention` note. §10 example 45 is why: the Team spends Cap Space and *gains* $10,000,000 of Maximum Bid, and no pair of figures says that out loud. A **Manager** acting on their own Team gets a solid Manager commit control and **no reason field**; the **Commissioner** acting on any Team gets Story 7.1's sheet — dashed, recessed, *"Commissioner · visible only to you"*, mandatory free text. DESIGN.md's four independent differences exist so the referee control and the player control are never confusable by muscle memory at 4am, and a single component that grows a reason field when `isCommissioner` is true is precisely the collapse that rule forbids.
+
+UX-DR38: **The cancelled Bid stays in the visible Auction history**, struck through and labelled *cancelled*, with the causing win named — never deleted, hidden or reordered. Copy must distinguish it from a void: a void says someone decided the Bid should not have stood; a cancellation says nothing of the kind. An Auction where nothing survived renders as an unbid nomination, not a new "restarted" state.
+
 ### FR Coverage Map
 
-*Every FR-1 … FR-39 appears exactly once. Order follows the PRD's own numbering, not epic order, so a gap is visible at a glance.*
+*Every FR-1 … FR-43 appears exactly once **as an owning epic**. Order follows the PRD's own numbering, not epic order, so a gap is visible at a glance. Rows marked **amended by Epic 10** keep their original owner — the shipped stories under it are the record their code was verified against — and Epic 10 supersedes named clauses within them rather than taking ownership.*
 
 | FR | Epic | Coverage |
 | --- | --- | --- |
@@ -210,28 +245,29 @@ UX-DR31: **Deferred UX findings, documented and unfixed** (nine medium, eight lo
 | FR-4 | Epic 1 | Discord OAuth, pre-registered accounts only, Commissioner fallback path |
 | FR-5 | Epic 1 | Manager→Team binding and co-management |
 | FR-6 | Epic 1 | Commissioner role, server-side capability checks |
+| FR-38 | Epic 1 | Commissioner-set Minor League Eligibility, defaulting to *not* eligible (Story 1.10) — *row restored 2026-09-08; the story shipped, the map row had been missing since the map was written* |
 | FR-7 | Epic 2 | Nominate a Free Agent onto the Bid Board |
 | FR-8 | Epic 2 | Nomination eligibility enforcement and concurrent-nomination uniqueness |
 | FR-9 | Epic 2 | Nomination Slot release at Auction Close |
 | FR-10 | Epic 2 | Dead-nomination visibility at 24 hours |
-| FR-11 | Epic 2 | Place a Bid — increment, granularity, no self-outbidding |
+| FR-11 | Epic 2 | Place a Bid — increment, granularity, no self-outbidding · **amended by Epic 10** (the control names the allowance bid before confirm) |
 | FR-12 | Epic 2 | Compute and display Maximum Bid per Auction with components broken out |
 | FR-13 | Epic 2 | Reject over-cap Bids at submission with the full arithmetic |
-| FR-14 | Epic 2 | Commit and release capital, including Minors Exposure |
-| FR-15 | Epic 2 | No bid retraction — the control is absent, not disabled |
+| FR-14 | Epic 2 | Commit and release capital, including Minors Exposure · **amended by Epic 10** (release on cancellation, re-commit on restoration) |
+| FR-15 | Epic 2 | No *voluntary* bid retraction — the control is absent, not disabled · **narrowed by Epic 10** (the system may cancel; the Team still may not) |
 | FR-16 | Epic 2 | Standard Contention clock set to 24h by each valid Bid |
 | FR-24 | Epic 2 | The Auction detail page — bid control, refusal panel, full history. *One clause carries over: its live Contender list and non-resetting-clock wording have no subject until Minimum-Bid Contention exists, and are completed by Story 3.2.* |
 | FR-35 | Epic 2 | Unbounded eligible bidding bounded by Overflow and Minors Exposure |
-| FR-37 | Epic 2 | Roster Capacity as the second, independent refusal ground |
+| FR-37 | Epic 2 | Roster Capacity as the second, independent refusal ground · **rewritten by Epic 10** (the Outstanding Bid Allowance and its free-slot precondition) |
 | FR-17 | Epic 3 | Enter Minimum-Bid Contention on a $1,000,000 Opening Bid |
-| FR-18 | Epic 3 | Join a Minimum-Bid Contention; the clock does not reset |
+| FR-18 | Epic 3 | Join a Minimum-Bid Contention; the clock does not reset · **amended by Epic 10** (unlimited entries; cap space the only limit) |
 | FR-19 | Epic 3 | Dissolve a contention on a Bid of $1,500,000 or more |
-| FR-20 | Epic 3 | Commit-reveal Randomizer draw, independently reproducible |
-| FR-21 | Epic 3 | Close an Auction with automatic Slot Placement, within 60 seconds |
+| FR-20 | Epic 3 | Commit-reveal Randomizer draw, independently reproducible · **amended by Epic 10** (list excludes cancelled Contenders; an empty list closes with no winner) |
+| FR-21 | Epic 3 | Close an Auction with automatic Slot Placement, within 60 seconds · **amended by Epic 10** (the Close applies the FR-40 cascade before the next Close is evaluated) |
 | FR-22 | Epic 3 | League Clock expiry ends the Auction Phase |
 | FR-23 | Epic 4 | View the Bid Board with live state and persistent Maximum Bid |
 | FR-25 | Epic 4 | View any Team's roster, cap position and auction activity |
-| FR-39 | Epic 4 | The 30-Team index with its League Median |
+| FR-39 | Epic 4 | The 30-Team index with its League Median · **amended by Epic 10** (rows publish bids against the allowance) |
 | FR-26 | Epic 5 | Broadcast auction events to the league Discord channel |
 | FR-27 | Epic 5 | Notify Managers by Discord `@mention` within 60 seconds |
 | FR-28 | Epic 6 | Assign contract lengths against the Year Allotment |
@@ -242,6 +278,11 @@ UX-DR31: **Deferred UX findings, documented and unfixed** (nine medium, eight lo
 | FR-32 | Epic 7 | Commissioner overrides, each with a mandatory reason |
 | FR-33 | Epic 7 | League-visible append-only Audit Log |
 | FR-34 | Epic 7 | Pause and resume the entire auction |
+| FR-41 | Epic 7 | Record a Roster Trade — both directions, one act, one evaluation; refused, never cancelled (Story 7.7) |
+| FR-42 | Epic 7 | Detect a Roster Divergence from Fantrax — **contingent**, proposes and never writes (Story 7.9) |
+| FR-43 | Epic 7 | Record a Drop and carry Dead Money — the charged-Cap-Hit rule, and the 2RK exception (Stories 7.6, 7.8) |
+| FR-44 | Epic 7 | Rearrange a Roster's Slot Placements — one Team, one act, one evaluation; Cap Hit follows placement (Story 7.11) |
+| FR-40 | **Epic 10** | Cancel a surplus commitment at Close and restore the Auction to its next-highest bidder |
 
 **Requirements with no FR, mapped to an owning epic.** These are NFR- and AD-driven and must not be orphaned:
 
@@ -331,13 +372,19 @@ Every Manager assigns contract lengths against their Year Allotment, and the Com
 
 ### Epic 7: The referee's controls and the record
 
-The Commissioner can void a Bid, adjust Cap Space, terminate an Auction, release a Nomination Slot, extend or expire any Clock, assign a length on a Team's behalf, and pause and resume the whole auction — every act carrying a mandatory free-text reason and a before/after — and any Manager can read the complete append-only Audit Log.
+The Commissioner can void a Bid, adjust Cap Space, terminate an Auction, release a Nomination Slot, extend or expire any Clock, assign a length on a Team's behalf, and pause and resume the whole auction — every act carrying a mandatory free-text reason and a before/after — and any Manager can read the complete append-only Audit Log. The Commissioner can also **record what happened in Fantrax**: a trade, or a drop and the Dead Money it leaves behind, with both Teams' cap and slot positions recomputing from it — and be told when Fantrax and the app have drifted apart at all.
 
-**FRs covered:** FR-32, FR-33, FR-34
+**FRs covered:** FR-32, FR-33, FR-34, **FR-41, FR-42, FR-43** *(added 2026-09-10)*, **FR-44** *(added 2026-09-12)*
 
-**Also carries:** the Commissioner control class separated by **form not colour**, the override reason sheet, League Clock recomputation on a void (prospective only), pause storing remaining duration with a break-glass path independent of Netlify, and the paused banner on every surface.
+**Also carries:** the Commissioner control class separated by **form not colour**, the override reason sheet, League Clock recomputation on a void (prospective only), pause storing remaining duration with a break-glass path independent of Netlify, and the paused banner on every surface. Since 2026-09-10 it also carries **AR-41 … AR-43** and **UX-DR39 … UX-DR40**, PRD §10 examples **36–43** as new tests, and one **migration** admitting a fourth `RosterSlotKind`.
+
+**Since 2026-09-12 it also carries FR-44** — the one act in this epic a **Manager** performs: rearranging their own Team's Minor League Slots, so a trade does not leave them paying full price for a player they meant to stash.
 
 **Standalone:** rules meet reality, visibly.
+
+**Build order is not story order.** Stories 7.6 – 7.9 are **everyday operations**, not break-glass — trades are frequent, and an auction without trade recording computes wrong cap figures for both sides of every one. The epic body carries an explicit *Implementation order* block: 7.6 runs in parallel from the start, then 7.1 → 7.7 (trades work here) → 7.5 → 7.8 → 7.2 → 7.9 → 7.3/7.4. Numbers were **not** reshuffled to match, because renumbering would churn every `sprint-status.yaml` key and every by-name citation in the spine and traceability.
+
+**Why the roster work belongs here and not in its own epic.** A Roster Trade is a Commissioner control with a mandatory reason sheet and an Audit Log entry — the same shape as every other story in this epic, reaching the same `routes/admin` surface and reusing Story 7.1's control class. Splitting it out would duplicate that foundation. **But note the dependency shape is unusual for this file:** Story 7.6 depends on nothing and is independently valuable, 7.7 depends only on 7.1, 7.8 depends on 7.6, and 7.9 is contingent on a third party and explicitly killable. Unlike Epic 10, these four **are** separately shippable, and 7.7 alone is a complete increment.
 
 ### Epic 8: Ready to open — rehearsal, liveness, and restore
 
@@ -358,6 +405,20 @@ The app stops being code and becomes a thing people use: both vendors provisione
 **Also carries:** the two-vendor account setup no story owns, the hand-seeded `teams` and `managers` rows that exist because AD-15 ships no admin UI by design, the CSP widening Story 4.1 left blocking, AR-33's real-export confirmation, the setup runbook the repository has never had, and the pilot's findings triaged back into the backlog.
 
 **Standalone:** the difference between an app that passes its tests and an app that works.
+
+### Epic 10: Chase two players with one slot
+
+A Manager can hold one more outstanding Bid than they have room for, and enter as many minimum lotteries as their cap space allows — because the auction has to *finish*, and a league where every Manager is serialised behind their own wins does not. The surplus is taken back automatically: when a win fills the last Slot, the leftover Bid is cancelled and the Auction it was on returns to whoever bid under it.
+
+**FRs covered:** FR-40 (new). Supersedes named clauses in FR-11, FR-14, FR-15, FR-18, FR-20, FR-21, FR-35, FR-37 and FR-39 — see the Coverage Map.
+
+**Also carries:** AR-36 … AR-40 and UX-DR32 … UX-DR38; PRD §10 examples 29–35 as new tests, with 23–25 rewritten and 18–25 re-verified as a block.
+
+**Why one epic and not two.** Every story here edits the same three or four core files — `rules/bidding.ts`, `rules/close.ts`, `projection/auctions.ts` — which is the file-churn pattern the epic-design rules say to consolidate. More decisively, **the allowance and the cancellation are not separately shippable**: an allowance without the cascade lets a Team win a thirteenth player, which is the exact invariant FR-37 exists to protect. Splitting them would create a state where shipping half the epic breaks the product. They go together or not at all.
+
+**Standalone:** it builds on Epics 2 and 3 and requires nothing after it. Story 7.2 (void a Bid) will *consume* the restorer this epic builds, but Epic 10 does not depend on Epic 7 in either direction — 7.2 gets cheaper, not enabled.
+
+**Sequencing:** must land **before** Story 9.7 (moderator pilot) and 9.8 (prod setup day). AD-20 fail-stops `core/` changes during a live Auction Phase, and the pilot exists to measure exactly the property this rule targets — auction speed. Piloting the old rules would be piloting rules the league will not play under.
 
 ---
 
@@ -1971,7 +2032,34 @@ So that the record stays readable forever and nothing can be changed after the f
 
 ## Epic 7: The referee's controls and the record
 
-The Commissioner can void a Bid, adjust Cap Space, terminate an Auction, release a Nomination Slot, extend or expire any Clock, assign a length on a Team's behalf, and pause and resume the whole auction — every act carrying a mandatory free-text reason and a before/after — and any Manager can read the complete append-only Audit Log.
+The Commissioner can void a Bid, adjust Cap Space, terminate an Auction, release a Nomination Slot, extend or expire any Clock, assign a length on a Team's behalf, and pause and resume the whole auction — every act carrying a mandatory free-text reason and a before/after — and any Manager can read the complete append-only Audit Log. Since 2026-09-10 the Commissioner can also record a trade or a drop that happened in Fantrax, and be told when Fantrax and the app have drifted apart.
+
+### Implementation order — trade functions first
+
+*Added 2026-09-10 at the commissioner's direction. **Story numbers are NOT in build order**, and deliberately so: renumbering would churn every `sprint-status.yaml` key and every by-name citation in `ARCHITECTURE-SPINE.md` and `traceability.md`. Build in the order below; the numbers are identity, not sequence.*
+
+**Why this epic is not uniformly break-glass.** Stories 7.2, 7.3 and 7.4 exist for when something goes wrong — a bad import, a bid placed by the wrong co-manager, an outage. **Stories 7.6 – 7.9 are the opposite: they are everyday operations.** Managers trade frequently during an auction, to clear cap space or chase a secondary target once their first choice is gone. An auction running without trade recording is an auction whose cap arithmetic is wrong for both sides of every trade, for as long as the auction lasts.
+
+| Build | Story | Depends on | Note |
+| --- | --- | --- | --- |
+| **parallel, start now** | **7.6** Dead Money and the rookie-scale designation | **nothing** | The only story here with no dependency on 7.1. Pure core, adapter, migration and a display change; also fixes a latent import defect on its own merits |
+| **1** | **7.1** The Commissioner control class and the reason sheet | — | **Smaller than it reads.** `src/lib/styles/commissioner.css` and `src/lib/server/commissioner-guard.ts` shipped in Epic 1; what remains is the reason sheet, which nothing in `src/` implements yet |
+| **2** | **7.7** Record a Roster Trade | 7.1 | **Trades work from here.** Two stories to a usable tool |
+| **3** | **7.5** The league-visible Audit Log | Story 1.5 only | On the critical path — see coupling A |
+| **4** | **7.8** Record a Drop | 7.1, 7.6 | 7.6 is already done on the parallel track |
+| **5** | **7.2** Void a Bid and restore the Auction | 7.1 | Promoted above 7.3/7.4 — see coupling B |
+| **6** | **7.9** Detect a Roster Divergence | 7.7, 7.8 | Contingent and killable; gated on its own first AC |
+| **7** | **7.3**, **7.4** The remaining overrides; pause and resume | 7.1 | Genuine break-glass. Last |
+
+**Coupling A — the audit-log-only decision puts 7.5 on the critical path.** FR-41 records a Roster Trade to the Audit Log and **does not broadcast it to Discord**, which makes the Log the *only* channel by which the league learns a rival's Cap Space moved. Ship 7.7 without 7.5 and every recorded trade is invisible to all thirty managers: figures change with no announcement and no surface to look them up on. Confirmed as the intended trade-off on 2026-09-10 — broadcasting instead would take 7.5 off the critical path entirely, since Epic 5's outbox is already built. Revisit at Story 9.7 per the §12 assumption.
+
+**Coupling B — 7.2 is the remedy for a refused trade, not only a correction tool.** FR-41's refusal tells the Commissioner to void a Bid *or* wait for a Close. Without 7.2 only the second exists, so a refused trade stalls for up to 24 hours. Refusals are expected rather than rare: the Team *receiving* salary is the one that fails the money gate, and a Team can also be pushed over by **giving players up** (§10 example 37).
+
+**Deployment constraint — this block wants to land before auction open.** Stories 7.6, 7.7 and 7.8 all touch `src/lib/core/`, and **AD-20** fail-stops a `core/` deploy during a live Auction Phase: each one needs a pause (AD-13), a green §10 suite (AD-25) and a recorded reason. Landing them after the auction opens converts every fix into a league-wide freeze. They should therefore precede **Story 9.8** (prod setup day) and ideally **Story 9.7** (moderator pilot), so the pilot exercises trade recording against real managers — the same argument Epic 10 already carries in its own sequencing note.
+
+**Two smaller sequencing facts.** Finish **Story 10.6** first: it is in `review` and touches the same `core/rules/bidding.ts` gates that 7.7 reuses rather than reimplements (AR-42). And 7.7's Contract-Assignment-Phase criterion — a cleared length re-blocking the export — cannot be fully exercised until **Story 6.3** ships the export, so expect that one AC deferred rather than met.
+
+**7.10 then 7.11, after everything else in this epic that touches the trade code.** Story 7.10 is a rename across ~470 identifier occurrences in 12 files, and it is best landed when no other story is mid-flight in `core/rules/roster-*.ts`. Story 7.11 **must** follow it: building a new Move beside an old Move that is about to be renamed means writing every import, test name and comment twice. 7.10 should also precede **7.9**, whose acceptance criteria say *"proposes a Roster Move"* and will mean a Trade. Both touch `src/lib/core/`, so **AD-20** applies to each exactly as it does to 7.6 – 7.8 above — a pause (AD-13), a green §10 suite (AD-25) and a recorded reason if deployed during a live Auction Phase — and the same conclusion follows: land them before **Story 9.8** and ideally before **Story 9.7**, so the pilot exercises both acts against real managers.
 
 ### Story 7.1: The Commissioner control class and the reason sheet
 
@@ -2034,6 +2122,7 @@ So that a correction is a visible, reconstructible act rather than a rewrite of 
 **When** the Auction is refolded
 **Then** it is restored to its state before that Bid, including the **prior Leading Bidder** and the **prior Auction Clock value**
 **And** the voided Team's committed capital is released and the restored Leading Bidder's is re-committed
+**And** the prior Leading Bidder is selected by **`core/rules/restore.ts`'s `selectRestoration`** — the one pure selector Story 10.4 shipped (AR-36) — called with the void's own axes (`withdrawnBid: 'erase'`, `auctionClock: 'restore'`, `leagueClockReset: 'remove'`); **this story writes no selector of its own**, and a second walk of the surviving history here would be a second answer to a question FR-40 already owns
 
 **Given** a voided Bid
 **When** the League Clock is refolded
@@ -2176,6 +2265,330 @@ So that verifiable fairness is something I can check rather than something I am 
 **Given** the Audit Log at 375px
 **When** it renders
 **Then** it is single-column, legible without lateral scrolling, and readable by any Manager in every phase including Archived
+
+### Story 7.6: Dead Money and the rookie-scale designation
+
+As the Commissioner,
+I want a released contract to keep charging the cap the way league rules say it does,
+So that a drop cannot silently hand a team money it never got back.
+
+**Depends on:** nothing. This story is independently valuable and should ship even if the rest of the roster work is abandoned.
+
+**Acceptance Criteria:**
+
+**Given** `RosterSlotKind`, today `'active_bench' | 'injury_reserve' | 'minor_league'`
+**When** `'dead_money'` is added
+**Then** `chargedCapHit` returns the row's **full** Cap Hit for it, by falling through the existing `minor_league` check rather than gaining a branch — the rule stays one expression (AR-43)
+**And** `SLOT_CEILINGS` gains an entry with **no bound**, so `checkSlotCeilings` never reports it
+**And** Roster Count still counts `active_bench` alone, so Dead Money frees a Slot and keeps the money in one change
+**And** `RosterSlotKind` is treated as a **closed union of exactly four members**: every switch or match over it in `core/` and `adapters/` is **exhaustive with no `default` case**, so a missing branch is a compile error rather than a sibling module silently tallying Dead Money as an Active/Bench occupant (AD-32)
+**And** the fallthrough AD-32 sanctions for `chargedCapHit` is **not** copied as a general pattern into any other consumer
+
+**Given** `team_rosters_roster_slot_kind_check` enumerates three kinds (`20260824020000_live_reference_tables.sql:61-62`)
+**When** a fourth is admitted
+**Then** it is **a migration file applied dev-first** (AD-26, AD-32) — nothing is typed into the Supabase dashboard
+
+**Given** `CONTRACT_END_YEAR` in `adapters/fantrax/roster-file.ts`, which matches the rookie prefix in a **non-capturing** group and discards it
+**When** it is corrected
+**Then** the designation survives the import as structured data — round and full term — so `2RK31` and `2031` are no longer the same row
+**And** the change is confined to that adapter (AD-24)
+**And** an unrecognised shape still refuses the row and names it, unchanged
+
+**Given** PRD §10 examples 40 and 41 — the same drop, differing only by `2RK31`
+**When** they run
+**Then** they produce Maximum Bids of $3,000,000 and $5,000,000 respectively
+**And** they are the regression test for this story: **before it, both compute the same answer and one of them is wrong**
+
+**Given** Dead Money on a Team
+**When** the Team view (FR-25) and Teams index (FR-39) render
+**Then** it is shown **labelled and separate from the roster** (UX-DR40), so Cap Space reconciles against the players visibly on the Team
+
+**Given** the import (FR-1)
+**When** a file carries a Status this adapter does not recognise
+**Then** it still refuses at content altitude and names the row — Dead Money is **not** importable in v1, and that failure is loud by design
+
+### Story 7.7: Record a Roster Trade
+
+*(Shipped 2026-09-10 as "Record a Roster Move" and renamed 2026-09-12 by Story 7.10. **No acceptance criterion changed.** The spec file `spec-7-7-record-a-roster-move.md` keeps its original name: it is the record of what was built.)*
+
+As the Commissioner,
+I want to record a trade the managers agreed in Discord and executed in Fantrax,
+So that both teams' cap and slot positions are true for the rest of the auction.
+
+**Depends on:** Story 7.1 only — **not** 7.6. A Trade never creates Dead Money, so this is a complete increment on its own.
+
+**Acceptance Criteria:**
+
+**Given** a trade between two Teams
+**When** the Commissioner records it
+**Then** it is **one act naming both Teams and moving Contracts in both directions**, and either direction may be **empty** — a salary dump is a Roster Trade (§10 example 36)
+**And** both Teams are evaluated **once, against post-Trade state**, never a direction at a time (§10 example 39)
+**And** Existing Contracts move by `UPDATE` of `team_id` — never delete-then-insert, because `fantrax_player_id` is `unique` across every Team (AR-41)
+**And** Auction Contracts move by the same event, folded latest-transfer-wins by `contractsReducer`
+
+**Given** a moved Player
+**When** he arrives
+**Then** **Slot Placement is re-evaluated against the receiving Team's occupancy** and **Cap Hit follows placement** — a stashed Player landing in Active/Bench charges his full amount, his winning amount untouched (§10 example 38, AD-23)
+**And** the sending Team's freed Minor League Slot recomputes its **Minors Exposure** across every eligible Auction it still leads
+
+**Given** a Trade leaving either Team failing the money or slots gate
+**When** it is evaluated
+**Then** **the whole Trade is refused and nothing is written**, naming the Team, the gate, the Auction and the arithmetic
+**And** the refusal can be caused by the **sending** Team (§10 example 37) — the freed Slot costs $1,000,000 of Roster Reserve against a Cap Hit that may be worth less
+**And** **no Bid is cancelled**: AD-31's trigger stays a Close and only a Close, and the sheet offers no control that would change that
+
+**Given** a Trade naming a Player **contested in an open Auction**
+**When** it is evaluated
+**Then** it is **refused by the rules core**, not filtered by the admin screen — he is neither an Existing nor an Auction Contract, and `contractsReducer` would have nothing to apply the transfer to
+**And** this is a **third refusal ground checked before** the money and slots gates, which are meaningless for a Player nobody holds
+
+**Given** re-evaluation
+**When** it runs
+**Then** a Trade is a **third command type** declared in `core/types.ts` with its own gate set, per AD-1's per-command-type discipline and AD-2's `RestoreLeadingBid` precedent
+**And** it reuses `core/rules/bidding.ts`'s money and slot arithmetic as **pure helper functions** — it must **never** synthesize a `PlaceBid` and force-pass the gates that do not apply, which would route two Teams' opposing deltas through a cap gate AD-7 defines as single-Team and incremental
+**And** this story writes no affordability check of its own (AR-42)
+
+**Given** an Auction Contract carrying an assigned length
+**When** it moves during the Contract Assignment Phase
+**Then** the length is **cleared**, the year returns to the sending Team's Year Allotment, and the export re-blocks under FR-30 until the receiving Team reassigns (§10 example 42)
+
+**Given** the reason sheet
+**When** it renders
+**Then** it shows before → after for **both** Teams side by side — Cap Space, Roster Count and all three Slot occupancies — with the moved Players named between them (UX-DR39)
+**And** any Cap Hit changed by re-placement is stated **in words** with an `attention` note
+
+**Given** the Trade commits
+**Then** it is **one transaction under the global write lock** (AD-6) — a Trade that moved three Players of five is never reachable
+**And** the event carries the **whole delta**, both Slot kinds and both Cap Hits, so a replay reproduces the world as it stood (AR-41)
+**And** it is written to the Audit Log with actor, timestamp, before/after **for both Teams** and the reason, as **one** entry
+**And** it is **not broadcast to Discord** — the only Commissioner act that is not
+
+### Story 7.8: Record a Drop
+
+As the Commissioner,
+I want to record that a team released a player,
+So that they get the roster spot back and keep the cap hit, exactly as the league rules say.
+
+**Depends on:** Stories 7.1 and **7.6**.
+
+**Acceptance Criteria:**
+
+**Given** a Drop
+**When** the Commissioner records it
+**Then** it names **one Team** and one or more Players, with no counterparty
+**And** the governing rule is applied uniformly: **a Drop converts the Player's *charged* Cap Hit into Dead Money at the same amount** — full from Active/Bench, full from Injury Reserve, and **nothing** from a Minor League Slot
+**And** no Slot kind is handled as a special case in the code; all three fall out of the one rule
+
+**Given** a Drop from an Active/Bench Slot
+**When** it commits
+**Then** Roster Count falls and Cap Space is **unchanged**
+**And** the reason sheet stated, before commit, that this **lowers** the Team's Maximum Bid by the $1,000,000 reserve on the freed hole (§10 example 40, UX-DR40)
+
+**Given** a Drop from a Minor League Slot
+**When** it commits
+**Then** **no Dead Money is carried** and the row is removed — he was charging $0
+**And** Roster Count is untouched, `M` rises, and **Minors Exposure recomputes** across every eligible Auction the Team leads, *raising* its Maximum Bid (§10 example 43)
+**And** examples 40 and 43 move Maximum Bid in **opposite directions**, which is the test that stops this being implemented as a flat rule
+
+**Given** a dropped Contract carrying `2RK` **and a full unelapsed term** (5 years, invariant)
+**When** the Drop commits
+**Then** the Contract is **removed rather than reclassified** and its Cap Hit is released to Cap Space (§10 example 41)
+**And** every other Contract, `1RK` and rookie-scale alike, becomes Dead Money
+
+**Given** a Drop leaving the Team failing either gate
+**Then** it is refused on the same terms as a Trade, naming the Auction
+
+**Given** Dead Money
+**Then** it is excluded from both exports (FR-30, FR-31) — the Drop happened in Fantrax, which already carries its own accounting for it
+
+### Story 7.9: Detect a Roster Divergence from Fantrax
+
+As the Commissioner,
+I want the app to tell me when it and Fantrax disagree about who is on which team,
+So that a trade nobody reported cannot quietly corrupt the arithmetic for a fortnight.
+
+**Depends on:** Stories 7.7 and 7.8.
+
+**Contingency discharged 2026-09-10.** The endpoint was called against the real BBSL league and **answered unauthenticated** with all 30 Teams and 303 roster rows. This story is viable and no longer gated. The live probe also found three integration hazards the wrapper documentation would never have shown, and each is now an AC below.
+
+**Acceptance Criteria:**
+
+**Given** the live probe of 2026-09-10 — `GET /fxea/general/getTeamRosters?leagueId=…&period=1`, no authentication, 30 Teams, 303 rows, `status` ∈ {`ACTIVE`, `RESERVE`, `MINORS`, `INJURED_RESERVE`}
+**When** the reader is built
+**Then** it is built against that observed shape, not against `go-fantrax`'s `RosterItem { ID, Position, Status }`, which models three fields of a payload carrying six
+**And** the endpoint remains undocumented and may change between offseasons, which is what the failure-mode ACs below are for
+
+**Given** salaries arrive as scientific-notation floats carrying representation error — `23499999.999999993`, `46499999.999999985`, `28499999.999999993` in the live payload
+**When** any code reads `salary`
+**Then** it **rounds to the nearest dollar and asserts the $500,000 grid**, refusing the row if it fails — **never truncates**, which put 4 of 303 live rows a dollar low and off the grid the whole money rendering depends on (AD-8)
+**And** this holds even though this story takes no money from the endpoint, because the hazard goes live the moment anything reads the field
+
+**Given** the endpoint returns bare player ids (`01eon`) and the FR-1 importer stores the asterisk-wrapped form verbatim (`*04ewu*`)
+**When** membership is compared
+**Then** ids are **normalised inside the adapter** (AD-24) in both directions
+**And** an automated test proves an unnormalised comparison is caught — without it, all 303 rows read as a departure and an unknown arrival simultaneously, which is a silent total failure rather than a loud one
+
+**Given** the endpoint carries a Fantrax team id and the `teams` table stores none
+**When** API Teams are mapped to app Teams
+**Then** the mapping is **explicit**, not by `teamName` — AD-24 forbids name matching
+**And** `INJURED_RESERVE` is mapped separately from the CSV importer's `injured reserve` alias; the underscore form does not match it
+
+**Given** the endpoint answers
+**When** the app reads it
+**Then** it reads **at most once per hour**, not per tick
+**And** the read runs in the shell, outside the write lock, with every field name inside `adapters/fantrax/` (AD-24, AD-32)
+**And** **membership is the only fact taken** — the app already holds every Cap Hit, and the endpoint carries none
+**And** a Slot kind, where present, is carried as **advisory** and confirmed by the Commissioner
+
+**Given** a comparison
+**When** it runs
+**Then** it **excludes every Player won in this auction**, who is not yet in Fantrax
+**And** a **paired** difference proposes a Roster Trade pre-filled with both Teams and the resulting before → after figures
+**And** an **unpaired departure** proposes a Drop
+**And** a **placement** difference raises **nothing** — membership is the only fact, and from FR-44 the app *decides* placement while Fantrax *receives* it through the export, so a Slot difference before that export is the expected state and not drift (added 2026-09-12)
+**And** an **unknown arrival** is reported as an **error, prominently** — every acquisition in the window goes through the auction, so it cannot legitimately occur and signals a mis-set league id, a wrong period, or a genuine out-of-band change
+
+**Given** any read
+**Then** it writes **no event, no row, and no projection** — a read produces a proposal and nothing else (AD-32)
+**And** a dismissed divergence stays suppressed until the underlying difference changes
+**And** divergences appear on the Commissioner's surface only, never a Manager's
+
+**Given** a payload that parses cleanly but is implausible — an HTTP 200 carrying 3 Teams instead of 30, from a transient upstream fault, a wrong `period`, or a deploy mid-flight
+**When** the comparison runs
+**Then** the **plausibility guard** refuses to raise anything: all 30 Teams must be present and **no Team's roster may be empty**
+**And** a read whose divergences would affect **more than a quarter of the League in one pass** is treated as a **fault, not as news**
+**And** the guard is what stops 27 Teams reading as having released every Player they hold — an interpretation that is arithmetically valid and obviously absurd, and which the ordinary failure ACs below do **not** catch, because the response is well-formed
+
+**Given** a tripped guard
+**Then** it renders as **stopped**, never as *"no divergences"*
+**And** it **never clears itself** — the Commissioner acknowledges it and can then see the proposals, so a genuinely busy trade day costs one extra confirmation while a bad payload costs nothing
+**And** the quarter-of-the-League fraction is tunable without a code change
+
+**Given** the reader fails — unreachable, unauthorised, rate-limited or malformed
+**Then** no auction action is blocked or reversed
+**And** repeated failure **renders as stopped, never as "no divergences"** (AD-32, AD-19), because that is the state that displaces the manual check
+
+**Given** this story in full
+**Then** it **detects and proposes only** — it never applies a Roster Trade or a Drop itself
+**And** every write goes through Story 7.7 or 7.8 with the mandatory reason FR-32 requires, which is the rule an automatic apply would have to break
+
+---
+
+### Story 7.10: Rename the Roster Move to a Roster Trade
+
+As the Commissioner,
+I want the act that records a trade to be called a trade,
+So that the name "Roster Move" is free for the within-Team act that actually needs it.
+
+**Depends on:** Stories 7.7 and 7.8, both done. **Blocks** Story 7.11, and should precede Story 7.9.
+
+**This story changes no behaviour.** Every existing test must pass unchanged in meaning; the only edits to a test body are identifiers and file paths.
+
+**Acceptance Criteria:**
+
+**Given** the shipped trade recorder
+**When** it is renamed
+**Then** `src/lib/core/rules/roster-move.ts`, `src/lib/server/roster-move.ts` and `src/routes/roster-move/` become `roster-trade`, and the three test files beside them follow
+**And** the destination id `roster-move` becomes `roster-trade` in **both** phase lists (`server/destinations.ts`), with `tests/destinations.test.ts` updated in both
+**And** `tests/examples/example-36…39` keep their **file names** — they are PRD example numbers and those examples are about trades — and change only their imports
+
+**Given** the persisted event type
+**When** the rename runs
+**Then** the string `'RosterMoveRecorded'` in `core/projection/contracts.ts` is **unchanged**, and carries a comment saying why: AD-4 forbids mutating or deleting an event, so a value already written to `auction_events.event_type` cannot be renamed without rewriting history
+**And** the **constant** holding it renames to `ROSTER_TRADE_RECORDED_EVENT`, so the code reads in the new vocabulary while the wire does not
+**And** a test asserts the literal string value, so a later well-meaning rename of the constant cannot silently change it
+
+**Given** the four type names shared by all three roster acts
+**When** they are renamed
+**Then** `MoveCapGateOutcome`, `MoveSlotsGateOutcome` and `MoveLeadingAuction` in `core/types.ts` become `ActCapGateOutcome`, `ActSlotsGateOutcome` and `ActLeadingAuction`, and `RosterMoveTeamFigures` in `core/projection/contracts.ts` becomes `RosterActTeamFigures`
+**And** they are named for `roster-act.ts`, which is what they actually belong to — renaming them to Trade would be as wrong as leaving them named Move once Move means something else
+**And** `describeMoveAmount`'s alias in the trade module is **deleted** rather than renamed; its 21 call sites reach `roster-act.ts`'s `describeActAmount` directly, which is what the alias's own comment already says it is
+
+**Given** AD-32 in the architecture spine
+**When** it is amended
+**Then** its pre-existing drift is fixed in the same pass: it named the event `RosterMoved` while the code writes `RosterMoveRecorded`, and the spine is the rulebook
+
+**Given** the whole rename
+**When** it is complete
+**Then** `npm test` and `npm run check` both pass with **no test's assertion changed in meaning**
+**And** `git grep -i "roster.move"` over `src/` returns only the deliberate wire-name string, its comment and its test
+**And** nothing named Move exists in `src/` when the story ends, which is what makes Story 7.11's vocabulary unambiguous
+
+### Story 7.11: Rearrange a Roster's Slot Placements
+
+As a Manager,
+I want to choose which of my eligible players occupy my three Minor League Slots,
+So that a trade does not leave me paying full price for a player I meant to stash.
+
+**Depends on:** Story **7.10** (hard — the vocabulary), Story 7.1 (the sheet), Story 7.7 (the evaluator it shares). **Not** 7.6, 7.8 or 7.9.
+
+**Acceptance Criteria:**
+
+**Given** a Manager and their own Team
+**When** they record a Roster Move
+**Then** it names **one Team** and one or more of its own Contracts, each with the Slot it is to occupy, and **no Contract changes hands**
+**And** the Team is resolved **from the session**, never from a form field, and a Manager naming another Team is refused server-side whatever the page rendered
+**And** the **Commissioner** may name any Team, through Story 7.1's reason sheet
+
+**Given** a swap that fills a Slot the same act empties (§10 example 44)
+**When** it is evaluated
+**Then** **departures from every Slot are applied before any arrival is placed**, so the transient Minor League occupancy of 4 is never constructed and cannot be judged — the identical discipline `evaluateTrade` applies, and §10 example 44's refusal-when-sequenced is the regression test
+**And** the Team's figures are derived **once**, at the end, from the rows it is left holding
+
+**Given** a Contract named for a Minor League Slot
+**When** eligibility is checked
+**Then** the eligible set is the live pool's flag **union every Contract the app has ever observed in a Minor League Slot**, folded from the reference-data snapshot forward (AR-44)
+**And** a Contract demoted by an earlier Move **can be promoted back**, returning the roster to the state it held before — the round trip is an explicit test (§10 example 46)
+**And** an imported Active/Bench Contract never seen in minors and never in the pool is **refused by name**, worded as *the app has never been told he is eligible* — never as *he is ineligible*
+**And** demotion to Active/Bench requires no eligibility at all
+
+**Given** Injury Reserve and Dead Money
+**When** a Move names either
+**Then** it is refused: **IR is a Fantrax fact about a player's health**, not a placement this app assigns, and **Dead Money is not a Slot** (FR-43)
+**And** neither is offered by the picker, and the refusal is the rules core's rather than the screen's
+
+**Given** a placement that changes what a Contract charges
+**When** the Move commits
+**Then** **Cap Hit follows placement** through `chargedCapHit` — the one expression — so a promotion charges **$0** and a demotion charges the **full** amount, with the Contract's value untouched (AD-23)
+**And** **Minors Exposure recomputes** across every eligible Auction the Team leads, and Roster Count moves with Active/Bench occupancy
+**And** no assigned contract length is cleared and the Year Allotment is untouched — the Contract did not change hands
+
+**Given** a Move leaving the Team failing the money or slots gate
+**When** it is evaluated
+**Then** **the whole Move is refused and nothing is written**, naming the gate, the Auction and the arithmetic
+**And** the gates are `evaluateActCap` and `evaluateActSlots` **called, not copied** — this story writes no affordability check of its own (AR-42, AR-44)
+**And** **no Bid is cancelled**: AD-31's trigger stays a Close, and the sheet offers no control that would change that
+
+**Given** re-evaluation
+**When** it runs
+**Then** `RearrangeRoster` is a **fourth command type** in `core/types.ts` with its own gate set (AD-1)
+**And** placement is taken **from the command**, not derived by `slotPlacementFor` — FR-21's automatic rule is what a close and a Trade arrival apply, and a Move is the Manager deliberately overriding it (AR-44)
+
+**Given** the sheet
+**When** it renders
+**Then** it shows before → after for the one Team — Cap Space, Roster Count, all three occupancies — with every moved Contract named, both placements and both Cap Hits (UX-DR41)
+**And** **the direction Maximum Bid moved is stated in words** with an `attention` note, because §10 example 45 spends Cap Space to gain bidding power and no pair of figures says that out loud
+**And** a Manager's sheet is a **solid** Manager control with **no reason field**; the Commissioner's is dashed, recessed, labelled *"Commissioner · visible only to you"* and demands free text
+**And** they are **two controls**, not one with a conditional field (UX-DR41)
+**And** the act still works, and is still refused, with JavaScript switched off — `ReasonSheet.svelte`'s own discipline
+
+**Given** the phase and the pause
+**When** a Move is attempted
+**Then** it is live in the **Auction** and **Contract Assignment** Phases and refused in Setup and Archived
+**And** it is **refused while paused** (AD-13), worded as the pause and distinctly from every rules refusal — a Move changes Maximum Bids and a paused auction changes nothing
+**And** every guard runs on `load` **and** on the action; hiding a form is never the check
+
+**Given** the Move commits
+**Then** it is **one transaction under the global write lock** (AD-6) — a Move that moved two Contracts of three is never reachable
+**And** it mutates `team_rosters.roster_slot_kind` for Existing Contracts and appends **one** event carrying the **whole delta** — every Contract, both placements, both Cap Hits, the Team's figures before and after — so a replay reproduces the world as it stood (AR-41)
+**And** Auction Contracts have no row and move by the event alone, folded latest-placement-wins
+**And** it needs **no migration**: `roster_slot_kind` already admits all four values and `auction_events.event_type` is generic `text`
+**And** it is in the league-visible Audit Log with actor, timestamp, before/after and — for the Commissioner's form — the reason, and is **not broadcast to Discord** (FR-41's precedent)
+
+**Given** PRD §10 examples 44, 45 and 46
+**When** they run
+**Then** they pass as `tests/examples/` files
+**And** **45 is the one that stops this being built as a flat rule**: a demotion that *lowers* Cap Space and *raises* Maximum Bid by $10,000,000 is the case a naive implementation gets backwards
 
 ---
 
@@ -2573,5 +2986,273 @@ So that setup day is a rehearsal I have already done rather than one I am doing 
 **Given** the auction is about to open
 **When** the go-live gate from Story 8.4 is run
 **Then** it passes, or every unmet condition is **named in writing** alongside the decision to open anyway
+
+---
+
+## Epic 10: Chase two players with one slot
+
+A Manager can hold one more outstanding Bid than they have room for, and enter as many minimum lotteries as their cap space allows — because the auction has to *finish*. The surplus is taken back automatically: when a win fills the last Slot, the leftover Bid is cancelled and the Auction it was on returns to whoever bid under it.
+
+**Ships as one unit.** The allowance without the cascade lets a Team win a thirteenth Player, which is the invariant FR-37 exists to protect. Stories 10.1 and 10.2 widen what may be held; 10.3 and 10.4 take the surplus back. **No subset of this epic is safe to deploy alone**, and 10.1 must not reach production without 10.3 and 10.4 behind it.
+
+### Story 10.1: The Outstanding Bid Allowance in the slots gate
+
+As a Manager with one open slot and two players I want,
+I want to chase both at once,
+So that I am not idling for a day waiting on a close I cannot influence.
+
+**Acceptance Criteria:**
+
+**Given** a prospective Bid
+**When** Roster Capacity is evaluated
+**Then** it passes when `Projected Active/Bench Additions = 0`, **or** when the Team holds at least one Free Active/Bench Slot **and** `Projected Active/Bench Additions ≤ Free Active/Bench Slots + 1`
+**And** the `+ 1` is a **named constant** beside `ACTIVE_BENCH_SLOTS` in `core/constants.ts`, never an inline literal
+**And** the gate still takes the `BidState` and **not** the amount, so it remains structurally incapable of reading a Bid's size (AD-7, Story 2.7)
+
+**Given** a Team at Roster Count 12 with no Free Minor League Slot and $40,000,000 of Cap Space
+**When** it bids on a Player who is not Minor League Eligible
+**Then** the Bid is **refused on capacity** — the free-slot precondition fails before the allowance arithmetic is reached
+**And** §10 example 30 passes as a named test, including its statement of the arithmetic that *would* have admitted the Bid without the precondition
+
+**Given** a Team at Roster Count 12 with a Free Minor League Slot
+**When** it bids on a Minor League Eligible Player whose win that Slot absorbs
+**Then** the Bid is **permitted** on the `Projected Active/Bench Additions = 0` branch, which needs no free Active/Bench Slot
+**And** the pre-existing FR-37 carve-out is therefore unchanged by this story
+
+**Given** any evaluation of the slots gate
+**When** its outcome is returned
+**Then** it carries `rosterCount`, `projectedAdditions`, `freeActiveBenchSlots`, the `allowance`, and `ceiling` of 12 — **on a pass and a refusal alike**, keeping the one-branch discipline Story 2.7 established
+**And** the ceiling of 12 is still reported, because a refusal quoting only the allowance would imply a Team may hold thirteen players
+
+**Given** a refusal or a pass on the slots gate
+**When** the refusal panel words it
+**Then** three distinct sentences exist and never collapse into one — passed (*"your 2nd of 2 permitted bids; Roster Count would be 10 of 12"*), refused at the allowance (*"this would be your 3rd outstanding bid; 1 free slot permits 2"*), and refused on the precondition (*"no free Active/Bench slot, so no bid is permitted"*)
+**And** this satisfies UX-DR32, whose reason is that the first refusal resolves itself at the next close and the second lasts the whole auction
+
+**Given** a Team at its allowance
+**When** the Bid Board renders
+**Then** its controls are disabled with *"at your allowance"* stated, **distinctly from** a Team at Roster Count 12 with no room at all
+**And** both are stated on the board rather than discovered at submission, as Story 2.7 already requires
+
+**Given** Roster Reserve
+**When** a Team bids at its allowance
+**Then** `Roster Count + Projected Active/Bench Additions` reaches 13 and the `max(0, …)` clamp correctly yields `$0`
+**And** the clamp is documented as **reachable in ordinary play**, no longer a Commissioner-override-only safeguard
+
+**Given** the §10 suite
+**When** it runs
+**Then** examples **29** and **30** pass as new named tests, examples **24** and **25** pass as rewritten, example **23** passes with its added capacity clause
+**And** examples **18–22** are re-verified unchanged, per AD-25's instruction to re-check the block rather than only the ceiling cases
+
+### Story 10.2: Lottery entries leave the slots gate
+
+As a Manager with one open roster spot,
+I want to enter every minimum-bid lottery on the board,
+So that I am not rationing entries against an outcome I will probably lose.
+
+**Acceptance Criteria:**
+
+**Given** a Minimum-Bid Contention entry
+**When** Roster Capacity is evaluated for any Bid
+**Then** the entry contributes **nothing** to Projected Active/Bench Additions and does **not** consume the Outstanding Bid Allowance
+**And** a Team may be a Contender in any number of open Contentions simultaneously
+
+**Given** a Team entering or joining a Contention
+**When** the entry is gated
+**Then** it is permitted if the Team holds at least one Free Active/Bench Slot, **or** the Player is Minor League Eligible and the Team holds at least one Free Minor League Slot
+**And** it is refused when neither holds, because the win would have nowhere to land
+
+**Given** the money rules
+**When** an entry is committed
+**Then** FR-14's flat $1,000,000 per non-eligible Contention still reaches Committed Bids, and an eligible Contention still feeds Minors Exposure through Overflow Count — **both unchanged by this story**
+**And** cap space is the **only quantitative limit**: a Team with $9,000,000 of Available Cap Space may hold nine non-eligible entries, and a tenth is refused **on money, not on capacity**
+
+**Given** `Overflow Count` and `Active/Bench Overflow`
+**When** they are computed
+**Then** they are **two separately named derivations**, each stating in its own documentation which rule it serves — the money side counting Contention entries, the slots side excluding them
+**And** a single shared call serving both gates is a **defect** (AR-40), notwithstanding that Story 2.7 deliberately shared one and documented the sharing as load-bearing
+**And** the comment Story 2.7 left — that the two gates *"cannot disagree about the count"* — is replaced with one stating why they now must
+
+**Given** the §10 suite
+**When** it runs
+**Then** example **34**'s entry half passes — six entries permitted against one free Slot, a tenth refused on money
+
+### Story 10.3: Cancel the surplus commitment at Close
+
+As a Manager whose roster has just filled,
+I want my surplus bid stood down automatically,
+So that I cannot win a thirteenth player and discover it on export day.
+
+**Acceptance Criteria:**
+
+**Given** an Auction Close that **reduces the winning Team's free Slots** — Active/Bench **or** Minor League
+**When** the Close completes its placement
+**Then** the cancellation cascade runs against that Team's remaining commitments
+**And** **no other event triggers it** — not a Bid, not a Nomination, not a clock, and never a restoration
+
+**Given** a Team over capacity after a Close
+**When** the cascade runs
+**Then** commitments are cancelled **one at a time, most recent first by log `seq`**, re-testing Roster Capacity (FR-37) and contention capacity (FR-18) after each
+**And** it **stops as soon as the Team is within both** — nothing further is cancelled
+**And** an eligible leading Bid a Free Minor League Slot can still absorb is left untouched however recent
+
+**Given** a Close that leaves the Team still within capacity
+**When** the cascade evaluates
+**Then** **nothing is cancelled** — §10 example 31's first close, where a Team at Roster Count 11 holding two commitments remains within an allowance of two
+
+**Given** a cancellation
+**When** it is recorded
+**Then** a `BidCancelled` compensating event is appended; the original `BidPlaced` is **never** deleted or mutated and remains a visible history line
+**And** the cancelled Team's committed capital is released
+**And** the Team is notified with **the win that caused it named**, not merely the fact of the cancellation
+
+**Given** one Close's transaction
+**When** its events are appended
+**Then** `AuctionClosed` is written **first**, then each `BidCancelled` in the order the cascade decided them
+**And** `close.ts` is the **sole appender** — `restore.ts` decides and appends nothing (AR-36)
+**And** the whole effect is committed to the state the **next** Close is evaluated against (AD-11)
+
+**Given** a Team at Roster Count 12 holding one Free Minor League Slot and three eligible Contention entries
+**When** it wins one and the Player takes that last Minor League Slot at a $0 Cap Hit
+**Then** Roster Count stays 12, `M` falls to 0, and the cascade **still fires** because a free Slot was reduced
+**And** the two remaining entries are cancelled before their lotteries draw
+**And** §10 example **35** passes — the case a trigger reading *"a Close that increases Roster Count"* would miss, and which would otherwise finish that Team at Roster Count 14
+
+**Given** the schema
+**When** `BidCancelled` is appended
+**Then** **no migration is required** — `auction_events.event_type` is a generic `text` column (AR-36)
+
+### Story 10.4: Restore the next-highest bidder
+
+As a Manager who was outbid and then outbid again,
+I want my bid to lead again when the bid above mine is cancelled,
+So that the auction settles on what teams actually offered rather than on who happened to fill a roster.
+
+**Acceptance Criteria:**
+
+**Given** a cancelled leading Bid on an Auction in Standard Contention
+**When** restoration runs
+**Then** the **next-highest surviving Bid** becomes the leading Bid and that Team's capital is re-committed at that amount
+**And** the restored Team is notified — it stopped watching this Auction and is being told it is winning again
+
+**Given** a candidate for restoration
+**When** it is re-validated
+**Then** **only** the `cap` and `slots` gates run, declared in `core/types.ts` as the `RestoreLeadingBid` command type with its own fixed gate set (AR-37)
+**And** it is **never** implemented as a synthetic `PlaceBid` — which would re-run the increment rule against a price that has just fallen and refuse every restoration that mattered
+**And** the evaluation reads **post-close state**: after the triggering Close's placement and after every cancellation already decided in this cascade
+
+**Given** a candidate that fails either gate
+**When** restoration continues
+**Then** that candidate is **skipped** and the next-highest Bid below is tried, and so on down the history
+**And** a candidate is **never** restored and then cancelled — a restoration must not be able to trigger a cascade
+**And** §10 example **32** passes: the second-highest bidder has itself reached Roster Count 12, is skipped, and the third-highest is restored at a lower price
+
+**Given** an Auction where **no** surviving Bid passes
+**When** restoration exhausts the history
+**Then** the Auction returns to **Awaiting Opening Bid** with no leading Bid
+**And** its **Auction Clock is cleared**, not left running — an Auction with no Bid has no Clock
+**And** the Player stays on the Board, the nominating Team's Nomination Slot stays held (FR-9), and the Auction resolves as any unbid nomination does
+**And** §10 example **33** passes, including its negative assertion: the Auction does **not** close at the cancelled bidder's old expiry with no winner
+
+**Given** a restoration where a Bid survives
+**When** the clocks are folded
+**Then** the **Auction Clock is untouched** — the Auction closes when it always would have, and a Restored Leading Bidder may inherit very little time
+**And** the **League Clock is not reset and no prior reset is removed**, which is the opposite of a Commissioner void (AR-39, AD-22)
+**And** a reducer treating `BidCancelled` and `BidVoided` alike is a defect that would end the Auction Phase early every time a roster fills
+
+**Given** the restoration decision
+**When** it is recorded
+**Then** the `BidCancelled` event carries the cancelled `seq`, the cause, and **either** the restored Team, Bid `seq` and amount **or** `null`
+**And** the projection **reads** that recorded decision rather than re-deriving it by re-running gates inside a fold (AR-36, AD-31)
+
+**Given** the selection algorithm
+**When** it is implemented
+**Then** it lives in **one** pure function in `core/rules/restore.ts` — walk the surviving history downward, re-evaluate, skip failures, stop at the first pass
+**And** it is parameterised on the three axes that separate a cancellation from a void: retain-vs-erase in the fold, leave-vs-restore the Auction Clock, keep-vs-remove the League Clock reset
+**And** **Story 7.2 consumes this function** rather than implementing its own; 7.2's specification is updated to cite it
+
+**Given** the §10 suite
+**When** it runs
+**Then** examples **31**, **32** and **33** pass as named tests
+
+### Story 10.5: A lottery whose contenders were cancelled
+
+As a Manager reading a closed lottery,
+I want the recorded contender list to be exactly who was eligible to win it,
+So that I can still reproduce the draw by hand and satisfy myself it was fair.
+
+**Acceptance Criteria:**
+
+**Given** a Minimum-Bid Contention at Clock expiry
+**When** the Randomizer draws
+**Then** the recorded Contender list is the list **after** any FR-40 cancellations have been applied
+**And** a cancelled Contender does not appear in it and cannot be drawn
+**And** the Auction's history still shows that the Team entered and that its entry was cancelled, so the record stays complete
+
+**Given** the recorded seed and Contender list
+**When** a Manager reproduces the draw independently
+**Then** it still yields the recorded selection — FR-20's verifiable-fairness contract is unchanged by this story
+**And** every remaining Contender still has probability `1/n` over the post-cancellation list
+
+**Given** a Contention whose Contender list is **empty** at expiry
+**When** it closes
+**Then** it closes with **no winner** and the Player returns to the Free Agent pool
+**And** the empty list and the reason are recorded exactly as a drawn one would be
+**And** the nominating Team's Nomination Slot is released as on any Close (FR-9)
+
+**Given** several lotteries expiring in the same sweep with one Team contending in each
+**When** the sweep runs
+**Then** that Team winning the first is removed from the remainder **before** they are drawn, because each Close commits before the next is evaluated (AD-11)
+**And** §10 example **34**'s draw half passes, including the lottery left with zero Contenders
+
+### Story 10.6: Say it on the board and in Discord
+
+As a Manager,
+I want to know which of my bids is the one at risk before I place it,
+So that losing it is a trade I chose rather than something the app did to me.
+
+**Acceptance Criteria:**
+
+**Given** a Bid that would be the Team's allowance Bid
+**When** the bid control renders, **before** the confirm step
+**Then** it states the trade in words: *"This is your 2nd of 2 permitted bids. If you win a player before this auction closes, this bid is cancelled and the next highest bid leads."*
+**And** it is stated **once**, at the moment of the decision — not a warning dialog, not a checkbox, and not repeated on every later view (UX-DR34)
+
+**Given** the persistent strip
+**When** it renders on any surface
+**Then** it carries bids against the allowance beside the roster figure — `Roster 9 of 12 · 2 of 4 bids`
+**And** a Team at parity shows the figure alone with **no colour, badge or warning treatment** (UX-DR35)
+
+**Given** a Teams index row
+**When** it renders
+**Then** it carries outstanding bids against the allowance, with open lottery entries counted **separately**
+**And** the separation is preserved because entries consume no allowance and folding them in would imply a ceiling that does not exist (UX-DR36)
+
+**Given** the refusal panel
+**When** the slots gate reports
+**Then** its sentence wraps to a second line rather than truncating, at line-height `1.6`, aligned to the sentence's first line (UX-DR33)
+
+**Given** a cancellation
+**When** the three parties are notified
+**Then** the cancelled Manager's notice leads with the **cause** and then the effect, with no apology, no alarm styling and no congratulation wrapped around it
+**And** the restored Manager's notice re-establishes context, then states what it costs their cap **and how long they have**, since the Clock did not reset
+**And** the league channel carries one line in the existing register (UX-DR37)
+**And** both mentions are carried by the **`outbid` category**, adding two new clauses to `clauseFor` in `adapters/discord/mention.ts` — **no fourth category is added**, and the mutable set stays exactly `slot_release` as Story 5.4 left it
+**And** they are therefore **unmutable server-side** like every `outbid` mention: a posted request naming the category is refused with the stated wording, unchanged from Story 5.4
+**And** the category's *name* now covers three things that are not literally an outbid — being outbid, having a Bid cancelled, and being restored — which is accepted deliberately: the category is the **"your position in an Auction changed without you"** class, and a Manager must not be able to mute the notice telling them they lost a Player through no act of their own
+
+**Given** an Auction with a cancelled Bid
+**When** its history renders
+**Then** the cancelled Bid remains visible, struck through and labelled *cancelled*, with the causing win named — never deleted, hidden or reordered
+**And** the copy distinguishes it from a void: a void says someone decided the Bid should not have stood, a cancellation says nothing of the kind (UX-DR38)
+
+**Given** an Auction returned to Awaiting Opening Bid
+**When** the board renders it
+**Then** it renders as an **unbid nomination**, the state the board already has a treatment for, rather than a new "restarted" state
+**And** its history remains, so it reads as an Auction a Team led and then did not
+
+**Given** Your Positions
+**When** a Manager opens it after a cancellation
+**Then** the won Player appears in the won group, the cancelled Auction has left the leading group, and the released capital is reflected in Available Cap Space — with nothing for the Manager to reconcile by hand
 
 ---

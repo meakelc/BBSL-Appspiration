@@ -145,6 +145,98 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 	[
 		'example-28-the-median-lands-between-two-grid-values.test.ts',
 		'28 — The median lands between two grid values'
+	],
+	// Added 2026-09-08 with the Outstanding Bid Allowance (FR-37) and Bid
+	// Cancellation (FR-40). Story 10.1 lands the first two.
+	[
+		'example-29-the-allowance-in-the-ordinary-case.test.ts',
+		'29 — The allowance, in the ordinary case'
+	],
+	[
+		'example-30-the-allowance-needs-a-slot-to-extend.test.ts',
+		'30 — The allowance needs a slot to extend'
+	],
+	// Story 10.3 landed the cancellation cascade, and 31 with it; Story 10.4
+	// added the restoration its last sentences narrate, and 32 and 33 beside
+	// it — the skipped candidate and the Auction with nothing to restore.
+	[
+		'example-31-the-cascade-fires-only-as-far-as-it-must.test.ts',
+		'31 — The cascade fires, and only as far as it must'
+	],
+	[
+		'example-32-a-restoration-that-is-skipped-not-undone.test.ts',
+		'32 — A restoration that is skipped, not undone'
+	],
+	[
+		'example-33-a-restoration-with-nothing-to-restore.test.ts',
+		'33 — A restoration with nothing to restore'
+	],
+	// Story 10.2 landed the bidding half of the two below and Story 10.3 the
+	// close half of each. The draws they narrate belong to Story 10.5.
+	[
+		'example-34-unlimited-lotteries.test.ts',
+		'34 — Unlimited lotteries, and the one win that ends them'
+	],
+	[
+		'example-35-the-trigger-is-a-free-slot.test.ts',
+		'35 — The trigger is a free slot, not a roster count'
+	],
+	// 36-39 and 42 are Story 7.7's Roster Trade examples (FR-41), landed with
+	// the `RecordRosterTrade` command. 42 sits out of sequence below because
+	// 40 and 41 landed first with Story 7.6's rookie-scale designation; Story
+	// 7.8 landed the `RecordDrop` command those two describe, and 43 with it.
+	[
+		'example-36-the-trade-that-clears-the-room.test.ts',
+		'36 — The trade that clears the room'
+	],
+	[
+		'example-37-the-team-pushed-over-by-giving-something-away.test.ts',
+		'37 — The Team pushed over by giving something away'
+	],
+	[
+		'example-38-the-stash-that-becomes-expensive-by-moving.test.ts',
+		'38 — The stash that becomes expensive by moving'
+	],
+	['example-39-one-act-evaluated-once.test.ts', '39 — One act, evaluated once'],
+	[
+		'example-40-a-drop-lowers-the-maximum-bid.test.ts',
+		'40 — A Drop lowers the Maximum Bid'
+	],
+	[
+		'example-41-the-three-characters-worth-2000000.test.ts',
+		'41 — The three characters worth $2,000,000'
+	],
+	[
+		'example-42-a-won-player-traded-after-the-auction-phase.test.ts',
+		'42 — A won Player traded after the Auction Phase'
+	],
+	// Story 7.8's Drop command (FR-43). 43 is new with it, and 40 and 41 gain
+	// a command-driven derivation beside 7.6's hand-built fixtures — 43 is the
+	// one that moves Maximum Bid in the OPPOSITE direction from 40, which is
+	// the test that stops FR-43 being read as a flat rule.
+	[
+		'example-43-a-stashed-drop-moves-the-maximum-bid-the-other-way.test.ts',
+		'43 — A stashed Drop moves the Maximum Bid the other way'
+	],
+	// Story 7.11's Roster Move (FR-44) lands the last THREE. 44 is example 39's
+	// lesson reached by a different act — a swap that is legal as one act and
+	// refused one leg at a time, so the file runs the sequenced order as the
+	// regression test. 45 is the mirror of 40 on the Move side: Cap Space falls
+	// and Maximum Bid RISES, which is why the sheet computes the direction
+	// rather than asserting it. 46 is the first §10 example about what the app
+	// KNOWS rather than what it can compute — two roster rows that are
+	// indistinguishable in `team_rosters` and are told apart by the log alone.
+	[
+		'example-44-the-optimization-after-the-trade.test.ts',
+		'44 — The optimization after the trade'
+	],
+	[
+		'example-45-the-move-that-buys-bidding-power-by-spending-cap.test.ts',
+		'45 — The Move that buys bidding power by spending cap'
+	],
+	[
+		'example-46-the-promotion-the-app-must-refuse-and-the-one-it-must-allow.test.ts',
+		'46 — The promotion the app must refuse, and the one it must allow'
 	]
 ];
 
@@ -310,6 +402,38 @@ describe('the stack configuration', () => {
 		expect(list).toContain('Nothing is live for you right now.');
 	});
 
+	/**
+	 * Dead Money renders labelled and SEPARATE, and its two absences are
+	 * deliberate (Story 7.6, UX-DR40).
+	 *
+	 * Both claims live in markup a `.svelte` file cannot be rendered under
+	 * this suite's vite.config, so they are proven the way every other markup
+	 * claim in this file is proven — by reading source text. The behaviour
+	 * behind them is proven directly in tests/team-view.test.ts and
+	 * tests/teams-index.test.ts; what is at stake HERE is that the two
+	 * conditionals cannot be deleted, or quietly inverted into always-render,
+	 * without a test going red.
+	 */
+	it('suppresses the EMPTY Dead Money group and the absent Dead Money figure', () => {
+		const teamPage = readFileSync(at('src', 'routes', 'teams', '[teamId]', '+page.svelte'), 'utf8');
+		// `groupRoster` produces all four groups always — that is the AD-32
+		// fix and it must stay — so the page is what declines to print a
+		// heading over zero rows. The other three groups still render empty:
+		// an absent Minor League group and an empty one say different things.
+		expect(teamPage).toContain(
+			"{#if group.slotKind !== 'dead_money' || group.entries.length > 0}"
+		);
+		// And the figure beside Injury Reserve, absent rather than $0.0M.
+		expect(teamPage).toContain('{#if team.deadMoneyHalves !== null}');
+		expect(teamPage).toContain('id="team-dead-money"');
+
+		const index = readFileSync(at('src', 'routes', 'teams', '+page.svelte'), 'utf8');
+		// A card lists no rows, so this line is the only thing on it that
+		// reconciles a Cap Space reduced by released Contracts.
+		expect(index).toContain('{#if row.deadMoneyHalves !== null}');
+		expect(index).toContain('teams-dead-money-');
+	});
+
 	it('serves a real page from a layout that loads the design tokens', () => {
 		expect(existsSync(at('src', 'app.html'))).toBe(true);
 		expect(existsSync(at('src', 'app.d.ts'))).toBe(true);
@@ -449,31 +573,46 @@ describe('AC2 — the Nomination Slot is released by the fold, never by a stored
 			.replace(/^\s*\/\/.*$/gm, '');
 	}
 
-	it('names open_nominations in exactly one module — the claim table has one owner', () => {
-		const naming = sources().filter((path) =>
-			/open_nominations|OPEN_NOMINATIONS_TABLE/.test(code(path))
-		);
+	it.each([
+		['open_nominations', /open_nominations|OPEN_NOMINATIONS_TABLE/],
+		['nomination_slots', /nomination_slots|NOMINATION_SLOTS_TABLE/]
+	])('names %s in exactly one module — each claim table has one owner', (_table, pattern) => {
+		const naming = sources().filter((path) => pattern.test(code(path)));
 		expect(naming).toEqual(['src/lib/server/nomination.ts']);
 	});
 
-	it('issues exactly one INSERT and one DELETE against it, and never a SELECT', () => {
-		// "Nothing reads `open_nominations` to answer a question" (Story 2.2's
-		// Always, carried into 2.3): it is a write-side constraint, and the
+	it.each([
+		// The board seat: one INSERT, and TWO deletes since Story 3.7 — a close
+		// and a termination end an Auction alike, and both return the Player to
+		// the pool.
+		['OPEN_NOMINATIONS_TABLE', ['delete from', 'delete from', 'insert into']],
+		// The Nomination Slot: one INSERT, and exactly ONE delete, because only
+		// a win frees a Slot (FR-9 amended). A second delete here would be a
+		// second way to free one, and the termination path is precisely the one
+		// that must not have it.
+		['NOMINATION_SLOTS_TABLE', ['delete from', 'insert into']]
+	])('issues only INSERTs and DELETEs against %s, and never a SELECT', (table, expected) => {
+		// "Nothing reads the claim tables to answer a question" (Story 2.2's
+		// Always, carried into 2.3): they are write-side constraints, and the
 		// answer to "is this Slot held" is the fold over `auction_events`.
 		const statements = [
 			...code('src/lib/server/nomination.ts').matchAll(
-				/\b(select|insert into|update|delete from)\b[^;`]*?\$\{OPEN_NOMINATIONS_TABLE\}/gi
+				new RegExp(
+					String.raw`\b(select|insert into|update|delete from)\b[^;\`]*?\$\{${table}\}`,
+					'gi'
+				)
 			)
 		].map((match) => (match[1] ?? '').toLowerCase());
 
-		expect(statements.sort()).toEqual(['delete from', 'insert into']);
+		expect(statements.sort()).toEqual(expected);
 	});
 
 	it('folds exactly three events — two of them release, and nothing else does', () => {
-		// Story 3.7 added the third: an `AuctionTerminated` frees the same board
-		// seat and the same Nomination Slot a close frees, because the League
-		// Clock ran out with that Player still Awaiting an Opening Bid. There is
-		// still no fourth, and in particular no timer of any kind.
+		// Story 3.7 added the third: an `AuctionTerminated` frees the board seat
+		// a close frees, because the League Clock ran out with that Player still
+		// Awaiting an Opening Bid. It frees no Nomination Slot — since FR-8 was
+		// amended only a win does that, and a termination has no winner. There
+		// is still no fourth case, and in particular no timer of any kind.
 		const nominations = code('src/lib/core/projection/nominations.ts');
 		const cases = [...nominations.matchAll(/case\s+([A-Z_]+):/g)].map((match) => match[1]);
 

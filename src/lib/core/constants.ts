@@ -98,6 +98,29 @@ export const LIVENESS_TIMEOUT = 8 * 1000;
 export const ACTIVE_BENCH_SLOTS = 12;
 
 /**
+ * The Outstanding Bid Allowance: the ONE extra outstanding Bid a Team may
+ * hold beyond its Free Active/Bench Slots (FR-37, amended 2026-09-08).
+ *
+ * **It is not a thirteenth Slot.** `ACTIVE_BENCH_SLOTS` is unchanged and
+ * still hard; what widened is the BIDDING rule built on it, so a Manager
+ * with one free Slot may chase two Players at once instead of idling a day
+ * waiting on a close they cannot influence. The surplus commitment is taken
+ * back automatically at the Close that fills the Slot (FR-40) — which is why
+ * the allowance is safe, and why it is exactly one rather than a number.
+ *
+ * **It is a named constant rather than an inline `+ 1`** for the reason
+ * every figure in this product is: the slots gate adds it, the refusal
+ * wording quotes what it permits, and the row figure states the same count
+ * again. Three readings of one literal is three places for it to drift.
+ *
+ * **The allowance never applies without a free Slot to extend.** The gate
+ * tests that precondition BEFORE this arithmetic — see `evaluateSlots` —
+ * because `0 + 1 = 1` would otherwise admit a Bid that wins a thirteenth
+ * Player with no other Close available to cancel it (§10 example 30).
+ */
+export const OUTSTANDING_BID_ALLOWANCE = 1;
+
+/**
  * The `fantraxPlayerId` the persistent strip's baseline probe carries
  * (Story 4.2).
  *
@@ -155,7 +178,7 @@ export const EVENT_SCHEMA_VERSION = 1;
  * deleting events, a bad rules deploy cannot be rolled back by reverting
  * code alone.
  */
-export const CORE_VERSION = 1;
+export const CORE_VERSION = 2;
 
 /**
  * The single global write lock (AD-6). Every mutating transaction takes this
@@ -173,3 +196,65 @@ export const CORE_VERSION = 1;
  * a key anyone else picks.
  */
 export const GLOBAL_WRITE_LOCK_KEY = 0x4242534c00000001n;
+
+/**
+ * How often the Fantrax rosters may be read, at most (Story 7.9, FR-42).
+ *
+ * **This is a rate-limit courtesy to an undocumented third party, and it is
+ * NOT a freshness figure.** `FRESHNESS_WINDOW` and `STALE_WINDOW` above are
+ * chosen against how quickly a Manager should be told the app has lost the
+ * server; this one is chosen against how often it is decent to ask a service
+ * that never agreed to answer us at all. Nothing degrades when the interval
+ * passes without a read: the comparison runs at RENDER against the stored
+ * membership, so the surface is exactly as current as the last read, and it
+ * says when that was.
+ *
+ * **Half an hour, shortened from an hour on 2026-09-14** at the Commissioner's
+ * request, to halve the worst-case time a trade nobody reported goes unseen.
+ * The costs were weighed and are small at this spacing: twice the invocations
+ * is still noise beside the 10-second tick, and the read record roughly doubles
+ * to ~50MB a month — worth watching, because `fantrax_reads` has no retention
+ * and nothing prunes it. Shortening it further was declined: 15 minutes buys
+ * little on a fault whose remedy is a human recording a Trade, and quadruples
+ * the polling of an endpoint with no published rate limit and no recourse if it
+ * blocks us.
+ *
+ * It is an interval, never an instant: nothing here reads a clock (AD-3).
+ * `server/divergence.ts` enforces it from the last `fantrax_reads` row rather
+ * than from a timer, so a second invocation inside the interval is skipped
+ * however it arrives — a re-enabled cron job, a hand-called endpoint, two
+ * deployments. The cron schedule and this constant must agree, but this one
+ * BINDS: a cron firing more often is merely skipped, cheaply.
+ *
+ * Deliberately NOT on the 10-second tick. That pass closes Auctions under the
+ * global write lock, and hanging a stranger's latency off it would put a third
+ * party in the path of every close.
+ */
+export const DIVERGENCE_READ_INTERVAL = 30 * 60 * 1000;
+
+/**
+ * The share of the League a single comparison may touch before its
+ * plausibility guard trips (Story 7.9, FR-42). A quarter.
+ *
+ * **The DEFAULT, and the one constant in this file the shell may override.**
+ * Everything else here is a league rule that no environment variable edits
+ * (see this module's header). This is not a league rule: it is a tuning knob
+ * over a third party's behaviour, and FR-42 requires it changeable without a
+ * code change. So the default lives here, in the core, where the comparison
+ * that reads it lives — and `server/divergence.ts` may replace it from
+ * `$env/dynamic/private`, passing the effective value in as a PARAMETER.
+ * `core/rules/divergence.ts` never reads configuration and never reads this
+ * constant on its own behalf.
+ *
+ * A quarter rather than a half or a tenth: a real offseason day might see two
+ * or three Teams trade, which is a tenth of thirty and must not trip; nothing
+ * legitimate moves eight Teams at once between two consecutive reads, and a
+ * payload that says so is far more likely to be the wrong league id, the wrong
+ * period, or a Fantrax outage answering with somebody else's data.
+ *
+ * Shortening `DIVERGENCE_READ_INTERVAL` only ever makes this bar SAFER — less
+ * legitimate activity accumulates between reads, so a real trading day is
+ * further from the threshold, not nearer it. Lengthening it is the direction
+ * that would need this number revisited.
+ */
+export const DIVERGENCE_VOLUME_FRACTION = 0.25;

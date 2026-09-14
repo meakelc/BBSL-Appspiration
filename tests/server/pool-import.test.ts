@@ -97,20 +97,21 @@ function fakeGateway(options: {
 				return { rows: [] };
 			}
 			if (/^insert into import_staged_pool_players/i.test(sql)) {
-				// Batched: one statement per 500 Players, four bind parameters
-				// each (Story 9.7). It was one statement per row until a real
-				// ~1,470-Player pool took 65 seconds to stage against the hosted
-				// database — on its own, against a 10-second function budget. The
-				// params are unflattened here so the assertions below still read
-				// one Player at a time.
+				// Batched: one statement per 500 Players, five bind parameters
+				// each (Story 9.7; the fifth is `source_rank`, 9.8). It was one
+				// statement per row until a real ~1,470-Player pool took 65
+				// seconds to stage against the hosted database — on its own,
+				// against a 10-second function budget. The params are unflattened
+				// here so the assertions below still read one Player at a time.
 				order.push('insert-rows');
-				expect(params.length % 4, 'params do not divide into four-column rows').toBe(0);
-				for (let at = 0; at < params.length; at += 4) {
+				expect(params.length % 5, 'params do not divide into five-column rows').toBe(0);
+				for (let at = 0; at < params.length; at += 5) {
 					insertedRows.push({
 						fantrax_player_id: params[at],
 						player_name: params[at + 1],
 						positions: params[at + 2],
-						nba_team: params[at + 3]
+						nba_team: params[at + 3],
+						source_rank: params[at + 4]
 					});
 				}
 				// Eligibility is never in the INSERT — it takes the column default.
@@ -149,6 +150,37 @@ function fakeGateway(options: {
 	};
 }
 
+describe('stagePoolFile — the order the file states', () => {
+	it('ranks every Player by position in the file, unbroken across insert batches', async () => {
+		// The insert is batched at 500 Players (Story 9.7), and `source_rank`
+		// is the row's position in the WHOLE file — so a rank computed from
+		// the position within a batch would restart at 0 every 500 Players and
+		// silently reorder the nomination list into three interleaved runs. A
+		// 501-row file is the smallest one that can catch it; every fixture
+		// above is two rows, where a batch and a loop are indistinguishable.
+		const size = 501;
+		const rows = Array.from({ length: size }, (_, at) => `P${String(at)},Player ${String(at)},PG,LAL`);
+		const fake = fakeGateway();
+
+		const outcome = await stagePoolFile(fake.gateway, 'free-agents.csv', [HEADER, ...rows].join('\n'));
+
+		expect(outcome).toEqual({
+			kind: 'staged',
+			source: 'pool',
+			fileName: 'free-agents.csv',
+			rowCount: size
+		});
+		expect(fake.insertedRows.map((row) => row['source_rank'])).toEqual(
+			Array.from({ length: size }, (_, at) => at)
+		);
+		// And the rank belongs to the Player it was read beside, not merely to
+		// a position in a list that happens to be the same length.
+		expect(fake.insertedRows.map((row) => row['fantrax_player_id'])).toEqual(
+			Array.from({ length: size }, (_, at) => `P${String(at)}`)
+		);
+	});
+});
+
 describe('stagePoolFile — the happy path', () => {
 	it('parses, checks for conflicts, deletes+inserts+upserts, then commits', async () => {
 		const fake = fakeGateway();
@@ -170,9 +202,24 @@ describe('stagePoolFile — the happy path', () => {
 			'upsert-status',
 			'commit'
 		]);
+		// `source_rank` is the row's position in the FILE, so the ranks are 0
+		// and 1 in the order the CSV listed them — not a re-sort of anything
+		// this module decided (Story 9.8).
 		expect(fake.insertedRows).toEqual([
-			{ fantrax_player_id: 'P1', player_name: 'Alice', positions: 'PG', nba_team: 'LAL' },
-			{ fantrax_player_id: 'P2', player_name: 'Bob', positions: 'C', nba_team: 'BOS' }
+			{
+				fantrax_player_id: 'P1',
+				player_name: 'Alice',
+				positions: 'PG',
+				nba_team: 'LAL',
+				source_rank: 0
+			},
+			{
+				fantrax_player_id: 'P2',
+				player_name: 'Bob',
+				positions: 'C',
+				nba_team: 'BOS',
+				source_rank: 1
+			}
 		]);
 		expect(fake.upsertedSources).toEqual([
 			{

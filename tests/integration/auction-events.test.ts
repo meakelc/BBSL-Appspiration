@@ -439,13 +439,45 @@ describe.skipIf(!reachable)(SUITE_TITLE, () => {
 			);
 		}
 
+		/**
+		 * Spend the Team's Nomination Slot.
+		 *
+		 * Separate from `claim` because FR-9's amendment separated them:
+		 * `open_nominations` is keyed on the PLAYER and dies with the board
+		 * seat, while the Slot outlives it and moved to `nomination_slots`,
+		 * whose primary key on `team_id` IS the one-Slot rule.
+		 * `20260914000000_nomination_slot_released_on_win.sql` drops the old
+		 * `open_nominations_team_id_key` deliberately, so a test that writes
+		 * only the board seat no longer touches the Slot constraint at all.
+		 */
+		async function spendSlot(
+			client: Client,
+			fantraxPlayerId: string,
+			claimingTeamId: string,
+			appended: { seq: string; occurredAt: Date }
+		): Promise<void> {
+			await client.query(
+				`insert into public.nomination_slots
+					(team_id, fantrax_player_id, seq, occurred_at)
+				 values ($1, $2, $3, $4)`,
+				[claimingTeamId, fantraxPlayerId, appended.seq, appended.occurredAt]
+			);
+		}
+
 		// Each test in this block commits a claim of its own, and the two
 		// constraints under test are exactly what a leftover claim would trip.
 		// Without this, the Slot test dies on the PREVIOUS test's committed
 		// row before reaching the assertion it exists to make — a green-or-red
 		// verdict that depends on execution order rather than on the schema.
+		//
+		// Both tables are cleared, and `nomination_slots` especially: its row
+		// is keyed on the TEAM and is deleted only by a WIN, so it survives
+		// everything a board-seat cleanup would remove.
 		afterEach(async () => {
 			await owner.query('delete from public.open_nominations where team_id = any($1::uuid[])', [
+				[teamId, otherTeamId]
+			]);
+			await owner.query('delete from public.nomination_slots where team_id = any($1::uuid[])', [
 				[teamId, otherTeamId]
 			]);
 		});
@@ -512,7 +544,7 @@ describe.skipIf(!reachable)(SUITE_TITLE, () => {
 			}
 		});
 
-		it('lets a Team spend its Slot ONCE: a second Player raises 23505 on the team constraint', async () => {
+		it('lets a Team spend its Slot ONCE: a second Player raises 23505 on nomination_slots_pkey', async () => {
 			const firstPlayer = `slot-race-a-${Date.now()}`;
 			const secondPlayer = `slot-race-b-${Date.now()}`;
 			const client = new Client({ connectionString: LOCAL_DB_URL });
@@ -522,13 +554,18 @@ describe.skipIf(!reachable)(SUITE_TITLE, () => {
 				await client.query('begin');
 				const appendedFirst = await appendNomination(client, firstPlayer, 'Slot A', teamId);
 				await claim(client, firstPlayer, teamId, appendedFirst);
+				await spendSlot(client, firstPlayer, teamId, appendedFirst);
 				await client.query('commit');
 
+				// The second nomination is of a DIFFERENT Player, so the board
+				// seat is free and `claim` succeeds. The Slot is what refuses,
+				// which is the whole point of the two being separate tables.
 				await client.query('begin');
 				const appendedSecond = await appendNomination(client, secondPlayer, 'Slot B', teamId);
+				await claim(client, secondPlayer, teamId, appendedSecond);
 				let thrown: unknown = null;
 				try {
-					await claim(client, secondPlayer, teamId, appendedSecond);
+					await spendSlot(client, secondPlayer, teamId, appendedSecond);
 				} catch (error) {
 					thrown = error;
 				}

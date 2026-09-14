@@ -24,16 +24,20 @@ import type { Money } from '../src/lib/core/money.ts';
 import { INITIAL_AUCTIONS, auctionsReducer, BID_PLACED_EVENT } from '../src/lib/core/projection/auctions.ts';
 import { fold } from '../src/lib/core/projection/fold.ts';
 import type { LeaguePhase } from '../src/lib/core/projection/phase.ts';
-import { teamMoneyStateFor } from '../src/lib/core/rules/bidding.ts';
+import { outstandingBidFiguresFor, teamMoneyStateFor } from '../src/lib/core/rules/bidding.ts';
 import type { TeamMoneyState } from '../src/lib/core/rules/bidding.ts';
 import {
 	STRIP_REGION_LABEL,
 	STRIP_SHEET_LABEL,
 	baselineCapOutcome,
 	baselineMaximumBid,
+	contentionEntriesSentence,
+	outstandingBidLines,
+	outstandingBidsSentence,
 	rosterCountSentence,
 	stripPresent,
-	stripShowsMaximumBid
+	stripShowsMaximumBid,
+	stripShowsOutstandingBids
 } from '../src/lib/core/strip.ts';
 import type { AppendedEvent } from '../src/lib/core/types.ts';
 import { loadStripTeam } from '../src/lib/server/strip.ts';
@@ -68,8 +72,8 @@ function stripComments(source: string): string {
 const STRIP_MARKUP = stripComments(STRIP);
 const LAYOUT_CODE = stripComments(LAYOUT);
 const LAYOUT_SERVER_CODE = stripComments(LAYOUT_SERVER);
-const CORE_STRIP_CODE = stripComments(CORE_STRIP);
-const SERVER_STRIP_CODE = stripComments(SERVER_STRIP);
+const CORE_STRIP_MARKUP = stripComments(CORE_STRIP);
+const SERVER_STRIP_MARKUP = stripComments(SERVER_STRIP);
 const GLOBAL_CSS_CODE = stripComments(GLOBAL_CSS);
 const TOKENS_CSS_CODE = stripComments(TOKENS_CSS);
 
@@ -138,6 +142,32 @@ describe('the phase table — one place, every row of the matrix', () => {
 		expect(stripShowsMaximumBid('Archived')).toBe(false);
 		expect(stripShowsMaximumBid('Setup')).toBe(false);
 	});
+
+	it('states the bids figure only in the Auction Phase', () => {
+		// Outstanding Bids against the allowance is a figure about placing a
+		// Bid, and outside the Auction Phase no Bid is accepted at any amount
+		// — so `0 of 3 bids` in Archived would state something about
+		// outstanding Bids in a phase where none can exist. The Roster Count
+		// beside it stays: a Roster Count is true in every phase that has a
+		// roster, which is what "the Roster Count alone" means.
+		expect(stripShowsOutstandingBids('Auction')).toBe(true);
+		expect(stripShowsOutstandingBids('Contract Assignment')).toBe(false);
+		expect(stripShowsOutstandingBids('Archived')).toBe(false);
+		// Setup is unchanged and is decided one level up: no strip renders
+		// there at all, so this predicate is never reached.
+		expect(stripShowsOutstandingBids('Setup')).toBe(false);
+		expect(stripPresent('Setup')).toBe(false);
+	});
+
+	it('is its OWN predicate, never the money half read a second time', () => {
+		// The two agree today and that is a coincidence of the rules rather
+		// than a shared meaning: `stripShowsMaximumBid` is named for the money
+		// half and is where Story 6.1's Contract Assignment figure would land.
+		// Two declarations, and the surface calls the capacity one.
+		expect(CORE_STRIP.match(/^export function stripShowsOutstandingBids/gm)).toHaveLength(1);
+		expect(STRIP_MARKUP).toContain('stripShowsOutstandingBids(phase)');
+		expect(STRIP_MARKUP.match(/stripShowsMaximumBid\(/g)).toHaveLength(1);
+	});
 });
 
 // --- The Roster Count sentence ---------------------------------------------
@@ -173,7 +203,7 @@ describe('the Roster Count sentence', () => {
 
 	it('is built from the constant, so the twelve cannot be spelled twice', () => {
 		expect(CORE_STRIP).toContain('ACTIVE_BENCH_SLOTS');
-		expect(CORE_STRIP_CODE).not.toMatch(/of 12/);
+		expect(CORE_STRIP_MARKUP).not.toMatch(/of 12/);
 	});
 });
 
@@ -254,8 +284,8 @@ describe('the baseline Maximum Bid — evaluate() output, never a stored figure'
 		// figure, because the figure is arithmetic and not permission.
 		const full = teamWith({ rosterCount: ACTIVE_BENCH_SLOTS });
 		expect(baselineMaximumBid(full, 'Auction', NOW)).not.toBeNull();
-		expect(CORE_STRIP_CODE).not.toContain('allGatesPassed');
-		expect(CORE_STRIP_CODE).not.toMatch(/\.passed\b/);
+		expect(CORE_STRIP_MARKUP).not.toContain('allGatesPassed');
+		expect(CORE_STRIP_MARKUP).not.toMatch(/\.passed\b/);
 	});
 
 	it('carries a named probe id rather than a literal or an empty string', () => {
@@ -295,9 +325,9 @@ describe('the baseline Maximum Bid — evaluate() output, never a stored figure'
 		// The refactor's whole point: the probe is CALLED from one place — the
 		// declaration is the other match — and `baselineMaximumBid` reaches it
 		// through `baselineCapOutcome`.
-		expect(CORE_STRIP_CODE.match(/evaluate\(state, probeFor\(\), now\)/g)).toHaveLength(1);
-		expect(CORE_STRIP_CODE).toContain('baselineCapOutcome(team, phase, now).maximumBid');
-		expect(CORE_STRIP_CODE.match(/bidStateFor\(null, team, false, phase\)/g)).toHaveLength(1);
+		expect(CORE_STRIP_MARKUP.match(/evaluate\(state, probeFor\(\), now\)/g)).toHaveLength(1);
+		expect(CORE_STRIP_MARKUP).toContain('baselineCapOutcome(team, phase, now).maximumBid');
+		expect(CORE_STRIP_MARKUP.match(/bidStateFor\(null, team, false, phase\)/g)).toHaveLength(1);
 	});
 });
 
@@ -426,14 +456,48 @@ describe('PersistentStrip.svelte — the surface, asserted against its source', 
 		expect(STRIP).toContain('position: static');
 	});
 
+	it('pins to the TOP on a phone, because the bottom edge belongs to the nav bar', () => {
+		// The strip held the bottom edge until `MobileNav.svelte` took it. Two
+		// fixed elements at one edge would cost 112px of a phone's height, and
+		// of the two it is the five-button bar that earns the thumb's edge —
+		// the strip is read, not pressed for its figures.
+		//
+		// Asserting the declaration inside `.strip` rather than anywhere in
+		// the file, because `.mobile-nav`'s own `bottom: 0` is the correct
+		// value on the correct element and a file-wide match would accept it.
+		const strip = /\.strip\s*\{[^}]*\}/.exec(STRIP)?.[0] ?? '';
+		expect(strip).toContain('top: 0');
+		expect(strip, 'the strip is pinned to the edge the nav bar occupies').not.toMatch(
+			/\sbottom:/
+		);
+	});
+
 	it('keeps its 1px border inside the height the layout reserves for it', () => {
 		// `global.css` reserves exactly `--strip-height`. A border added on
 		// TOP of a `min-height` of the same token occupies one pixel more than
-		// was reserved, so the strip covers the last row of the page by that
-		// much — the one thing the reservation exists to prevent.
+		// was reserved, so the strip covers a row of the page by that much —
+		// the one thing the reservation exists to prevent.
+		//
+		// This test used to assert `box-sizing: border-box` on `.strip` and
+		// stop there, and that assertion passed for a year while the strip
+		// stood at 53px. `box-sizing` governs an element's OWN specified
+		// height; `.strip` specifies none, because the `min-height` is on
+		// `.strip-summary`, a child it cannot reach. The height is where the
+		// subtraction has to happen, so that is what is asserted now.
 		const strip = /\.strip\s*\{[^}]*\}/.exec(STRIP)?.[0] ?? '';
-		expect(strip).toContain('border-top: var(--border-width)');
+		// The rule faces the page, and the page is BELOW the strip at both
+		// widths now, so the border is on the bottom and there is no longer a
+		// top-pinned and a bottom-pinned case to keep in step.
+		expect(strip).toContain('border-bottom: var(--border-width)');
 		expect(strip).toContain('box-sizing: border-box');
+		// `.strip` sets no height of its own — if it ever does, this test is
+		// asserting the wrong element and should be rewritten, not deleted.
+		expect(strip, 'the strip now sizes itself; move the subtraction').not.toMatch(
+			/\s(min-)?height:/
+		);
+
+		const summary = /\.strip-summary\s*\{[^}]*\}/.exec(STRIP)?.[0] ?? '';
+		expect(summary).toContain('min-height: calc(var(--strip-height) - var(--border-width))');
 	});
 
 	it('states one line only, so it cannot wrap past the room reserved for it', () => {
@@ -639,8 +703,8 @@ describe('loadStripTeam — one read, facts only, and it cannot 500 a page', () 
 
 	it('narrows through the core\'s one teamMoneyStateFor and derives no money itself', () => {
 		expect(SERVER_STRIP).toContain('teamMoneyStateFor');
-		expect(SERVER_STRIP_CODE).not.toContain('maximumBid');
-		expect(SERVER_STRIP_CODE).not.toContain('subtractMoney');
+		expect(SERVER_STRIP_MARKUP).not.toContain('maximumBid');
+		expect(SERVER_STRIP_MARKUP).not.toContain('subtractMoney');
 	});
 
 	it('excludes no Auction — the probe id is what makes the figure the baseline', () => {
@@ -659,17 +723,33 @@ describe('loadStripTeam — one read, facts only, and it cannot 500 a page', () 
 // --- The bottom room --------------------------------------------------------
 
 describe('the strip never covers the last control', () => {
-	it('reserves --strip-height of bottom room on mobile and releases it at 640px', () => {
-		expect(GLOBAL_CSS).toContain('padding-bottom: var(--strip-height)');
+	it('reserves --strip-height of TOP room on mobile and releases it at 640px', () => {
+		// The strip is pinned to the top now, so the room it needs is above
+		// the page and not below it. Reserved at the bottom instead, the page
+		// would begin underneath the strip — the first heading of every
+		// surface covered — while 52px of nothing sat at the foot.
+		expect(GLOBAL_CSS).toContain('padding-top: var(--strip-height)');
 		expect(GLOBAL_CSS).toContain('@media (min-width: 640px)');
-		expect(GLOBAL_CSS).toContain('padding-bottom: 0');
+		expect(GLOBAL_CSS).toContain('padding-top: 0');
 		expect(GLOBAL_CSS_CODE).not.toContain('52px');
 	});
 
-	it('reserves that room only where the strip actually mounts', () => {
+	it('reserves the bottom room for the nav bar instead, on its own gate', () => {
+		// The bottom edge is the mobile destination bar's now, and it is a
+		// different height and a different mount condition — a Manager can
+		// have the strip without the bar. One `:has()` gate each, never one
+		// shared between them.
+		expect(GLOBAL_CSS).toContain('padding-bottom: var(--nav-height)');
+		expect(GLOBAL_CSS).toContain('padding-bottom: 0');
+		expect(GLOBAL_CSS_CODE).toContain('body:has(.mobile-nav)');
+		expect(GLOBAL_CSS_CODE).not.toContain('60px');
+	});
+
+	it('reserves each room only where that element actually mounts', () => {
 		// The strip does not mount for a signed-out visitor, a Manager bound
-		// to no Team, or in Setup. Reserving the room unconditionally holds
-		// 52px of dead space at the bottom of every one of those pages for
+		// to no Team, or in Setup; the nav bar does not mount for a viewer
+		// with no listed destination of their own. Reserving either room
+		// unconditionally holds dead space on every one of those pages for
 		// something that is not there.
 		expect(GLOBAL_CSS_CODE).toContain('body:has(.strip)');
 		expect(GLOBAL_CSS_CODE).not.toMatch(/\nbody \{\s*padding-bottom/);
@@ -683,5 +763,102 @@ describe('the sheet names itself from the core', () => {
 		expect(STRIP_SHEET_LABEL).toBe('Destinations');
 		const declarations = CORE_STRIP.match(/^export const STRIP_SHEET_LABEL/gm) ?? [];
 		expect(declarations).toHaveLength(1);
+	});
+});
+
+
+// --- The bids figure (Story 10.6) -------------------------------------------
+
+describe('the bids sentence and the lottery-entries sentence', () => {
+	const lead = (fantraxPlayerId: string, amount: number, isContentionEntry = false) => ({
+		fantraxPlayerId,
+		playerName: fantraxPlayerId,
+		amount: parseMoney(amount),
+		isContentionEntry
+	});
+
+	const team = (input: {
+		rosterCount: number;
+		leading?: readonly ReturnType<typeof lead>[];
+		eligibleLeading?: readonly ReturnType<typeof lead>[];
+	}): TeamMoneyState => ({
+		capSpace: parseMoney(SALARY_CAP),
+		rosterCount: input.rosterCount,
+		leading: input.leading ?? [],
+		eligibleLeading: input.eligibleLeading ?? [],
+		minorLeagueOccupied: 0
+	});
+
+	it('states the parity row exactly as the matrix words it', () => {
+		const lines = outstandingBidLines(
+			team({ rosterCount: 9, leading: [lead('p-1', 3_000_000), lead('p-2', 4_000_000)] })
+		);
+
+		expect(lines.bids).toBe('2 of 4 bids');
+		// The strip's two segments, in the order the strip renders them.
+		expect(rosterCountSentence(9)).toBe(`Roster 9 of ${String(ACTIVE_BENCH_SLOTS)}`);
+	});
+
+	it('never sums lottery entries into the bids figure', () => {
+		const lines = outstandingBidLines(
+			team({
+				rosterCount: 10,
+				leading: [lead('p-1', 3_000_000), lead('lot-1', 1_000_000, true)],
+				eligibleLeading: [lead('lot-2', 1_000_000, true)]
+			})
+		);
+
+		expect(lines.bids).toBe('1 of 3 bids');
+		expect(lines.entries).toBe('2 lottery entries');
+	});
+
+	it('has no ceiling half on the entries sentence, because FR-18 imposes none', () => {
+		const figures = outstandingBidFiguresFor(
+			team({ rosterCount: 9, leading: [lead('lot-1', 1_000_000, true)] })
+		);
+
+		expect(contentionEntriesSentence(figures)).toBe('1 lottery entry');
+		expect(contentionEntriesSentence(figures)).not.toContain(' of ');
+	});
+
+	it('is absent outside the Auction Phase, with the Roster Count left standing', () => {
+		// The strip is inherited by every screen, so a figure about an act
+		// nobody can perform would be a false statement on all of them. The
+		// segment is gated in the surface on the core's predicate; the Roster
+		// Count segment is not gated at all.
+		expect(STRIP_MARKUP).toContain(
+			'stripShowsOutstandingBids(phase) ? outstandingBidLines(team).bids : null'
+		);
+		expect(STRIP_MARKUP).toContain('{#if bids !== null}');
+		// The Roster Count rides no condition.
+		expect(STRIP_MARKUP).toContain('<span class="strip-roster">{roster}</span>');
+		expect(STRIP_MARKUP).not.toMatch(/{#if[^}]*}\s*<span class="strip-roster">/);
+	});
+
+	it('says nothing at all for a viewer bound to no Team — never 0 of 0', () => {
+		expect(outstandingBidsSentence(null)).toBeNull();
+		expect(contentionEntriesSentence(null)).toBeNull();
+		const lines = outstandingBidLines(null);
+		expect(lines.figures).toBeNull();
+		expect(lines.bids).toBeNull();
+		expect(lines.entries).toBeNull();
+	});
+
+	it('gives the figure no colour, badge or warning treatment at parity (UX-DR35)', () => {
+		// At parity the figure alone is the signal. The strip renders the
+		// sentence into one plain span behind the `·` it already uses, and
+		// nothing conditions a class on the count.
+		expect(outstandingBidLines(team({ rosterCount: 11, leading: [lead('p-1', 3_000_000), lead('p-2', 3_000_000)] })).bids).toBe(
+			'2 of 2 bids'
+		);
+		expect(STRIP).toContain('<span class="strip-bids">{bids}</span>');
+		expect(STRIP_MARKUP).not.toMatch(/class:.*bids/);
+		expect(STRIP_MARKUP).not.toContain('color-warning');
+	});
+
+	it('words nothing in the surface — the strip prints the core sentence', () => {
+		expect(STRIP_MARKUP).toContain('outstandingBidLines(team).bids');
+		expect(STRIP_MARKUP).not.toContain(' of ');
+		expect(STRIP_MARKUP).not.toContain('bids`');
 	});
 });

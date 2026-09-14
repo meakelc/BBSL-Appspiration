@@ -24,14 +24,15 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { BID_PLACED_EVENT } from '../../src/lib/core/projection/auctions.ts';
+import { CORE_VERSION } from '../../src/lib/core/constants.ts';
+import { BID_CANCELLED_EVENT, BID_PLACED_EVENT } from '../../src/lib/core/projection/auctions.ts';
 import { MINOR_LEAGUE_ELIGIBILITY_SET } from '../../src/lib/core/projection/eligibility.ts';
 import {
 	AUCTION_CLOSED_EVENT,
 	NOMINATION_PLACED_EVENT
 } from '../../src/lib/core/projection/nominations.ts';
 import { decideClose } from '../../src/lib/core/rules/close.ts';
-import type { AuctionClosedPayload } from '../../src/lib/core/rules/close.ts';
+import type { AuctionClosedPayload, BidCancelledPayload } from '../../src/lib/core/rules/close.ts';
 import { closeAuction, loadCloseState } from '../../src/lib/server/close.ts';
 import { runTick } from '../../src/lib/server/sweep.ts';
 import type {
@@ -67,7 +68,10 @@ function logEvent(type: string, payload: unknown): QueryResultRow {
 		seq: nextSeq,
 		occurred_at: new Date('2026-08-26T09:00:00.000Z'),
 		schema_version: 1,
-		core_version: 1,
+		// This tick's own version: the sweep fail-stops on a mismatch
+		// (AD-20), so a fixture pinned to a literal would break on the next
+		// bump for a reason that has nothing to do with sequencing.
+		core_version: CORE_VERSION,
 		manager_id: 'm-m',
 		team_id: 't-m',
 		event_type: type,
@@ -120,7 +124,7 @@ function startingLog(): QueryResultRow[] {
  */
 const EVERY_LEAGUE_TEAM: readonly string[] = ['t-one', 't-two'];
 
-function fakeGateway(seed: QueryResultRow[]) {
+function fakeGateway(seed: QueryResultRow[], roster: QueryResultRow[] = ROSTER) {
 	const order: string[] = [];
 	const appendedEvents: QueryResultRow[] = [];
 	const heartbeats: unknown[][] = [];
@@ -158,7 +162,7 @@ function fakeGateway(seed: QueryResultRow[]) {
 			// view's roster listing needs from the same one read.
 			if (/from team_rosters/i.test(sql)) {
 				order.push('read-roster');
-				return { rows: ROSTER };
+				return { rows: roster };
 			}
 			if (/^insert into auction_events/i.test(sql)) {
 				order.push('append-event');
@@ -181,6 +185,13 @@ function fakeGateway(seed: QueryResultRow[]) {
 			}
 			if (/^delete from open_nominations/i.test(sql)) {
 				order.push('release-claim');
+				return { rows: [] };
+			}
+			// The Slot claim, keyed on the winning Team (FR-9 amended): a close
+			// frees the board seat and the WINNER's Nomination Slot, and the two
+			// are separate deletes because they key on different things.
+			if (/^delete from nomination_slots/i.test(sql)) {
+				order.push('release-slot');
 				return { rows: [] };
 			}
 			if (/^insert into tick_heartbeats/i.test(sql)) {
@@ -293,17 +304,27 @@ describe('the sequential sweep — AD-11 through the real closeAuction', () => {
 			'begin',
 			'lock',
 			'read-log',
+			// TWO roster reads since Story 10.4: the WINNER's, then ONE batched
+			// read over every Team holding a Bid — the candidates FR-40's
+			// restorer re-validates.
+			'read-roster',
 			'read-roster',
 			'append-event',
 			'release-claim',
+			// The winner's Nomination Slot, freed by the win itself (FR-8
+			// amended) — a second delete, keyed on the Team rather than the
+			// Player, inside the same transaction.
+			'release-slot',
 			'commit',
 			// The second, which re-folds a log that now contains the first.
 			'begin',
 			'lock',
 			'read-log',
 			'read-roster',
+			'read-roster',
 			'append-event',
 			'release-claim',
+			'release-slot',
 			'commit',
 			// One heartbeat, last.
 			'heartbeat'
@@ -413,5 +434,106 @@ describe('the BATCH shape — one snapshot, two decisions — gets it wrong', ()
 		// The two shapes produce different contracts for the same Auction. Only
 		// one of them can be right, and AD-11 says which.
 		expect(sequentialSecond?.placement).not.toBe(batchedSecond.placement);
+	});
+});
+
+
+// --- AD-11 with a cascade in it (Story 10.3, FR-40) -----------------------
+
+/**
+ * Team M with ELEVEN Active/Bench contracts: Free Active/Bench Slots 1, and
+ * one win takes it to 0. The roster above is deliberately unusable here.
+ */
+const FULL_ROSTER: QueryResultRow[] = Array.from({ length: 11 }, () => ({
+	cap_hit: '1000000',
+	roster_slot_kind: 'active_bench'
+}));
+
+/**
+ * The same two overdue Auctions, both NON-eligible and both led by Team M —
+ * so the first win fills its last Slot and FR-40 has to take the second back.
+ *
+ * A different nominating Team for each: `nominationsReducer` holds one
+ * Nomination Slot per Team.
+ */
+function twoLeadsLog(): QueryResultRow[] {
+	nextSeq = 0;
+	const rows: QueryResultRow[] = [];
+	for (const [index, auction] of [FIRST, SECOND].entries()) {
+		rows.push(
+			logEvent(NOMINATION_PLACED_EVENT, {
+				fantraxPlayerId: auction.id,
+				playerName: `Player ${auction.id}`,
+				teamId: `t-n${String(index)}`,
+				teamName: `Team N${String(index)}`,
+				managerId: `m-n${String(index)}`
+			})
+		);
+		rows.push(
+			logEvent(BID_PLACED_EVENT, {
+				fantraxPlayerId: auction.id,
+				teamId: 't-m',
+				teamName: 'Team M',
+				managerId: 'm-m',
+				amount: auction.amount,
+				closesAt: auction.closesAt
+			})
+		);
+	}
+	return rows;
+}
+
+describe('the sequential sweep — a cancellation commits before the next close', () => {
+	it('closes the FIRST, cancels the Bid on the SECOND, and does not award it', async () => {
+		// AD-11 is now load-bearing rather than merely correct. Team M's win
+		// on `p-9` fills its twelfth Slot, so the cascade cancels its Bid on
+		// `p-2` inside that same transaction — and `p-2` is then offered to a
+		// close with no Leading Bidder and refuses. A batched fold, closing
+		// both against one snapshot, would have handed Team M a thirteenth
+		// Player, which is the exact invariant the roster ceiling exists to
+		// protect.
+		const harness = fakeGateway(twoLeadsLog(), FULL_ROSTER);
+
+		const summary = await runTick({
+			gateway: harness.gateway,
+			closeOne: (fantraxPlayerId) => closeAuction(harness.gateway, fantraxPlayerId)
+		});
+
+		expect(summary.closed).toEqual([FIRST.id]);
+		expect(summary.failures.map((failure) => failure.fantraxPlayerId)).toEqual([SECOND.id]);
+		expect(summary.failures[0]?.message).toMatch(/no Leading Bidder/);
+
+		// One close and one cancellation, in that order, and no second close.
+		expect(harness.appendedEvents.map((row) => row['event_type'])).toEqual([
+			AUCTION_CLOSED_EVENT,
+			BID_CANCELLED_EVENT
+		]);
+		const cancelled = harness.appendedEvents[1]?.['payload'] as BidCancelledPayload;
+		expect(cancelled.fantraxPlayerId).toBe(SECOND.id);
+		expect(cancelled.causeFantraxPlayerId).toBe(FIRST.id);
+		expect(cancelled.amount).toBe(SECOND.amount);
+	});
+
+	it('commits the cancellation inside the FIRST close’s own transaction', async () => {
+		// Both appends land between one `begin` and one `commit`: the
+		// cancellation is not a second transaction that could be lost while
+		// the close it compensates for stood.
+		const harness = fakeGateway(twoLeadsLog(), FULL_ROSTER);
+		await runTick({
+			gateway: harness.gateway,
+			closeOne: (fantraxPlayerId) => closeAuction(harness.gateway, fantraxPlayerId)
+		});
+
+		const firstBegin = harness.order.indexOf('begin');
+		const firstCommit = harness.order.indexOf('commit');
+		const appends = harness.order
+			.map((statement, index) => ({ statement, index }))
+			.filter((entry) => entry.statement === 'append-event');
+
+		expect(appends).toHaveLength(2);
+		for (const append of appends) {
+			expect(append.index).toBeGreaterThan(firstBegin);
+			expect(append.index).toBeLessThan(firstCommit);
+		}
 	});
 });

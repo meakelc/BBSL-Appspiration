@@ -39,8 +39,8 @@ const TEAM_C: TeamMoneyState = {
 	capSpace: parseMoney(12_000_000),
 	rosterCount: 9,
 	leading: [
-		{ fantraxPlayerId: 'p-lead-a', playerName: 'Lead A', amount: parseMoney(3_000_000) },
-		{ fantraxPlayerId: 'p-lead-b', playerName: 'Lead B', amount: parseMoney(2_000_000) }
+		{ fantraxPlayerId: 'p-lead-a', playerName: 'Lead A', amount: parseMoney(3_000_000), isContentionEntry: false },
+		{ fantraxPlayerId: 'p-lead-b', playerName: 'Lead B', amount: parseMoney(2_000_000), isContentionEntry: false }
 	],
 	// Story 2.8: neither lead is Minor League Eligible and no Minor League
 	// Slot is occupied, so the exposure arithmetic is inert here — which is

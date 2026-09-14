@@ -27,6 +27,8 @@ type StagedRoster = {
 	capHit?: number;
 	slotKind?: string;
 	years?: number;
+	/** The draft round of a rookie-scale Contract, or absent for an ordinary one. */
+	rookieScaleRound?: number | null;
 };
 
 type Team = { id: string; name: string; status: string | null };
@@ -97,7 +99,8 @@ function fakeGateway(options: {
 						player_name: row.playerName ?? 'Alice',
 						cap_hit: String(row.capHit ?? 1_000_000),
 						roster_slot_kind: row.slotKind ?? 'active_bench',
-						contract_years_remaining: row.years ?? 1
+						contract_years_remaining: row.years ?? 1,
+						rookie_scale_round: row.rookieScaleRound ?? null
 					}))
 				};
 			}
@@ -113,11 +116,15 @@ function fakeGateway(options: {
 			if (/from import_staged_pool_players/i.test(sql)) {
 				order.push('read-staged-pool');
 				return {
-					rows: pool.map((player) => ({
+					// `source_rank` is the row's position in the supplied CSV
+					// (Story 9.8). The fixture's own array order IS that file
+					// order, so the index is the honest stand-in.
+					rows: pool.map((player, rank) => ({
 						fantrax_player_id: player.id,
 						player_name: player.name ?? 'Bob',
 						positions: player.positions ?? 'PG',
-						nba_team: player.nbaTeam ?? 'LAL'
+						nba_team: player.nbaTeam ?? 'LAL',
+						source_rank: rank
 					}))
 				};
 			}
@@ -154,34 +161,41 @@ function fakeGateway(options: {
 				return { rows: [] };
 			}
 			if (/^insert into team_rosters/i.test(sql)) {
-				// Batched: one statement per 500 rows, six bind parameters each
-				// (Story 9.7). It was one statement per row until a real promotion
-				// — ~300 rostered Players plus ~1,470 Free Agents — exceeded
-				// Netlify's 10-second function budget. Unflattened here so every
-				// assertion below still reads one row at a time.
+				// Batched: one statement per 500 rows, SEVEN bind parameters each
+				// (Story 9.7; the seventh is Story 7.8's `rookie_scale_round`).
+				// It was one statement per row until a real promotion — ~300
+				// rostered Players plus ~1,470 Free Agents — exceeded Netlify's
+				// 10-second function budget. Unflattened here so every assertion
+				// below still reads one row at a time.
 				order.push('insert-live-roster');
-				expect(params.length % 6, 'roster params do not divide into six-column rows').toBe(0);
-				for (let at = 0; at < params.length; at += 6) {
+				expect(params.length % 7, 'roster params do not divide into seven-column rows').toBe(
+					0
+				);
+				for (let at = 0; at < params.length; at += 7) {
 					live.rosters.push({
 						team_id: params[at],
 						fantrax_player_id: params[at + 1],
 						player_name: params[at + 2],
 						cap_hit: params[at + 3],
 						roster_slot_kind: params[at + 4],
-						contract_years_remaining: params[at + 5]
+						contract_years_remaining: params[at + 5],
+						rookie_scale_round: params[at + 6]
 					});
 				}
 				return { rows: [] };
 			}
 			if (/^insert into free_agent_players/i.test(sql)) {
 				order.push('insert-live-free-agent');
-				expect(params.length % 4, 'pool params do not divide into four-column rows').toBe(0);
-				for (let at = 0; at < params.length; at += 4) {
+				expect(params.length % 5, 'pool params do not divide into five-column rows').toBe(0);
+				for (let at = 0; at < params.length; at += 5) {
 				live.freeAgents.push({
 					fantrax_player_id: params[at],
 					player_name: params[at + 1],
 					positions: params[at + 2],
 					nba_team: params[at + 3],
+					// The file's own order, carried from staging rather than
+					// recomputed from the insert position (Story 9.8).
+					source_rank: params[at + 4],
 					// The column's own `false` default: promotion does not set this
 					// at insert. `applyEligibilityProjection` below is the one
 					// writer, and it runs inside this same transaction (Story 1.10).
@@ -441,6 +455,38 @@ describe('promoteImport — the refusals, every one re-derived inside the transa
 		expect(rejection.refusal.kind).toBe('outstanding');
 		if (rejection.refusal.kind !== 'outstanding') return;
 		expect(rejection.refusal.sourceNames).toEqual([POOL_SOURCE_LABEL]);
+	});
+
+	it('carries the rookie-scale round through to `team_rosters`', async () => {
+		// Story 7.8, FR-43: the designation the adapter parses off a `2RK31`
+		// cell must survive staging AND promotion, because the Drop's exception
+		// reads it off the live table. Before this story `staged-roster-row.ts`
+		// hardcoded `null` here and the exception was unreachable.
+		const teams = thirtyTeams();
+		const rosters = rosterFor(teams, 1);
+		rosters.push({
+			teamId: 't-1',
+			fantraxPlayerId: 't-1-rookie',
+			years: 5,
+			rookieScaleRound: 2
+		});
+		const harness = fakeGateway({
+			teams,
+			rosters,
+			poolStatus: 'staged',
+			pool: [{ id: 'fa-1' }]
+		});
+
+		const outcome = await promoteImport(harness.gateway, ACTOR);
+		expect(outcome.kind).toBe('accepted');
+
+		const promoted = harness.live.rosters.find((row) => row['fantrax_player_id'] === 't-1-rookie');
+		expect(promoted?.['rookie_scale_round']).toBe(2);
+		expect(promoted?.['contract_years_remaining']).toBe(5);
+		// An ordinary Contract promotes with no round at all — `null` is a real
+		// answer here and never a `0`.
+		const ordinary = harness.live.rosters.find((row) => row['fantrax_player_id'] === 't-1-p0');
+		expect(ordinary?.['rookie_scale_round']).toBeNull();
 	});
 
 	it('refuses a slot-ceiling breach, naming the Team and stating the arithmetic', async () => {

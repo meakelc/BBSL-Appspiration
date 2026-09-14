@@ -23,6 +23,13 @@
  * global lock, so a page that rendered a Player as available cannot race a
  * second nomination past them.
  *
+ * **The Commissioner exemption is resolved here, from the session** (Story
+ * 9.8). It is not an access decision and does not make this a Commissioner
+ * surface: every Manager still nominates here, and a Commissioner is simply
+ * an actor whose nomination spends no Nomination Slot. `actorFrom` reads it
+ * off `managers.is_commissioner` through the session (AD-15); the gate that
+ * acts on it is `refuseNomination`, in the pure core, under the lock.
+ *
  * **The device class is read here and only here.** `request.headers` is a
  * transport fact; the pure core classifies the string and never sees the
  * header, and the classification rides the event envelope rather than the
@@ -37,6 +44,7 @@ import { fail } from '@sveltejs/kit';
 
 import { classifyDeviceClass } from '$lib/core/device-class.ts';
 import {
+	commissionerConsequenceSentence,
 	nominationConsequenceSentence,
 	nominationRefusalDetail
 } from '$lib/core/rules/nomination.ts';
@@ -63,7 +71,16 @@ function actorFrom(session: App.Locals['session']) {
 	return {
 		managerId: manager.id,
 		teamId: manager.teamId,
-		teamName: manager.teamName ?? manager.teamId
+		teamName: manager.teamName ?? manager.teamId,
+		// **The Commissioner exemption resolves HERE and only here** (Story
+		// 9.8). `managers.is_commissioner`, through the session `hooks.server.ts`
+		// already resolved (AD-15) — never from a form field, and never from a
+		// Discord role. A Commissioner spends no Nomination Slot, so
+		// `refuseNomination` never reaches its `slot_in_use` gate for them and
+		// they may hold as many open nominations as the board needs. This is
+		// NOT `requireCommissioner`: the route stays open to every Manager, and
+		// the flag decides one rule rather than access.
+		spendsSlot: !manager.isCommissioner
 	};
 }
 
@@ -71,7 +88,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requireLiveDestination(locals.session, locals.phase.name, NOMINATE_DESTINATION_ID);
 
 	const actor = actorFrom(locals.session);
-	const pool = await loadNominatablePool(writeGateway(), actor?.teamId ?? null);
+	const pool = await loadNominatablePool(
+		writeGateway(),
+		actor?.teamId ?? null,
+		actor?.spendsSlot ?? true
+	);
 
 	return {
 		phase: locals.phase,
@@ -101,7 +122,7 @@ export const actions: Actions = {
 		}
 
 		if (form.get('confirm') !== 'yes') {
-			// A nomination holds the Team's only Slot until that Auction
+			// A nomination puts a Player on the Bid Board until their Auction
 			// closes, so it is never inferred from a submit. No transaction is
 			// opened for an unconfirmed request.
 			return fail(400, {
@@ -139,9 +160,16 @@ export const actions: Actions = {
 		const payload = (appended?.payload ?? null) as { playerName?: string } | null;
 		const playerName = payload?.playerName ?? null;
 
+		// The receipt states the consequence that actually happened. A
+		// Commissioner spent no Slot, so telling them one is held would be the
+		// same falsehood in the past tense (Story 9.8).
+		const consequence = actor.spendsSlot
+			? nominationConsequenceSentence(playerName)
+			: commissionerConsequenceSentence(playerName);
+
 		return {
 			notice:
-				`The nomination is placed. ${nominationConsequenceSentence(playerName)} ` +
+				`The nomination is placed. ${consequence} ` +
 				'The League Clock runs its 48 hours from this event.',
 			appended:
 				appended === undefined

@@ -40,15 +40,23 @@
 
 import { auctionPathFor } from './auction-link.ts';
 import { ACTIVE_BENCH_SLOTS, INJURY_RESERVE_SLOTS, MINOR_LEAGUE_SLOTS } from './constants.ts';
+import { addMoney, parseMoney } from './money.ts';
 import type { Money } from './money.ts';
-import { wonCardSentence } from './positions.ts';
+import { wonCardSentence } from './projection/closed.ts';
 import type { OpenNomination } from './projection/nominations.ts';
 import type { LeaguePhase } from './projection/phase.ts';
-import { capBreakdown, describeAmount } from './rules/bidding.ts';
+import { capBreakdown, describeAmount, outstandingBidFiguresFor } from './rules/bidding.ts';
 import type { CapBreakdownLine, TeamMoneyState } from './rules/bidding.ts';
 import { SLOT_LABELS, chargedCapHit } from './rules/roster-import.ts';
-import { baselineCapOutcome, rosterCountSentence } from './strip.ts';
+import {
+	baselineCapOutcome,
+	contentionEntriesSentence,
+	outstandingBidsSentence,
+	rosterCountSentence,
+	stripShowsOutstandingBids
+} from './strip.ts';
 import { formatTeamManagers, teamManagerSuffix } from './team-identity.ts';
+import { SLOT_PLACEMENTS } from './types.ts';
 import type { CapGateOutcome, RosterSlotKind, SlotPlacement } from './types.ts';
 
 /**
@@ -56,14 +64,30 @@ import type { CapGateOutcome, RosterSlotKind, SlotPlacement } from './types.ts';
  *
  * Active/Bench first because it is the twelve the Roster Count is about;
  * Minor League second because it is the other occupancy a Cap figure depends
- * on; Injury Reserve last and visibly outside both, which is the arrangement
+ * on; Injury Reserve third and visibly outside both, which is the arrangement
  * `DESIGN.md:183` asks for by name — IR "is the figure most often wrongly
  * folded into the twelve".
+ *
+ * **Dead Money last, outside the roster proper, and this array is the reason
+ * it is here at all** (Story 7.6, UX-DR40). It is a `readonly
+ * RosterSlotKind[]` rather than a total `Record`, so adding a fourth member to
+ * the union did NOT make it fail to compile — `groupRoster` below maps over
+ * this array, and a `dead_money` row absent from it would have been dropped
+ * from the Team view silently while still charging the Cap Space printed at
+ * the head of the same page. That is the AD-32 hazard exactly: a Manager
+ * summing the rows on screen would come up short and have nothing to blame.
+ * The entry is what makes the money visible beside the figure it explains.
+ *
+ * It is last because Dead Money is not a roster: nobody plays for it, it
+ * occupies no Slot, and it answers to no ceiling. It reads after the twelve,
+ * after the stash, after IR — money the Team is still paying for players it
+ * no longer has.
  */
 export const ROSTER_GROUP_ORDER: readonly RosterSlotKind[] = Object.freeze([
 	'active_bench',
 	'minor_league',
-	'injury_reserve'
+	'injury_reserve',
+	'dead_money'
 ]);
 
 /**
@@ -262,6 +286,50 @@ export type TeamView = {
 	readonly activeBenchSentence: string;
 	readonly minorLeagueSentence: string;
 	readonly injuryReserveSentence: string;
+	/**
+	 * `Dead Money $2.0M, charged and outside the 12`, or `null` for a Team
+	 * carrying none. See `deadMoneySentence` for why it is money and why a
+	 * zero is an absence.
+	 */
+	readonly deadMoneySentence: string | null;
+
+	/**
+	 * What this Team holds against its Outstanding Bid Allowance, and how many
+	 * open lotteries it has entered — THREE separately named figures, from the
+	 * one `outstandingBidFiguresFor` derivation the persistent strip reads
+	 * (Story 10.6).
+	 *
+	 * **The entries are never summed into the bids count** (UX-DR36). A
+	 * lottery entry consumes no allowance and a Team may hold any number of
+	 * them, so a combined figure would imply a ceiling that does not exist.
+	 * They are carried here rather than re-derived in `teams-index.ts` for the
+	 * reason every other figure on this object is: the index re-deriving is
+	 * the second computation Epic 4 forbids.
+	 */
+	readonly outstandingBids: number;
+	/** `Free Active/Bench Slots + OUTSTANDING_BID_ALLOWANCE`. */
+	readonly bidAllowance: number;
+	/** Open Minimum-Bid Contention entries. Bounded by money alone (FR-18). */
+	readonly openContentionEntries: number;
+	/**
+	 * `2 of 4 bids` — the strip's own sentence, reused verbatim — or `null`
+	 * outside the Auction Phase.
+	 *
+	 * **The three counts above are facts and stay; the sentences are what a
+	 * surface prints, and they are gated** (resolved 2026-09-09). Outside the
+	 * Auction Phase no Bid is accepted at any amount, so a figure about
+	 * outstanding Bids describes an act nobody can perform —
+	 * `stripShowsOutstandingBids` states the reason, and every surface reads
+	 * that one predicate so the strip and this object can never disagree
+	 * about the same Team at the same instant.
+	 */
+	readonly outstandingBidsSentence: string | null;
+	/**
+	 * `4 lottery entries` — its own figure, with no ceiling to state — or
+	 * `null` outside the Auction Phase AND for a Team holding none. Entries
+	 * have no ceiling (FR-18), so a zero states nothing worth a row.
+	 */
+	readonly contentionEntriesSentence: string | null;
 
 	/**
 	 * The same four sentences split into the two registers `DESIGN.md:183`
@@ -272,6 +340,20 @@ export type TeamView = {
 	readonly activeBenchHalves: SlotSentenceHalves;
 	readonly minorLeagueHalves: SlotSentenceHalves;
 	readonly injuryReserveHalves: SlotSentenceHalves;
+	/**
+	 * The Dead Money line in the same two registers, or `null` when there is
+	 * none. It carries no ceiling, so the qualifier half is empty.
+	 */
+	readonly deadMoneyHalves: SlotSentenceHalves | null;
+	/**
+	 * The Minor League line WITHOUT its Free Minor League Slots clause, for
+	 * the Teams index — `minorLeagueOccupancySentence`'s reason.
+	 */
+	readonly minorLeagueOccupancyHalves: SlotSentenceHalves;
+	/** The bids sentence in the same two registers — `2` then ` of 4 bids`. */
+	readonly outstandingBidsHalves: SlotSentenceHalves | null;
+	/** The entries sentence. It has no ceiling half, so the qualifier is empty. */
+	readonly contentionEntriesHalves: SlotSentenceHalves | null;
 
 	readonly roster: readonly TeamRosterGroup[];
 	readonly nominationSlot: NominationSlotStatus;
@@ -294,6 +376,30 @@ export type TeamRosterRow = {
 	readonly rosterSlotKind: RosterSlotKind;
 	/** Whether this row came from an `AuctionClosed` rather than the import. */
 	readonly won: boolean;
+	/**
+	 * Years still to run on an IMPORTED Contract, as Fantrax stated them
+	 * (Story 7.8) — `null` for an Auction Contract, which has no imported
+	 * term and whose assigned length is `AuctionContract.contractYears`.
+	 *
+	 * Carried here for FR-43's one exception, which is the only rule in the
+	 * product that reads it: a Drop releases a second-round rookie-scale deal
+	 * to nothing only while its full term is UNELAPSED. Nothing else on this
+	 * type's own surface renders it — the Teams page states a Cap Hit and a
+	 * Slot, not a term.
+	 */
+	readonly contractYearsRemaining: number | null;
+	/**
+	 * The draft round of a rookie-scale Contract, or `null` for an ordinary
+	 * one (Story 7.8).
+	 *
+	 * The OTHER half of FR-43's exception, and it needs both: round 2 alone
+	 * is a rookie deal that may be part-served, and a full term alone is an
+	 * ordinary Contract that has simply not started. `null` for an Auction
+	 * Contract, and `null` for any row imported before the designation was
+	 * persisted — which is why a re-import, not a backfill, is the remedy for
+	 * those.
+	 */
+	readonly rookieScaleRound: number | null;
 };
 
 // --- The wording -----------------------------------------------------------
@@ -373,11 +479,24 @@ export function minorLeagueSlotSentence(
 	occupied: number,
 	freeMinorLeagueSlots: number | null
 ): string {
-	const held = Number.isFinite(occupied) ? Math.max(0, Math.trunc(occupied)) : 0;
 	const free = freeMinorLeagueSlots === null ? FIGURE_UNAVAILABLE : String(freeMinorLeagueSlots);
-	return (
-		`Minor League ${String(held)} of ${String(MINOR_LEAGUE_SLOTS)}, ` + `Free Minor League Slots ${free}`
-	);
+	return `${minorLeagueOccupancySentence(occupied)}, Free Minor League Slots ${free}`;
+}
+
+/**
+ * The occupancy half of the sentence above, alone — `Minor League N of 3`.
+ *
+ * The Teams index prints THIS one. `N of 3` already tells a reader how much
+ * room is left, so the clause naming the gate's own free count beside it says
+ * the same thing twice on a card built to be scanned. The full sentence keeps
+ * the clause where the free count is load-bearing.
+ *
+ * Extracted rather than respelled so the two renderings share one derivation
+ * and cannot disagree about the occupancy or the ceiling.
+ */
+export function minorLeagueOccupancySentence(occupied: number): string {
+	const held = Number.isFinite(occupied) ? Math.max(0, Math.trunc(occupied)) : 0;
+	return `Minor League ${String(held)} of ${String(MINOR_LEAGUE_SLOTS)}`;
 }
 
 /**
@@ -398,6 +517,30 @@ export function injuryReserveSentence(occupied: number): string {
 }
 
 /**
+ * Dead Money, stated as MONEY and visibly outside the roster — or `null` for
+ * a Team carrying none (Story 7.6, FR-43, UX-DR40).
+ *
+ * **A money figure rather than a count, because money is what it costs.** The
+ * other three slot sentences state an occupancy against a ceiling: that is
+ * what Active/Bench, Minor League and Injury Reserve are for. Dead Money
+ * occupies nothing and has no ceiling, so `2 of 0` would be a nonsense and a
+ * bare `2` would state the least interesting half of the fact. What a reader
+ * needs is the dollars, because those dollars are the gap between the Cap
+ * Space printed at the head of the page and the contracts they can see.
+ *
+ * **`null` rather than `$0.0M` for a Team holding none**, on
+ * `contentionEntriesSentence`'s reasoning: Dead Money is an exception, not an
+ * occupancy every Team has some of, and a zero row on thirty cards would
+ * teach a reader to stop seeing the line on the one card where it matters.
+ *
+ * The figure is `chargedCapHit`'s, summed — never `row.capHit` read directly —
+ * so the line and `computeCapSpace` cannot disagree about what a row charges.
+ */
+export function deadMoneySentence(charged: Money): string {
+	return `Dead Money ${describeAmount(charged)}, charged and outside the ${String(ACTIVE_BENCH_SLOTS)}`;
+}
+
+/**
  * The Nomination Slot's state, in words.
  *
  * **It never offers to nominate.** `positions.ts`'s `nominationSlotSentence`
@@ -405,10 +548,16 @@ export function injuryReserveSentence(occupied: number): string {
  * screen is where a Manager spends it. This is a statement about A Team —
  * possibly a rival's — and an offer on a rival's page would be a control that
  * acts on somebody else's Slot.
+ *
+ * The spent case says what frees it, which under the amended FR-9 is that
+ * Team winning a Player and nothing else. It is worth printing on a rival's
+ * card for the reason it is worth printing on your own: a Slot held by a
+ * Team that has won nothing is a Team that cannot nominate again, and that
+ * is a fact about the board every Manager reads it for.
  */
 export function nominationSlotStatusSentence(playerName: string | null): string {
 	if (playerName === null) return 'The Nomination Slot is free.';
-	return `The Nomination Slot is spent on ${playerName}, and frees when that Auction ends.`;
+	return `The Nomination Slot is spent on ${playerName}, and frees when that Team wins a Player.`;
 }
 
 // --- The assembly ----------------------------------------------------------
@@ -423,8 +572,17 @@ function compareText(left: string, right: string): number {
 	return left < right ? -1 : 1;
 }
 
+/**
+ * The `SlotPlacement` a roster slot kind IS, or `null` for one no close can
+ * produce — Injury Reserve and Dead Money alike.
+ */
+function placementOf(slotKind: RosterSlotKind): SlotPlacement | null {
+	return SLOT_PLACEMENTS.find((candidate) => candidate === slotKind) ?? null;
+}
+
 /** A roster row, rendered. */
 function entryFor(row: TeamRosterRow): TeamRosterEntry {
+	const placement = placementOf(row.rosterSlotKind);
 	return {
 		fantraxPlayerId: row.fantraxPlayerId,
 		playerName: row.playerName,
@@ -442,12 +600,17 @@ function entryFor(row: TeamRosterRow): TeamRosterEntry {
 		// A won Player is a roster row on the same footing as an imported one,
 		// and the sentence saying where he landed is the one Your Positions
 		// already prints — `PLACEMENT_LABELS` through `wonCardSentence`, not a
-		// second spelling here. `injury_reserve` is not a `SlotPlacement`: no
-		// close can produce one, so a won row is always one of the two.
-		wonSentence:
-			row.won && row.rosterSlotKind !== 'injury_reserve'
-				? wonCardSentence(row.rosterSlotKind as SlotPlacement, row.capHit)
-				: null
+		// second spelling here.
+		//
+		// **Narrowed by asking `SLOT_PLACEMENTS`, never by excluding the kinds
+		// that are not placements.** This read `!== 'injury_reserve'` and then
+		// cast, which was true of a three-member union and became a lie the
+		// moment `dead_money` joined it (Story 7.6) — a Dead Money row would
+		// have been handed to `wonCardSentence` as a placement it cannot
+		// express. The narrowing now comes FROM the placement union, so a
+		// fifth roster slot kind cannot be mistaken for a placement by
+		// default.
+		wonSentence: row.won && placement !== null ? wonCardSentence(placement, row.capHit) : null
 	};
 }
 
@@ -558,6 +721,28 @@ export function teamViewFor(input: {
 		input.rosterRows.filter((row) => row.rosterSlotKind === 'injury_reserve').length
 	);
 
+	// What this Team's released Contracts still charge. Summed through
+	// `chargedCapHit`, the same function `computeCapSpace` sums, so the line
+	// and the Cap Space above it are answering with one rule rather than two.
+	const deadMoneyRows = input.rosterRows.filter((row) => row.rosterSlotKind === 'dead_money');
+	const deadMoneyCharged = deadMoneyRows.reduce<Money>(
+		(total, row) => addMoney(total, chargedCapHit(row)),
+		parseMoney(0)
+	);
+	const deadMoneyLine = deadMoneyRows.length === 0 ? null : deadMoneySentence(deadMoneyCharged);
+
+	// The ONE bids derivation, and the two sentences worded off it. The strip
+	// calls the same function over the same `TeamMoneyState`, which is what
+	// makes this page and that strip incapable of stating different counts.
+	//
+	// The counts stay whatever they are; the SENTENCES are gated on the phase
+	// through the one predicate the strip reads, so no two surfaces can ever
+	// disagree about whether the figure is sayable (resolved 2026-09-09).
+	const bidFigures = outstandingBidFiguresFor(input.team);
+	const saysBids = stripShowsOutstandingBids(input.phase);
+	const outstandingBidsLine = saysBids ? outstandingBidsSentence(bidFigures) : null;
+	const contentionEntriesLine = saysBids ? contentionEntriesSentence(bidFigures) : null;
+
 	const published = {
 		teamName: input.teamName,
 		identity: formatTeamManagers(input.teamName, input.managerNames),
@@ -587,11 +772,26 @@ export function teamViewFor(input: {
 		activeBenchSentence: activeBenchLine,
 		minorLeagueSentence: minorLeagueLine,
 		injuryReserveSentence: injuryReserveLine,
+		deadMoneySentence: deadMoneyLine,
+
+		outstandingBids: bidFigures.outstandingBids,
+		bidAllowance: bidFigures.allowance,
+		openContentionEntries: bidFigures.openContentionEntries,
+		outstandingBidsSentence: outstandingBidsLine,
+		contentionEntriesSentence: contentionEntriesLine,
 
 		rosterCountHalves: slotSentenceHalves(rosterCountLine),
 		activeBenchHalves: slotSentenceHalves(activeBenchLine),
 		minorLeagueHalves: slotSentenceHalves(minorLeagueLine),
+		minorLeagueOccupancyHalves: slotSentenceHalves(
+			minorLeagueOccupancySentence(input.team.minorLeagueOccupied)
+		),
 		injuryReserveHalves: slotSentenceHalves(injuryReserveLine),
+		deadMoneyHalves: deadMoneyLine === null ? null : slotSentenceHalves(deadMoneyLine),
+		outstandingBidsHalves:
+			outstandingBidsLine === null ? null : slotSentenceHalves(outstandingBidsLine),
+		contentionEntriesHalves:
+			contentionEntriesLine === null ? null : slotSentenceHalves(contentionEntriesLine),
 
 		roster: groupRoster(input.rosterRows),
 		nominationSlot: nominationStatusFor(input.nomination)

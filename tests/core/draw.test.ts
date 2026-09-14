@@ -32,6 +32,17 @@ import { hash } from '../../src/lib/core/hash.ts';
 import { parseMoney } from '../../src/lib/core/money.ts';
 import type { Auction, Bid, Contender } from '../../src/lib/core/projection/auctions.ts';
 import { drawIndex, drawnWinnerFor } from '../../src/lib/core/rules/draw.ts';
+import type { ClosedWinner, DrawnWinner } from '../../src/lib/core/rules/close.ts';
+
+/**
+ * The drawn half of the union, asserted rather than cast (Story 10.5).
+ * `ClosedWinner` gained an `undrawn` case, so every test that reads a winner's
+ * Team is stating "and it drew one" as part of its expectation.
+ */
+function drawn(winner: ClosedWinner): DrawnWinner {
+	if (winner.kind !== 'drawn') throw new Error(`expected a drawn winner, received "${winner.kind}"`);
+	return winner;
+}
 
 /**
  * The seed the `/verify` page's worked example prints, and the four Teams it
@@ -215,7 +226,7 @@ describe('drawIndex — the one expression a Manager reproduces', () => {
 
 describe('drawnWinnerFor — the Contender the seed selected', () => {
 	it('selects the Team at the derived position, in the fold’s own order', () => {
-		const winner = drawnWinnerFor(lottery(WORKED_EXAMPLE_COUNT), WORKED_EXAMPLE_SEED);
+		const winner = drawn(drawnWinnerFor(lottery(WORKED_EXAMPLE_COUNT), WORKED_EXAMPLE_SEED));
 
 		expect(winner.kind).toBe('drawn');
 		expect(winner.teamId).toBe('t-g');
@@ -240,7 +251,7 @@ describe('drawnWinnerFor — the Contender the seed selected', () => {
 				{ seq: '4', teamId: 't-m', teamName: 'Team M', managerId: 'm-m' }
 			]
 		};
-		const winner = drawnWinnerFor(auction, WORKED_EXAMPLE_SEED);
+		const winner = drawn(drawnWinnerFor(auction, WORKED_EXAMPLE_SEED));
 
 		expect(winner.contenders).toEqual(['t-z', 't-a', 't-m']);
 		expect(winner.teamId).toBe(winner.contenders[drawIndex(WORKED_EXAMPLE_SEED, 3)]);
@@ -287,8 +298,40 @@ describe('drawnWinnerFor — the Contender the seed selected', () => {
 		expect(() => drawnWinnerFor(lottery(4), 'not-a-seed')).toThrow(/64 lowercase hex digits/);
 	});
 
-	it('throws on an empty Contender list — there is nobody to draw', () => {
-		expect(() => drawnWinnerFor(lottery(0), WORKED_EXAMPLE_SEED)).toThrow(/no\s+Contenders/);
+	it('returns an UNDRAWN result for an empty Contender list, and does not throw (Story 10.5)', () => {
+		// 10.3's cascade can cancel every join, and 10.5 keeps the lottery's
+		// fixed clock through that — so an empty list is an ordinary outcome
+		// the log must record rather than a bug to strand the Auction over.
+		const winner = drawnWinnerFor(lottery(0), WORKED_EXAMPLE_SEED);
+
+		expect(winner).toEqual({
+			kind: 'undrawn',
+			seed: WORKED_EXAMPLE_SEED,
+			contenders: []
+		});
+	});
+
+	it('still reveals the seed on an empty list, and still verifies the commitment first', () => {
+		// A published commitment that never opens is the one outcome AD-14
+		// cannot survive, and an empty list does not excuse it. So the seed is
+		// carried out — and a seed that does not answer the commitment still
+		// throws, BEFORE the emptiness is even looked at.
+		const empty = lottery(0);
+		expect(drawnWinnerFor(empty, WORKED_EXAMPLE_SEED).seed).toBe(WORKED_EXAMPLE_SEED);
+		expect(() => drawnWinnerFor(empty, OTHER_SEED)).toThrow(
+			/does not match the published commitment/
+		);
+		expect(() => drawnWinnerFor(empty, 'not-a-seed')).toThrow(/64 lowercase hex digits/);
+		expect(() => drawnWinnerFor(empty, null)).toThrow(/no sealed seed exists/);
+	});
+
+	it('never reaches drawIndex on an empty list — the arithmetic still refuses a count below 1', () => {
+		// The empty case is decided one level up, in `drawnWinnerFor`. The
+		// modulus itself is unchanged and still refuses zero: a modulus of
+		// zero makes every intermediate NaN and would index the list with a
+		// non-number.
+		expect(() => drawIndex(WORKED_EXAMPLE_SEED, 0)).toThrow(/at least one Contender/);
+		expect(() => drawIndex(WORKED_EXAMPLE_SEED, -1)).toThrow(/at least one Contender/);
 	});
 
 	it('throws when the drawn Contender is missing an identity', () => {
@@ -311,7 +354,7 @@ describe('drawnWinnerFor — the Contender the seed selected', () => {
 	it('resolves a one-Contender lottery to that Contender, with a one-team list', () => {
 		// §10 example 11 through the drawer: the list is recorded rather than
 		// omitted, and no second `ClosedWinner` case was needed for it.
-		const winner = drawnWinnerFor(lottery(1), WORKED_EXAMPLE_SEED);
+		const winner = drawn(drawnWinnerFor(lottery(1), WORKED_EXAMPLE_SEED));
 
 		expect(winner.teamId).toBe('t-e');
 		expect(winner.contenders).toEqual(['t-e']);

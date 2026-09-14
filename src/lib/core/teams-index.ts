@@ -282,9 +282,49 @@ export type TeamsIndexRow = {
 	readonly href: string;
 
 	readonly rosterCountHalves: SlotSentenceHalves;
-	readonly activeBenchHalves: SlotSentenceHalves;
+	/**
+	 * The Minor League OCCUPANCY — `Minor League N of 3`, without the Free
+	 * Minor League Slots clause the full sentence carries. There is no
+	 * Free Active/Bench Slots line on a card either: `Roster N of 12` one
+	 * line above already states the same occupancy, and a card that repeats
+	 * a figure in two spellings is a card a reader has to reconcile.
+	 */
 	readonly minorLeagueHalves: SlotSentenceHalves;
 	readonly injuryReserveHalves: SlotSentenceHalves;
+	/**
+	 * What this Team's released Contracts still charge — `Dead Money $2.0M,
+	 * charged and outside the 12` — or `null` for a Team carrying none
+	 * (Story 7.6, FR-43).
+	 *
+	 * **The card lists no rows, so this line is the only thing that can
+	 * reconcile it.** On `/teams/<id>` a Dead Money group is visible under the
+	 * roster and a reader can sum what they see; here there is nothing but
+	 * figures, and a Cap Space quietly reduced by contracts belonging to
+	 * players who are not on the Team is precisely the gap UX-DR40 exists to
+	 * close. Read off the `TeamView` like every other field on this row.
+	 */
+	readonly deadMoneyHalves: SlotSentenceHalves | null;
+	/**
+	 * Outstanding non-entry Bids against the allowance — `2 of 4 bids` — and
+	 * the open lottery entries beside it, as TWO figures (Story 10.6).
+	 *
+	 * **They are two because entries consume no allowance** (UX-DR36).
+	 * Summing them would state a ceiling on lottery entries that FR-18 does
+	 * not impose. Both are read off the `TeamView`, which read them off the
+	 * one `outstandingBidFiguresFor` derivation the persistent strip reads —
+	 * so a row and the strip above it cannot disagree.
+	 */
+	/**
+	 * Both `null` outside the Auction Phase, and the entries figure `null`
+	 * again for a Team holding none — `teamViewFor` decides, so a row and the
+	 * strip above it can never disagree about whether the figure is sayable.
+	 */
+	readonly outstandingBidsHalves: SlotSentenceHalves | null;
+	readonly contentionEntriesHalves: SlotSentenceHalves | null;
+	/** The three figures behind the two sentences, read and never computed. */
+	readonly outstandingBids: number;
+	readonly bidAllowance: number;
+	readonly openContentionEntries: number;
 
 	readonly capSpaceLabel: string;
 	readonly committedBidsLabel: string;
@@ -441,9 +481,14 @@ function rowFor(view: TeamsIndexInput, viewerTeamId: string | null): TeamsIndexR
 		href: teamPathFor(view.teamId),
 
 		rosterCountHalves: view.rosterCountHalves,
-		activeBenchHalves: view.activeBenchHalves,
-		minorLeagueHalves: view.minorLeagueHalves,
+		minorLeagueHalves: view.minorLeagueOccupancyHalves,
 		injuryReserveHalves: view.injuryReserveHalves,
+		deadMoneyHalves: view.deadMoneyHalves,
+		outstandingBidsHalves: view.outstandingBidsHalves,
+		contentionEntriesHalves: view.contentionEntriesHalves,
+		outstandingBids: view.outstandingBids,
+		bidAllowance: view.bidAllowance,
+		openContentionEntries: view.openContentionEntries,
 
 		capSpaceLabel: view.capSpaceLabel,
 		committedBidsLabel: view.committedBidsLabel,

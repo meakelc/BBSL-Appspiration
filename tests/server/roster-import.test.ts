@@ -114,15 +114,17 @@ function fakeGateway(
 				// The params are unflattened here so the assertions below still
 				// read one row at a time.
 				order.push('insert-rows');
-				expect(params.length % 6, 'params do not divide into six-column rows').toBe(0);
-				for (let at = 0; at < params.length; at += 6) {
+				// Seven columns since Story 7.8 added `rookie_scale_round`.
+				expect(params.length % 7, 'params do not divide into seven-column rows').toBe(0);
+				for (let at = 0; at < params.length; at += 7) {
 					insertedRows.push({
 						team_id: params[at],
 						fantrax_player_id: params[at + 1],
 						player_name: params[at + 2],
 						cap_hit: params[at + 3],
 						roster_slot_kind: params[at + 4],
-						contract_years_remaining: params[at + 5]
+						contract_years_remaining: params[at + 5],
+						rookie_scale_round: params[at + 6]
 					} as QueryResultRow);
 				}
 				return { rows: [] };
@@ -202,6 +204,30 @@ describe('stageRosterFile — the happy path', () => {
 			{ team_id: LAKERS.id, file_name: 'Lakers.csv', status: 'staged', refusal_detail: null }
 		]);
 		expect(released).toEqual([true]);
+	});
+
+	it('stages the rookie-scale round off a `2RK` Contract cell (Story 7.8)', async () => {
+		// FR-43's exception turns on three characters in one cell, and the
+		// designation has to reach `import_staged_rosters` before it can reach
+		// `team_rosters`. The staging insert became a 7-tuple for exactly this.
+		const { gateway, insertedRows } = fakeGateway([LAKERS]);
+		const csv = [
+			HEADER,
+			`P1,Alice,10000000,Act,${endYearIn(2)}`,
+			// `2RK31` against a 2026 import: round 2, five years remaining.
+			`P2,Rookie,2000000,Act,2RK${endYearIn(5).slice(2)}`
+		].join('\n');
+
+		await stageRosterFile(gateway, 'Lakers.csv', csv);
+
+		expect(insertedRows).toHaveLength(2);
+		// An ordinary Contract stages with no round at all — `null`, never a `0`.
+		expect(insertedRows[0]).toMatchObject({ fantrax_player_id: 'P1', rookie_scale_round: null });
+		expect(insertedRows[1]).toMatchObject({
+			fantrax_player_id: 'P2',
+			rookie_scale_round: 2,
+			contract_years_remaining: 5
+		});
 	});
 
 	it('adds the resolved Team to claimedInBatch', async () => {

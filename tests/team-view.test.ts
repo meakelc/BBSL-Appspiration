@@ -72,6 +72,10 @@ function row(overrides: Partial<TeamRosterRow> = {}): TeamRosterRow {
 		capHit: parseMoney(4_000_000),
 		rosterSlotKind: 'active_bench',
 		won: false,
+		// Story 7.8 added both to the row. An ordinary imported Contract with
+		// no rookie-scale designation is the default the Team view is about.
+		contractYearsRemaining: 3,
+		rookieScaleRound: null,
 		...overrides
 	};
 }
@@ -107,6 +111,7 @@ function nominationOn(fantraxPlayerId: string, playerName: string): OpenNominati
 		teamId: VIEWER,
 		teamName: 'Lakers',
 		managerId: 'm-1',
+		holdsSlot: true,
 		occurredAt: '2026-09-03T08:00:00.000Z'
 	};
 }
@@ -318,12 +323,113 @@ describe('the viewer’s own Team — Maximum Bid and the Auctions it holds capi
 // --- The roster listing ----------------------------------------------------
 
 describe('the roster listing — grouped by slot kind, IR outside the twelve', () => {
-	it('always renders all three groups, in the declared order', () => {
+	it('always renders every group, in the declared order', () => {
 		const view = viewFor();
 		expect(view.roster.map((group) => group.slotKind)).toEqual([...ROSTER_GROUP_ORDER]);
 		// An absent Minor League group and an empty one say different things,
 		// and only the second is true of a Team holding none.
 		expect(view.roster.every((group) => group.entries.length === 0)).toBe(true);
+	});
+
+	it('carries a dead_money GROUP, last and outside the roster proper (Story 7.6)', () => {
+		// `ROSTER_GROUP_ORDER` is an array rather than a total `Record`, so
+		// adding `dead_money` to `RosterSlotKind` did NOT make this file fail
+		// to compile — a Dead Money row omitted from the order would have
+		// vanished from the Team view while still charging the Cap Space at
+		// the head of the same page (AD-32). This is the test that stands in
+		// for the compiler.
+		expect(ROSTER_GROUP_ORDER).toContain('dead_money');
+		expect(ROSTER_GROUP_ORDER[ROSTER_GROUP_ORDER.length - 1]).toBe('dead_money');
+
+		const view = viewFor({
+			rosterRows: [
+				row({ fantraxPlayerId: 'p-live', playerName: 'Still Here' }),
+				row({
+					fantraxPlayerId: 'p-gone',
+					playerName: 'Released Player',
+					capHit: parseMoney(2_000_000),
+					rosterSlotKind: 'dead_money'
+				})
+			]
+		});
+
+		const group = view.roster.find((candidate) => candidate.slotKind === 'dead_money');
+		expect(group?.label).toBe('Dead Money');
+		expect(group?.entries.map((entry) => entry.playerName)).toEqual(['Released Player']);
+		// Charged in full — the same $2.0M `computeCapSpace` sums, so the
+		// listing and the Cap Space above it reconcile (UX-DR40).
+		expect(group?.entries[0]?.capHitLabel).toBe('$2.0M');
+		// And it says nothing about a placement: no close can produce one.
+		expect(group?.entries[0]?.wonSentence).toBeNull();
+	});
+
+	it('states no placement for a WON row that is Dead Money, even with `won: true` set', () => {
+		// **This is the assertion the `placementOf` narrowing exists for.**
+		// `entryFor` used to read `rosterSlotKind !== 'injury_reserve'` and
+		// then cast to `SlotPlacement` — true of a three-member union, and a
+		// lie the moment `dead_money` joined it. Under that cast this row
+		// would have been handed to `wonCardSentence` as a placement it cannot
+		// express, and the page would have printed a stashed-or-rostered
+		// sentence about a Player the Team no longer holds.
+		//
+		// The row sets `won: true` deliberately: with `won: false` the null
+		// comes from `row.won` and proves nothing about the narrowing. A close
+		// cannot in fact produce Dead Money — `SlotPlacement` is a two-member
+		// union and says so — but a Contract WON at auction can be released
+		// later, and the reclassified row keeps the `won` flag it was created
+		// with.
+		const view = viewFor({
+			rosterRows: [
+				row({
+					fantraxPlayerId: 'p-won-then-gone',
+					playerName: 'Won Then Released',
+					capHit: parseMoney(2_000_000),
+					rosterSlotKind: 'dead_money',
+					won: true
+				})
+			]
+		});
+
+		const entry = view.roster.find((group) => group.slotKind === 'dead_money')?.entries[0];
+		expect(entry?.playerName).toBe('Won Then Released');
+		expect(entry?.won).toBe(true);
+		expect(entry?.wonSentence).toBeNull();
+		// The same row on Injury Reserve — the other non-placement kind — has
+		// always behaved this way, and still does.
+		const onIr = viewFor({
+			rosterRows: [row({ rosterSlotKind: 'injury_reserve', won: true })]
+		});
+		expect(
+			onIr.roster.find((group) => group.slotKind === 'injury_reserve')?.entries[0]?.wonSentence
+		).toBeNull();
+	});
+
+	it('states Dead Money as MONEY beside the figures, and omits it for a Team carrying none', () => {
+		const none = viewFor();
+		expect(none.deadMoneySentence).toBeNull();
+		expect(none.deadMoneyHalves).toBeNull();
+
+		const view = viewFor({
+			rosterRows: [
+				row({
+					fantraxPlayerId: 'p-gone',
+					capHit: parseMoney(2_000_000),
+					rosterSlotKind: 'dead_money'
+				}),
+				row({
+					fantraxPlayerId: 'p-gone-2',
+					capHit: parseMoney(500_000),
+					rosterSlotKind: 'dead_money'
+				})
+			]
+		});
+
+		// Summed through `chargedCapHit`, the function `computeCapSpace` sums.
+		expect(view.deadMoneySentence).toBe(`Dead Money $2.5M, charged and outside the ${String(ACTIVE_BENCH_SLOTS)}`);
+		// No ceiling in the sentence, so the quiet half is empty and a surface
+		// may still render it unconditionally.
+		expect(view.deadMoneyHalves?.full).toBe(view.deadMoneySentence);
+		expect(view.deadMoneyHalves?.qualifier).toBe('');
 	});
 
 	it('puts a WON Player on the roster in his placement slot kind, with the placement stated', () => {
@@ -569,5 +675,110 @@ describe('no comparison, no median, no verdict', () => {
 				expect(value.toLowerCase()).not.toContain(forbidden);
 			}
 		}
+	});
+});
+
+// --- The bids figures (Story 10.6) ------------------------------------------
+
+describe('the bids figures on a Team view', () => {
+	const lead = (fantraxPlayerId: string, amount: number, isContentionEntry = false) => ({
+		fantraxPlayerId,
+		playerName: fantraxPlayerId,
+		amount: parseMoney(amount),
+		isContentionEntry
+	});
+
+	it('carries the three figures and the two sentences from the one derivation', () => {
+		const view = viewFor({
+			team: teamWith({
+				rosterCount: 9,
+				leading: [lead('p-1', 3_000_000), lead('p-2', 4_000_000)]
+			})
+		});
+
+		expect(view.outstandingBids).toBe(2);
+		expect(view.bidAllowance).toBe(4);
+		expect(view.openContentionEntries).toBe(0);
+		expect(view.outstandingBidsSentence).toBe('2 of 4 bids');
+		// No entries held, so no entries sentence at all — the bids figure
+		// keeps its `0 of n` because the allowance exists whether or not it is
+		// spent, while entries have no ceiling and a zero states nothing.
+		expect(view.contentionEntriesSentence).toBeNull();
+	});
+
+	it('splits the bids sentence into the same two registers every slot sentence uses', () => {
+		const view = viewFor({
+			team: teamWith({ rosterCount: 9, leading: [lead('p-1', 3_000_000)] })
+		});
+
+		expect(view.outstandingBidsHalves).toEqual(slotSentenceHalves('1 of 4 bids'));
+		expect(view.outstandingBidsHalves?.lead).toBe('1');
+		expect(view.outstandingBidsHalves?.qualifier).toBe(' of 4 bids');
+		// The entries sentence has no ceiling, so there is no quieter half to
+		// step back — the whole sentence reads in one register.
+		const held = viewFor({
+			team: teamWith({ rosterCount: 9, leading: [lead('lot-1', 1_000_000, true)] })
+		});
+		expect(held.contentionEntriesHalves?.qualifier).toBe('');
+	});
+
+	it('keeps lottery entries out of the bids figure entirely', () => {
+		const view = viewFor({
+			team: teamWith({
+				rosterCount: 10,
+				leading: [
+					lead('p-1', 3_000_000),
+					lead('lot-1', 1_000_000, true),
+					lead('lot-2', 1_000_000, true),
+					lead('lot-3', 1_000_000, true)
+				],
+				eligibleLeading: [lead('lot-4', 1_000_000, true)]
+			})
+		});
+
+		expect(view.outstandingBidsSentence).toBe('1 of 3 bids');
+		expect(view.openContentionEntries).toBe(4);
+		expect(view.contentionEntriesSentence).toBe('4 lottery entries');
+	});
+
+	it('states neither figure outside the Auction Phase, as the strip does not', () => {
+		// One predicate for every surface. The counts stay on the object — they
+		// are facts — but the SENTENCES go, because outside the Auction Phase no
+		// Bid is accepted at any amount and a figure about outstanding Bids
+		// describes an act nobody can perform. Gating the strip alone was the
+		// worse bug: in Archived it fell silent while this row still read
+		// `0 of n bids`, so two surfaces disagreed about one Team at one instant.
+		const held = { rosterCount: 9, leading: [lead('p-1', 3_000_000), lead('lot-1', 1_000_000, true)] };
+
+		for (const phase of ['Contract Assignment', 'Archived'] as const) {
+			const view = viewFor({ phase, team: teamWith(held) });
+			expect(view.outstandingBidsSentence).toBeNull();
+			expect(view.contentionEntriesSentence).toBeNull();
+			expect(view.outstandingBidsHalves).toBeNull();
+			expect(view.contentionEntriesHalves).toBeNull();
+			// The facts survive the silence.
+			expect(view.outstandingBids).toBe(1);
+			expect(view.openContentionEntries).toBe(1);
+		}
+
+		const auction = viewFor({ phase: 'Auction', team: teamWith(held) });
+		expect(auction.outstandingBidsSentence).toBe('1 of 4 bids');
+		expect(auction.contentionEntriesSentence).toBe('1 lottery entry');
+	});
+
+	it('is published on every Team, not just the viewer own — the figure is public', () => {
+		// The rival must HOLD an entry for the entries sentence to exist at
+		// all — absence there is the zero rule, not a visibility rule, and
+		// this test is about visibility.
+		const rival = viewFor({
+			viewerIsThisTeam: false,
+			team: teamWith({
+				rosterCount: 9,
+				leading: [lead('p-1', 3_000_000), lead('lot-1', 1_000_000, true)]
+			})
+		});
+
+		expect(rival.outstandingBidsSentence).toBeTypeOf('string');
+		expect(rival.contentionEntriesSentence).toBeTypeOf('string');
 	});
 });

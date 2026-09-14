@@ -40,6 +40,14 @@ describe('every league constant is a named value in the core', () => {
 		expect(constants.MINOR_LEAGUE_SLOTS).toBe(3);
 	});
 
+	it('holds the Outstanding Bid Allowance as ONE extra Bid, never a thirteenth Slot', () => {
+		// FR-37's `+ 1`, named. The ceiling beside it is unchanged, and the
+		// pair is asserted together because the whole risk of this rule is
+		// somebody reading the allowance as a wider ceiling.
+		expect(constants.OUTSTANDING_BID_ALLOWANCE).toBe(1);
+		expect(constants.ACTIVE_BENCH_SLOTS).toBe(12);
+	});
+
 	it('holds the Year Allotment, with one-year deals deliberately uncounted', () => {
 		expect(constants.YEAR_ALLOTMENT).toEqual({ fourYear: 1, threeYear: 1, twoYear: 2 });
 		expect(Object.isFrozen(constants.YEAR_ALLOTMENT)).toBe(true);
@@ -50,7 +58,10 @@ describe('every league constant is a named value in the core', () => {
 describe('the AD-20 event versions', () => {
 	it('are small integers, not strings or floats', () => {
 		expect(constants.EVENT_SCHEMA_VERSION).toBe(1);
-		expect(constants.CORE_VERSION).toBe(1);
+		// Bumped 1 -> 2 by Story 10.1: the Outstanding Bid Allowance is the
+		// first Epic 10 change to alter a rule outcome, so events written
+		// after it must be distinguishable from events written before.
+		expect(constants.CORE_VERSION).toBe(2);
 		expect(Number.isInteger(constants.EVENT_SCHEMA_VERSION)).toBe(true);
 		expect(Number.isInteger(constants.CORE_VERSION)).toBe(true);
 	});

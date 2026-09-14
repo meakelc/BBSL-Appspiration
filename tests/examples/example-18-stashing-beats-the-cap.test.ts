@@ -119,8 +119,8 @@ describe('§10 example 18 — stashing beats the cap, on purpose', () => {
 		expect(slots.passed).toBe(true);
 		// The capacity gate reaches the same counts, and no money.
 		expect(slots.freeMinorLeagueSlots).toBe(1);
-		expect(slots.eligibleLeadingBids).toBe(1);
-		expect(slots.overflowCount).toBe(0);
+		expect(slots.eligibleLeadingBidsExcludingEntries).toBe(1);
+		expect(slots.activeBenchOverflow).toBe(0);
 	});
 
 	it('is accepted through decide(), with every gate passing', () => {

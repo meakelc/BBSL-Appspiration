@@ -94,8 +94,22 @@ export type PhaseEndState = {
 };
 
 /**
- * The `AuctionTerminated` payload: a nomination that ran out of time with
- * nobody ever bidding on it.
+ * The `AuctionTerminated` payload: an Auction that ran out of time with
+ * nobody standing to win it.
+ *
+ * **Two producers since Story 10.5**, and the payload is one shape for both.
+ * This module appends one for every nomination still Awaiting an Opening Bid
+ * when the League Clock expires — nobody ever bid. `rules/close.ts` appends
+ * one for a Minimum-Bid Contention whose every Contender was cancelled by
+ * FR-40's cascade — Teams did bid, and none of their joins still stands. The
+ * outcome is identical in every respect a reader cares about: no winner, no
+ * contract, no Nomination Slot released, and the Player in the Free Agent pool
+ * by arithmetic, which is why it is this event rather than a second one
+ * meaning the same thing.
+ *
+ * **It frees no Slot precisely because it names no winner.** Since FR-9's
+ * amendment a Nomination Slot is released by winning a Player and by nothing
+ * else, so a Team whose nomination expired unbid keeps the Slot it spent.
  *
  * FR-21's "written to the Audit Log" IS this event — AD-4 makes the Audit Log
  * a read of `auction_events`, not a second table — so everything a later
@@ -108,10 +122,15 @@ export type PhaseEndState = {
  * `AuctionClosedPayload`'s reason — a fold reads the payload and must not have
  * to reach for an envelope column.
  *
- * `expiredAt` is the League Clock's own computed expiry, never the transaction
- * clock. A tick that runs six hours late appends a byte-identical payload and
- * only the row's `occurred_at` records when it actually landed, which is
- * AD-10's "late, not wrong" applied to the phase boundary. `evaluatedAt` is
+ * `expiredAt` is **whichever clock ran out** — the League Clock's own computed
+ * expiry for a phase-boundary termination, the Auction's own persisted
+ * `closesAt` for an emptied lottery — and never the transaction clock in
+ * either case. A reader must not be told it is always the former: the two
+ * producers answer "when was this due" about two different clocks, and both
+ * answers are the instant the log persisted rather than the instant the sweep
+ * got round to it. A tick that runs six hours late appends a byte-identical
+ * payload and only the row's `occurred_at` records when it actually landed,
+ * which is AD-10's "late, not wrong". `evaluatedAt` is
  * the injected `now` the expiry was compared against, so a reader can see both
  * the instant it was due and the instant it was judged at — `ExpiryGateOutcome`
  * carries the same pair for the same reason.
@@ -123,12 +142,19 @@ export type PhaseEndState = {
 export type AuctionTerminatedPayload = {
 	readonly fantraxPlayerId: string;
 	readonly playerName: string;
-	/** The NOMINATING Team, which gets its Nomination Slot back. */
+	/**
+	 * The NOMINATING Team — the one that spent a Slot on this Player and, since
+	 * FR-9's amendment, goes on holding it: nobody won, so nobody pays one back.
+	 */
 	readonly teamId: string;
 	readonly teamName: string;
 	/** The nominating Manager, or `null` when the nomination named none. */
 	readonly managerId: string | null;
-	/** The League Clock's own expiry — never the transaction clock. */
+	/**
+	 * The clock that ran out: the League Clock's own expiry at a phase
+	 * boundary, or the Auction's own `closesAt` for an emptied lottery. Never
+	 * the transaction clock.
+	 */
 	readonly expiredAt: string;
 	/** The injected `now` that expiry was compared against. */
 	readonly evaluatedAt: string;
@@ -147,7 +173,16 @@ export type AuctionTerminatedPayload = {
  * reasons.
  */
 export type ContractAssignmentOpenedPayload = {
-	/** The League Clock's own expiry — never the transaction clock. */
+	/**
+	 * The League Clock's own expiry — never the transaction clock.
+	 *
+	 * **Unlike `AuctionTerminatedPayload`'s field of the same name, this one
+	 * has exactly one clock and always will.** A termination gained a second
+	 * producer in Story 10.5 and so a second answer to "which clock ran out";
+	 * a phase boundary did not. `decidePhaseEnd` is the only thing that ever
+	 * appends this event, and the League Clock is the only clock a phase
+	 * boundary is about.
+	 */
 	readonly expiredAt: string;
 	/** The injected `now` that expiry was compared against. */
 	readonly evaluatedAt: string;

@@ -152,7 +152,7 @@ describe('§10 example 5 — Outbid frees capital immediately', () => {
 		const money = moneyStateFrom(OUTBID_ON_P_A);
 
 		expect(money.leading).toEqual([
-			{ fantraxPlayerId: 'p-b', playerName: 'p-b', amount: 2_000_000 }
+			{ fantraxPlayerId: 'p-b', playerName: 'p-b', amount: 2_000_000, isContentionEntry: false }
 		]);
 	});
 });

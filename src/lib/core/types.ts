@@ -135,20 +135,38 @@ export type AppendedEvent = {
 // --- Story 1.7: the Fantrax roster import's domain shape -------------------
 
 /**
- * The three roster slot kinds a Fantrax roster export's "Roster Slot" column
- * maps to (addendum.md B: "Active/Bench, IR, Minor League"). Written
- * snake_case, verbatim, to match `import_staged_rosters.roster_slot_kind`'s
- * database check constraint — the adapter and the database agree on the same
- * three literal strings rather than translating between two vocabularies.
+ * The four roster slot kinds a roster row can be in. Written snake_case,
+ * verbatim, to match the `roster_slot_kind` database check constraints — the
+ * adapter and the database agree on the same literal strings rather than
+ * translating between two vocabularies.
+ *
+ * **Three of the four are IMPORTABLE; the fourth is not, and the split is
+ * deliberate.** `active_bench`, `injury_reserve` and `minor_league` are what a
+ * Fantrax roster export's "Roster Slot" column maps to (addendum.md B:
+ * "Active/Bench, IR, Minor League"), and `import_staged_rosters`'s check
+ * constraint still admits exactly those three. `dead_money` (Story 7.6,
+ * FR-43) is produced only by an act inside this product — a released Contract
+ * that keeps charging the Cap — so it exists on `team_rosters` alone.
+ *
+ * **A closed union of exactly four members.** Every site in `core/` and
+ * `adapters/` that discriminates on it is exhaustive with no `default` and no
+ * catch-all `else`, so a fifth member would be a compile error at each rather
+ * than a silently mishandled row.
+ *
+ * Dead Money charges the Cap IN FULL and occupies NOTHING: it is Injury
+ * Reserve without the ceiling. `core/rules/roster-import.ts`'s `chargedCapHit`
+ * needs no branch for it — it zeroes `minor_league` and returns the stated hit
+ * for everything else — and Roster Count keeps counting `active_bench` alone,
+ * which is what lets a Drop free a Slot and keep the money in one change.
  */
-export type RosterSlotKind = 'active_bench' | 'injury_reserve' | 'minor_league';
+export type RosterSlotKind = 'active_bench' | 'injury_reserve' | 'minor_league' | 'dead_money';
 
 /**
  * Where a close puts the won Player (Story 3.4) — a NARROWING of
  * `RosterSlotKind`, and the narrowing is the point.
  *
  * A close can produce exactly two of the three roster slot kinds. Injury
- * Reserve is a state a Team's own roster moves a Player into afterwards, in
+ * Reserve is a state a Team's own roster places a Player into afterwards, in
  * Fantrax; no rule in this product can place a Player there at a close, so
  * the type the contracts fold holds and the type `slotPlacementFor` returns
  * cannot express it. `CapHitRow` accepts a `RosterSlotKind`, and this union
@@ -188,6 +206,27 @@ export type ParsedRosterRow = {
 	readonly capHit: Money;
 	readonly rosterSlotKind: RosterSlotKind;
 	readonly contractYearsRemaining: number;
+	/**
+	 * The DRAFT ROUND of a rookie-scale contract — `2` for a `2RK31` cell —
+	 * or `null` for an ordinary contract (Story 7.6).
+	 *
+	 * **Structured data rather than a re-readable string, because the string
+	 * does not survive.** `Contract` cells `2RK31` and `2031` both mean five
+	 * years remaining against a 2026 import, and until this field existed they
+	 * produced byte-identical rows — the round was matched in a NON-capturing
+	 * group and discarded. FR-43's exception turns on exactly that discarded
+	 * digit: a second-round rookie deal released with its full term unelapsed
+	 * carries no Dead Money, and an otherwise identical plain contract carries
+	 * all of it. A $2,000,000 difference decided by three characters (PRD §10
+	 * examples 40 and 41).
+	 *
+	 * The adapter parses it; nothing in `core/` knows the cell format it came
+	 * from (AD-24). It is not persisted through import staging in v1 — the
+	 * staging table has no column for it — so a row read back from the
+	 * database carries `null` here until the Drop command (Story 7.8) needs
+	 * otherwise.
+	 */
+	readonly rookieScaleRound: number | null;
 };
 
 // --- Story 1.8: the Free Agent pool's domain shape -------------------------
@@ -466,6 +505,20 @@ export type ExposingBid = {
  * reporting a capacity refusal as a cap refusal is a defect (AD-7), so the
  * two gates share the derivation — `projectedAdditionsFor` in
  * `rules/bidding.ts` — and never the outcome.
+ *
+ * **Story 10.2 changes what that shared derivation counts, on this side
+ * too.** PRD §3 defines Projected Active/Bench Additions with Minimum-Bid
+ * Contention entries excluded "however many the Team holds", and there is
+ * one such definition rather than a money one and a slots one — so the
+ * entries a Team already holds drop out of `projectedAdditions` here as
+ * well, which makes `rosterReserve` LARGER and therefore stricter. What
+ * this gate does not do is treat the Bid being PLACED as an entry: it calls
+ * `projectedAdditionsFor` with one argument, the classification defaults to
+ * `false`, and the prospective Bid is counted as an ordinary commitment.
+ * That is the stricter reading of a Bid whose landing place is still
+ * hypothetical, and it is why the two gates can now report different
+ * `projectedAdditions` for one Team — §10 example 34's tenth entry is
+ * refused on money at a Maximum Bid of $0 precisely because of it.
  */
 export type CapGateOutcome = GateOutcome & {
 	readonly offered: Money;
@@ -479,9 +532,30 @@ export type CapGateOutcome = GateOutcome & {
 	readonly maximumBid: Money | null;
 	/** Free Minor League Slots (`M`) — `max(0, 3 − occupied)`. */
 	readonly freeMinorLeagueSlots: number | null;
-	/** Eligible Leading Bids (`N`), counting the Bid being placed. */
+	/**
+	 * Eligible Leading Bids (`N`), counting the Bid being placed.
+	 *
+	 * **Unchanged by Story 10.2 — the arithmetic here is exactly what it
+	 * was.** It has always included Minimum-Bid Contention entries and it
+	 * still does, because a Contender who wins pays and the cap must carry
+	 * that exposure (FR-14, FR-18). What 10.2 added is a COUNTERPART on the
+	 * other gate, not an amendment to this one: `SlotsGateOutcome` reports
+	 * `eligibleLeadingBidsExcludingEntries`, one subtraction away, and the
+	 * two are legitimately different numbers for one Team at one instant
+	 * (§10 example 35: 3 here against 0 there). The name on this field was
+	 * left alone deliberately — renaming a figure whose value did not move
+	 * would imply a change to the cap that has not happened.
+	 */
 	readonly eligibleLeadingBids: number | null;
-	/** `max(0, N − M)` — how many eligible wins have nowhere to land. */
+	/**
+	 * `max(0, N − M)` — how many eligible wins have nowhere to land.
+	 *
+	 * **Overflow Count, the money-side figure, and Story 10.2 left its
+	 * arithmetic alone.** It feeds Minors Exposure and nothing else. What
+	 * changed is that the slots gate stopped reading it: that gate now has
+	 * `activeBenchOverflow` — one subtraction away, entries removed — and
+	 * must never quote this one (PRD §3, FR-18).
+	 */
 	readonly overflowCount: number | null;
 	/**
 	 * Whether Maximum Bid does not bound the offered amount at all: a Free
@@ -515,29 +589,72 @@ export type CapGateOutcome = GateOutcome & {
  * quietly folded into the money one. A Team can fail this with unlimited Cap
  * Space and pass it with none.
  *
- * It refuses exactly when `rosterCount + projectedAdditions > ceiling`, on
- * the same POST-BID basis Roster Reserve uses — `projectedAdditions` counts
- * the Bid being placed. The two figures are `CapGateOutcome`'s two counts
+ * **A lottery entry is gated by FR-18 and not by FR-37 at all (Story
+ * 10.2).** A Minimum-Bid Contention entry contributes nothing to
+ * `projectedAdditions`, spends no Outstanding Bid Allowance, and is asked
+ * one question instead: has the win somewhere to land — a free Active/Bench
+ * Slot, or an eligible Player with a free Minor League Slot. Cap space is
+ * the only quantitative limit on how many a Team may hold, so a tenth entry
+ * is refused on money and never here. `isContentionEntry` records that the
+ * entry branch was the one that decided.
+ *
+ * **The gate learns that from the CONTENTION gate's verdict, never from an
+ * amount.** `evaluateContention` classifies the Bid as `joins`,
+ * `already_contending`, `converts`, `neither` or `not_a_contention`, and
+ * only the first two are entries. A $5,000,000 conversion into a live
+ * lottery is an ordinary Active/Bench commitment and is gated as one — which
+ * a naive `contention === 'minimum_bid'` test would have got wrong, letting
+ * a Team at its allowance take a third.
+ *
+ * **The rule has TWO branches for every other Bid (FR-37, amended
+ * 2026-09-08).** It passes when
+ * `projectedAdditions` is zero — the Minor-League carve-out, where the win
+ * lands in a Free Minor League Slot and adds nothing to Active/Bench — OR
+ * when the Team holds at least one Free Active/Bench Slot AND
+ * `projectedAdditions <= freeActiveBenchSlots + OUTSTANDING_BID_ALLOWANCE`.
+ * Everything else is refused.
+ *
+ * **The free-Slot precondition is tested BEFORE the allowance arithmetic,
+ * and the ordering is the rule rather than an implementation detail.** With
+ * `freeActiveBenchSlots` at 0 the allowance still evaluates to 1, so a Team
+ * with a full roster would be admitted at `1 <= 1` and would go on to win a
+ * thirteenth Player with no other Close available to cancel the surplus
+ * (§10 example 30). The precondition is what makes the allowance safe.
+ *
+ * **`ceiling` is reported on every evaluation, pass and refusal alike**, and
+ * it is still 12. The allowance is one extra outstanding BID, never a
+ * thirteenth Slot; a refusal quoting only the allowance would imply thirteen
+ * players are legal, which is the one thing this shape may never say. So the
+ * outcome carries all five figures — `rosterCount`, `projectedAdditions`,
+ * `freeActiveBenchSlots`, `allowance` and `ceiling` — and the wording picks
+ * which of them a given sentence needs.
+ *
+ * The counts are on the same POST-BID basis Roster Reserve uses —
+ * `projectedAdditions` counts the Bid being placed. The two figures are
+ * `CapGateOutcome`'s two counts
  * over again, deliberately copied rather than pointed at: two rows each
  * stating their own arithmetic cannot be read as one, and reporting a
  * capacity refusal as a cap refusal is a defect (AD-7). The shared
- * DERIVATION is `projectedAdditionsFor` in `rules/bidding.ts`, so the two
- * gates can never disagree about the count while agreeing they describe the
- * same roster.
+ * DERIVATION is `projectedAdditionsFor` in `rules/bidding.ts` — but since
+ * Story 10.2 the two gates hand it different arguments and may report
+ * different counts, because a lottery entry is an Active/Bench addition to
+ * the cap and to nothing else. Neither figure is wrong; they answer two
+ * questions.
  *
  * **Story 2.8 adds three COUNTS and no money, which is what lets the
  * capacity gate see Minors Exposure without seeing a dollar.** An eligible
  * win that overflows has to land in an Active/Bench Slot, so
- * `projectedAdditions` includes `overflowCount` — and `Overflow Count` is
- * `max(0, N − M)`, two integers. `freeMinorLeagueSlots` and
- * `eligibleLeadingBids` ride along so a capacity refusal can name the
- * overflow in counts alone (§10 example 25). There is still no `offered`
- * field and still no money field on this shape, so FR-37's "fails with
- * unlimited Cap Space, passes with none" remains a property of the
+ * `projectedAdditions` includes `activeBenchOverflow` — and that is
+ * `max(0, N_slots − M)`, two integers. `freeMinorLeagueSlots` and
+ * `eligibleLeadingBidsExcludingEntries` ride along so a capacity refusal can
+ * name the overflow in counts alone (§10 example 25). There is still no
+ * `offered` field and still no money field on this shape, so FR-37's "fails
+ * with unlimited Cap Space, passes with none" remains a property of the
  * signature rather than a claim to verify by reading.
  *
- * `rosterCount`, `projectedAdditions` and the three counts are `null`
- * together, and only for an actor bound to no Team — exactly as
+ * `rosterCount`, `projectedAdditions`, `freeActiveBenchSlots`, `allowance`
+ * and the three Minors counts are `null` together, and only for an actor
+ * bound to no Team — exactly as
  * `CapGateOutcome`'s nullable figures are, and for the same reason: stating
  * `0` would be an invented figure a refusal panel would then print. The gate
  * PASSES in that case, because the real refusal is `unbound_actor`.
@@ -548,12 +665,69 @@ export type SlotsGateOutcome = GateOutcome & {
 	readonly rosterCount: number | null;
 	readonly projectedAdditions: number | null;
 	readonly ceiling: number;
+	/**
+	 * Free Active/Bench Slots (`F`) — `max(0, 12 − rosterCount)`, the room
+	 * the Team has BEFORE this Bid. Both the precondition (`F >= 1`) and the
+	 * allowance (`F + 1`) are read off it, and the refusal wording names it,
+	 * so it is reported rather than left for a surface to re-derive.
+	 *
+	 * **It counts FILLED roster slots only, and deliberately ignores the
+	 * slots the Team's other outstanding Bids would claim** — `rosterCount`
+	 * alone, never `rosterCount + projectedAdditions`. That asymmetry IS the
+	 * mechanism of §10 example 29: the Team's one free Slot is what earns it
+	 * the allowance, and the second outstanding Bid it then holds must not
+	 * consume the very figure that permitted it. Netting the leads out here
+	 * would collapse the allowance back into the ceiling comparison it
+	 * replaced.
+	 */
+	readonly freeActiveBenchSlots: number | null;
+	/**
+	 * `F + OUTSTANDING_BID_ALLOWANCE` — the outstanding Active/Bench Bids
+	 * this Team may hold.
+	 *
+	 * **Raw, and unclamped by the precondition**: at `F = 0` this is still 1,
+	 * because §10 example 30's whole lesson is the counterfactual arithmetic
+	 * that would have admitted a thirteenth Player. The precondition refusal
+	 * must therefore never QUOTE it — saying "1 permitted" while permitting
+	 * none is exactly the confusion the two separate sentences exist to
+	 * avoid.
+	 */
+	readonly allowance: number | null;
 	/** Free Minor League Slots (`M`). A count — this gate reads no amount. */
 	readonly freeMinorLeagueSlots: number | null;
-	/** Eligible Leading Bids (`N`), counting the Bid being placed. */
-	readonly eligibleLeadingBids: number | null;
-	/** `max(0, N − M)` — the eligible wins that must land in Active/Bench. */
-	readonly overflowCount: number | null;
+	/**
+	 * `N` on the SLOTS side: eligible leads elsewhere with Minimum-Bid
+	 * Contention entries removed, plus the Bid being placed when it is
+	 * eligible and is not itself an entry.
+	 *
+	 * Deliberately NOT `CapGateOutcome.eligibleLeadingBids`, which counts the
+	 * entries. The name carries the difference because a wording that quoted
+	 * the money-side figure inside a capacity refusal would state a count the
+	 * capacity rule never read.
+	 */
+	readonly eligibleLeadingBidsExcludingEntries: number | null;
+	/**
+	 * **Active/Bench Overflow** — `max(0, N_slots − M)`, the eligible wins
+	 * that must land in Active/Bench, and the only overflow figure that
+	 * reaches `projectedAdditions` (PRD §3, Story 10.2).
+	 *
+	 * §10 example 35 is the pair disagreeing on purpose: `Overflow Count 2`
+	 * on `CapGateOutcome` against `Active/Bench Overflow 0` here, same Team,
+	 * same instant, both correct.
+	 */
+	readonly activeBenchOverflow: number | null;
+	/**
+	 * Whether this Bid was gated as a Minimum-Bid Contention entry — FR-18's
+	 * landing test rather than FR-37's two branches.
+	 *
+	 * **Recorded because it decides which sentence the panel may say.** An
+	 * entry refused for want of a landing place has not spent an allowance
+	 * and has not met a full roster in the ordinary way, and a refusal
+	 * telling a Manager otherwise would be false. Not nullable: the
+	 * classification comes from `evaluateContention`, which knows nothing
+	 * about the Team, so it is as true of an unbound actor as of a bound one.
+	 */
+	readonly isContentionEntry: boolean;
 };
 
 /**
@@ -684,6 +858,477 @@ export type PlaceBidGateResults = {
 	readonly granularity: GranularityGateOutcome;
 	readonly cap: CapGateOutcome;
 	readonly slots: SlotsGateOutcome;
+};
+
+// --- Story 10.4: the RestoreLeadingBid command and its fixed gate set ------
+
+/**
+ * The `RestoreLeadingBid` command (Story 10.4, FR-40, AR-37).
+ *
+ * **A distinct command type, and that is the whole point.** Restoration hands
+ * an Auction to the next-highest surviving Bid after the leader's commitment
+ * was cancelled, and the candidate has to be re-validated before it may lead
+ * — but only against the two questions a commitment already made can still
+ * fail: can this Team still afford it, and has it still got somewhere to put
+ * the win. Every other gate in `PLACE_BID_GATES` is about the act of
+ * OFFERING, and re-asking one of them here would refuse a Bid that was
+ * lawfully placed and never withdrawn by its own Manager.
+ *
+ * **`increment` is the one that makes this a separate type rather than a
+ * synthetic `PlaceBid`.** The price has just FALLEN — the leader above this
+ * candidate is gone — so a re-run of "strictly higher than the leading Bid"
+ * would compare the candidate's own amount against a leading amount that no
+ * longer exists, or against the candidate itself, and refuse every
+ * restoration that mattered. `expiry` is the second: a restored Bidder may
+ * inherit minutes of a clock that is nearly out, and refusing on that would
+ * strand the Auction leaderless for a reason FR-40 explicitly rejects.
+ *
+ * The field list is `PlaceBid`'s exactly, and deliberately: `teamName` and
+ * `managerId` are on the command for the EVENT's sake — the restoration
+ * rides `BidCancelledPayload` and the notice must name the Team and reach
+ * the Manager — while `RESTORE_LEADING_BID_GATES` decides from `teamId` and
+ * `amount` alone.
+ */
+export type RestoreLeadingBid = {
+	readonly kind: 'RestoreLeadingBid';
+	readonly fantraxPlayerId: string;
+	readonly teamId: string;
+	readonly teamName: string;
+	readonly managerId: string;
+	readonly amount: Money;
+};
+
+/**
+ * The gate set for `RestoreLeadingBid`, **fixed per command type** (AD-1),
+ * and the SECOND fixed gate set this codebase declares.
+ *
+ * Two gates, and the pair is the answer to one question: is this Team still
+ * able to keep the commitment it already made? `cap` says whether the money
+ * is still there and `slots` says whether the win still has a Slot to land
+ * in — which are exactly the two grounds a Close elsewhere can have moved
+ * under a Bid nobody touched.
+ *
+ * **The ORDER is the reading order**, as `PLACE_BID_GATES`' is: money before
+ * capacity, matching the last two entries of that list so a reader who knows
+ * one knows the other. Neither short-circuits the other and both outcomes are
+ * always returned (AD-7).
+ *
+ * Frozen at runtime as well as `as const`, for `PLACE_BID_GATES`' reason: this
+ * list is what `evaluateRestore()`'s totality is asserted against, and a
+ * caller that could splice an entry out of it could make a partial result
+ * look complete.
+ */
+export const RESTORE_LEADING_BID_GATES = Object.freeze(['cap', 'slots'] as const);
+
+/** One of the two gate names above. */
+export type RestoreLeadingBidGate = (typeof RESTORE_LEADING_BID_GATES)[number];
+
+/**
+ * What `evaluateRestore()` returns for a `RestoreLeadingBid`, in any state.
+ *
+ * **`CapGateOutcome` and `SlotsGateOutcome` are reused verbatim.** They are
+ * the same gates over the same arithmetic asked of a narrower set, so a
+ * parallel pair of outcome shapes would be two spellings of one answer — and
+ * the refusal panel, `gateFigure` and `capBreakdown` all already read these.
+ */
+export type RestoreLeadingBidGateResults = {
+	readonly cap: CapGateOutcome;
+	readonly slots: SlotsGateOutcome;
+};
+
+// --- Story 7.7: the RecordRosterTrade command and its fixed gate set -------
+
+/**
+ * The `RecordRosterTrade` command (Story 7.7, FR-41).
+ *
+ * **A third command type, because a Trade is neither a Bid nor a restoration.**
+ * It names two Teams and moves Contracts in BOTH directions in one act, it
+ * offers no amount, and it is judged once over the state the whole act
+ * produces. Nothing in `PLACE_BID_GATES` asks either of its questions of two
+ * Teams at once, and synthesising a `PlaceBid` to borrow one would route two
+ * Teams' opposing deltas through a gate AD-7 defines as single-Team and
+ * incremental.
+ *
+ * **"Sending" and "receiving" name the two SIDES, not the two directions.**
+ * A Trade is bidirectional: `sendingPlayerIds` leave the sending Team for the
+ * receiving Team, and `receivingPlayerIds` travel the other way. The labels
+ * are the Commissioner's own framing of the act — the Team the sheet is
+ * written from, and the Team it is written to — and either list may be
+ * EMPTY, because a salary dump is a Roster Trade (§10 example 36). Both empty
+ * is refused: the act then names nothing.
+ *
+ * The two names ride the command for the EVENT's sake, exactly as
+ * `PlaceBid.teamName` does: the Audit Log entry states both Teams and an id
+ * is not a name. `RECORD_ROSTER_TRADE_GATES` decides from the two ids and the
+ * two id lists alone.
+ *
+ * `reason` is on the command because FR-41 requires one before a Trade
+ * commits and `core/rules/override.ts` owns what makes a reason valid. The
+ * ENFORCEMENT is `server/override-guard.ts`'s, over what was submitted.
+ */
+export type RecordRosterTrade = {
+	readonly kind: 'RecordRosterTrade';
+	readonly sendingTeamId: string;
+	readonly sendingTeamName: string;
+	readonly receivingTeamId: string;
+	readonly receivingTeamName: string;
+	/** Players leaving the sending Team for the receiving Team. May be empty. */
+	readonly sendingPlayerIds: readonly string[];
+	/** Players leaving the receiving Team for the sending Team. May be empty. */
+	readonly receivingPlayerIds: readonly string[];
+	/** The Commissioner's stated reason, already trimmed and non-blank. */
+	readonly reason: string;
+};
+
+/**
+ * The gate set for `RecordRosterTrade`, **fixed per command type** (AD-1), and
+ * the THIRD fixed gate set this codebase declares.
+ *
+ * **Five names, and the list is FLAT on purpose.** `GateResults` is
+ * `Readonly<Record<string, GateOutcome>>` and `RecordRosterTradeGateResults`
+ * must stay assignable to it, so a per-Team object cannot nest inside a gate
+ * — a nested record has no `passed` and would quietly stop being a gate. Two
+ * Teams therefore appear as two keys each, which also makes "one evaluation,
+ * both Teams" literally one returned record rather than two results a caller
+ * has to remember to combine.
+ *
+ * **`contested` leads, exactly as `phase` leads `PLACE_BID_GATES`.** It is
+ * the frame the other four sit inside: cap and slots are meaningless
+ * questions about a Player nobody holds, and FR-41 says so outright — "a
+ * third refusal ground alongside the money and slots gates, checked first".
+ * Reading order, not short-circuit order: all five outcomes are always
+ * returned (AD-7).
+ *
+ * **The money before the capacity, per Team**, matching the last two entries
+ * of `PLACE_BID_GATES` and both entries of `RESTORE_LEADING_BID_GATES`, so a
+ * reader who knows one knows all three.
+ *
+ * Frozen at runtime as well as `as const`, for `PLACE_BID_GATES`' reason:
+ * this list is what `evaluateTrade()`'s totality is asserted against, and a
+ * caller that could splice an entry out of it could make a partial result
+ * look complete.
+ */
+export const RECORD_ROSTER_TRADE_GATES = Object.freeze([
+	'contested',
+	'sendingCap',
+	'sendingSlots',
+	'receivingCap',
+	'receivingSlots'
+] as const);
+
+/** One of the five gate names above. */
+export type RecordRosterTradeGate = (typeof RECORD_ROSTER_TRADE_GATES)[number];
+
+/** One Player a Trade named whom an open Auction is still deciding. */
+export type ContestedPlayer = {
+	readonly fantraxPlayerId: string;
+	/** What he is called — the refusal names a Player, and an id is not a name. */
+	readonly playerName: string;
+	/**
+	 * Which open thing contests him.
+	 *
+	 * `bid` is an Auction with a Bid on it; `nomination` is a Player on the
+	 * Board nobody has bid on yet. Both are "contested in an open Auction" for
+	 * FR-41's purposes — neither Team holds a Contract on him — and the two
+	 * are distinguished because the refusal reads differently: one says wait
+	 * for the Auction to close, the other says wait for it to happen.
+	 */
+	readonly contest: 'bid' | 'nomination';
+};
+
+/**
+ * The contested gate: every Player a Trade names is held under a SETTLED
+ * Contract (FR-41).
+ *
+ * `contested` is the whole list, never the first one found: a Commissioner
+ * who has to retry once per Player is a Commissioner who retries five times.
+ */
+export type ContestedGateOutcome = {
+	readonly passed: boolean;
+	readonly contested: readonly ContestedPlayer[];
+};
+
+/** One open Auction a Team leads, as a Trade's refusal names it. */
+export type ActLeadingAuction = {
+	readonly fantraxPlayerId: string;
+	readonly playerName: string;
+	readonly amount: Money;
+};
+
+/**
+ * One Team's money gate on a Trade — solvency, asked with no amount (FR-41,
+ * AR-42).
+ *
+ * **The verdict is `maximumBid >= 0` and not a comparison**, because a Trade
+ * offers nothing. What can fail is solvency: §10 example 37's Team is
+ * $500,000 richer after sending a Player away and $300,000 short, because the
+ * Slot it freed costs $1,000,000 to reserve. That is exactly the test
+ * `evaluateCap`'s `unbounded` branch already makes, and the figures below are
+ * `teamSolvencyFiguresFor`'s — this gate writes no arithmetic of its own.
+ *
+ * `shortfall` is the refusal's own number: `null` when the gate passes, and
+ * the positive size of a negative Maximum Bid when it does not. It exists so
+ * no surface has to negate a Money to say "$300,000 short".
+ *
+ * `leadingAuctions` is what the refusal must NAME — the open Auctions this
+ * Team is committed to and can no longer cover. Empty is a legitimate state:
+ * a Team that leads nothing can still be short, and the refusal then names
+ * only the arithmetic.
+ */
+export type ActCapGateOutcome = {
+	readonly passed: boolean;
+	readonly teamId: string;
+	readonly teamName: string;
+	readonly capSpace: Money;
+	readonly committedBids: Money;
+	readonly minorsExposure: Money;
+	readonly availableCapSpace: Money;
+	readonly rosterCount: number;
+	readonly projectedAdditions: number;
+	readonly rosterReserve: Money;
+	readonly maximumBid: Money;
+	/** `null` when the gate passes; the size of the shortfall when it fails. */
+	readonly shortfall: Money | null;
+	readonly leadingAuctions: readonly ActLeadingAuction[];
+	readonly exposingBids: readonly ExposingBid[];
+};
+
+/**
+ * One Team's capacity gate on a Trade — FR-37's branches, plus the three
+ * ceilings FR-41 adds (FR-41, FR-1).
+ *
+ * **The explicit Active/Bench ceiling test is not redundant.**
+ * `unfilledSlots` clamps at zero, so a Team standing at Roster Count 14 and
+ * leading nothing computes `projectedAdditions === 0` and passes FR-37's
+ * first branch — which is precisely the transient state §10 example 39 says
+ * must never be reachable. `rosterCount <= ACTIVE_BENCH_SLOTS` is what makes
+ * the ceiling a ceiling for an act that adds rows without bidding for them.
+ *
+ * The Injury Reserve and Minor League ceilings are the same ceilings FR-1
+ * holds on import, asked here of the state a Trade would produce.
+ */
+export type ActSlotsGateOutcome = {
+	readonly passed: boolean;
+	readonly teamId: string;
+	readonly teamName: string;
+	readonly rosterCount: number;
+	readonly projectedAdditions: number;
+	readonly freeActiveBenchSlots: number;
+	readonly allowance: number;
+	readonly injuryReserveOccupied: number;
+	readonly minorLeagueOccupied: number;
+	/** The three league ceilings, stated on every evaluation, pass or fail. */
+	readonly activeBenchCeiling: number;
+	readonly injuryReserveCeiling: number;
+	readonly minorLeagueCeiling: number;
+	/** Every Slot kind this Team would stand above its ceiling in. */
+	readonly breaches: readonly RosterSlotKind[];
+};
+
+/**
+ * What `evaluateTrade()` returns for a `RecordRosterTrade`, in any state whose
+ * shape permits an evaluation at all.
+ *
+ * Five keys, one per name in `RECORD_ROSTER_TRADE_GATES`, always all present.
+ * Adding or removing a name here makes every consumer a compile error until
+ * it handles the change — the one-edit property `PLACE_BID_GATES` has.
+ */
+export type RecordRosterTradeGateResults = {
+	readonly contested: ContestedGateOutcome;
+	readonly sendingCap: ActCapGateOutcome;
+	readonly sendingSlots: ActSlotsGateOutcome;
+	readonly receivingCap: ActCapGateOutcome;
+	readonly receivingSlots: ActSlotsGateOutcome;
+};
+
+// --- Story 7.8: the RecordDrop command and its fixed gate set -------------
+
+/**
+ * The `RecordDrop` command (Story 7.8, FR-43, PRD §10 examples 40, 41 and 43).
+ *
+ * **A fourth command type, because a Drop is none of the other three.** A
+ * Team released a Player in Fantrax and the app has to hear about it: the
+ * Contract stops counting against the twelve, and — unless FR-43's one
+ * exception applies — keeps charging the Cap as Dead Money under nobody's
+ * name. It names ONE Team, it offers no amount, and it is judged once over
+ * the state the whole act produces.
+ *
+ * **Why not a `RecordRosterTrade` with an empty receiving side.** A Trade
+ * transfers a Contract from one Team to another and clears nothing; a Drop
+ * ENDS one, converting it to a charge or removing it outright. Routing a Drop
+ * through a Trade would need a Team to receive what nobody receives, and the
+ * receiving Team's two gates would then judge a roster nobody is changing.
+ *
+ * `teamName` rides the command for the EVENT's sake, exactly as
+ * `RecordRosterTrade`'s two names do: the Audit Log entry states the Team and
+ * an id is not a name. `RECORD_DROP_GATES` decides from the id and the id
+ * list alone.
+ *
+ * `reason` is on the command because FR-43 requires one before a Drop
+ * commits and `core/rules/override.ts` owns what makes a reason valid. The
+ * ENFORCEMENT is `server/override-guard.ts`'s, over what was submitted.
+ */
+export type RecordDrop = {
+	readonly kind: 'RecordDrop';
+	readonly teamId: string;
+	readonly teamName: string;
+	/** The Contracts being released. Empty is refused: the act names nothing. */
+	readonly fantraxPlayerIds: readonly string[];
+	/** The Commissioner's stated reason, already trimmed and non-blank. */
+	readonly reason: string;
+};
+
+/**
+ * The gate set for `RecordDrop`, **fixed per command type** (AD-1), and the
+ * FOURTH fixed gate set this codebase declares.
+ *
+ * **Three names, and the list is FLAT** for `RECORD_ROSTER_TRADE_GATES`'
+ * reason: `GateResults` is `Readonly<Record<string, GateOutcome>>` and
+ * `RecordDropGateResults` must stay assignable to it, so nothing may nest
+ * inside a gate — a nested record has no `passed` and would quietly stop
+ * being a gate. A Drop has one Team, so it needs one cap key and one slots
+ * key rather than the Trade's two of each.
+ *
+ * **`contested` leads, exactly as it leads `RECORD_ROSTER_TRADE_GATES`.**
+ * Cap and slots are meaningless questions about a Player nobody holds:
+ * a Player being bid on has no settled Contract for a Drop to release.
+ * Reading order, not short-circuit order — all three outcomes are always
+ * returned (AD-7).
+ *
+ * **The money before the capacity**, matching the last two entries of
+ * `PLACE_BID_GATES`, both entries of `RESTORE_LEADING_BID_GATES` and each
+ * Team's pair in `RECORD_ROSTER_TRADE_GATES`, so a reader who knows one knows
+ * all four.
+ *
+ * Frozen at runtime as well as `as const`, for `PLACE_BID_GATES`' reason:
+ * this list is what `evaluateDrop()`'s totality is asserted against, and a
+ * caller that could splice an entry out of it could make a partial result
+ * look complete.
+ */
+export const RECORD_DROP_GATES = Object.freeze(['contested', 'cap', 'slots'] as const);
+
+/** One of the three gate names above. */
+export type RecordDropGate = (typeof RECORD_DROP_GATES)[number];
+
+/**
+ * What `evaluateDrop()` returns for a `RecordDrop`, in any state whose shape
+ * permits an evaluation at all.
+ *
+ * Three keys, one per name in `RECORD_DROP_GATES`, always all present. Adding
+ * or removing a name here makes every consumer a compile error until it
+ * handles the change — the one-edit property `PLACE_BID_GATES` has.
+ *
+ * **The outcome shapes are the Trade's, reused rather than paralleled.** A
+ * Drop asks the identical two questions of the identical arithmetic
+ * (`rules/roster-act.ts`), so a `DropCapGateOutcome` would be a second
+ * spelling of one answer — and `gateFigure` and the refusal wording all
+ * already read these.
+ */
+export type RecordDropGateResults = {
+	readonly contested: ContestedGateOutcome;
+	readonly cap: ActCapGateOutcome;
+	readonly slots: ActSlotsGateOutcome;
+};
+
+// --- Story 7.11: the RearrangeRoster command and its fixed gate set -------
+
+/**
+ * The `RearrangeRoster` command (Story 7.11, FR-44, PRD §10 examples 44, 45
+ * and 46).
+ *
+ * **The FIFTH command type, and AR-44's "fourth" is a stale count.**
+ * `RecordDrop` above already took fourth place; AR-44's other count — that
+ * this is the THIRD caller of the shared evaluator in `rules/roster-act.ts`,
+ * after the Trade and the Drop — is correct.
+ *
+ * **A Team moving its own Contracts between its own Slots.** No Contract
+ * changes hands, there is no counterparty, no amount is edited and no
+ * assigned length is cleared. What changes is PLACEMENT, and Cap Hit follows
+ * it: a Contract promoted into a Minor League Slot charges `$0` and one
+ * demoted to Active/Bench charges its full amount.
+ *
+ * **Placement is carried on the command and is never re-derived.** Every
+ * other placement in this codebase goes through `slotPlacementFor`, which is
+ * FR-21's automatic rule against the Team's occupancy at that instant. A Move
+ * that re-derived placement would take the demotion the Manager just asked
+ * for and put the Contract straight back in the Slot it left, so `toPlacement`
+ * rides each entry of `moves` and the rules core applies it verbatim.
+ *
+ * **Why not a `RecordRosterTrade` with one Team on both sides.** A Trade
+ * transfers a Contract between two Teams and clears the assigned length; a
+ * Move transfers nothing and clears nothing. Routing a Move through a Trade
+ * would evaluate one Team's gates twice and would return a year to the Year
+ * Allotment that FR-44 says is untouched.
+ *
+ * `teamName` rides the command for the EVENT's sake, exactly as `RecordDrop`'s
+ * does: the Audit Log entry states the Team and an id is not a name.
+ *
+ * **`reason` is nullable, which is the one shape difference from every other
+ * override command.** FR-44 gives a Manager acting on their OWN Team a
+ * confirmation sheet and no reason — it is an ordinary strategic decision,
+ * not a referee intervention — while the Commissioner acting on any Team's
+ * behalf goes through the reason sheet and a `requireOverrideReason` that has
+ * already trimmed and rejected a blank one.
+ */
+export type RearrangeRoster = {
+	readonly kind: 'RearrangeRoster';
+	readonly teamId: string;
+	readonly teamName: string;
+	/**
+	 * The Contracts being re-placed, each with the Slot it is to occupy.
+	 * Empty is refused: the act names nothing.
+	 */
+	readonly moves: readonly {
+		readonly fantraxPlayerId: string;
+		readonly toPlacement: RosterSlotKind;
+	}[];
+	/** The Commissioner's stated reason, or `null` for a Manager's own Move. */
+	readonly reason: string | null;
+};
+
+/**
+ * The gate set for `RearrangeRoster`, **fixed per command type** (AD-1), and
+ * the FIFTH fixed gate set this codebase declares.
+ *
+ * **Three names, and the list is FLAT** for `RECORD_DROP_GATES`' reason:
+ * `GateResults` is `Readonly<Record<string, GateOutcome>>` and
+ * `RearrangeRosterGateResults` must stay assignable to it, so nothing may
+ * nest inside a gate. A Move has one Team, so it needs one cap key and one
+ * slots key rather than the Trade's two of each.
+ *
+ * **`contested` leads**, exactly as it leads the other four: cap and slots
+ * are meaningless questions about a Player nobody holds. Reading order, not
+ * short-circuit order — all three outcomes are always returned (AD-7).
+ *
+ * **The money before the capacity**, matching every other gate list, so a
+ * reader who knows one knows all five.
+ *
+ * Frozen at runtime as well as `as const`, for `PLACE_BID_GATES`' reason:
+ * this list is what `evaluateRearrange()`'s totality is asserted against, and
+ * a caller that could splice an entry out of it could make a partial result
+ * look complete.
+ */
+export const REARRANGE_ROSTER_GATES = Object.freeze(['contested', 'cap', 'slots'] as const);
+
+/** One of the three gate names above. */
+export type RearrangeRosterGate = (typeof REARRANGE_ROSTER_GATES)[number];
+
+/**
+ * What `evaluateRearrange()` returns for a `RearrangeRoster`, in any state
+ * whose shape permits an evaluation at all.
+ *
+ * Three keys, one per name in `REARRANGE_ROSTER_GATES`, always all present.
+ *
+ * **The outcome shapes are the Trade's and the Drop's, reused rather than
+ * paralleled.** A Move asks the identical two questions of the identical
+ * arithmetic (`rules/roster-act.ts`), so a `RearrangeCapGateOutcome` would be
+ * a second spelling of one answer — and `gateFigure` and the refusal wording
+ * already read these.
+ */
+export type RearrangeRosterGateResults = {
+	readonly contested: ContestedGateOutcome;
+	readonly cap: ActCapGateOutcome;
+	readonly slots: ActSlotsGateOutcome;
 };
 
 /**

@@ -25,10 +25,15 @@
  *
  * **The ONE registered projection is `releaseNomination`, unchanged.** Story
  * 2.3 shipped that delete tested and deliberately unregistered, saying in as
- * many words that 3.4 would be a one-line registration. It is. The Slot's
- * release itself is not this module's doing either way —
- * `nominationsReducer` frees it by folding the same event — and the delete
- * exists so the claim table and the log agree about a Slot that is now free.
+ * many words that 3.4 would be a one-line registration. It is. Neither
+ * release is this module's doing — `nominationsReducer` frees both by folding
+ * the same event — and the deletes exist so the claim tables and the log agree
+ * about what is now free.
+ *
+ * On THIS path it issues two: the closed Player's board seat, and the winning
+ * Team's Nomination Slot. A close is the only event that frees a Slot at all
+ * (FR-9, amended), and it frees the WINNER's — very often a Slot spent
+ * nominating somebody else entirely, and never the nominator's for losing.
  *
  * **A Minimum-Bid Contention is DRAWN and then closed, in one transaction**
  * (Story 3.6). `loadCloseState` reads the sealed seed on this transaction's
@@ -63,6 +68,8 @@ import {
 	auctionsReducer,
 	hasExpired
 } from '../core/projection/auctions.ts';
+import { BID_CANCELLED_EVENT } from '../core/projection/auctions.ts';
+import type { OpenAuctions, Restoration } from '../core/projection/auctions.ts';
 import { CONTENTION_DRAWN_EVENT } from '../core/projection/draws.ts';
 import { INITIAL_CONTRACTS, contractsReducer } from '../core/projection/contracts.ts';
 import {
@@ -72,6 +79,7 @@ import {
 } from '../core/projection/eligibility.ts';
 import {
 	AUCTION_CLOSED_EVENT,
+	AUCTION_TERMINATED_EVENT,
 	INITIAL_NOMINATIONS,
 	nominationForPlayer,
 	nominationsReducer
@@ -79,13 +87,30 @@ import {
 import { closedWinnerFor, decideClose } from '../core/rules/close.ts';
 import type { CloseState, ClosedWinner } from '../core/rules/close.ts';
 import { drawnWinnerFor } from '../core/rules/draw.ts';
+import type { AppendedEvent } from '../core/types.ts';
 import { runTransactionalWrite } from '../shell/write.ts';
 import type { ConnectionGateway, TransactionalClient, WriteOutcome } from '../shell/write.ts';
 import { readContentionSeed } from './contention-seed.ts';
 import { loadEventsViaClient } from './event-log.ts';
 import { releaseNomination } from './nomination.ts';
 import { enqueueBroadcastsAndMentions } from './outbox.ts';
-import { loadTeamRoster } from './team-roster.ts';
+import { loadLeagueRosterDetail, loadTeamRoster } from './team-roster.ts';
+import type { TeamRosterFigures } from './team-roster.ts';
+import type { Money } from '../core/money.ts';
+import { parseMoney } from '../core/money.ts';
+
+/**
+ * The Cap Space a close with no winning Team is handed (Story 10.5).
+ *
+ * **Not a figure about anybody.** A lottery every Contender was cancelled from
+ * has no winner, so there is no Team whose Cap Space this could be — and
+ * `decideClose` returns its termination pair before it reaches a placement, a
+ * Cap Hit or the cascade, which are the only three things that read it. Zero
+ * is what "there is nobody to describe" looks like in a `Money`, and it is
+ * stated here rather than left to a query that would have to invent a Team to
+ * ask about.
+ */
+const NO_CAP_SPACE: Money = parseMoney(0);
 
 /**
  * Fold everything a close decides from out of ONE read of the log, then read
@@ -146,11 +171,70 @@ export async function loadCloseState(
 	// before the roster is read and long before anything is written (AD-1).
 	const winner = closedWinnerFor(auction, drawnWinner);
 
-	const roster = await loadTeamRoster(client, winner.teamId, contracts);
+	// **No winning Team means no winner-keyed read** (Story 10.5). A lottery
+	// FR-40's cascade emptied closes with nobody having won: `closedWinnerFor`
+	// answers `null`, and every read below it is keyed on a Team that does not
+	// exist. `loadTeamRoster` would be a query against nothing, and
+	// `loadLeagueRosterDetail` answers the CASCADE — which this close does not
+	// run, because nobody won and so no Team's free Slots fell.
+	//
+	// `decideClose` returns its `ContentionDrawn` + `AuctionTerminated` pair
+	// before it reaches a placement, a Cap Hit or `cascadeFor`, so not one of
+	// the winner figures below is read on this path. They are stated as the
+	// zeroes they are rather than left to a second read that would describe
+	// nobody.
+	const roster: TeamRosterFigures | null =
+		winner === null ? null : await loadTeamRoster(client, winner.teamId, contracts);
+
+	// **A SECOND roster read, batched over every Team with a Bid** (Story
+	// 10.4). The cascade's restorer judges a CANDIDATE Team — somebody other
+	// than the winner — against its Cap Space, Roster Count and Minor League
+	// occupancy, and there is nowhere on `CloseState` for another Team's
+	// figures to come from. `loadTeamRoster` above answers for the winner
+	// alone, by design: `minorLeagueOccupied` is the WINNER's and the read is
+	// keyed on a Team that is not known until the winner is derived.
+	//
+	// One statement over many Teams rather than a query per candidate, and
+	// that is the whole reason `loadLeagueRosterDetail` exists: a Close changes
+	// the WINNER's roster and nobody else's, so this single read describes
+	// every candidate correctly both before and after it. `cascadeFor`
+	// substitutes the winner's own post-close derivation for its own row, so
+	// nothing here has to model the close it is about to make.
+	//
+	// The set comes from the Bid history rather than from the Team table: a
+	// Team with no Bid anywhere can never be a candidate, and reading the whole
+	// league would grow this statement with the league rather than with the
+	// close.
+	const rosterFigures =
+		winner === null
+			? new Map<string, TeamRosterFigures>()
+			: await loadLeagueRosterDetail(client, teamsWithABid(auctions), contracts);
 
 	return {
 		auction,
 		nomination: nominationForPlayer(nominations, fantraxPlayerId),
+		// **The whole fold, INCLUDING the Auction being closed** (Story 10.3).
+		// `decideClose` drops the won Player itself, because the post-close
+		// picture is the core's to derive and a shell that pre-filtered it
+		// would be deciding half of FR-40 out here.
+		auctions,
+		// The WINNER's Cap Space and Roster Count at this close, off the same
+		// `loadTeamRoster` read `minorLeagueOccupied` already came from — two
+		// figures the read has always returned and this module used to
+		// discard. No new query, and no second moment they could describe.
+		capSpace: roster?.capSpace ?? NO_CAP_SPACE,
+		rosterCount: roster?.rosterCount ?? 0,
+		// The eligibility FOLD and the nominations fold, handed through as
+		// `teamMoneyStateFor`'s two callbacks so the cascade's re-test
+		// partitions the winner's other commitments exactly as a Bid would.
+		// `isEligible` is asked per Player rather than pre-computed, for the
+		// reason it is asked per Player everywhere else: the answer is a fold
+		// over the whole log and the set is not enumerable from here.
+		isMinorLeagueEligible: (playerId: string) => isEligible(eligibility, playerId),
+		// The Player's name, with the id as the fallback every `readPayload`
+		// in the core already makes.
+		playerNameFor: (playerId: string) =>
+			nominationForPlayer(nominations, playerId)?.playerName ?? playerId,
 		// The eligibility FOLD's answer, never `free_agent_players`' column —
 		// `server/bidding.ts`'s reason: the column IS the fold of those events,
 		// and asking the table too would make two answers possible inside one
@@ -158,13 +242,49 @@ export async function loadCloseState(
 		playerIsMinorLeagueEligible: isEligible(eligibility, fantraxPlayerId),
 		// The RAW occupancy at this close, contracts included. `M = max(0, 3 −
 		// occupied)` is the core's derivation and is never computed here.
-		minorLeagueOccupied: roster.minorLeagueOccupied,
+		minorLeagueOccupied: roster?.minorLeagueOccupied ?? 0,
 		// Carried on the state so `decide` hands the CORE the very value the
 		// roster read above was keyed on. Deriving it a second time inside
 		// `decide` would be a second read of a table the transaction has
 		// already passed the right moment to ask.
-		drawnWinner
+		drawnWinner,
+		// A plain map lookup, and `undefined` narrowed to the `null` the core
+		// asks for — "a Team this read did not cover", which the restorer
+		// treats as a failed candidate and walks past.
+		rosterFiguresFor: (teamId: string): TeamRosterFigures | null =>
+			rosterFigures.get(teamId) ?? null
 	};
+}
+
+/**
+ * Every Team holding a Bid anywhere in the fold, sorted and deduplicated.
+ *
+ * Sorted because it is the argument to a single statement whose result the
+ * cascade reads (AD-5), and because a stable order makes the query text the
+ * same across two closes that see the same Teams.
+ *
+ * CANCELLED Bids are included deliberately. `bids` keeps them — that is the
+ * whole of what tells a cancellation from a void — and a Team whose Bid was
+ * cancelled on one Auction can still be the next-highest survivor on another,
+ * so filtering them here would drop a legitimate candidate to save nothing.
+ */
+function teamsWithABid(auctions: OpenAuctions): readonly string[] {
+	const teamIds = new Set<string>();
+	for (const playerId of Object.keys(auctions.byPlayer).sort()) {
+		const auction = auctionForPlayer(auctions, playerId);
+		if (auction === null) continue;
+		for (const bid of auction.bids) teamIds.add(bid.teamId);
+	}
+	return [...teamIds].sort();
+}
+
+/** The restored Team on a `BidCancelled` payload, or `null`. Total. */
+function restoredTeamId(payload: unknown): string | null {
+	if (typeof payload !== 'object' || payload === null) return null;
+	const restoration = (payload as Record<string, unknown>)['restoration'];
+	if (typeof restoration !== 'object' || restoration === null) return null;
+	const teamId = (restoration as Partial<Restoration>)['teamId'];
+	return typeof teamId === 'string' && teamId !== '' ? teamId : null;
 }
 
 /**
@@ -178,6 +298,19 @@ export async function loadCloseState(
  *  - `ContentionDrawn` mentions every Contender, in the fold's own order
  *    (AD-14). They are the Teams that had money in the lottery, and the draw is
  *    the only event that can tell them how it went.
+ *  - `BidCancelled` mentions the Team whose commitment was withdrawn (Story
+ *    10.3, FR-40) — off the APPENDED EVENT'S OWN `team_id`, which is the one
+ *    role here that does not need the state at all. `decideClose` addresses
+ *    each cancellation to the Manager and Team it is about, because
+ *    `auction_events.manager_id`/`team_id` are `not null` and reference real
+ *    rows, so the fact is already on the row this enqueue is handed. Deriving
+ *    it a second time — re-running `closedWinnerFor` over the loaded state —
+ *    would be the same fact by a longer route, and a route with a throw in it:
+ *    the enqueue runs INSIDE the write transaction, so it would have to be
+ *    caught, and a caught throw mentions nobody. This cannot silently drop a
+ *    mention, and a Manager must not be able to miss the notice telling them
+ *    they lost a Player through no act of their own. The mention has no copy
+ *    of its own until Story 10.6 and falls back to the plain factual line.
  *  - `AuctionClosed` mentions the Team that LED the Auction into its close —
  *    the winner, for every Standard close — and the Team whose Nomination Slot
  *    the close released, which is the nominator and is frequently somebody
@@ -192,12 +325,51 @@ export async function loadCloseState(
  * A `null` state is the pre-`load` window the enqueue cannot observe; empty is
  * the safe answer there.
  */
-function affectedTeamsForClose(eventType: string, state: CloseState | null): readonly string[] {
+function affectedTeamsForClose(
+	event: AppendedEvent,
+	state: CloseState | null
+): readonly string[] {
+	const eventType = event.type;
+	// **Answered before the `null` guard, because it does not read the
+	// state.** The appended row names the Team the cancellation is about, so
+	// even the pre-`load` window the enqueue cannot observe still addresses it.
+	if (eventType === BID_CANCELLED_EVENT) {
+		// **Two Teams, one event** (Story 10.4). The row names the CANCELLED
+		// Team; the RESTORED one is on the payload, because an
+		// `auction_events` row carries one Team and this one is about the
+		// cancellation. A Manager whose Bid is leading again must not miss the
+		// notice telling them so — they did nothing to earn it and nothing to
+		// deserve losing it either — so the restored Team is added here rather
+		// than left to a fold on some later read.
+		//
+		// Read straight off the payload with no narrowing beyond a string
+		// test: this runs INSIDE the write transaction, so a throw would have
+		// to be caught and a caught throw mentions nobody.
+		const cancelled = event.teamId === null ? [] : [event.teamId];
+		const restored = restoredTeamId(event.payload);
+		if (restored === null || cancelled.includes(restored)) return cancelled;
+		return [...cancelled, restored];
+	}
 	if (state === null) return [];
 	const auction = state.auction;
 
 	if (eventType === CONTENTION_DRAWN_EVENT) {
+		// An emptied lottery's reveal mentions nobody, and correctly so: the
+		// list is empty, and the Teams that were on it were told the moment
+		// their Bid was cancelled. The Manager owed a notice here is the
+		// NOMINATOR, and the event that is about them is the termination
+		// below (Story 10.5).
 		return auction === null ? [] : auction.contenders.map((contender) => contender.teamId);
+	}
+	if (eventType === AUCTION_TERMINATED_EVENT) {
+		// **The nominating Team, and only them** (Story 10.5). Nobody won, so
+		// there is no winner to congratulate and no leader to console; the one
+		// party to this event is the Manager whose Nomination Slot has just
+		// come back and whose Player is in the pool again. The Team is off the
+		// nominations fold, exactly as the close case reads it — the payload
+		// names it too, but one derivation is what keeps the two from drifting.
+		const terminatedNominator = state.nomination?.teamId ?? null;
+		return terminatedNominator === null ? [] : [terminatedNominator];
 	}
 	if (eventType !== AUCTION_CLOSED_EVENT) return [];
 
@@ -258,7 +430,7 @@ export async function closeAuction(
 		//
 		// Story 5.3 mentions the Contenders on the draw, and the leader and the
 		// nominating Team on the close — see `affectedTeamsForClose`.
-		enqueue: enqueueBroadcastsAndMentions((event) => affectedTeamsForClose(event.type, loaded)),
+		enqueue: enqueueBroadcastsAndMentions((event) => affectedTeamsForClose(event, loaded)),
 		load: async (client) => {
 			loaded = await loadCloseState(client, fantraxPlayerId);
 			return loaded;
@@ -294,9 +466,16 @@ export async function closeAuction(
 			// core's guard can no longer tell a live Auction from an expired
 			// one. This is the check that still can. Both throw, both roll the
 			// transaction back with nothing appended (AD-1).
-			if (!hasExpired(auction.closesAt, now.toISOString())) {
+			//
+			// **A `null` clock takes the same throw** (Story 10.3). FR-40
+			// clears `closesAt` on an Auction whose every Bid was cancelled,
+			// precisely so it never closes at its old expiry with no winner —
+			// `hasExpired(null, …)` is already `false`, and stating the `null`
+			// here as well is what lets the core be handed a string below.
+			const closesAt = auction.closesAt;
+			if (closesAt === null || !hasExpired(closesAt, now.toISOString())) {
 				throw new TypeError(
-					`closeAuction: this Auction closes at ${JSON.stringify(auction.closesAt)} and the ` +
+					`closeAuction: this Auction closes at ${JSON.stringify(closesAt)} and the ` +
 						`transaction clock is ${JSON.stringify(now.toISOString())}, which has not reached ` +
 						'it. Closing a live Auction is the sweep’s bug — the same instant the expiry ' +
 						'gate refuses Bids against (AD-12)'
@@ -313,7 +492,7 @@ export async function closeAuction(
 			// `decideClose` asks `closedWinnerFor` about it again, which is pure
 			// and takes only what it is handed, so the shell and the core cannot
 			// arrive at different winners (Story 3.6).
-			return decideClose(state, auction.closesAt, state.drawnWinner);
+			return decideClose(state, closesAt, state.drawnWinner);
 		}
 	});
 }

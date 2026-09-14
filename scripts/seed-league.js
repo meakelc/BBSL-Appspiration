@@ -68,42 +68,115 @@ const TEAMS = Object.freeze([
 	['MIN', 'Minnesota Timberwolves'],
 	['NOP', 'New Orleans Pelicans'],
 	['NYK', 'New York Knicks'],
-	['OKC', 'Oklahoma City Thunder'],
 	['ORL', 'Orlando Magic'],
 	['PHI', 'Philadelphia 76ers'],
 	['PHX', 'Phoenix Suns'],
 	['POR', 'Portland Trail Blazers'],
 	['SAC', 'Sacramento Kings'],
 	['SAS', 'San Antonio Spurs'],
+	// This league plays SEA, not OKC — "Bring Back the Sonics" is the league's
+	// own name. Seeding the standard NBA thirty put an Oklahoma City Thunder row
+	// here on 2026-09-06, and because `resolveTeamByFileName` matches a renamed
+	// file to whatever Team bears that name, nine of thirty rosters imported
+	// against the wrong Team and nothing detected it. SEA sorts after SAS by
+	// abbreviation and after San Antonio by FULL NAME — the second of those is
+	// what any download-ordering scheme has to use, and getting it wrong is
+	// exactly how the first import shifted.
+	['SEA', 'Seattle SuperSonics'],
 	['TOR', 'Toronto Raptors'],
 	['UTA', 'Utah Jazz'],
 	['WAS', 'Washington Wizards']
 ]);
 
 /**
- * The pilot's Managers — the moderators driving Story 9.7.
+ * A display name nobody has supplied yet.
+ *
+ * `managers.display_name` is `not null` with a not-blank check, and it is what
+ * every surface renders — "Lakers — Meakel" in the Teams index, the actor on
+ * every Audit Log line, the name beside a bid. There is no sensible default: a
+ * Team named after itself ("Boston Celtics — Boston") tells a Manager nothing
+ * and tells the log less. So an unfilled name is a REFUSAL rather than a
+ * fallback, checked before the script connects — seeding thirty Managers and
+ * then finding out is the expensive order to discover it in.
+ */
+const PENDING_NAME = '<pending>';
+
+/**
+ * The league's Managers — all thirty-one: one per Team, plus a second seat on
+ * the co-managed Team named in CO_MANAGED.
  *
  * `discordUserId` is the account's own snowflake, which is what AD-15 binds
  * identity to: an account absent from this table is refused at sign-in without
  * the refusal revealing whether it, or any Team, exists.
  *
- * All seven carry `isCommissioner` for the pilot, so every one of them can
- * exercise import, eligibility and auction-open — which is the point of a
- * moderator test. Note the consequence: any of the seven can open or reset the
- * auction. Narrow this before the real auction.
+ * **The third pilot iteration admits every Manager.** Iterations 1 and 2 seeded
+ * the seven moderators and gave the other 23 Teams inert placeholder Managers
+ * (see `seedPlaceholders`) so the auction could open at all. That tested the
+ * mechanics against thin competition: 23 of 30 Teams could neither nominate nor
+ * bid, so no gate that only fires under real contention — a bid war, a
+ * simultaneous nomination, a Team running out of cap mid-auction — was ever
+ * exercised. This table is the fix, and placeholders are no longer used.
  *
- * The remaining 23 Teams are seeded with no Manager. `managers.team_id` is
- * nullable and a Team with no Manager is an ordinary Setup-phase state, not an
- * error.
+ * **All seven keep `isCommissioner` into the real auction.** This block used to
+ * end "narrow this to one before the real auction (Story 9.8)"; the Commissioner
+ * decided otherwise on 2026-09-14, and the instruction is replaced rather than
+ * left standing next to a table that contradicts it. The seven are the league's
+ * moderators, and moderating is the thing the flag grants — driving import,
+ * eligibility and auction-open is their job in the real auction exactly as it
+ * was in the pilot, so a single holder would make the Commissioner a bottleneck
+ * on setup day rather than a safeguard.
+ *
+ * The consequence is unchanged and is accepted rather than absent: any of the
+ * seven can open or RESET the auction, with 29 other people's work inside it.
+ * There is no second factor and no confirmation step between a moderator and
+ * that act. The mitigation is social — these seven already hold the league's
+ * trust — and the log is append-only, so the act is attributable after the
+ * fact even though it is not preventable before it.
+ *
+ * The remaining 23 snowflakes came from `team_rosters/discord-ids/
+ * 2026-snowflakes.txt` (collected 2026-09-12). Each decodes to a plausible
+ * account-creation date, which is the only check possible from here — a
+ * mistyped-but-well-formed snowflake is indistinguishable from a real one until
+ * its owner tries to sign in and is refused. That refusal is the pilot's first
+ * useful signal, so it is cheap to discover.
  */
 const MANAGERS = Object.freeze([
+	// The seven moderators, carrying the Commissioner flag.
 	['UTA', 'Meakel', '184532951688675328', true],
 	['ATL', 'Slothington', '634191652470390821', true],
 	['CLE', 'George', '618505612053184518', true],
 	['LAC', 'Michael', '475140401012015124', true],
 	['DAL', 'Dustin', '360095790565294080', true],
 	['DEN', 'Patton', '141642526531518464', true],
-	['DET', 'Tchoy', '294127376927817729', true]
+	['DET', 'Tchoy', '294127376927817729', true],
+	// The other 23, as ordinary Managers.
+	['BOS', 'foxforce', '1070324943579000943', false],
+	['BKN', 'rc73', '404376181010333708', false],
+	['CHA', 'Alex', '693636065717780500', false],
+	['CHI', 'Tukeduke', '644271167200297023', false],
+	['GSW', 'gauchovic', '1131102481963831296', false],
+	['HOU', 'KDizzle', '698660868413587466', false],
+	['IND', 'SteveX', '611987528236400650', false],
+	['LAL', 'msaggio', '1261028905608020000', false],
+	['MEM', 'Colby', '598363157622292482', false],
+	['MIA', 'Mikkiel', '1150143448091983983', false],
+	['MIL', 'Damian', '789320957343825940', false],
+	['MIN', 'Row', '608152289236090881', false],
+	['NOP', 'Captain Sprinkles', '606885233735893012', false],
+	['NYK', 'DaddyLightYears', '388499745745797121', false],
+	// The 31st Manager, and the only co-managed seat (see CO_MANAGED).
+	['NYK', 'Pesto', '345082937533792256', false],
+	['ORL', 'Kostas', '777613302310240277', false],
+	// The snowflake file spells this one PHO; TEAMS keys it PHX, which is the
+	// abbreviation the Phoenix Suns carry everywhere else in this repository.
+	['PHX', 'guacmode', '500869116920594442', false],
+	['PHI', 'BC55', '818338971078623256', false],
+	['POR', 'Huskies', '818528555814092811', false],
+	['SAC', 'Nik', '310908140478660608', false],
+	['SAS', 'Polish Thunder', '508344019714310144', false],
+	['SEA', 'baselinehammer', '843377633588543528', false],
+	['TOR', 'Cobra', '609909836146147348', false],
+	['WAS', 'PFru', '468421644164268032', false]
 ]);
 
 /**
@@ -117,6 +190,29 @@ const MANAGERS = Object.freeze([
  * adds a Team binding without adding an identity.
  */
 const PLACEHOLDER_PREFIX = 'pilot-placeholder-';
+
+/**
+ * Teams that deliberately carry more than one Manager.
+ *
+ * **Co-management is a product feature, not an anomaly.** Story 9.4's
+ * acceptance criteria required a Team with two Managers seeded against one
+ * `team_id`, and both resolving to identical Cap Space, Maximum Bid and
+ * Nomination Slot status; Story 9.8 requires all **31** Managers, which is
+ * thirty Teams plus this one second seat.
+ *
+ * The duplicate-Team check below refused exactly this until 2026-09-14, on the
+ * reasonable assumption that one abbreviation appearing twice is a typo. It
+ * usually is. So the check is kept and narrowed rather than removed: a Team
+ * appearing twice is still a hard refusal UNLESS it is named here, which makes
+ * the one intended case explicit in the file and leaves every accidental one
+ * loud. Deleting the check would have bought the 31st Manager at the price of
+ * every future mis-keyed abbreviation seeding silently.
+ *
+ * The duplicate-SNOWFLAKE check is untouched and must stay absolute: the same
+ * account twice would not fail the upsert, it would silently re-bind the first
+ * Manager to the second's Team and leave one Team unbound.
+ */
+const CO_MANAGED = Object.freeze(new Set(['NYK']));
 
 /**
  * Give every Manager-less Team an inert Manager, so `refuseAuctionOpen`'s
@@ -136,6 +232,12 @@ const PLACEHOLDER_PREFIX = 'pilot-placeholder-';
  *
  * PILOT ONLY. Story 9.8 seeds all thirty-one real Managers against prod, and
  * this function refuses to run there.
+ *
+ * **Unused from pilot iteration 3 (2026-09-12).** `MANAGERS` now names a real
+ * Manager for every one of the thirty Teams, so `--placeholders` finds nothing
+ * to do and says so. It is kept rather than deleted because the situation it
+ * answers — a pilot that has to open with Teams nobody has claimed — recurs the
+ * moment a Manager drops out and the auction still has to open on a schedule.
  */
 async function seedPlaceholders(client) {
 	const { rows } = await client.query(
@@ -169,6 +271,60 @@ async function seedPlaceholders(client) {
 	);
 }
 
+/**
+ * Everything about `MANAGERS` that can be checked without a database.
+ *
+ * Returns every complaint rather than throwing on the first, so that filling in
+ * twenty-three display names is one pass over one list instead of twenty-three
+ * runs of the script.
+ *
+ * `discord_user_id` is the unique natural key the upsert below turns on, so two
+ * rows sharing one snowflake do not fail — the second silently RE-BINDS the
+ * first Manager to a different Team, leaving one Team unbound and one person
+ * holding somebody else's roster. That is the one error here a database
+ * constraint cannot catch, which is why it is checked here.
+ */
+function validateManagers() {
+	const complaints = [];
+
+	const pending = MANAGERS.filter(([, name]) => name === PENDING_NAME).map(([abbrev]) => abbrev);
+	if (pending.length > 0) {
+		complaints.push(
+			`${String(pending.length)} Manager(s) have no display name yet: ${pending.join(', ')}`,
+			'Fill them into the MANAGERS table in this file and run again.'
+		);
+	}
+
+	const seenSnowflake = new Map();
+	const seenTeam = new Map();
+	for (const [abbrev, displayName, discordUserId] of MANAGERS) {
+		if (TEAMS.find(([a]) => a === abbrev) === undefined) {
+			complaints.push(`${abbrev} is not a Team abbreviation in TEAMS`);
+		}
+		if (!/^[0-9]{17,20}$/.test(discordUserId)) {
+			complaints.push(
+				`${abbrev}'s Discord id "${discordUserId}" is not a snowflake (17-20 digits)`
+			);
+		}
+		const priorSnowflake = seenSnowflake.get(discordUserId);
+		if (priorSnowflake !== undefined) {
+			complaints.push(`${abbrev} and ${priorSnowflake} share the Discord id ${discordUserId}`);
+		}
+		seenSnowflake.set(discordUserId, abbrev);
+
+		const priorTeam = seenTeam.get(abbrev);
+		if (priorTeam !== undefined && !CO_MANAGED.has(abbrev)) {
+			complaints.push(
+				`${abbrev} appears twice (${priorTeam}, ${displayName})`,
+				`If that is deliberate co-management, add '${abbrev}' to CO_MANAGED in this file.`
+			);
+		}
+		seenTeam.set(abbrev, displayName);
+	}
+
+	return complaints;
+}
+
 async function main() {
 	const url = process.env['SUPABASE_DB_URL'];
 	if (url === undefined || url.trim() === '') {
@@ -176,6 +332,17 @@ async function main() {
 			'SUPABASE_DB_URL is not set.\n' +
 				"Run as: SUPABASE_DB_URL='postgresql://...' node scripts/seed-league.js\n"
 		);
+		process.exitCode = 1;
+		return;
+	}
+
+	// Checked BEFORE connecting, for the same reason the prod guard below is: a
+	// malformed MANAGERS table is a fact about this file, and finding out about
+	// it from a constraint violation halfway through a transaction is strictly
+	// worse than finding out before a socket is opened.
+	const complaints = validateManagers();
+	if (complaints.length > 0) {
+		process.stderr.write(`MANAGERS is not seedable:\n  ${complaints.join('\n  ')}\n`);
 		process.exitCode = 1;
 		return;
 	}
@@ -307,7 +474,10 @@ async function report(client) {
 	const unmanaged = rows.filter((r) => r['display_name'] === null).map((r) => String(r['team']));
 	if (unmanaged.length > 0) {
 		process.stdout.write(
-			`\n  ${String(unmanaged.length)} Team(s) with no Manager (expected during the pilot):\n  ${unmanaged.join(', ')}\n`
+			// From iteration 3 on, MANAGERS covers all thirty Teams, so this list
+			// should be empty — and an unbound Team refuses `auctionOpen`, which
+			// is a thing to learn here rather than at the moment of opening.
+			`\n  ⚠ ${String(unmanaged.length)} Team(s) with no Manager — the auction cannot open until each is bound:\n  ${unmanaged.join(', ')}\n`
 		);
 	}
 }

@@ -68,6 +68,8 @@ type StagedRosterRow = {
 	readonly cap_hit: string | number;
 	readonly roster_slot_kind: string;
 	readonly contract_years_remaining: number;
+	/** The draft round of a rookie-scale Contract, or `null` (Story 7.8). */
+	readonly rookie_scale_round: number | null;
 };
 
 type TeamRow = {
@@ -91,7 +93,7 @@ export async function loadImportPreview(
 	const teamsResult = await client
 		.from('teams')
 		.select(
-			'id, name, import_staged_rosters(fantrax_player_id, player_name, cap_hit, roster_slot_kind, contract_years_remaining)'
+			'id, name, import_staged_rosters(fantrax_player_id, player_name, cap_hit, roster_slot_kind, contract_years_remaining, rookie_scale_round)'
 		)
 		.order('name', { ascending: true });
 

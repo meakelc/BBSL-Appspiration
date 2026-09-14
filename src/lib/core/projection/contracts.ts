@@ -12,10 +12,10 @@
  * `AuctionClosed` must converge on the same contract rows rather than
  * duplicating them".
  *
- * `open_nominations` is a table because it needs a UNIQUENESS CONSTRAINT for
- * a real race between two Managers. A close has no such race: it is one
- * writer under the global lock (AD-6), so a table here would only have to be
- * undone.
+ * `open_nominations` and `nomination_slots` are tables because each needs a
+ * UNIQUENESS CONSTRAINT for a real race between two Managers. A close has no
+ * such race: it is one writer under the global lock (AD-6), so a table here
+ * would only have to be undone.
  *
  * **The two money fields are distinct and neither is derived from the other**
  * (AD-23). `winningAmount` is the contract's value; `capHit` is what it
@@ -53,9 +53,10 @@
  * stdlib only, relative .ts imports only so Deno can load it (AD-2).
  */
 
+import { parseMoney } from '../money.ts';
 import type { Money } from '../money.ts';
 import type { CapHitRow } from '../rules/roster-import.ts';
-import type { SlotPlacement } from '../types.ts';
+import type { RosterSlotKind, SlotPlacement } from '../types.ts';
 import type { Reducer } from './fold.ts';
 import { AUCTION_CLOSED_EVENT, readClosedFacts } from './nominations.ts';
 
@@ -379,6 +380,497 @@ function readAssignmentPayload(
 }
 
 /**
+ * The event type that records one Roster Trade (Story 7.7, FR-41, PRD §10
+ * examples 36–39 and 42).
+ *
+ * Declared here, beside the reducer that gives it meaning, for
+ * `CONTRACT_LENGTH_ASSIGNED_EVENT`'s reason — and the payload types below
+ * with it, because `rules/roster-trade.ts` builds exactly what this fold
+ * reads and two structurally identical declarations are the drift Story 4.5's
+ * review removed elsewhere.
+ *
+ * **It carries the WHOLE delta** — every Player, both Teams, both Slot kinds
+ * and both Cap Hits — so a replay from zero reproduces the world without
+ * reaching for `team_rosters`, which is mutable reference data nothing
+ * rebuilds from the log (AD-4).
+ *
+ * **The LATEST transfer per Player wins**, which is `ContractLengthAssigned`'s
+ * rule rather than `AuctionClosed`'s. A Player may be traded twice in one
+ * offseason, and the second trade is not a duplicate of the first: it is
+ * where he is now. First-wins here would strand him on the Team that traded
+ * him away.
+ *
+ * **The string stays `'RosterMoveRecorded'` while the constant says Trade**
+ * (Story 7.10). The act was called a Roster Move until that story renamed it,
+ * and rows written under the old name are already in `auction_events`. AD-4
+ * makes the log insert-only and forbids rewriting history, so the wire name
+ * is frozen and only the identifier moved. `tests/projection-contracts.test.ts`
+ * asserts the literal value, so a later rename of the constant cannot
+ * silently change what a replay matches on.
+ */
+export const ROSTER_TRADE_RECORDED_EVENT = 'RosterMoveRecorded';
+
+/**
+ * One Contract's whole journey inside a Trade.
+ *
+ * `capHitBefore` and `capHitAfter` are both CHARGED figures — what the
+ * Contract took off each Team's Cap Space — while `winningAmount` stands
+ * unchanged beside them (AD-23). §10 example 38's `$0 → $18,000,000` is
+ * therefore readable off the record without anybody deriving one from the
+ * other.
+ *
+ * `won` is what tells an Auction Contract from an Existing one: this reducer
+ * folds the `true` ones and ignores the rest, because an Existing Contract is
+ * a `team_rosters` row that the same transaction `UPDATE`s (AR-41).
+ */
+export type RosterTradeTransfer = {
+	readonly fantraxPlayerId: string;
+	readonly playerName: string;
+	readonly fromTeamId: string;
+	readonly fromTeamName: string;
+	readonly toTeamId: string;
+	readonly toTeamName: string;
+	/** `true` for an Auction Contract — moved by this event, never by an `UPDATE`. */
+	readonly won: boolean;
+	readonly fromPlacement: RosterSlotKind;
+	readonly toPlacement: RosterSlotKind;
+	readonly capHitBefore: Money;
+	readonly capHitAfter: Money;
+	readonly winningAmount: Money;
+	/** The assigned length this Trade cleared, or `null` where there was none. */
+	readonly clearedContractYears: ContractYears | null;
+};
+
+/**
+ * One Team's five figures at one instant — FR-41's "before-state and
+ * after-state for both Teams", per side.
+ *
+ * `rosterCount` IS the Active/Bench occupancy: PRD §3 defines Roster Count as
+ * exactly that count, so a second field for it would be a second name for one
+ * number and the first thing to disagree.
+ */
+export type RosterActTeamFigures = {
+	readonly teamId: string;
+	readonly teamName: string;
+	readonly capSpace: Money;
+	readonly rosterCount: number;
+	readonly injuryReserveOccupied: number;
+	readonly minorLeagueOccupied: number;
+};
+
+/**
+ * The payload a `RosterMoveRecorded` carries — the whole act, in the log.
+ *
+ * FR-41's "written to the Audit Log with actor, timestamp, before-state and
+ * after-state for both Teams, and the reason" IS this payload: AD-4 makes the
+ * Audit Log a read of `auction_events` rather than a second table, so
+ * everything a later reading needs is here. **One entry, not two**, which is
+ * why both Teams' figures sit on one payload rather than on an event each.
+ *
+ * The actor rides the envelope's `manager_id`/`team_id` as every other event's
+ * does; `reason` is on the payload because there is no column for it.
+ */
+export type RosterTradeRecordedPayload = {
+	readonly sendingTeamId: string;
+	readonly sendingTeamName: string;
+	readonly receivingTeamId: string;
+	readonly receivingTeamName: string;
+	readonly transfers: readonly RosterTradeTransfer[];
+	readonly sendingBefore: RosterActTeamFigures;
+	readonly sendingAfter: RosterActTeamFigures;
+	readonly receivingBefore: RosterActTeamFigures;
+	readonly receivingAfter: RosterActTeamFigures;
+	/** The Commissioner's stated reason — non-blank, trimmed, permanent. */
+	readonly reason: string;
+};
+
+// --- Story 7.8: the Drop, recorded but never folded -----------------------
+
+/**
+ * The event type that records one Drop (Story 7.8, FR-43, PRD §10 examples
+ * 40, 41 and 43).
+ *
+ * Declared here, beside `ROSTER_TRADE_RECORDED_EVENT` and for the same reason,
+ * with its payload types alongside it — `rules/roster-drop.ts` builds exactly
+ * what the Audit Log reads, and two structurally identical declarations are
+ * the drift Story 4.5's review removed elsewhere.
+ *
+ * **It carries the WHOLE delta** — every released Player, the Slot he left,
+ * what he was charging, what is carried as Dead Money and whether his row
+ * survived, plus the Team's five figures before and after — so a replay from
+ * zero reproduces the world without reaching for `team_rosters`, which is
+ * mutable reference data nothing rebuilds from the log (AD-4).
+ *
+ * **There is deliberately NO `contractsReducer` case for it, and the absence
+ * is load-bearing.** `contractsReducer` folds Auction Contracts and nothing
+ * else, and a Player held by an Auction Contract CANNOT be dropped —
+ * `rules/roster-drop.ts` refuses him as a shape refusal, because he is not in
+ * Fantrax until the FR-30/31 export and so cannot have been released there.
+ * Every released Contract is therefore a `team_rosters` row that the same
+ * transaction `UPDATE`s or `DELETE`s. The event exists for replay and the
+ * Audit Log, not for a projection.
+ *
+ * **If the won refusal is ever lifted, THIS is what breaks.** A dropped
+ * Auction Contract would need a fold — it has no row to mutate — and its
+ * absence here is silent rather than a compile error. The dependency is
+ * stated on the payload below as well as here, so it is read at both ends.
+ */
+export const DROP_RECORDED_EVENT = 'DropRecorded';
+
+/**
+ * One Contract's release, as the record states it.
+ *
+ * **`deadMoney` and `removed` are ONE decision stated twice, not two.**
+ * `rules/roster-drop.ts` computes `deadMoney = releases2RK ? $0 : chargedCapHit(row)`
+ * and removes the row if and only if that amount is `$0`; both fields are
+ * written from that one expression, and nothing re-derives either from the
+ * Slot kind. A Minor League row was charging `$0` and so leaves nothing
+ * behind; a full-term second-round rookie deal is released to `$0` by FR-43's
+ * exception; everything else is reclassified at the amount it was already
+ * charging.
+ *
+ * `chargedCapHit` is what the row took off Cap Space the day before, and
+ * `value` stands unchanged beside it (AD-23) — a Minor League release reads
+ * `$0` against a `value` of whatever Fantrax stated, and the pair is readable
+ * off the record without anybody deriving one from the other.
+ *
+ * `contractYearsRemaining` and `rookieScaleRound` are the two facts FR-43's
+ * exception turned on, recorded so a later reading can see WHY a Contract was
+ * released to nothing rather than take it on trust. The remaining years also
+ * travel with Dead Money for the FR-30/31 export's sake; **within this
+ * auction the term computes nothing.**
+ */
+export type DroppedContract = {
+	readonly fantraxPlayerId: string;
+	readonly playerName: string;
+	/** The Slot the Contract occupied before the Drop. */
+	readonly fromPlacement: RosterSlotKind;
+	/** What the row was charging Cap Space before the Drop. */
+	readonly chargedCapHit: Money;
+	/** The full value of the Contract, unchanged by the act (AD-23). */
+	readonly value: Money;
+	/** What the Team keeps carrying. `$0` exactly when the row is removed. */
+	readonly deadMoney: Money;
+	/** `true` when the `team_rosters` row is DELETEd rather than reclassified. */
+	readonly removed: boolean;
+	/** Years still to run, as Fantrax stated them, or `null`. */
+	readonly contractYearsRemaining: number | null;
+	/** The draft round of a rookie-scale Contract, or `null` for an ordinary one. */
+	readonly rookieScaleRound: number | null;
+};
+
+/**
+ * The payload a `DropRecorded` carries — the whole act, in the log.
+ *
+ * FR-43's record IS this payload: AD-4 makes the Audit Log a read of
+ * `auction_events` rather than a second table, so everything a later reading
+ * needs is here. One entry however many Players were released, because a Drop
+ * is one act evaluated once.
+ *
+ * `teamBefore` and `teamAfter` are `RosterActTeamFigures`, reused unchanged:
+ * a Drop's five figures are a Trade's five figures asked of one Team, and a
+ * parallel type would be a second name for one shape.
+ *
+ * **They are NOT called `before` and `after`, and the prefix is load-bearing.**
+ * `core/audit-log.ts`'s `mergeOverride` renders the `OverrideRecord` SHAPE off
+ * any payload that carries it, and that shape's own state pair is top-level
+ * `before`/`after`. A payload using those two names has its Team figures read
+ * a second time as an override state map and printed raw — `teamId team-a →
+ * team-a`, machine tokens and all. `RosterTradeRecordedPayload` avoids the
+ * collision by naming its four figure blocks per side; this avoids it the same
+ * way.
+ *
+ * **No reducer folds this.** See `DROP_RECORDED_EVENT` above: a won Contract
+ * cannot be dropped, so every release is a `team_rosters` row the same
+ * transaction mutates or removes. Lifting that refusal is what would make a
+ * fold necessary, and the fold is where it would break.
+ *
+ * The actor rides the envelope's `manager_id`/`team_id` as every other event's
+ * does; `reason` is on the payload because there is no column for it.
+ */
+export type DropRecordedPayload = {
+	readonly teamId: string;
+	readonly teamName: string;
+	readonly released: readonly DroppedContract[];
+	readonly teamBefore: RosterActTeamFigures;
+	readonly teamAfter: RosterActTeamFigures;
+	/** The Commissioner's stated reason — non-blank, trimmed, permanent. */
+	readonly reason: string;
+};
+
+// --- Story 7.11: the Roster Move, recorded and folded ---------------------
+
+/**
+ * The event type that records one Roster Move (Story 7.11, FR-44, PRD §10
+ * examples 44, 45 and 46).
+ *
+ * **It is NOT `ROSTER_TRADE_RECORDED_EVENT`, and the separation is frozen.**
+ * `'RosterMoveRecorded'` is the TRADE's persisted wire name — rows are
+ * already in `auction_events` under it and AD-4 forbids rewriting history, so
+ * Story 7.10 renamed the identifier and left the string alone. The act this
+ * constant names is the within-Team rearrangement FR-44 defines, which is a
+ * different act with a different payload, so it takes a new string of its
+ * own: `'RosterRearranged'`.
+ *
+ * **It carries the WHOLE delta** — every Contract, both placements, both Cap
+ * Hits, the value, and the Team's five figures before and after — so a replay
+ * from zero reproduces the world without reaching for `team_rosters`, which
+ * is mutable reference data nothing rebuilds from the log (AD-4).
+ *
+ * **The LATEST move per Player wins**, which is the Trade's rule and not
+ * `AuctionClosed`'s. A Contract may be demoted and promoted back within the
+ * hour (§10 example 46's round trip), and the second Move is not a duplicate
+ * of the first — it is where the Contract is now.
+ */
+export const ROSTER_REARRANGED_EVENT = 'RosterRearranged';
+
+/**
+ * One Contract's re-placement inside a Roster Move.
+ *
+ * `capHitBefore` and `capHitAfter` are both CHARGED figures — what the
+ * Contract took off the Team's Cap Space on each side of the act — while
+ * `value` stands unchanged beside them (AD-23). §10 example 44's Ellis reads
+ * `$18,000,000 → $0` against a value of `$18,000,000`, and Brooks reads
+ * `$0 → $3,000,000` against a value of `$3,000,000`; both pairs are readable
+ * off the record without anybody deriving one from the other.
+ *
+ * `won` is what tells an Auction Contract from an Existing one: the reducer
+ * below folds the `true` ones and ignores the rest, because an Existing
+ * Contract is a `team_rosters` row that the same transaction `UPDATE`s.
+ *
+ * **There is no `clearedContractYears`.** A Move is not a transfer: the
+ * Contract does not change hands, so §10 example 42's reasoning does not
+ * apply and the Year Allotment is untouched (FR-44).
+ */
+export type RosterRearrangedMove = {
+	readonly fantraxPlayerId: string;
+	readonly playerName: string;
+	/** `true` for an Auction Contract — moved by this event, never by an `UPDATE`. */
+	readonly won: boolean;
+	readonly fromPlacement: RosterSlotKind;
+	readonly toPlacement: RosterSlotKind;
+	readonly capHitBefore: Money;
+	readonly capHitAfter: Money;
+	/** The full value of the Contract, unchanged by the act (AD-23). */
+	readonly value: Money;
+};
+
+/**
+ * The payload a `RosterRearranged` carries — the whole act, in the log.
+ *
+ * FR-44's record IS this payload: AD-4 makes the Audit Log a read of
+ * `auction_events` rather than a second table, so everything a later reading
+ * needs is here. ONE entry however many Contracts moved, because a Move is
+ * one act evaluated once.
+ *
+ * **They are `teamBefore`/`teamAfter`, and the prefix is load-bearing** —
+ * `DropRecordedPayload`'s note, restated because this story tried the other
+ * spelling first and the suite caught it. `core/audit-log.ts`'s
+ * `mergeOverride` renders the `OverrideRecord` SHAPE off any payload carrying
+ * a top-level `before`/`after`, with NO second condition: it does not require
+ * an `override` block and it does not check the value types. A payload using
+ * those two names has its Team figures read a second time as an override
+ * state map and printed raw — `teamId team-a → team-a`, machine tokens and
+ * all, which `tests/core/audit-log.test.ts`'s "no raw party id" assertion
+ * fails on. `RosterTradeRecordedPayload` avoids the collision by naming its
+ * four figure blocks per side; this avoids it the same way the Drop does.
+ *
+ * `reason` is `null` for a Manager acting on their own Team — FR-44 requires
+ * a confirmation sheet and NO reason there, because it is an ordinary
+ * strategic decision and not a referee intervention — and a non-blank trimmed
+ * string for the Commissioner acting on any Team's behalf.
+ */
+export type RosterRearrangedPayload = {
+	readonly teamId: string;
+	readonly teamName: string;
+	readonly moves: readonly RosterRearrangedMove[];
+	readonly teamBefore: RosterActTeamFigures;
+	readonly teamAfter: RosterActTeamFigures;
+	/** The Commissioner's stated reason, or `null` for a Manager's own Move. */
+	readonly reason: string | null;
+};
+
+/** Whether a value is one of the two Slot Placements an Auction Contract may hold. */
+function isSlotPlacement(value: unknown): value is SlotPlacement {
+	return value === 'active_bench' || value === 'minor_league';
+}
+
+/**
+ * One money field off a payload, VALIDATED BY VALUE before it is branded —
+ * or `null` when the column holds something that is not an amount.
+ *
+ * **`parseMoney` THROWS**, and a throw inside a reducer is the one failure an
+ * insert-only log cannot recover from: it does not lose one event, it makes
+ * every future fold of the whole log raise, which is this module's stated
+ * discipline turned inside out ("a malformed historical row is SKIPPED rather
+ * than thrown over"). A type test alone is not enough to prevent it —
+ * `capHitAfter: "abc"` is a `string` and `capHitAfter: 1.5` is a `number`, and
+ * both reach `parseMoney` and throw — so the VALUE is checked here, by the
+ * same two rules `parseMoney` itself applies, and a failure is returned as
+ * `null` for the caller to skip past.
+ *
+ * A number must be a safe integer; a string must be an optionally-signed run
+ * of digits that survives the same safe-integer test. Nothing is coerced,
+ * rounded or defaulted.
+ */
+function readMoney(value: unknown): Money | null {
+	if (typeof value === 'number') {
+		return Number.isSafeInteger(value) ? parseMoney(value) : null;
+	}
+	if (typeof value === 'string') {
+		const text = value.trim();
+		if (!/^[+-]?\d+$/.test(text)) return null;
+		const parsed = Number(text);
+		return Number.isSafeInteger(parsed) ? parseMoney(parsed) : null;
+	}
+	return null;
+}
+
+/**
+ * The `RosterMoveRecorded` payload as this reducer needs it, read
+ * defensively — `readAssignmentPayload`'s discipline, for its reason.
+ *
+ * Only the transfers matter to this fold, and only the `won` ones: an
+ * Existing Contract has no contract row here and moved by an `UPDATE` in the
+ * same transaction. Everything else on the payload is the audit record, which
+ * no fold decides on.
+ *
+ * A transfer is REJECTED rather than repaired when any field it folds on is
+ * absent or wrong — a missing id names no contract, a placement outside the
+ * two legal ones is not a Slot, and a Cap Hit that is not a whole number of
+ * dollars is not a charge. Individual bad transfers are skipped rather than
+ * dropping the whole Trade: an insert-only log cannot be corrected in place,
+ * and losing four good transfers over a fifth would be worse than losing the
+ * fifth.
+ *
+ * **Nothing here can throw**, which is the property that matters most: a
+ * `parseMoney` raised inside this loop would not lose one transfer, it would
+ * make every future fold of the entire log raise. `readMoney` is what keeps
+ * the validation on this side of the brand.
+ */
+function readTransfers(payload: unknown): readonly RosterTradeTransfer[] {
+	if (typeof payload !== 'object' || payload === null) return [];
+	const record = payload as Record<string, unknown>;
+	const transfers = record['transfers'];
+	if (!Array.isArray(transfers)) return [];
+
+	const read: RosterTradeTransfer[] = [];
+	for (const entry of transfers as readonly unknown[]) {
+		if (typeof entry !== 'object' || entry === null) continue;
+		const row = entry as Record<string, unknown>;
+		if (row['won'] !== true) continue;
+		const fantraxPlayerId = row['fantraxPlayerId'];
+		const toTeamId = row['toTeamId'];
+		const toTeamName = row['toTeamName'];
+		const toPlacement = row['toPlacement'];
+		if (typeof fantraxPlayerId !== 'string' || fantraxPlayerId === '') continue;
+		if (typeof toTeamId !== 'string' || toTeamId === '') continue;
+		if (typeof toTeamName !== 'string' || toTeamName === '') continue;
+		if (!isSlotPlacement(toPlacement)) continue;
+
+		// **All three money fields are REJECTED rather than repaired**, and that
+		// is AD-23 rather than strictness for its own sake. `winningAmount` used
+		// to fall back to `capHitAfter` and `capHitBefore` to `0`; both of those
+		// read one money field out of the other, or invent one, in a fold whose
+		// entire job is to keep the contract's value and its charge distinct —
+		// a stashed win of $18,000,000 charging $0 is the case that makes them
+		// different numbers, and a "repair" would silently make them the same.
+		// There is no cosmetic half here to fall back to.
+		const capHitBefore = readMoney(row['capHitBefore']);
+		const capHitAfter = readMoney(row['capHitAfter']);
+		const winningAmount = readMoney(row['winningAmount']);
+		if (capHitBefore === null || capHitAfter === null || winningAmount === null) continue;
+
+		read.push({
+			fantraxPlayerId,
+			playerName: typeof row['playerName'] === 'string' ? row['playerName'] : fantraxPlayerId,
+			fromTeamId: typeof row['fromTeamId'] === 'string' ? row['fromTeamId'] : '',
+			fromTeamName: typeof row['fromTeamName'] === 'string' ? row['fromTeamName'] : '',
+			toTeamId,
+			toTeamName,
+			won: true,
+			fromPlacement: isSlotPlacement(row['fromPlacement']) ? row['fromPlacement'] : toPlacement,
+			toPlacement,
+			capHitBefore,
+			capHitAfter,
+			winningAmount,
+			clearedContractYears: isContractYears(row['clearedContractYears'])
+				? row['clearedContractYears']
+				: null
+		});
+	}
+	return read;
+}
+
+/**
+ * The `RosterRearranged` payload as this reducer needs it, read defensively
+ * — `readTransfers`' discipline, for its reason.
+ *
+ * Only the moves matter to this fold, and only the `won` ones: an Existing
+ * Contract has no contract row here and moved by an `UPDATE` in the same
+ * transaction. Everything else on the payload is the audit record, which no
+ * fold decides on.
+ *
+ * A move is REJECTED rather than repaired when any field it folds on is
+ * absent or wrong. Individual bad moves are skipped rather than dropping the
+ * whole act, and **nothing here can throw** — `readMoney` is what keeps the
+ * validation on this side of the brand, exactly as it does for a transfer.
+ *
+ * **`fromPlacement` is rejected too, and that is the difference from
+ * `readTransfers`.** That reader substitutes `toPlacement` for a missing
+ * `fromPlacement`, which is survivable there because nothing folds on it. It
+ * is NOT survivable here: `projection/minors-history.ts` reads exactly this
+ * field to decide whether the app has ever observed a Contract in a Minor
+ * League Slot, so a substitution would silently erase the observation that
+ * makes a demoted stash promotable again — §10 example 46's Thompson turning
+ * into its Vassell. A move whose origin is unreadable is skipped, and the
+ * Contract stays where the rest of the log says it is.
+ */
+function readMoves(payload: unknown): readonly RosterRearrangedMove[] {
+	if (typeof payload !== 'object' || payload === null) return [];
+	const record = payload as Record<string, unknown>;
+	const moves = record['moves'];
+	if (!Array.isArray(moves)) return [];
+
+	const read: RosterRearrangedMove[] = [];
+	for (const entry of moves as readonly unknown[]) {
+		if (typeof entry !== 'object' || entry === null) continue;
+		const row = entry as Record<string, unknown>;
+		if (row['won'] !== true) continue;
+		const fantraxPlayerId = row['fantraxPlayerId'];
+		const toPlacement = row['toPlacement'];
+		const fromPlacement = row['fromPlacement'];
+		if (typeof fantraxPlayerId !== 'string' || fantraxPlayerId === '') continue;
+		if (!isSlotPlacement(toPlacement)) continue;
+		// Rejected, never substituted — see the docblock: this field is what
+		// `minors-history.ts` folds placement eligibility from.
+		if (!isSlotPlacement(fromPlacement)) continue;
+
+		// **All three money fields are REJECTED rather than repaired** (AD-23),
+		// for `readTransfers`' reason: a stashed win of $18,000,000 charging $0
+		// is exactly the case that makes the value and the charge different
+		// numbers, and a "repair" reading one out of the other would silently
+		// make them the same.
+		const capHitBefore = readMoney(row['capHitBefore']);
+		const capHitAfter = readMoney(row['capHitAfter']);
+		const value = readMoney(row['value']);
+		if (capHitBefore === null || capHitAfter === null || value === null) continue;
+
+		read.push({
+			fantraxPlayerId,
+			playerName: typeof row['playerName'] === 'string' ? row['playerName'] : fantraxPlayerId,
+			won: true,
+			fromPlacement,
+			toPlacement,
+			capHitBefore,
+			capHitAfter,
+			value
+		});
+	}
+	return read;
+}
+
+/**
  * Fold one event onto the Auction Contracts.
  *
  * The `default: return state` discipline is `phase.ts`'s, for the same
@@ -427,6 +919,94 @@ export const contractsReducer: Reducer<AuctionContracts> = (state, event) => {
 					[assignment.fantraxPlayerId]: { ...contract, contractYears: assignment.contractYears }
 				}
 			};
+		}
+		// **The LATEST transfer for a Player wins** (Story 7.7, FR-41), which is
+		// `ContractLengthAssigned`'s rule and not `AuctionClosed`'s. A Player
+		// may change hands twice in one offseason and the second Trade is not a
+		// duplicate of the first — it is where he is now.
+		//
+		// Four fields are rewritten and one is CLEARED. The Team and its name
+		// are the transfer; `placement` and `capHit` are re-derived by the Trade
+		// against the receiving Team's occupancy, because a stash landing where
+		// there is no Minor League Slot starts charging its full amount (§10
+		// example 38); and `contractYears` goes back to `null`, which returns
+		// the year to the sending Team's Year Allotment by arithmetic rather
+		// than by a compensating event (§10 example 42).
+		//
+		// **`winningAmount` is not touched.** A Trade is not a restructure: the
+		// Contract travels unchanged in value, and no expression here reads one
+		// money field out of the other (AD-23).
+		case ROSTER_TRADE_RECORDED_EVENT: {
+			let byPlayer = state.byPlayer;
+			for (const transfer of readTransfers(event.payload)) {
+				const contract = contractForPlayer({ byPlayer }, transfer.fantraxPlayerId);
+				// A transfer naming a Player who holds no Auction Contract folds
+				// nothing: an Existing Contract moved by the `UPDATE` this event
+				// commits beside, and inventing a contract out of a transfer
+				// payload would manufacture a Player nobody won.
+				if (contract === null) continue;
+				// Narrowed again at the point of use: `RosterTradeTransfer` carries
+				// a `RosterSlotKind` because an Existing Contract may sit on IR,
+				// while an `AuctionContract`'s `placement` is the two-member
+				// `SlotPlacement` — and a close can only ever have produced one of
+				// those two. `readTransfers` has already refused anything else; this
+				// is what lets the type say so.
+				if (!isSlotPlacement(transfer.toPlacement)) continue;
+				byPlayer = {
+					...byPlayer,
+					[transfer.fantraxPlayerId]: {
+						...contract,
+						teamId: transfer.toTeamId,
+						teamName: transfer.toTeamName,
+						placement: transfer.toPlacement,
+						capHit: transfer.capHitAfter,
+						contractYears: null
+					}
+				};
+			}
+			return byPlayer === state.byPlayer ? state : { byPlayer };
+		}
+		// **The LATEST move for a Player wins** (Story 7.11, FR-44), which is
+		// the Trade's rule and not `AuctionClosed`'s. A Contract may be demoted
+		// and promoted back within the hour — §10 example 46's round trip — and
+		// the second Move is not a duplicate of the first: it is where the
+		// Contract is now.
+		//
+		// TWO fields are rewritten and no other is touched. `placement` is what
+		// the Move commanded — never re-derived, because re-deriving it would
+		// take a demotion the Manager just asked for and put the Contract
+		// straight back in the Slot it left — and `capHit` is what that
+		// placement charges. The Team does not change, because a Move has no
+		// counterparty; `winningAmount` does not change, because a Move is not
+		// a restructure; and `contractYears` does not change, because the
+		// Contract did not change hands and §10 example 42's reasoning does not
+		// apply (FR-44).
+		case ROSTER_REARRANGED_EVENT: {
+			let byPlayer = state.byPlayer;
+			for (const move of readMoves(event.payload)) {
+				const contract = contractForPlayer({ byPlayer }, move.fantraxPlayerId);
+				// A move naming a Player who holds no Auction Contract folds
+				// nothing: an Existing Contract moved by the `UPDATE` this event
+				// commits beside, and inventing a contract out of a move payload
+				// would manufacture a Player nobody won.
+				if (contract === null) continue;
+				// Narrowed again at the point of use, exactly as the Trade's case
+				// narrows: `RosterRearrangedMove` carries a `RosterSlotKind`
+				// because an Existing Contract may sit on IR, while an
+				// `AuctionContract`'s `placement` is the two-member
+				// `SlotPlacement`. `readMoves` has already refused anything else;
+				// this is what lets the type say so.
+				if (!isSlotPlacement(move.toPlacement)) continue;
+				byPlayer = {
+					...byPlayer,
+					[move.fantraxPlayerId]: {
+						...contract,
+						placement: move.toPlacement,
+						capHit: move.capHitAfter
+					}
+				};
+			}
+			return byPlayer === state.byPlayer ? state : { byPlayer };
 		}
 		default:
 			return state;

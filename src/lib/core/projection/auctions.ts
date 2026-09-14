@@ -50,8 +50,15 @@ import { MINIMUM_BID } from '../constants.ts';
 import { formatInstant, parseInstant } from '../instant.ts';
 import type { Money } from '../money.ts';
 import { compareMoney, parseMoney } from '../money.ts';
+import type { AppendedEvent } from '../types.ts';
+import { fold } from './fold.ts';
 import type { Reducer } from './fold.ts';
-import { AUCTION_CLOSED_EVENT, readClosedPlayerId } from './nominations.ts';
+import {
+	AUCTION_CLOSED_EVENT,
+	AUCTION_TERMINATED_EVENT,
+	readClosedPlayerId,
+	readTerminatedPlayerId
+} from './nominations.ts';
 
 /**
  * The event type a successful Bid appends (`server/bidding.ts`).
@@ -88,6 +95,37 @@ export const BID_PLACED_EVENT = 'BidPlaced';
  * dissolved the contention before it states the dissolution.
  */
 export const CONTENTION_DISSOLVED_EVENT = 'ContentionDissolved';
+
+/**
+ * The event type a cancellation appends — the compensating half of the
+ * Outstanding Bid Allowance (Story 10.3, FR-40, AD-31).
+ *
+ * Declared here for `BID_PLACED_EVENT`'s reason, and the declaration is the
+ * whole of the registration: `auction_events.event_type` is generic `text`
+ * and this codebase has no central event registry, so a const beside the
+ * reducer that gives it meaning is where an event type comes into existence.
+ * No migration was needed and none was written.
+ *
+ * **It is a COMPENSATING event and emphatically not a correction.** The
+ * `BidPlaced` it names is never deleted and never mutated: it stays a history
+ * line, keeps its `seq`, and keeps its place in the order every other fold
+ * reads. What this event withdraws is the Bid's STANDING — its leadership,
+ * its place in a Contender list, and through both of those the capital the
+ * Team had committed to it.
+ *
+ * **It is not a `BidVoided` and `league-clock.ts` must never treat it as
+ * one.** A void says a Bid should not have stood and takes its League Clock
+ * reset back with it; a cancellation says nothing of the kind — the Bid was
+ * legal when it was placed and the Team simply ran out of room to land it. A
+ * reducer that folded the two alike would end the Auction Phase early every
+ * time a roster filled, which is why `league-clock.ts` has no case for this
+ * type at all and its `default: return state` is the assertion.
+ *
+ * Appended LAST, after the `AuctionClosed` that caused it, in one
+ * transaction: cause then consequence, the order `ContentionDrawn` already
+ * keeps on the other side of the close.
+ */
+export const BID_CANCELLED_EVENT = 'BidCancelled';
 
 /**
  * Which contention an Auction is in.
@@ -150,6 +188,88 @@ export type Contender = {
 	readonly managerId: string;
 };
 
+/**
+ * The mark a `BidCancelled` leaves on the Bid it names (Story 10.3, FR-40).
+ *
+ * **A marker, not a deletion.** The Bid stays in `bids`, in `seq` order, with
+ * every field it was folded with; this says that its standing was withdrawn
+ * and by what. The Auction history therefore still shows the Bid — struck
+ * through, labelled, and naming the win that caused it (Story 10.6 words it)
+ * — which is what FR-40 requires kept visible and what tells a cancellation
+ * apart from a void on the page.
+ *
+ * The CAUSE is carried rather than looked up. It is the Close that filled the
+ * Team's last Slot, and it is on a different Auction entirely — so a surface
+ * that had to recover it would have to re-fold a second Auction from a `seq`,
+ * which is a derivation that can fail on a surface that must not.
+ */
+export type BidCancellation = {
+	/** The `BidCancelled` event's own log position. */
+	readonly seq: string;
+	/** The Player whose Close caused it — a DIFFERENT Auction to this one. */
+	readonly causeFantraxPlayerId: string;
+	/** That Player's name, so the history line can say the cause out loud. */
+	readonly causePlayerName: string;
+	/**
+	 * Who leads this Auction now, as `rules/restore.ts` decided it inside the
+	 * closing transaction — or `null` when nothing survived re-validation
+	 * (Story 10.4, FR-40).
+	 *
+	 * **A decision this fold READS and never makes** (AD-31). Choosing the
+	 * successor means running the cap and slots gates over a candidate Team's
+	 * roster and committed capital, which is a picture no projection can see;
+	 * so the answer rides the event and `withBidCancelled` seats whoever it
+	 * names. `null` is not "there is nobody below" — it is "nobody below could
+	 * still keep the Bid", and an Auction can go leaderless with a shelf full
+	 * of surviving Bids in `bids`.
+	 *
+	 * It is `null` for every cancelled Minimum-Bid Contention entry, where the
+	 * lead is a fold artifact over identical flat amounts and moves with no
+	 * re-validation at all.
+	 */
+	readonly restoration: Restoration | null;
+};
+
+/**
+ * The Bid a cancellation handed this Auction to (Story 10.4, FR-40).
+ *
+ * **`seq` is the identity and the other three are the notice.** The fold
+ * seats the restored leader by finding `seq` in `bids` — never by trusting
+ * the recorded `amount`, which would let a malformed payload put a price on
+ * an Auction that no Bid in its history ever offered. The Team, its name and
+ * the Manager ride along because the restored Manager is owed a notice
+ * naming what they now lead and for how much, and a dispatcher reading one
+ * event must not have to re-fold an Auction to address it.
+ *
+ * `amount` is therefore a stated figure rather than a load-bearing one: it is
+ * the same number the Bid at `seq` carries, recorded so the Audit Log and the
+ * notice can quote it without the fold.
+ */
+export type Restoration = {
+	/** The restored Bid's own log position — its identity in `bids`. */
+	readonly seq: string;
+	/**
+	 * The Team handed the lead.
+	 *
+	 * **Usually not the cancelled Team, and nothing here guarantees it.** The
+	 * selector considers the cancelled Team's own older, outbid Bids on this
+	 * same Auction like any other candidate — they are surviving Bids — and
+	 * what keeps them out is that they are re-evaluated against that Team's
+	 * POST-CLOSE roster and committed capital, which is the state that just
+	 * refused the Bid above them. A Team over its allowance fails `slots`
+	 * again; a Team whose eligible win a free Minor League Slot still absorbs
+	 * does not, and would legitimately be restored here. Neither this type nor
+	 * the fold treats the identity as a rule.
+	 */
+	readonly teamId: string;
+	/** That Team's name, so one row names the new Leading Bidder out loud. */
+	readonly teamName: string;
+	/** The Manager who placed the restored Bid, and who the notice is owed to. */
+	readonly managerId: string;
+	/** What that Bid offered — re-committed as a consequence, not as a write. */
+	readonly amount: number;
+};
+
 /** One Bid, as the history line and the Leading Bidder both need it. */
 export type Bid = {
 	/** The log's own ordering column. Also this Bid's identity in history. */
@@ -177,27 +297,74 @@ export type Bid = {
 	 * against at the draw (Story 3.6).
 	 */
 	readonly seedHash: string | null;
+	/**
+	 * The mark a `BidCancelled` left on this Bid, or `null`/absent on the
+	 * overwhelming majority that were never cancelled (Story 10.3, FR-40).
+	 *
+	 * **Optional rather than required, and that is a statement about the
+	 * log.** Every other field on this shape is read off a `BidPlaced`
+	 * payload, so a `Bid` literal that omitted one would be describing an
+	 * event that could not exist. This one is written by a LATER event onto a
+	 * Bid already folded, so its absence is the ordinary case rather than a
+	 * missing fact — and every reader takes it as `bid.cancellation ?? null`.
+	 */
+	readonly cancellation?: BidCancellation | null;
 };
+
+/** Whether this Bid's standing was withdrawn by a `BidCancelled` (FR-40). */
+export function wasCancelled(bid: Bid): boolean {
+	return (bid.cancellation ?? null) !== null;
+}
 
 /**
  * One Auction's bid state. Absent entirely until its first Bid.
  *
- * **`leadingBid` and `closesAt` are not nullable, and that is the invariant
- * rather than an oversight.** An entry exists in this projection if and only
- * if at least one `BidPlaced` was folded for that Player, and any non-empty
- * set of Bids has a highest one. Typing them as nullable invited a branch
- * that could never be taken — `contention` and `closesAt` each re-testing a
- * leader the reducer had just guaranteed — and a dead branch hides the real
- * invariant instead of stating it. "No Auction row" IS the no-Bid state, and
- * `auctionForPlayer` returning `null` is how a caller reads it.
+ * **`leadingBid` and `closesAt` are NULLABLE, and FR-40 is why.** The
+ * invariant that stood here until Story 10.3 was "an entry exists if and only
+ * if at least one `BidPlaced` was folded, and any non-empty set of Bids has a
+ * highest one". A cancellation falsifies the second half without touching the
+ * first: a non-empty set of Bids can have no *surviving* highest one, because
+ * `BidCancelled` withdraws a Bid's standing while leaving the Bid in
+ * `bids` as the history line FR-40 requires kept visible.
+ *
+ * So the invariant is restated rather than removed:
+ *
+ *  - an entry exists if and only if at least one `BidPlaced` was folded for
+ *    that Player. "No Auction row" is still the no-Bid state, and
+ *    `auctionForPlayer` returning `null` is still how a caller reads it.
+ *  - `leadingBid` is the Bid that currently LEADS, and `null` when none does.
+ *    That is deliberately weaker than "the highest Bid still standing", and
+ *    the gap is the whole of Story 10.4: cancelling the leader of a Standard
+ *    Contention leaves `null` even though lower Bids go on standing, because
+ *    handing the Auction to the next of them is RESTORATION — it re-validates
+ *    the candidate against gates a fold may not run — and until 10.4 appends
+ *    one nothing leads. §10 example 31 is that state exactly: Team U's
+ *    cancelled Bid, Team V's still standing beneath it, and no leader between
+ *    the two. A LEADERLESS Auction renders as the ordinary unbid nomination
+ *    the board already has.
+ *  - `closesAt` is cleared only when NOTHING survives. A cancellation resets
+ *    no clock and removes none: where a Bid still stands, the Auction Clock is
+ *    untouched, and a restored bidder may inherit very little of it (Story
+ *    10.4). Where none does, a `null` clock is what stops the Auction closing
+ *    at its old expiry with no winner.
+ *
+ * Deleting the entry instead would clear the clock correctly and erase the
+ * history, which is the one thing FR-40 forbids.
  */
 export type Auction = {
 	readonly fantraxPlayerId: string;
 	readonly contention: ContentionState;
-	/** The highest Bid so far — the current price and the Leading Bidder. */
-	readonly leadingBid: Bid;
-	/** The Auction Clock's absolute expiry: the leading Bid's own `closesAt`. */
-	readonly closesAt: string;
+	/**
+	 * The Bid that currently leads — the current price and the Leading Bidder
+	 * — or `null` when none does. Not "the highest standing Bid": see the
+	 * invariant above, and `highestStandingBid` for the other question.
+	 */
+	readonly leadingBid: Bid | null;
+	/**
+	 * The Auction Clock's absolute expiry: the leading Bid's own `closesAt`,
+	 * and `null` only when no Bid survives at all.
+	 */
+	readonly closesAt: string | null;
 	/** Every Bid, oldest first. Ordered by `seq`, never by `occurredAt` (AD-5). */
 	readonly bids: readonly Bid[];
 	/**
@@ -269,6 +436,56 @@ export function auctionForPlayer(auctions: OpenAuctions, fantraxPlayerId: string
 }
 
 /**
+ * The Auction one Player's Bids left behind, as it stood the instant before
+ * its close — the history a Closed Auction page renders.
+ *
+ * **The Bids are durable; only the PROJECTION drops them.** `auctionsReducer`
+ * deletes the entry on `AuctionClosed`, which is what stops a settled Auction
+ * being offered a Bid or swept up as overdue, and for a long time the Closed
+ * page read that deletion as "the Bids are gone" and printed nothing. They are
+ * not gone: every `BidPlaced` is still in `auction_events` with its own `seq`,
+ * and so is every `BidCancelled` that marked one. Folding the same reducer
+ * over the log UP TO the close reconstructs the Auction exactly as it was when
+ * it closed — nothing assembled from leftovers and nothing invented, which is
+ * what the page's checkability claim actually requires.
+ *
+ * **The FIRST close for the Player is the cut**, which is `contractsReducer`'s
+ * own rule for which close produced the contract — so the history this returns
+ * and the winner printed above it can never describe two different Auctions.
+ * Everything before that point is folded in full, so a Player whose earlier
+ * nomination was terminated and who was nominated again contributes no Bids
+ * from the abandoned round: this reducer's own `AuctionTerminated` case
+ * cleared them inside the prefix.
+ *
+ * Comparison is on `seq` as `BigInt` rather than on array position — `fold`
+ * sorts a copy for exactly this reason, and a caller handing over an unsorted
+ * array must not get a different history from one that sorted first.
+ *
+ * `null` when the log holds no close for this Player, which on a Closed page
+ * cannot happen: `closedAuctionFor` requires the contract that only a close
+ * writes. It is `null` rather than an empty Auction so a caller cannot mistake
+ * "never closed" for "closed with no Bids" — the second is real (a lottery
+ * whose every Contender was cancelled) and reads as an empty history.
+ */
+export function auctionAtClose(
+	events: readonly AppendedEvent[],
+	fantraxPlayerId: string
+): Auction | null {
+	let closeSeq: bigint | null = null;
+	for (const event of events) {
+		if (event.type !== AUCTION_CLOSED_EVENT) continue;
+		if (readClosedPlayerId(event.payload) !== fantraxPlayerId) continue;
+		const seq = BigInt(event.seq);
+		if (closeSeq === null || seq < closeSeq) closeSeq = seq;
+	}
+	if (closeSeq === null) return null;
+
+	const cut = closeSeq;
+	const before = events.filter((event) => BigInt(event.seq) < cut);
+	return auctionForPlayer(fold(INITIAL_AUCTIONS, before, auctionsReducer), fantraxPlayerId);
+}
+
+/**
  * The contention state of an Auction that may not have one yet.
  *
  * The one place `null` — "nominated, no Bid" — is mapped to
@@ -321,6 +538,45 @@ export function contentionSentence(state: ContentionState): string {
  * the chip and the accent bar name one thing.
  */
 export const MINIMUM_BID_CONTENTION_LABEL = 'Minimum-Bid Contention';
+
+/**
+ * The same contention's CARD name — the word that rides the identity row of a
+ * Bid Board card and a Your Positions card, where the glossary term does not
+ * fit.
+ *
+ * A deliberate second name for one thing, and the only one in the product.
+ * `MINIMUM_BID_CONTENTION_LABEL` is the PRD §3 term and stays everywhere the
+ * contention is DEFINED or ACTED ON — the Auction page's chip, the refusal
+ * panel's `contention` gate, every sentence `rules/bidding.ts` words. This is
+ * the name on a surface that is scanned rather than read, where a 22-character
+ * term set at `--size-10` beside a Player's name wraps the identity row on
+ * every lottery card at 375px.
+ *
+ * Worded HERE, beside the term it shortens, for that term's own reason: the
+ * two cards that print it must print the same string, and a second spelling in
+ * a `.svelte` file is exactly where a third would appear.
+ */
+export const MINIMUM_LOTTERY_LABEL = 'Minimum Lottery';
+
+/**
+ * The same name again, for a NARROW viewport — the third and last spelling of
+ * one thing.
+ *
+ * `MINIMUM_LOTTERY_LABEL` already shortens the PRD §3 term for a surface that
+ * is scanned rather than read, and at 640px and up it fits. Below that it does
+ * not: `Minimum Lottery` set at `--size-10` beside a Player's name still wraps
+ * a Bid Board card's identity row on a phone, which is the width most of this
+ * product is read at.
+ *
+ * `Minimum` alone is unambiguous where it appears — a card carries exactly one
+ * state marker, and no other state in `AUCTION_STATE_LABELS` begins with the
+ * word — and the diamond beside it is what carries the state in greyscale
+ * either way.
+ *
+ * Worded HERE for the two labels above it's own reason: a second spelling in a
+ * `.svelte` file is exactly where a third would appear.
+ */
+export const MINIMUM_LOTTERY_LABEL_NARROW = 'Minimum';
 
 /**
  * The statement, in words, that joining does not restart the Auction Clock.
@@ -511,6 +767,31 @@ export function contentionForAmount(amount: Money): ContentionState {
 }
 
 /**
+ * The highest Bid in a history whose standing has not been withdrawn, or
+ * `null` when none stands (Story 10.3, FR-40).
+ *
+ * **The reducer's own "strictly higher takes the lead", stated once.** A Bid
+ * only displaces the current highest by being strictly greater, so the
+ * EARLIEST of two equal amounts wins — which is what makes replay converge and
+ * what makes a lottery, where every join is the identical flat amount, keep
+ * the first join it folded.
+ *
+ * Two callers, and they have to agree: `auctionsReducer` asks it for the
+ * incumbent a new Bid must beat when the leader has been cancelled out from
+ * under it, and `withBidCancelled` asks it for the successor to a lottery's
+ * fold artifact. A second expression of "highest surviving" could disagree
+ * with this one about a tie.
+ */
+function highestStandingBid(bids: readonly Bid[]): Bid | null {
+	let highest: Bid | null = null;
+	for (const bid of bids) {
+		if (wasCancelled(bid)) continue;
+		if (highest === null || compareMoney(bid.amount, highest.amount) > 0) highest = bid;
+	}
+	return highest;
+}
+
+/**
  * The Contenders a Bid history yields, in ascending `seq`, one per Team.
  *
  * A Contender is a Bid of EXACTLY `MINIMUM_BID` — the join amount — and
@@ -529,6 +810,15 @@ function contendersFor(bids: readonly Bid[]): readonly Contender[] {
 	const contenders: Contender[] = [];
 	const joined = new Set<string>();
 	for (const bid of bids) {
+		// **A cancelled Contender leaves the list here, and only here**
+		// (Story 10.3, FR-40). The joining Bid stays in `bids` and stays in
+		// the visible history; what it stops being is a ticket in the draw.
+		// This is the whole of "a cancelled Contender cannot be drawn" —
+		// `contendersFor` is recomputed from `bids` on every fold, AD-14's
+		// ordered list is derived from it, and `teamMoneyStateFor` reads the
+		// same list to decide whose capital is still committed. One skip, and
+		// the draw, the exposure and the page all agree.
+		if (wasCancelled(bid)) continue;
 		if (contentionForAmount(bid.amount) !== 'minimum_bid') continue;
 		if (joined.has(bid.teamId)) continue;
 		joined.add(bid.teamId);
@@ -663,6 +953,269 @@ function readDissolvedPayload(
 }
 
 /**
+ * What a cancellation's cause is called when the log names neither a Player
+ * nor an id for it — a corrupt-payload state this codebase cannot write.
+ *
+ * Worded here, beside the fold that produces it, for `contentionSentence`'s
+ * reason: it is a sentence fragment a surface prints verbatim, and a second
+ * spelling in a `.svelte` file is exactly where a synonym would appear. It
+ * claims nothing it cannot support — least of all a Player nobody can look up.
+ */
+export const CAUSE_UNNAMED = 'a win this log does not name';
+
+/**
+ * The `BidCancelled` payload as this reducer needs it, read defensively —
+ * `readPayload`'s idiom for `readPayload`'s reason.
+ *
+ * An event naming no Player or no cancelled `seq` is SKIPPED outright: there
+ * is no Bid it could be about, and inventing one would withdraw the standing
+ * of whichever Bid happened to sort first. The CAUSE falls back rather than
+ * skipping — a cancellation whose cause cannot be read still happened, and
+ * the history line names the Player by id, which is the fallback every
+ * `readPayload` in this core already makes.
+ *
+ * The fields this reducer does NOT read — the cancelled Team and the amount
+ * released — ride the payload for the dispatcher, which must notify the
+ * cancelled Manager from one event without re-folding. They are deliberately
+ * not narrowed here.
+ *
+ * **`restoration` IS read, since Story 10.4**, and it is the one field on this
+ * payload the fold acts on rather than merely carries: it says who leads the
+ * Auction now. It degrades to `null` rather than throwing, exactly as the
+ * cause degrades to a sentence — a fold that threw on a malformed payload
+ * would take the whole projection down over one bad row, and `null` is a real
+ * state this fold already models (nothing survived re-validation) rather than
+ * an invented one.
+ */
+function readCancelledPayload(payload: unknown): {
+	readonly fantraxPlayerId: string;
+	readonly cancelledSeq: string;
+	readonly causeFantraxPlayerId: string;
+	readonly causePlayerName: string;
+	readonly restoration: Restoration | null;
+} | null {
+	if (typeof payload !== 'object' || payload === null) return null;
+	const record = payload as Record<string, unknown>;
+	const fantraxPlayerId = record['fantraxPlayerId'];
+	const cancelledSeq = record['cancelledSeq'];
+	if (typeof fantraxPlayerId !== 'string' || fantraxPlayerId === '') return null;
+	if (typeof cancelledSeq !== 'string' || cancelledSeq === '') return null;
+	const rawCause = record['causeFantraxPlayerId'];
+	const causeFantraxPlayerId = typeof rawCause === 'string' && rawCause !== '' ? rawCause : '';
+	const rawCauseName = record['causePlayerName'];
+	// **The name falls back to the id, and the id falls back to a SENTENCE.**
+	// Naming the cause by id is `readPayload`'s fallback everywhere in this
+	// core; falling through to the empty string when there is no id either
+	// would put a history line on the page reading "cancelled by the win on"
+	// and then nothing at all. A cancellation whose cause the log cannot name
+	// still happened, and saying so is the honest rendering — the same trade
+	// `SEED_COMMITMENT_UNVERIFIABLE` makes for a reveal with nothing to check.
+	const causePlayerName =
+		typeof rawCauseName === 'string' && rawCauseName !== ''
+			? rawCauseName
+			: causeFantraxPlayerId !== ''
+				? causeFantraxPlayerId
+				: CAUSE_UNNAMED;
+	return {
+		fantraxPlayerId,
+		cancelledSeq,
+		causeFantraxPlayerId,
+		causePlayerName,
+		restoration: readRestoration(record['restoration'])
+	};
+}
+
+/**
+ * The `restoration` half of a `BidCancelled` payload, read defensively —
+ * `null` for the ordinary "nothing survived" case and `null` again for any
+ * shape this fold cannot use (Story 10.4).
+ *
+ * **All five fields or none.** A restoration naming a `seq` but no Team
+ * cannot address the notice it exists to send, and one naming a Team but no
+ * `seq` names no Bid for `withBidCancelled` to seat — so a partial record is
+ * treated as the absent one rather than half-applied. Degrading here is what
+ * keeps the fold total: `auctionsReducer` runs on every read path in the
+ * product, and a throw inside it over one malformed row would take out the
+ * board, the Auction page and every close after it.
+ *
+ * The amount is required to be a whole number of dollars above zero —
+ * `Money`'s own domain, which `parseMoney` states as a safe integer, narrowed
+ * by the fact that no Bid this product accepts is zero or negative (the
+ * opening minimum is $1,000,000). A fractional or negative figure is not a
+ * Bid amount at all, so a record carrying one is not a restoration this fold
+ * can report.
+ *
+ * It is still not what seats the leader — `withBidCancelled` finds the Bid at
+ * `seq` and uses that Bid — so even a plausible-but-wrong figure here is a
+ * wrong figure in a notice, never a wrong price on an Auction. The check is
+ * about not carrying nonsense into a Manager's notice, not about the fold.
+ */
+function readRestoration(value: unknown): Restoration | null {
+	if (typeof value !== 'object' || value === null) return null;
+	const record = value as Record<string, unknown>;
+	const seq = record['seq'];
+	const teamId = record['teamId'];
+	const teamName = record['teamName'];
+	const managerId = record['managerId'];
+	const amount = record['amount'];
+	if (typeof seq !== 'string' || seq === '') return null;
+	if (typeof teamId !== 'string' || teamId === '') return null;
+	if (typeof teamName !== 'string' || teamName === '') return null;
+	if (typeof managerId !== 'string' || managerId === '') return null;
+	if (typeof amount !== 'number' || !Number.isSafeInteger(amount) || amount <= 0) return null;
+	return { seq, teamId, teamName, managerId, amount };
+}
+
+/**
+ * One Auction with one Bid's standing withdrawn — the WHOLE of what a
+ * cancellation does to the fold (Story 10.3, FR-40).
+ *
+ * Exported because two callers must produce byte-identical state from one
+ * decision: `auctionsReducer` folding the appended `BidCancelled`, and
+ * `rules/close.ts`'s cascade, which has to see the effect of each
+ * cancellation before it decides whether a further one is owed. A cascade
+ * that modelled the effect itself would be a second statement of this rule,
+ * and the two could disagree about the state the next iteration tests.
+ *
+ * Four things happen and no fifth:
+ *
+ *  - the named Bid gains its `cancellation` marker. It is NOT removed from
+ *    `bids`, not reordered, and not otherwise touched — the history line FR-40
+ *    requires kept visible is the same object with one more field.
+ *  - `contenders` is recomputed from `bids`, which drops the cancelled Team
+ *    from the draw and from its own committed capital (`contendersFor`).
+ *  - the LEAD is withdrawn if the cancelled Bid held it, and left alone if it
+ *    did not. In Standard Contention it is handed to whoever
+ *    `cancellation.restoration` NAMES, and to nobody otherwise. **The
+ *    recorded decision is read and never re-derived** (Story 10.4, AD-31):
+ *    `rules/restore.ts` walked the surviving history inside the closing
+ *    transaction, re-ran the cap and slots gates over each candidate's roster
+ *    and committed capital, skipped the ones that failed and stopped at the
+ *    first pass. A skipped candidate is a surviving Bid that must NOT lead,
+ *    which is exactly what `highestStandingBid` would make it — so that
+ *    derivation is not asked here, and the leaderless branch is
+ *    `restoration === null` rather than "no Bid stands".
+ *  - **inside a Minimum-Bid Contention the lead MOVES, and that is not
+ *    restoration.** `rules/bidding.ts` says outright that a lottery's
+ *    `leadingBid` is a fold artifact — some Bid has to be the highest, and
+ *    every Contender holds the identical flat `MINIMUM_BID` — so the artifact
+ *    moving to the earliest surviving join changes nobody's position, nobody's
+ *    committed capital and nobody's price. Withdrawing it to `null` instead
+ *    would take the lottery's fixed Auction Clock with it and strand a
+ *    contention that is still running, which is the opposite of what FR-40
+ *    asks for.
+ *  - `closesAt` is cleared, and `contention` returns to `awaiting_opening_bid`,
+ *    only when a STANDARD Auction is left with no leader. A cancellation
+ *    resets no clock and removes none: where a Bid is restored the Auction
+ *    Clock is untouched and the Restored Leading Bidder inherits whatever is
+ *    left of it — possibly minutes — and where none is, a cleared clock is
+ *    what stops the Auction closing at its old expiry with no winner. Note
+ *    that "no leader" is not "no surviving Bid": every candidate can fail
+ *    re-validation while `bids` still holds several standing offers, and that
+ *    Auction goes back to Awaiting Opening Bid with the Player still on the
+ *    Board and the nominator's Nomination Slot still held (FR-9).
+ *  - **inside a Minimum-Bid Contention neither happens, however many joins
+ *    are cancelled — including the last** (Story 10.5). The contention stays
+ *    `minimum_bid` and keeps its fixed `closesAt` even with `contenders`
+ *    empty and `leadingBid` null. A lottery's clock is the CONTENTION's, not
+ *    any bidder's, so no Team's departure earns it: "a cancellation resets
+ *    nothing and removes nothing" applies to the clock too. And an emptied
+ *    lottery has a definite outcome that must be RECORDED — the empty list,
+ *    the revealed seed, the Player back in the pool and the nominator's Slot
+ *    released — which only an expiry the sweep still offers can reach.
+ *    `rules/close.ts` decides that outcome as a `ContentionDrawn` over an
+ *    empty list followed by an `AuctionTerminated`; clearing the clock here
+ *    would strand the sealed seed unopened, which is the one thing AD-14
+ *    cannot survive.
+ *
+ * Idempotent: a Bid already carrying a marker, or a `seq` this Auction has
+ * never held, returns the Auction unchanged, so a second fold of the same log
+ * converges.
+ */
+export function withBidCancelled(
+	auction: Auction,
+	cancelledSeq: string,
+	cancellation: BidCancellation
+): Auction {
+	const target = auction.bids.find((bid) => bid.seq === cancelledSeq) ?? null;
+	if (target === null || wasCancelled(target)) return auction;
+
+	const bids = auction.bids.map((bid) =>
+		bid.seq === cancelledSeq ? { ...bid, cancellation } : bid
+	);
+	const leaderWasCancelled = auction.leadingBid !== null && auction.leadingBid.seq === cancelledSeq;
+	// The artifact's successor, and it exists only inside a lottery, where
+	// every join is the identical flat amount so "highest standing" is simply
+	// the earliest one still in. Outside a lottery it is never asked for:
+	// promoting a strictly LOWER Bid is RESTORATION, and restoration is a
+	// decision, not a derivation.
+	const artifactSuccessor =
+		auction.contention === 'minimum_bid' ? highestStandingBid(bids) : null;
+	// The RECORDED decision, looked up in this Auction's own history. The
+	// `seq` is the identity; the payload's `amount` is not consulted, so a
+	// malformed figure cannot put a price on this Auction that no Bid ever
+	// offered. A `seq` naming no Bid here, or one this very event cancelled,
+	// degrades to leaderless — the state the fold already models — rather
+	// than seating something that is not in `bids`.
+	const restored =
+		auction.contention === 'minimum_bid'
+			? null
+			: restoredBidFor(bids, cancellation.restoration, cancelledSeq);
+
+	// A cancellation that did not take the lead leaves the lead exactly where
+	// it was: only the leader's own withdrawal can hand the Auction on.
+	const leadingBid = leaderWasCancelled
+		? (auction.contention === 'minimum_bid' ? artifactSuccessor : restored)
+		: auction.leadingBid;
+
+	// **A lottery keeps both, always** (Story 10.5). Inside a Minimum-Bid
+	// Contention the clock belongs to the contention rather than to any
+	// bidder, so an emptied Contender list leaves it exactly where it was and
+	// the Auction goes on being a lottery with nobody in it — one the sweep
+	// still offers, and that `decideClose` ends by revealing the seed over an
+	// empty list and terminating. Only a STANDARD Auction withdraws to
+	// Awaiting Opening Bid with its clock cleared, which is Story 10.4's
+	// branch and is untouched here.
+	const leaderless = leadingBid === null && auction.contention !== 'minimum_bid';
+
+	return {
+		...auction,
+		contention: leaderless ? 'awaiting_opening_bid' : auction.contention,
+		leadingBid,
+		// Untouched wherever a leader stands — restored or never withdrawn —
+		// and cleared only where a Standard Auction has none.
+		closesAt: leaderless ? null : auction.closesAt,
+		bids,
+		contenders: contendersFor(bids)
+	};
+}
+
+/**
+ * The Bid a recorded `Restoration` names, or `null` (Story 10.4).
+ *
+ * Three ways to `null`, and each is a state rather than a failure: nothing was
+ * restored, the named `seq` is not in this Auction's history, or it names a
+ * Bid whose own standing has been withdrawn. The last covers the `seq` this
+ * very cancellation just marked, so a payload that restored its own victim
+ * cannot loop the lead back onto it.
+ *
+ * The Bid itself is returned — the object already in `bids`, with its own
+ * amount, Team and clock — rather than one built from the payload, which is
+ * what keeps a malformed record from inventing a Leading Bidder.
+ */
+function restoredBidFor(
+	bids: readonly Bid[],
+	restoration: Restoration | null,
+	cancelledSeq: string
+): Bid | null {
+	if (restoration === null) return null;
+	if (restoration.seq === cancelledSeq) return null;
+	const bid = bids.find((candidate) => candidate.seq === restoration.seq) ?? null;
+	if (bid === null || wasCancelled(bid)) return null;
+	return bid;
+}
+
+/**
  * Every entry of a record except the named key, built through
  * `Object.entries`/`Object.fromEntries` for `hasOwn`'s reason: the keys are
  * data, and `record[key] = value` on `__proto__` would set a prototype.
@@ -719,12 +1272,40 @@ export const auctionsReducer: Reducer<OpenAuctions> = (state, event) => {
 			// field that identifies a Bid across two folds of the same log.
 			if (existing.bids.some((recorded) => recorded.seq === bid.seq)) return state;
 
-			// An existing Auction always has a leading Bid — that is what makes
-			// it exist — so there is exactly one question here: is this Bid
-			// strictly higher? Nothing below re-tests for a leader that cannot
-			// be absent.
+			// **The question is unchanged — is this Bid strictly higher? — but
+			// since Story 10.3 it is asked of the highest STANDING Bid rather
+			// than of the leader.** The two are the same Bid in every Auction
+			// that has never seen a cancellation. They part company in exactly
+			// one state: FR-40 withdraws a leader's standing while lower Bids
+			// go on standing, which leaves `leadingBid` null over a history
+			// that is emphatically not empty. Leaderless is not bidless, and
+			// treating it as bidless here would let a new Bid BELOW a surviving
+			// one take the lead — a price that falls because somebody else's
+			// Bid was cancelled, which no rule in this product permits.
+			//
+			// A Bid that fails to beat the highest survivor leaves the Auction
+			// exactly as it found it: still leaderless, and still with whatever
+			// clock the cancellation left it — which since Story 10.4 is no
+			// clock at all, an Auction back at Awaiting Opening Bid.
+			//
+			// **Story 10.4 audited this fallback and KEPT it, deliberately.**
+			// After a restoration `leadingBid` is set, so the `??` never
+			// reaches the second operand and nothing here changed. After a
+			// FAILED restoration it falls back to a Bid the restorer SKIPPED —
+			// and that is the intended answer, because the two questions are
+			// different ones. "Who may lead" is decided by the gates, and a
+			// skipped candidate failed them. "What must a NEW Bid beat" is
+			// decided by the history, and a skipped candidate is still a
+			// standing, un-cancelled, publicly visible offer at that amount.
+			// Letting a fresh Bid take the lead BELOW it would be a price that
+			// fell because somebody else's Bid was cancelled — which no rule in
+			// this product permits, and which is the very failure the paragraph
+			// above added this expression to prevent.
+			const standing = existing.leadingBid ?? highestStandingBid(existing.bids);
 			const leadingBid =
-				compareMoney(bid.amount, existing.leadingBid.amount) > 0 ? bid : existing.leadingBid;
+				standing === null || compareMoney(bid.amount, standing.amount) > 0
+					? bid
+					: existing.leadingBid;
 
 			// Appended in fold order, which `fold()` guarantees is `seq` order
 			// (AD-5) — so the history is chronological by construction and
@@ -733,10 +1314,15 @@ export const auctionsReducer: Reducer<OpenAuctions> = (state, event) => {
 			const bids = [...existing.bids, bid];
 
 			const auction: Auction = {
+				// Both read off the leader, and both stand still when there is
+				// none: an Auction that stays leaderless keeps the contention
+				// and the clock it already had, which is the same "a
+				// cancellation resets nothing" the cancellation itself keeps.
+				contention:
+					leadingBid === null ? existing.contention : contentionForAmount(leadingBid.amount),
 				fantraxPlayerId,
-				contention: contentionForAmount(leadingBid.amount),
 				leadingBid,
-				closesAt: leadingBid.closesAt,
+				closesAt: leadingBid === null ? existing.closesAt : leadingBid.closesAt,
 				bids,
 				// **A join never moves the lead, so it never moves the clock —
 				// and that is a second guarantee, not the rule.** A Bid of
@@ -803,6 +1389,36 @@ export const auctionsReducer: Reducer<OpenAuctions> = (state, event) => {
 				byPlayer: { ...state.byPlayer, [fantraxPlayerId]: { ...existing, seed } }
 			};
 		}
+		case BID_CANCELLED_EVENT: {
+			// **This case READS a decision it does not make** (AD-31). Which
+			// Bid was cancelled, and why, were decided by `rules/close.ts`
+			// running the gate suite inside the closing transaction; re-deriving
+			// either here would mean re-running `evaluateSlots` inside a fold,
+			// over a Team whose roster this projection cannot see.
+			const read = readCancelledPayload(event.payload);
+			if (read === null) return state;
+			const { fantraxPlayerId, cancelledSeq, causeFantraxPlayerId, causePlayerName, restoration } =
+				read;
+			if (!hasOwn(state.byPlayer, fantraxPlayerId)) return state;
+			const existing = state.byPlayer[fantraxPlayerId] ?? null;
+			if (existing === null) return state;
+			const cancelled = withBidCancelled(existing, cancelledSeq, {
+				// The CANCELLING event's own position, so the history line can
+				// be looked up in the Audit Log from the Bid it struck through.
+				seq: event.seq,
+				causeFantraxPlayerId,
+				causePlayerName,
+				// Passed straight through, already narrowed and already degraded
+				// to `null` if the payload could not be read. This reducer makes
+				// no restoration decision of its own and could not: the gates
+				// that made this one ran over a roster no projection can see.
+				restoration
+			});
+			// Unchanged when the `seq` names no Bid here or one already
+			// cancelled — the identity check that makes replay converge.
+			if (cancelled === existing) return state;
+			return { byPlayer: { ...state.byPlayer, [fantraxPlayerId]: cancelled } };
+		}
 		case AUCTION_CLOSED_EVENT: {
 			// The SAME reader `nominationsReducer` folds a close through, so a
 			// close naming no Player is skipped here exactly as it is skipped
@@ -812,6 +1428,28 @@ export const auctionsReducer: Reducer<OpenAuctions> = (state, event) => {
 			if (fantraxPlayerId === null) return state;
 			if (!hasOwn(state.byPlayer, fantraxPlayerId)) return state;
 			return { byPlayer: omitKey(state.byPlayer, fantraxPlayerId) };
+		}
+		case AUCTION_TERMINATED_EVENT: {
+			// **The close case, for the other way an Auction ends** (Story
+			// 10.5). Until now no terminated Player had an Auction at all —
+			// `phase-end.ts` terminates nominations that never drew a Bid — so
+			// this fold had nothing to drop and needed no case. A lottery whose
+			// every Contender was cancelled does: it keeps its clock, expires,
+			// reveals its seed over an empty list and terminates with no
+			// winner. Without this case that Auction would survive its own
+			// termination and be offered to `overdueAuctions` again on every
+			// sweep, closing forever over the same empty list.
+			//
+			// The SAME reader `nominationsReducer` folds a termination through,
+			// for the close case's reason: the board seat, the Nomination Slot
+			// and the Auction can never be released apart from one another.
+			// A termination naming a Player with no Auction — every one
+			// `phase-end.ts` appends — changes nothing, which is what makes a
+			// second fold of the same log converge.
+			const terminated = readTerminatedPlayerId(event.payload);
+			if (terminated === null) return state;
+			if (!hasOwn(state.byPlayer, terminated)) return state;
+			return { byPlayer: omitKey(state.byPlayer, terminated) };
 		}
 		default:
 			return state;
@@ -998,7 +1636,13 @@ export function overdueAuctions(auctions: OpenAuctions, now: string): readonly A
  * `closesAt` as expired, so the earliest position is the reading that agrees
  * with it.
  */
-function closeOrderOf(closesAt: string): number {
+function closeOrderOf(closesAt: string | null): number {
+	// A leaderless Auction has no clock and `hasExpired` never calls it
+	// overdue, so it cannot reach this comparator through `overdueAuctions`.
+	// It is ordered LAST rather than first all the same: "no clock" is the
+	// opposite of "already past due", and the unreadable case above is the
+	// one this function reads as earliest.
+	if (closesAt === null) return Number.POSITIVE_INFINITY;
 	return parseInstant(closesAt) ?? Number.NEGATIVE_INFINITY;
 }
 

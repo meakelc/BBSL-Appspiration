@@ -18,6 +18,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { FILTER_KEYS } from '../../src/lib/core/board.ts';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { isHttpError } from '@sveltejs/kit';
@@ -129,6 +130,24 @@ beforeEach(() => {
 });
 
 describe('load — the destination guard runs FIRST', () => {
+	it('shortens the lottery name below 640px, and never in script', () => {
+		// `Minimum Lottery` at `--size-10` beside a Player's name wraps this
+		// card's identity row on a phone. Both spellings are the core's, and
+		// the CHOICE is CSS: a viewport question answered by the only thing
+		// that can see a viewport. A `matchMedia` here would answer it wrong
+		// for one paint during SSR and re-answer it on every resize.
+		expect(PAGE).toContain('{card.auctionStateLabelNarrow}');
+		expect(PAGE).toContain('{card.auctionStateLabel}');
+		expect(PAGE_CODE).not.toMatch(/matchMedia|innerWidth/);
+		// The same breakpoint the app already changes its mind at.
+		expect(PAGE).toMatch(/@media \(min-width: 640px\)/);
+		// Exactly one of the two is displayed at any width, so a screen reader
+		// reads the name that is on screen and never both.
+		const style = PAGE.slice(PAGE.indexOf('<style>'));
+		expect(style).toMatch(/\.chip-word-wide \{\s*display: none;/);
+		expect(style).toMatch(/\.chip-word-narrow \{\s*display: none;/);
+	});
+
 	it('serves the board to a Manager in the Auction Phase', async () => {
 		const result = (await route.load({
 			locals: locals({ kind: 'registered', manager: MANAGER })
@@ -228,7 +247,7 @@ describe('the board page — what it renders', () => {
 		// the word still originates in `src/lib/core/` and this file prints a
 		// field. No literal spelling of any state, count or notice appears here.
 		expect(PAGE_CODE).not.toMatch(/You lead|Outbid|Contender|Not involved/);
-		expect(PAGE_CODE).not.toMatch(/Awaiting Opening Bid|Minimum-Bid Contention/);
+		expect(PAGE_CODE).not.toMatch(/'Unbid'|Minimum-Bid Contention/);
 		expect(PAGE_CODE).not.toMatch(/No opening bid/);
 		expect(PAGE_CODE).not.toMatch(/Auctions are (open|hidden)/);
 		expect(PAGE_CODE).not.toMatch(/h unbid|unbid for/);
@@ -250,7 +269,7 @@ describe('the board page — what it renders', () => {
 	});
 
 	it('gives the lottery bar to Minimum-Bid Contention and to nothing else', () => {
-		expect(PAGE).toMatch(/class:lottery=\{card\.contention === 'minimum_bid'\}/);
+		expect(PAGE).toMatch(/class:lottery=\{card\.state === 'minimum_bid'\}/);
 		expect(PAGE).toContain('border-left: var(--accent-bar-width) solid var(--color-lottery)');
 		// The device is not borrowed by any other rule in this file.
 		expect([...PAGE.matchAll(/--accent-bar-width/g)]).toHaveLength(1);
@@ -263,13 +282,32 @@ describe('the board page — what it renders', () => {
 		const attentionRules = [...PAGE.matchAll(/var\(--color-attention[^)]*\)/g)];
 		expect(attentionRules).toHaveLength(2);
 		expect(PAGE.indexOf('.chip-lead')).toBeLessThan(PAGE.indexOf('.chip-outbid'));
-		expect(PAGE).toMatch(/\.chip-lead \{[\s\S]*?--color-border-strong[\s\S]*?\}/);
+		// You lead takes its OWN colour — never attention, and never brand,
+		// which DESIGN.md:47 forbids from signalling leading.
+		expect(PAGE).toMatch(/\.chip-lead \{[\s\S]*?--color-leading[\s\S]*?\}/);
+		expect(PAGE).not.toMatch(/\.chip-lead \{[\s\S]*?--color-brand[\s\S]*?\}/);
+	});
+
+	it('marks a card the VIEWER leads with the leading edge, and only that viewer', () => {
+		// The edge is keyed on `viewerState`, which is computed for the
+		// signed-in Manager — so nobody else's board carries the mark.
+		expect(PAGE).toMatch(/class:leading=\{card\.viewerState === 'you_lead'\}/);
+		expect(PAGE).toContain('border-left: var(--leading-edge-width) solid var(--color-leading)');
+		// It is NOT the lottery bar: that 3px device is exclusive to a
+		// Minimum-Bid Contention, and the leading rule is declared first so a
+		// card that is both takes the lottery bar.
+		const leadingBlock = /\.card\.leading \{[\s\S]*?\}/.exec(PAGE)?.[0] ?? '';
+		expect(leadingBlock).not.toContain('--accent-bar-width');
+		expect(PAGE.indexOf('.card.leading')).toBeLessThan(PAGE.indexOf('.card.lottery'));
+		// And it never carries the state alone — the chip beside it has the
+		// icon and the word.
+		expect(PAGE).toMatch(/class:chip-lead=\{card\.viewerState === 'you_lead'\}/);
 	});
 
 	it('gives a chip to You lead and Outbid ONLY — ambient states stay plain', () => {
 		// DESIGN.md:194 reserves the chip for the two states that concern the
 		// reader: filled `attention` for Outbid, outlined `border-strong` for
-		// You lead. Open, Awaiting Opening Bid, Contender and Not involved are
+		// You lead. Open, Unbid, Contender and Not involved are
 		// ambient and take a plain `text-secondary` label with no chip — so
 		// the chip keeps meaning "this one is about you" instead of
 		// decorating every line on the card.
@@ -277,8 +315,13 @@ describe('the board page — what it renders', () => {
 			/class:chip=\{card\.viewerState === 'you_lead' \|\| card\.viewerState === 'outbid'\}/
 		);
 		// The Auction state line is never a chip: it describes the Auction,
-		// never the reader.
-		expect(PAGE).toMatch(/<p class="state state-ambient">/);
+		// never the reader. It rides the identity row rather than a row of its
+		// own — `card-state` is the placement, `state-ambient` is the treatment,
+		// and the treatment is what this asserts.
+		expect(PAGE).toMatch(/<p class="state state-ambient card-state">/);
+		// `not_involved` prints no marker at all: it is the state of most cards
+		// on most boards, and the absence already says what a label would.
+		expect(PAGE).toMatch(/\{#if card\.viewerState !== 'not_involved'\}/);
 		// The ambient treatment is the plain secondary label, with the fill
 		// and the outline living only on the two chip rules.
 		expect(PAGE).toMatch(/\.state-ambient \{\s*color: var\(--color-text-secondary\);\s*\}/);
@@ -359,7 +402,12 @@ describe('the board page — what it renders', () => {
 	it('shows no clock at all on a nomination with no Opening Bid', () => {
 		expect(PAGE).toMatch(/\{#if card\.closesAt === null\}/);
 		// The unbid phrase stands where the clock would be, from the core.
-		expect(PAGE).toMatch(/unbidPhrase\(card\.nominatedAt, nowIso\)/);
+		// `?? ''` because `nominatedAt` is nullable now — a closed card has no
+		// nomination — and the phrase helper answers an unreadable instant with
+		// a stated phrase rather than a throw. A closed card never reaches this
+		// branch: it is rendered by the other half of `{#if card.state ===
+		// 'closed'}` and carries no clock line at all.
+		expect(PAGE).toMatch(/unbidPhrase\(card\.nominatedAt \?\? '', nowIso\)/);
 	});
 
 	it('sorts and filters through the core, in the browser, over the transported list', () => {
@@ -376,7 +424,11 @@ describe('the board page — what it renders', () => {
 	it('states the whole board’s count, and the filtered view’s separately', () => {
 		// The count sentence is about the WHOLE board; a filtered view states
 		// its own, so no figure silently changes when a control is touched.
-		expect(PAGE).toMatch(/boardCountSentence\(board\.cards\.length\)/);
+		// The count is of the OPEN cards, from the core's own `openCardCount`:
+		// the sentence beside it says "are open", so counting the closed cards
+		// into it would make the one figure on the page false the moment an
+		// Auction closes. The filtered notice still measures the whole board.
+		expect(PAGE).toMatch(/boardCountSentence\(openCardCount\(board\.cards\)\)/);
 		expect(PAGE).toMatch(/filteredNoticeSentence\(filter, shown\.length, board\.cards\.length\)/);
 		expect(PAGE).toContain('id="board-filtered-notice"');
 	});
@@ -432,5 +484,89 @@ describe('the board page — what it renders', () => {
 		expect(PAGE).toMatch(/href=\{auctionPathFor\(card\.fantraxPlayerId\)\}/);
 		expect(PAGE).toContain("from '$lib/core/auction-link.ts'");
 		expect(PAGE_CODE).not.toMatch(/`\/auction\//);
+	});
+});
+
+describe('the board gains no state for a leaderless Auction (Story 10.6)', () => {
+	it('renders one treatment for a null leader, with no restarted branch', () => {
+		// FR-40 can leave an Auction with no surviving Bid. The card for it is
+		// the unbid nomination the board already draws, so this page needed no
+		// edit at all — and that is the property worth pinning: no new state,
+		// no cancellation vocabulary, no branch on a leader that is null.
+		expect(PAGE_CODE.toLowerCase()).not.toContain('restart');
+		expect(PAGE_CODE.toLowerCase()).not.toContain('cancel');
+		// A null price already has exactly ONE treatment on this page — the
+		// unbid nomination's — and a leaderless Auction inherits it rather
+		// than adding a second.
+		expect(PAGE_CODE.match(/card\.price === null/g)).toHaveLength(1);
+		expect(PAGE_CODE).toContain('card-price-absent');
+	});
+});
+
+describe('the board page — the Closed card', () => {
+	/** The `{#if card.state === 'closed'}` arm, and only that arm. */
+	const CLOSED_ARM = PAGE.slice(
+		PAGE.indexOf("{#if card.state === 'closed'}"),
+		PAGE.indexOf('<!-- ROW 3 — who leads')
+	);
+
+	it('renders a Closed arm at all, keyed on the card’s own state literal', () => {
+		expect(CLOSED_ARM.length).toBeGreaterThan(0);
+		expect(PAGE).toContain("{#if card.state === 'closed'}");
+	});
+
+	it('states who won, what it went for and where the Player landed', () => {
+		// `EXPERIENCE.md:168` asks a Closed state for the winner, the final
+		// amount and the Slot placement. All three are pre-worded fields; the
+		// surface prints them and words nothing.
+		// ANCHORED to its own label rather than asserted as a loose substring of
+		// the arm: containment alone would still pass if `card.wonBy` drifted
+		// into some other line.
+		expect(CLOSED_ARM).toMatch(
+			/\{BOARD_WON_BY_LABEL\}<\/span>\s*\{card\.wonBy\}/
+		);
+		// No placement line: removed as redundant beside the final amount.
+		expect(CLOSED_ARM).not.toContain('placementSentence');
+		// The figure shares the price row, under a different WORD, because a
+		// price and a final amount are not the same claim about a number.
+		expect(PAGE).toContain('BOARD_FINAL_LABEL');
+		expect(PAGE).toMatch(/card\.state === 'closed' \? BOARD_FINAL_LABEL : BOARD_PRICE_LABEL/);
+	});
+
+	it('carries NO countdown, NO unbid phrase and NO nominated-by', () => {
+		// A closed Auction has no clock — a timer on it would be an urgency
+		// device pointed at nothing — and `nominationsReducer` deleted the
+		// nomination, so the nominating Team is not durable and is not invented.
+		expect(CLOSED_ARM).not.toContain('closesInPhrase');
+		expect(CLOSED_ARM).not.toContain('unbidPhrase');
+		expect(CLOSED_ARM).not.toContain('BOARD_NOMINATED_LABEL');
+		expect(CLOSED_ARM).not.toContain('card.nominatedBy');
+		expect(CLOSED_ARM).not.toContain('BOARD_CLOSES_LABEL');
+	});
+
+	it('states the closed instant absolutely, in the viewer’s own timezone', () => {
+		expect(CLOSED_ARM).toContain('BOARD_CLOSED_AT_LABEL');
+		expect(CLOSED_ARM).toContain('closedAtAbsolute[card.fantraxPlayerId]');
+		// Derived in an `$effect`, so it never ships the SERVER's timezone in
+		// server-rendered HTML — the rule every stamp on this page follows.
+		expect(PAGE).toMatch(/closed\[card\.fantraxPlayerId\] = formatAbsolute\(card\.closedAt\)/);
+	});
+
+	it('never congratulates — a win is stated', () => {
+		// `!==` is the language's, not the copy's, so it is taken out before
+		// the sentence-level check — an exclamation mark that survives this is
+		// one somebody typed at a Manager.
+		const prose = stripComments(CLOSED_ARM).replace(/!==?/g, '');
+		expect(prose).not.toMatch(/[!]/);
+		expect(prose.toLowerCase()).not.toMatch(/congratulat|trophy|celebrat/);
+	});
+
+	it('offers the two state filters as radios, from the core’s own key list', () => {
+		// `FILTER_KEYS` is what the control iterates, so adding `open` and
+		// `closed` to the core added the radios — the surface chooses nothing.
+		expect(PAGE).toMatch(/\{#each FILTER_KEYS as key \(key\)\}/);
+		expect(PAGE).toContain('FILTER_LABELS[key]');
+		expect([...FILTER_KEYS]).toContain('open');
+		expect([...FILTER_KEYS]).toContain('closed');
 	});
 });

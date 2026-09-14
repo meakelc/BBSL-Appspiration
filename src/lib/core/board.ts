@@ -11,6 +11,13 @@
  * `openNominations()` returns every Player on the board and `auctionForPlayer`
  * decorates the ones that have Bids.
  *
+ * **And the closed Auctions beside them.** A close deletes the Player from
+ * both of those folds, so a board built from them alone answers for the three
+ * live states and for nothing that has finished. The fourth set comes off
+ * `projection/closed.ts` — the one composition of `contractsReducer` and
+ * `drawsReducer` that the Auction page's Closed state and Your Positions' won
+ * link read too, so the three surfaces cannot describe one outcome three ways.
+ *
  * **Sorting and filtering are view state and never change a figure.** Both
  * are written here rather than in a `.svelte` file so a comparator is a thing
  * a test can call, and so the same list re-derived on every projection change
@@ -25,8 +32,9 @@
  * notice and the unbid phrase — so `routes/board/+page.svelte` states nothing
  * of its own and a synonym cannot appear in markup. Where a word already
  * exists in the core it is IMPORTED rather than respelled:
- * `MINIMUM_BID_CONTENTION_LABEL` is the glossary term and this module reuses
- * it, exactly as the Auction page does.
+ * `MINIMUM_LOTTERY_LABEL` is the contention's card name and this module
+ * reuses it rather than respelling it, exactly as the Auction page reuses the
+ * glossary term.
  *
  * **No urgency device of any kind.** No "ending soon", no ranking of what is
  * worth bidding on, no suggested amount. The three sorts are orderings a
@@ -38,8 +46,20 @@
 
 import { parseInstant } from './instant.ts';
 import type { Money } from './money.ts';
-import { MINIMUM_BID_CONTENTION_LABEL, auctionForPlayer } from './projection/auctions.ts';
+import {
+	MINIMUM_LOTTERY_LABEL,
+	MINIMUM_LOTTERY_LABEL_NARROW,
+	auctionForPlayer
+} from './projection/auctions.ts';
 import type { Auction, ContentionState, OpenAuctions } from './projection/auctions.ts';
+import {
+	CLOSED_LABEL,
+	CLOSED_LABEL_NARROW,
+	closedAuctions
+} from './projection/closed.ts';
+import type { ClosedAuction } from './projection/closed.ts';
+import type { AuctionContracts } from './projection/contracts.ts';
+import type { Draws } from './projection/draws.ts';
 import { openNominations } from './projection/nominations.ts';
 import type { OpenNominations } from './projection/nominations.ts';
 import { describeAmount } from './rules/bidding.ts';
@@ -54,13 +74,41 @@ const MS_PER_HOUR = 3_600_000;
  * shade of it: a Team inside a Minimum-Bid Contention has not been outbid,
  * it is waiting on a draw, and telling it otherwise would be false.
  */
-export type BoardViewerState = 'you_lead' | 'outbid' | 'contender' | 'not_involved';
+export type BoardViewerState = 'you_lead' | 'outbid' | 'contender' | 'won' | 'not_involved';
+
+/**
+ * What a board CARD is in, which is one more thing than an Auction can be.
+ *
+ * `ContentionState` is the fold's answer about a LIVE Auction, and the close
+ * deletes the Auction — so `closed` is a value that fold can never produce,
+ * while the union itself is switched on inside the bidding gates. Widening it
+ * would force a dead case into every one of them. The Closed state is
+ * therefore card-level, declared here beside the labels it keys.
+ *
+ * A WIDENING, deliberately: every existing site that indexes the three
+ * label/icon records with a `ContentionState` still type-checks unchanged.
+ *
+ * There is no `terminated` member. `AuctionTerminated` records a Player id and
+ * no reason at all, so nothing durable distinguishes "nobody bid on them" from
+ * a Commissioner override, and a card claiming either would invent the half
+ * the log does not carry.
+ */
+export type BoardCardState = ContentionState | 'closed';
 
 /** The three orderings the board offers. */
 export type BoardSort = 'closing' | 'price' | 'name';
 
-/** The three views the board offers. `all` hides nothing. */
-export type BoardFilter = 'all' | 'leading' | 'contending';
+/**
+ * The five views the board offers. `all` hides nothing.
+ *
+ * `open` and `closed` narrow on the CARD's own state and the other two on the
+ * viewer's, which is why they are one control rather than two: a Manager
+ * asking "what can I still bid on" and a Manager asking "what am I leading"
+ * are both asking the board to show them fewer cards, and two independent
+ * controls would let them be combined into views nobody asked for and the
+ * filtered notice could not word.
+ */
+export type BoardFilter = 'all' | 'open' | 'closed' | 'leading' | 'contending';
 
 /** The sorts, in the order the control offers them. */
 export const SORT_KEYS: readonly BoardSort[] = Object.freeze(['closing', 'price', 'name'] as const);
@@ -68,6 +116,8 @@ export const SORT_KEYS: readonly BoardSort[] = Object.freeze(['closing', 'price'
 /** The filters, in the order the control offers them. `all` is the default. */
 export const FILTER_KEYS: readonly BoardFilter[] = Object.freeze([
 	'all',
+	'open',
+	'closed',
 	'leading',
 	'contending'
 ] as const);
@@ -110,38 +160,97 @@ export type BoardCard = {
 	/** From the reference row, or `null` when the Player has none. */
 	readonly nbaTeam: string | null;
 	readonly positions: string | null;
-	/** The current price — the leading Bid's amount, or `null` before one. */
+	/**
+	 * The card's one figure: the leading Bid's amount while the Auction runs,
+	 * the WINNING amount once it has closed, and `null` before any Bid.
+	 *
+	 * One field for both because it is one question — what is this Auction
+	 * worth — asked of a card at two moments, and the price sort orders the
+	 * whole board on it. What differs is the WORD beside it, which is why
+	 * `BOARD_PRICE_LABEL` and `BOARD_FINAL_LABEL` are two constants.
+	 */
 	readonly price: Money | null;
 	readonly leadingTeamId: string | null;
 	readonly leadingTeamName: string | null;
 	readonly leadingManagerId: string | null;
 	/** The Auction Clock's absolute expiry, or `null` before the first Bid. */
 	readonly closesAt: string | null;
-	readonly contention: ContentionState;
+	/** What this card is: one of the three live states, or `closed`. */
+	readonly state: BoardCardState;
 	readonly contenderCount: number;
-	readonly nominatedByTeamId: string;
-	readonly nominatedByTeamName: string;
+	/**
+	 * The nomination that put this Player on the board — `null` on a closed
+	 * card, and never invented.
+	 *
+	 * `nominationsReducer` DELETES the nomination at the close
+	 * (`nominations.ts:458-473`), so the nominating Team is not durable past
+	 * it. A closed card therefore carries no "Nominated by" line and no
+	 * nominated instant, which is also why it can carry no unbid phrase.
+	 */
+	readonly nominatedByTeamId: string | null;
+	readonly nominatedByTeamName: string | null;
 	readonly nominatedByManagerId: string | null;
-	readonly nominatedAt: string;
+	readonly nominatedAt: string | null;
+	/**
+	 * The winning Team, `null` on every card that is not closed.
+	 *
+	 * The Manager is the one a `DrawnDraw` recorded, or `null` — a Standard
+	 * close records the winning TEAM and no Manager, so those cards name the
+	 * Team alone, which is the fallback every surface in this app already
+	 * renders for "Team known, Manager unknown".
+	 */
+	readonly winningTeamId: string | null;
+	readonly winningTeamName: string | null;
+	readonly winningManagerId: string | null;
+	/** The Auction's own persisted expiry, `null` on every card still open. */
+	readonly closedAt: string | null;
 	readonly viewerState: BoardViewerState;
 };
 
 /**
- * The three Auction states, in words — and these three only.
+ * The four states a board card can be in, in words — and these four only.
  *
- * There is no Closed and no Terminated member because `ContentionState` has
- * none: a close removes the Auction from this projection entirely, so the
- * board cannot answer for one, and inventing a label here would promise a
- * card that can never be built.
+ * **Three of them are `ContentionState`'s and the fourth is not.** The fold
+ * answers for a LIVE Auction, and a close deletes the Auction from it — so
+ * `closed` can never come off `contentionOf`, and it is keyed here from
+ * `BoardCardState` instead. The word itself is `projection/closed.ts`'s,
+ * imported rather than respelled, because the Closed page at the other end of
+ * this card's link says it too and a synonym between the two would be a
+ * Manager reading one state under two names.
  *
- * `minimum_bid` reuses the glossary term from the fold that decides it rather
- * than respelling it — a synonym in UI copy is a defect the same way a
- * synonym in code is.
+ * **There is still no Terminated member.** `AuctionTerminated` yields a Player
+ * id and no reason, so nothing durable distinguishes an unbid nomination the
+ * phase end swept up from a Commissioner override, and a label here would
+ * promise a card whose second half cannot be built.
+ *
+ * `minimum_bid` reuses `MINIMUM_LOTTERY_LABEL` from the fold that decides it
+ * rather than respelling it — the card name, not the glossary term, because a
+ * board card's identity row is scanned beside a Player's name and cannot carry
+ * the full term at 375px. The term itself still stands on the Auction page
+ * this card links to.
  */
-export const AUCTION_STATE_LABELS: Readonly<Record<ContentionState, string>> = Object.freeze({
-	awaiting_opening_bid: 'Awaiting Opening Bid',
+export const AUCTION_STATE_LABELS: Readonly<Record<BoardCardState, string>> = Object.freeze({
+	awaiting_opening_bid: 'Unbid',
 	standard: 'Open',
-	minimum_bid: MINIMUM_BID_CONTENTION_LABEL
+	minimum_bid: MINIMUM_LOTTERY_LABEL,
+	closed: CLOSED_LABEL
+});
+
+/**
+ * The same record for a NARROW viewport, where only the lottery differs.
+ *
+ * A complete record rather than an override map, so a surface indexes ONE
+ * thing by the state it holds and cannot fall through to a missing key. The
+ * other three states are the same string in both: `Open`, `Closed` and
+ * `Unbid` are already one word each, so there is nothing left to shorten and
+ * a narrow spelling would only be a second name nothing asked for, which is
+ * the whole cost the header above warns about.
+ */
+export const AUCTION_STATE_LABELS_NARROW: Readonly<Record<BoardCardState, string>> = Object.freeze({
+	awaiting_opening_bid: AUCTION_STATE_LABELS.awaiting_opening_bid,
+	standard: AUCTION_STATE_LABELS.standard,
+	minimum_bid: MINIMUM_LOTTERY_LABEL_NARROW,
+	closed: CLOSED_LABEL_NARROW
 });
 
 /**
@@ -152,20 +261,35 @@ export const AUCTION_STATE_LABELS: Readonly<Record<ContentionState, string>> = O
  * identically. They are declared here, beside the words, so the pairing is
  * one fact rather than two that could drift in a template.
  */
-export const AUCTION_STATE_ICONS: Readonly<Record<ContentionState, string>> = Object.freeze({
+export const AUCTION_STATE_ICONS: Readonly<Record<BoardCardState, string>> = Object.freeze({
 	// An open circle: a clock that has not started.
 	awaiting_opening_bid: '\u25CB',
 	// A filled circle: an Auction that is running.
 	standard: '\u25CF',
 	// The diamond the Auction page already gives a Minimum-Bid Contention.
-	minimum_bid: '\u25C6'
+	minimum_bid: '\u25C6',
+	// A filled SQUARE: the stop mark, against three round or pointed shapes.
+	// Distinct from `contender`'s half-filled square by being whole, and the
+	// two can never appear on one card anyway — `viewerStateFor` gives a
+	// closed card `won` or `not_involved` and nothing else.
+	closed: '\u25A0'
 });
 
 /** Where the viewer stands, in words. */
 export const VIEWER_STATE_LABELS: Readonly<Record<BoardViewerState, string>> = Object.freeze({
-	you_lead: 'You lead',
+	// `Leading`, not `You lead`. The chip is only ever rendered to the Manager
+	// it is about — `viewerStateFor` computes it against the reader's own Team
+	// — so the pronoun stated a fact the surface had already established, and
+	// cost the state a name that reads the same as a heading, as a filter and
+	// as a chip. `won` keeps its pronoun: a Team's win is read beside other
+	// Teams' wins, where whose it is has to be said.
+	you_lead: 'Leading',
 	outbid: 'Outbid',
 	contender: 'Contender',
+	// Stated, never congratulated. The card says whose Player this now is and
+	// what it cost; an exclamation on a settled fact would be the one thing a
+	// surface reading thirty Auctions at 4am must not do.
+	won: 'You won',
 	not_involved: 'Not involved'
 });
 
@@ -178,11 +302,17 @@ export const VIEWER_STATE_LABELS: Readonly<Record<BoardViewerState, string>> = O
  * greyscale distinction the pairing exists to guarantee. `contender` takes a
  * half-filled square — a Team that has joined and is waiting — rather than
  * repeating the contention's own diamond.
+ *
+ * `won` takes a check: a ledger mark stating this one is settled and it is
+ * yours. It is not a trophy and not a star, because the card beside it states
+ * a fact rather than celebrating one, and it is disjoint from the closed
+ * square it always appears next to.
  */
 export const VIEWER_STATE_ICONS: Readonly<Record<BoardViewerState, string>> = Object.freeze({
 	you_lead: '\u25B2',
 	outbid: '\u25BC',
 	contender: '\u25E7',
+	won: '\u2713',
 	not_involved: '\u2013'
 });
 
@@ -196,7 +326,11 @@ export const SORT_LABELS: Readonly<Record<BoardSort, string>> = Object.freeze({
 /** What each view is called on the control that chooses it. */
 export const FILTER_LABELS: Readonly<Record<BoardFilter, string>> = Object.freeze({
 	all: 'All Auctions',
-	leading: 'You lead',
+	open: 'Open Auctions',
+	closed: 'Closed Auctions',
+	// The same word the chip and the Positions heading use: one state, one
+	// name, on every surface a Manager moves between.
+	leading: 'Leading',
 	contending: 'Contending'
 });
 
@@ -208,6 +342,37 @@ export const BOARD_PRICE_LABEL = 'Price';
 export const BOARD_LEADING_LABEL = 'Leading Bidder';
 export const BOARD_NOMINATED_LABEL = 'Nominated by';
 export const BOARD_CLOSES_LABEL = 'Auction Clock';
+
+/**
+ * The three words a CLOSED card says where an open one says price, leading
+ * bidder and clock.
+ *
+ * `Final amount` rather than `Price`, because the figure means something
+ * different once it has been paid: a price is what an Auction is asking and a
+ * final amount is what it went for, and the same number under the same word
+ * would leave a Manager scanning a mixed board unable to tell which they were
+ * reading. `Won by` for the Team, because nobody leads a settled Auction.
+ */
+export const BOARD_FINAL_LABEL = 'Final amount';
+export const BOARD_WON_BY_LABEL = 'Won by';
+export const BOARD_CLOSED_AT_LABEL = 'Closed';
+
+/**
+ * The heading over the count and the two controls.
+ *
+ * It read `Open Auctions` until the board gained its Closed cards, and that
+ * word became false the moment the list below it could hold one — a heading
+ * naming only half of what it covers is worse than none, because a Manager
+ * who reads it and then sees a closed card has been told the screen is
+ * something it is not. `Auctions` is what the panel is now over: every
+ * Auction the board holds, open and closed together, with the count sentence
+ * beneath it saying how many of them are still open.
+ *
+ * Worded here rather than in the markup for `BOARD_TITLE`'s reason — this
+ * heading was the one string on this page a `.svelte` file still spelled
+ * itself, which is exactly how it survived a change that falsified it.
+ */
+export const BOARD_PANEL_HEADING = 'Auctions';
 
 /**
  * What a card says where a price would be, before any Bid.
@@ -276,15 +441,41 @@ export function filteredNoticeSentence(
 /**
  * How many Auctions are on the board, as a finished sentence.
  *
- * The count of the WHOLE board, never of a filtered view — the filtered view
- * states its own count through `filteredNoticeSentence` above, and one
- * sentence that meant either depending on view state would be the figure that
- * silently changed when a Manager touched a control.
+ * The count of every OPEN Auction on the board, and never of a filtered view
+ * — the filtered view states its own count through `filteredNoticeSentence`
+ * above, and one sentence that meant either depending on view state would be
+ * the figure that silently changed when a Manager touched a control.
+ *
+ * **Open, not "the whole board", since the board gained its Closed cards.**
+ * This sentence says "N Auctions are open", which is a claim about what is
+ * still biddable — the question a Manager scans the board to answer. Counting
+ * the closed cards into it would make the figure grow all phase while the
+ * number of Auctions anybody can act on fell, which is the one reading of it
+ * that would be false. `openCardCount` is what the caller passes, so the
+ * count and the wording are decided together rather than at the call site.
  */
 export function boardCountSentence(count: number): string {
 	if (count === 0) return 'No Auctions are open.';
 	if (count === 1) return 'One Auction is open.';
 	return `${String(count)} Auctions are open.`;
+}
+
+/**
+ * How many of these cards are OPEN — `boardCountSentence`'s one input.
+ *
+ * A separate derivation rather than `cards.length`, because the board carries
+ * closed cards now and the sentence beside the count says "are open". Counting
+ * the whole board there would make the one figure on the page a claim that is
+ * false the moment an Auction closes, which is the exact failure the sentence
+ * was written to avoid.
+ *
+ * Structural in its parameter, for `Sortable`'s reason: the pure card and the
+ * serialised one the browser holds must both be countable by the one function.
+ */
+export function openCardCount<T extends { readonly state: BoardCardState }>(
+	cards: readonly T[]
+): number {
+	return cards.filter((card) => card.state !== 'closed').length;
 }
 
 /**
@@ -368,7 +559,7 @@ export function priceLabel(price: Money | null): string {
  * the same amount, so `leadingBid` names whoever joined earliest purely as
  * the fold's `seq` tiebreak, and AD-14 decides the winner by a seeded draw
  * over the ordered Contender list rather than by that field. Telling the
- * earliest joiner "You lead" would state a standing they do not hold and
+ * earliest joiner "Leading" would state a standing they do not hold and
  * invite them not to act on an Auction they are no likelier to win than
  * anyone else — the Auction page never makes that claim either, swapping its
  * Leading Bidder line for the contention panel (`auction/[fantraxPlayerId]/+page.svelte:692`).
@@ -402,17 +593,72 @@ export function viewerStateFor(
 	) {
 		return 'contender';
 	}
-	if (auction.leadingBid.teamId === viewerTeamId) return 'you_lead';
+	// **A leaderless Auction, and the ONE reading of it every surface takes**
+	// (Story 10.3, FR-40). `Auction.leadingBid` is nullable now: a cancellation
+	// withdraws the leader's standing, and until Story 10.4 restores one
+	// nothing leads even where lower Bids go on standing. There is therefore no
+	// current price and no Leading Bidder, and the product already has a
+	// treatment for exactly that — the unbid nomination (§10 example 33, which
+	// asks for "an ordinary unbid nomination" and not a new "restarted"
+	// state). So:
+	//
+	//  - the BOARD and the AUCTION PAGE print no price and name no bidder,
+	//    which is what a null leader already made them do;
+	//  - the POSITIONS page has no card to print at all, because every card
+	//    there carries a price and there is none — `positions.ts` skips it;
+	//  - and the viewer state below stays `outbid` for anyone holding a Bid,
+	//    the cancelled ex-leader included. It is not a claim that somebody
+	//    outbid them: the state's meaning here is "you bid and you are not
+	//    leading", which is true of both, and the card names nobody because
+	//    `leadingTeamName` is null. There is no fourth viewer state, and there
+	//    must not be one — Story 10.6 words what a cancelled Manager is told,
+	//    and it tells them in a notice rather than in a card label.
+	if (auction.leadingBid?.teamId === viewerTeamId) return 'you_lead';
 	if (auction.bids.some((bid) => bid.teamId === viewerTeamId)) return 'outbid';
 	return 'not_involved';
 }
 
 /**
- * Every card on the board, one per open nomination.
+ * Where the viewer stands on a CLOSED Auction — and there are exactly two
+ * answers.
  *
- * The set is `openNominations` and never `Object.values(auctions.byPlayer)`,
+ * `won` or `not_involved`, and nothing else. "Leading" and "Contender"
+ * describe standings a settled Auction no longer holds: nobody leads an
+ * Auction that is over, and a Contender in a lottery that has drawn either won
+ * it or did not. "Outbid" is the sharpest of the three to get wrong — it is
+ * the ONE state `attention` marks anywhere in this product, and putting that
+ * colour on a Team that lost an Auction days ago would mark as actionable the
+ * one card on the board nobody can act on.
+ *
+ * This is why `contender`'s half-filled square can never co-occur with the
+ * closed square: the only viewer glyphs a closed card can carry are the check
+ * and the dash.
+ */
+export function closedViewerStateFor(
+	closed: ClosedAuction,
+	viewerTeamId: string | null
+): BoardViewerState {
+	if (viewerTeamId === null) return 'not_involved';
+	return closed.contract.teamId === viewerTeamId ? 'won' : 'not_involved';
+}
+
+/**
+ * Every card on the board: one per open nomination, plus one per closed
+ * Auction.
+ *
+ * The open set is `openNominations` and never `Object.values(auctions.byPlayer)`,
  * for the reason this module's header gives: a Player Awaiting an Opening Bid
  * has no Auction row, and iterating Auctions would drop exactly that state.
+ *
+ * The closed set is `closedAuctions` — the CONTRACTS fold, joined to the draws
+ * fold by `projection/closed.ts`, which is the same derivation the Auction
+ * page's Closed state and Your Positions' won link read. The board does not
+ * compose the two folds its own way, and could not: a second composition is a
+ * second answer to "what did this Auction come out as".
+ *
+ * The two sets are disjoint by construction. A close deletes the nomination,
+ * and the nomination gate refuses a Player already under contract, so no
+ * Player can appear in both loops.
  *
  * `metadata` is a `Map` keyed on the Fantrax player id rather than a
  * `Record`, because the keys are DATA: a plain object probed with `[key]`
@@ -430,6 +676,8 @@ export function viewerStateFor(
 export function boardCardsFor(
 	nominations: OpenNominations,
 	auctions: OpenAuctions,
+	contracts: AuctionContracts,
+	draws: Draws,
 	metadata: ReadonlyMap<string, BoardMetadata>,
 	viewerTeamId: string | null
 ): readonly BoardCard[] {
@@ -445,24 +693,77 @@ export function boardCardsFor(
 			playerName: reference?.playerName ?? nomination.playerName,
 			nbaTeam: reference?.nbaTeam ?? null,
 			positions: reference?.positions ?? null,
-			price: auction === null ? null : auction.leadingBid.amount,
-			leadingTeamId: auction?.leadingBid.teamId ?? null,
-			leadingTeamName: auction?.leadingBid.teamName ?? null,
-			leadingManagerId: auction?.leadingBid.managerId ?? null,
-			// `null` is "no Opening Bid has started a clock", never "the clock ran
-			// out" — a closed Auction is absent from this projection entirely.
+			// `null` on a leaderless Auction exactly as on an unbid one: the
+			// board already renders "no Opening Bid has started a clock" and
+			// FR-40's leaderless Auction is that same treatment rather than a
+			// new "restarted" state.
+			price: auction?.leadingBid?.amount ?? null,
+			leadingTeamId: auction?.leadingBid?.teamId ?? null,
+			leadingTeamName: auction?.leadingBid?.teamName ?? null,
+			leadingManagerId: auction?.leadingBid?.managerId ?? null,
+			// `null` is "no clock is running", which is "no Opening Bid has
+			// started one" and — since Story 10.3 — "every Bid on this Auction
+			// was cancelled, so FR-40 cleared it". It is never "the clock ran
+			// out": a closed Auction reaches this list through the loop below,
+			// not through this one.
 			closesAt: auction?.closesAt ?? null,
 			// The ONE mapping of "no Auction row" to a state, from the fold that
 			// owns it. Never re-derived from `auction === null` here.
-			contention: auction === null ? 'awaiting_opening_bid' : auction.contention,
+			state: auction === null ? 'awaiting_opening_bid' : auction.contention,
 			contenderCount: auction?.contenders.length ?? 0,
 			nominatedByTeamId: nomination.teamId,
 			nominatedByTeamName: nomination.teamName,
 			nominatedByManagerId: nomination.managerId,
 			nominatedAt: nomination.occurredAt,
+			winningTeamId: null,
+			winningTeamName: null,
+			winningManagerId: null,
+			closedAt: null,
 			viewerState: viewerStateFor(auction, viewerTeamId)
 		});
 	}
+
+	// The closed half, from the ONE derivation every closed surface reads. A
+	// second loop rather than a branch inside the first, because the two sets
+	// are disjoint by construction and come off different folds: a Player under
+	// contract cannot be nominated again (the gate refuses it), and a close
+	// deletes the nomination that would otherwise put them in the loop above.
+	for (const closed of closedAuctions(contracts, draws)) {
+		const reference = metadata.get(closed.fantraxPlayerId) ?? null;
+		cards.push({
+			fantraxPlayerId: closed.fantraxPlayerId,
+			// The reference row survives the close — only `import-promotion.ts`
+			// deletes one — so the same precedence applies here, with the
+			// CONTRACT's own copy as the fallback rather than the nomination's,
+			// which is gone.
+			playerName: reference?.playerName ?? closed.contract.playerName,
+			nbaTeam: reference?.nbaTeam ?? null,
+			positions: reference?.positions ?? null,
+			// The winning amount, under `BOARD_FINAL_LABEL` rather than
+			// `BOARD_PRICE_LABEL` — the same field so one price sort orders the
+			// whole board, a different word because it means something else now.
+			price: closed.contract.winningAmount,
+			leadingTeamId: null,
+			leadingTeamName: null,
+			leadingManagerId: null,
+			// No clock, and no countdown anywhere on this card. The Auction is
+			// over; a timer on it would be an urgency device pointed at nothing.
+			closesAt: null,
+			state: 'closed',
+			contenderCount: 0,
+			// Not durable past the close, and never invented — see `BoardCard`.
+			nominatedByTeamId: null,
+			nominatedByTeamName: null,
+			nominatedByManagerId: null,
+			nominatedAt: null,
+			winningTeamId: closed.contract.teamId,
+			winningTeamName: closed.contract.teamName,
+			winningManagerId: closed.winningManagerId,
+			closedAt: closed.contract.closedAt,
+			viewerState: closedViewerStateFor(closed, viewerTeamId)
+		});
+	}
+
 	return cards.sort((left, right) => compareText(left.fantraxPlayerId, right.fantraxPlayerId));
 }
 
@@ -489,6 +790,8 @@ type Sortable = {
 	readonly playerName: string;
 	readonly closesAt: string | null;
 	readonly price: number | null;
+	/** Which TIER the card sorts in — closed is always the last one. */
+	readonly state: BoardCardState;
 };
 
 /**
@@ -537,6 +840,17 @@ export function sortBoard<T extends Sortable>(
 	};
 
 	return [...cards].sort((left, right) => {
+		// **Closed is an explicit final tier, and it has to be.** `closing` is
+		// ascending time REMAINING, and a closed card carries no clock — so
+		// under `compareNullsLast` it would land beside the unbid nominations
+		// rather than at the end, and under `price` a large settled Auction
+		// would sort straight to the top of a board a Manager is scanning for
+		// somewhere to bid. Neither is an ordering anybody asked for. A card
+		// that is over sorts beneath every card that is not, in all three
+		// views, and the chosen key then orders the closed cards among
+		// themselves exactly as it orders the open ones.
+		const tier = tierOf(left) - tierOf(right);
+		if (tier !== 0) return tier;
 		if (key === 'closing') {
 			const order = compareNullsLast(remaining(left), remaining(right), 'ascending');
 			if (order !== 0) return order;
@@ -569,6 +883,11 @@ export function sortBoard<T extends Sortable>(
  * would put them at the top of one view and the bottom of another for no
  * reason a reader could name.
  */
+/** Open cards first, closed cards last. The only two tiers there are. */
+function tierOf(card: Sortable): number {
+	return card.state === 'closed' ? 1 : 0;
+}
+
 function compareNullsLast(
 	left: number | null,
 	right: number | null,
@@ -583,7 +902,10 @@ function compareNullsLast(
 }
 
 /** The fields a filter reads. Structural, for `Sortable`'s reason. */
-type Filterable = { readonly viewerState: BoardViewerState };
+type Filterable = {
+	readonly viewerState: BoardViewerState;
+	readonly state: BoardCardState;
+};
 
 /**
  * The board narrowed to one view, as a NEW array.
@@ -594,14 +916,26 @@ type Filterable = { readonly viewerState: BoardViewerState };
  * `leading` and `contending` each name exactly one viewer state. Outbid is
  * deliberately NOT folded into `contending`: being outbid is a fact about an
  * Auction a Manager has left, and a view that mixed the two would answer
- * neither question. `epics.md` gives the board three filters and Your
+ * neither question. `epics.md` gives the board those filters and Your
  * Positions the grouping that separates them.
+ *
+ * `open` and `closed` are the two that narrow on the card's own state, added
+ * when closed cards arrived on this board: a Manager scanning for somewhere to
+ * bid and a Manager looking for a draw to check are asking opposite questions
+ * of one list, and neither wants the other's cards in the way.
  */
 export function filterBoard<T extends Filterable>(
 	cards: readonly T[],
 	filter: BoardFilter
 ): readonly T[] {
 	if (filter === 'all') return cards;
+	// The two views that narrow on the CARD's state rather than the viewer's.
+	// `open` hides closed cards ENTIRELY — it is what a Manager selects to get
+	// back the board they had before anything closed, and a "mostly open" view
+	// would not be that. `closed` is its complement, which is where a losing
+	// Manager goes to find the draw they want to check.
+	if (filter === 'open') return cards.filter((card) => card.state !== 'closed');
+	if (filter === 'closed') return cards.filter((card) => card.state === 'closed');
 	const wanted: BoardViewerState = filter === 'leading' ? 'you_lead' : 'contender';
 	return cards.filter((card) => card.viewerState === wanted);
 }

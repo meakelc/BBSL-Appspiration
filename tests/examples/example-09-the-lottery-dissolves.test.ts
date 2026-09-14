@@ -232,8 +232,8 @@ describe('§10 example 9 — the lottery dissolves', () => {
 		const auction = auctionForPlayer(fold(INITIAL_AUCTIONS, theWholeThing(), auctionsReducer), 'p-1');
 
 		expect(auction?.contention).toBe('standard');
-		expect(auction?.leadingBid.teamId).toBe('t-i');
-		expect(auction?.leadingBid.amount).toBe(1_500_000);
+		expect(auction?.leadingBid?.teamId).toBe('t-i');
+		expect(auction?.leadingBid?.amount).toBe(1_500_000);
 		// The reveal is on the Auction, and the commitment it answers is
 		// still the one the opening published.
 		expect(auction?.seed).toBe(SEED);
@@ -274,14 +274,21 @@ describe('§10 example 9 — the lottery dissolves', () => {
 
 		for (const [teamId] of CONTENDERS) {
 			expect(committedOn(theLottery(), teamId), teamId).toEqual([
-				{ fantraxPlayerId: 'p-1', playerName: 'Jalen Green', amount: MINIMUM_BID }
+				{
+					fantraxPlayerId: 'p-1',
+					playerName: 'Jalen Green',
+					amount: MINIMUM_BID,
+					// An entry WHILE the contention stands. After it dissolves the
+					// same Team holds nothing here at all, which is the next line.
+					isContentionEntry: true
+				}
 			]);
 			expect(committedOn(theWholeThing(), teamId), teamId).toEqual([]);
 		}
 
 		// ...and Team I is committed its $1,500,000, because it leads.
 		expect(committedOn(theWholeThing(), 't-i')).toEqual([
-			{ fantraxPlayerId: 'p-1', playerName: 'Jalen Green', amount: 1_500_000 }
+			{ fantraxPlayerId: 'p-1', playerName: 'Jalen Green', amount: 1_500_000, isContentionEntry: false }
 		]);
 	});
 
@@ -311,7 +318,7 @@ describe('§10 example 9 — the lottery dissolves', () => {
 		);
 
 		const folded = fold(INITIAL_AUCTIONS, log, auctionsReducer);
-		expect(auctionForPlayer(folded, 'p-1')?.leadingBid.teamId).toBe('t-f');
+		expect(auctionForPlayer(folded, 'p-1')?.leadingBid?.teamId).toBe('t-f');
 
 		// Read from a SECOND Auction, which is where a Team's commitments are
 		// visible at all. Exactly one entry, at the converting amount.
@@ -326,7 +333,7 @@ describe('§10 example 9 — the lottery dissolves', () => {
 				isMinorLeagueEligible: () => false,
 				playerNameFor: () => 'Jalen Green'
 			}).leading
-		).toEqual([{ fantraxPlayerId: 'p-1', playerName: 'Jalen Green', amount: 1_500_000 }]);
+		).toEqual([{ fantraxPlayerId: 'p-1', playerName: 'Jalen Green', amount: 1_500_000, isContentionEntry: false }]);
 
 		// **The payload carries the WHOLE list, converter included, and does
 		// not pretend that Team was released.** F is on its own dissolution's

@@ -21,6 +21,7 @@ import {
 	ARCHIVED_EMPTY_BOARD_STATEMENT,
 	AUCTION_STATE_ICONS,
 	AUCTION_STATE_LABELS,
+	AUCTION_STATE_LABELS_NARROW,
 	DEFAULT_FILTER,
 	DEFAULT_SORT,
 	EMPTY_BOARD_ACTION,
@@ -39,29 +40,39 @@ import {
 	filterBoard,
 	filteredNoticeSentence,
 	metadataLine,
+	openCardCount,
 	priceLabel,
 	sortBoard,
 	unbidPhrase,
 	viewerStateFor
 } from '../src/lib/core/board.ts';
-import type { BoardCard, BoardMetadata } from '../src/lib/core/board.ts';
+import type { BoardCard, BoardCardState, BoardMetadata } from '../src/lib/core/board.ts';
+import { CLOSED_LABEL, CLOSED_LABEL_NARROW } from '../src/lib/core/projection/closed.ts';
 import { MINIMUM_BID } from '../src/lib/core/constants.ts';
 import { parseMoney } from '../src/lib/core/money.ts';
 import {
 	BID_PLACED_EVENT,
 	INITIAL_AUCTIONS,
-	MINIMUM_BID_CONTENTION_LABEL,
+	MINIMUM_LOTTERY_LABEL,
 	auctionForPlayer,
 	auctionsReducer
 } from '../src/lib/core/projection/auctions.ts';
 import type { Auction } from '../src/lib/core/projection/auctions.ts';
 import { fold } from '../src/lib/core/projection/fold.ts';
 import {
+	AUCTION_CLOSED_EVENT,
 	INITIAL_NOMINATIONS,
 	NOMINATION_PLACED_EVENT,
 	nominationsReducer
 } from '../src/lib/core/projection/nominations.ts';
+import { INITIAL_CONTRACTS, contractsReducer } from '../src/lib/core/projection/contracts.ts';
+import {
+	CONTENTION_DRAWN_EVENT,
+	INITIAL_DRAWS,
+	drawsReducer
+} from '../src/lib/core/projection/draws.ts';
 import type { AppendedEvent } from '../src/lib/core/types.ts';
+import { closedPayload } from './fixtures/closed-event.ts';
 
 const NOW = '2026-08-27T12:00:00.000Z';
 
@@ -117,11 +128,66 @@ function bid(
 	);
 }
 
-/** Fold a log into the two projections the board is built from. */
+/**
+ * An `AuctionClosed` exactly as `rules/close.ts` appends one — the full
+ * payload `readClosedFacts` requires, since a close short any of it is skipped
+ * by all three reducers together.
+ */
+function closedEvent(
+	fantraxPlayerId: string,
+	playerName: string,
+	teamId: string,
+	teamName: string,
+	occurredAt: string,
+	overrides: Record<string, unknown> = {}
+): AppendedEvent {
+	return event(
+		AUCTION_CLOSED_EVENT,
+		closedPayload({
+			fantraxPlayerId,
+			playerName,
+			teamId,
+			teamName,
+			closedAt: occurredAt,
+			...overrides
+		}),
+		occurredAt
+	);
+}
+
+/** A `ContentionDrawn`, for the closed card that names a lottery's Manager. */
+function drawnEvent(
+	fantraxPlayerId: string,
+	winningTeamId: string,
+	winningManagerId: string,
+	occurredAt: string
+): AppendedEvent {
+	return event(
+		CONTENTION_DRAWN_EVENT,
+		{
+			fantraxPlayerId,
+			seed: '4d81f0b6a72c395e4d81f0b6a72c395e4d81f0b6a72c395e4d81f0b6a72c395e',
+			seedHash: '0f1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a6978',
+			contenders: ['t-a', winningTeamId],
+			selectedIndex: 1,
+			winningTeamId,
+			winningTeamName: 'Rockets',
+			winningManagerId
+		},
+		occurredAt
+	);
+}
+
+/**
+ * Fold a log into the four projections the board is built from — the two that
+ * a close DELETES from, and the two that survive it.
+ */
 function project(events: readonly AppendedEvent[]) {
 	return {
 		nominations: fold(INITIAL_NOMINATIONS, events, nominationsReducer),
-		auctions: fold(INITIAL_AUCTIONS, events, auctionsReducer)
+		auctions: fold(INITIAL_AUCTIONS, events, auctionsReducer),
+		contracts: fold(INITIAL_CONTRACTS, events, contractsReducer),
+		draws: fold(INITIAL_DRAWS, events, drawsReducer)
 	};
 }
 
@@ -145,10 +211,10 @@ describe('the board is built from NOMINATIONS, not from Auctions', () => {
 		]);
 		expect(auctionForPlayer(auctions, 'p-1')).toBeNull();
 
-		const cards = boardCardsFor(nominations, auctions, new Map(), null);
+		const cards = boardCardsFor(nominations, auctions, INITIAL_CONTRACTS, INITIAL_DRAWS, new Map(), null);
 		expect(cards).toHaveLength(1);
 		const card = cardFor(cards, 'p-1');
-		expect(card.contention).toBe('awaiting_opening_bid');
+		expect(card.state).toBe('awaiting_opening_bid');
 		// No clock at all — no Opening Bid has started one.
 		expect(card.closesAt).toBeNull();
 		expect(card.price).toBeNull();
@@ -163,8 +229,8 @@ describe('the board is built from NOMINATIONS, not from Auctions', () => {
 			nominated('p-1', 'Jalen Green', 't-1', 'Lakers', '2026-08-26T00:00:00.000Z'),
 			bid('p-1', 't-2', 'Rockets', 8_500_000, '2026-08-26T12:00:00.000Z', '2026-08-27T12:00:00.000Z')
 		]);
-		const card = cardFor(boardCardsFor(nominations, auctions, new Map(), null), 'p-1');
-		expect(card.contention).toBe('standard');
+		const card = cardFor(boardCardsFor(nominations, auctions, INITIAL_CONTRACTS, INITIAL_DRAWS, new Map(), null), 'p-1');
+		expect(card.state).toBe('standard');
 		expect(card.price).toBe(8_500_000);
 		expect(card.leadingTeamId).toBe('t-2');
 		expect(card.leadingTeamName).toBe('Rockets');
@@ -178,8 +244,8 @@ describe('the board is built from NOMINATIONS, not from Auctions', () => {
 			bid('p-1', 't-2', 'Rockets', MINIMUM_BID, '2026-08-26T12:00:00.000Z', '2026-08-27T12:00:00.000Z'),
 			bid('p-1', 't-3', 'Heat', MINIMUM_BID, '2026-08-26T13:00:00.000Z', '2026-08-27T12:00:00.000Z')
 		]);
-		const card = cardFor(boardCardsFor(nominations, auctions, new Map(), null), 'p-1');
-		expect(card.contention).toBe('minimum_bid');
+		const card = cardFor(boardCardsFor(nominations, auctions, INITIAL_CONTRACTS, INITIAL_DRAWS, new Map(), null), 'p-1');
+		expect(card.state).toBe('minimum_bid');
 		expect(card.contenderCount).toBe(2);
 	});
 
@@ -200,7 +266,7 @@ describe('the board is built from NOMINATIONS, not from Auctions', () => {
 				'2026-08-27T12:00:00.000Z'
 			)
 		]);
-		expect(boardCardsFor(nominations, auctions, new Map(), null)).toEqual([]);
+		expect(boardCardsFor(nominations, auctions, INITIAL_CONTRACTS, INITIAL_DRAWS, new Map(), null)).toEqual([]);
 	});
 
 	it('renders the reference row’s name and metadata, and omits the line when there is none', () => {
@@ -211,6 +277,8 @@ describe('the board is built from NOMINATIONS, not from Auctions', () => {
 		const cards = boardCardsFor(
 			nominations,
 			auctions,
+			INITIAL_CONTRACTS,
+			INITIAL_DRAWS,
 			metadataFor({
 				'p-1': { playerName: 'Jalen Green', nbaTeam: 'HOU', positions: 'SG' }
 			}),
@@ -237,7 +305,7 @@ describe('the board is built from NOMINATIONS, not from Auctions', () => {
 			nominated('p-b', 'B', 't-1', 'Lakers', '2026-08-26T00:00:00.000Z')
 		]);
 		const ids = (p: ReturnType<typeof project>) =>
-			boardCardsFor(p.nominations, p.auctions, new Map(), null).map((c) => c.fantraxPlayerId);
+			boardCardsFor(p.nominations, p.auctions, p.contracts, p.draws, new Map(), null).map((c) => c.fantraxPlayerId);
 		expect(ids(forwards)).toEqual(['p-a', 'p-b']);
 		expect(ids(backwards)).toEqual(['p-a', 'p-b']);
 	});
@@ -300,7 +368,7 @@ describe('the four viewer-relative states', () => {
 			bid('p-1', 't-3', 'Heat', MINIMUM_BID, '2026-08-26T13:00:00.000Z', NOW)
 		]);
 		expect(auction.contention).toBe('minimum_bid');
-		expect(auction.leadingBid.teamId).toBe('t-2');
+		expect(auction.leadingBid?.teamId).toBe('t-2');
 		expect(viewerStateFor(auction, 't-2')).toBe('contender');
 		// And both Contenders read identically — the board states no ordering
 		// between them, because the draw has not happened.
@@ -336,7 +404,7 @@ describe('the four viewer-relative states', () => {
 		// The state the guard turns on: converted, but the list survives.
 		expect(auction.contention).toBe('standard');
 		expect(auction.contenders.length).toBeGreaterThan(0);
-		expect(auction.leadingBid.teamId).toBe('t-2');
+		expect(auction.leadingBid?.teamId).toBe('t-2');
 		// The Team that actually leads is told so.
 		expect(viewerStateFor(auction, 't-2')).toBe('you_lead');
 		// And the Team its raise genuinely outbid is told THAT — `attention`
@@ -362,7 +430,7 @@ describe('the four viewer-relative states', () => {
 			bid('p-1', 't-1', 'Lakers', 8_500_000, '2026-08-26T12:00:00.000Z', NOW),
 			nominated('p-2', 'Second', 't-2', 'Heat', '2026-08-26T01:00:00.000Z')
 		]);
-		const cards = boardCardsFor(nominations, auctions, new Map(), null);
+		const cards = boardCardsFor(nominations, auctions, INITIAL_CONTRACTS, INITIAL_DRAWS, new Map(), null);
 		expect(cards).toHaveLength(2);
 		for (const card of cards) expect(card.viewerState).toBe('not_involved');
 		// The board is not narrowed for a signed-out viewer: the price and the
@@ -373,30 +441,55 @@ describe('the four viewer-relative states', () => {
 });
 
 describe('every state carries a word AND a shape', () => {
-	it('words all three Auction states, and no fourth', () => {
+	it('words all four card states, and no fifth — no Terminated', () => {
+		// Three are `ContentionState`'s and the fourth is not: a close deletes
+		// the Auction, so `closed` can never come off the fold and is keyed
+		// from `BoardCardState` instead. There is still no `terminated`,
+		// because `AuctionTerminated` records a Player id and no reason.
 		expect(Object.keys(AUCTION_STATE_LABELS).sort()).toEqual([
 			'awaiting_opening_bid',
+			'closed',
 			'minimum_bid',
 			'standard'
 		]);
-		expect(AUCTION_STATE_LABELS.awaiting_opening_bid).toBe('Awaiting Opening Bid');
+		expect(AUCTION_STATE_LABELS.awaiting_opening_bid).toBe('Unbid');
 		expect(AUCTION_STATE_LABELS.standard).toBe('Open');
-		// The glossary term from the fold that decides it, reused rather than
-		// respelled — a synonym in UI copy is a defect.
-		expect(AUCTION_STATE_LABELS.minimum_bid).toBe(MINIMUM_BID_CONTENTION_LABEL);
+		// The contention's CARD name from the fold that decides it, reused
+		// rather than respelled. Not the glossary term: a board card's identity
+		// row is scanned beside a Player's name and cannot carry the full term
+		// at 375px. The term itself still stands on the Auction page.
+		expect(AUCTION_STATE_LABELS.minimum_bid).toBe(MINIMUM_LOTTERY_LABEL);
+		// The Closed word is the one the Closed PAGE says, imported rather than
+		// respelled — a synonym between a card and the page it links to would
+		// be a Manager reading one state under two names.
+		expect(AUCTION_STATE_LABELS.closed).toBe(CLOSED_LABEL);
+		expect(AUCTION_STATE_LABELS_NARROW.closed).toBe(CLOSED_LABEL_NARROW);
+		// Every state has a NARROW spelling too, so a surface indexes one
+		// record and cannot fall through to a missing key.
+		expect(Object.keys(AUCTION_STATE_LABELS_NARROW).sort()).toEqual(
+			Object.keys(AUCTION_STATE_LABELS).sort()
+		);
 	});
 
-	it('words all four viewer-relative states, and no fifth', () => {
+	it('words all five viewer-relative states, and no sixth', () => {
 		expect(Object.keys(VIEWER_STATE_LABELS).sort()).toEqual([
 			'contender',
 			'not_involved',
 			'outbid',
+			'won',
 			'you_lead'
 		]);
-		expect(VIEWER_STATE_LABELS.you_lead).toBe('You lead');
+		// Named without a pronoun: the chip reaches only the Manager it is
+		// about, so `Leading` reads identically as a chip, as the Positions
+		// heading and as the board's own filter.
+		expect(VIEWER_STATE_LABELS.you_lead).toBe('Leading');
+		expect(FILTER_LABELS.leading).toBe(VIEWER_STATE_LABELS.you_lead);
 		expect(VIEWER_STATE_LABELS.outbid).toBe('Outbid');
 		expect(VIEWER_STATE_LABELS.contender).toBe('Contender');
 		expect(VIEWER_STATE_LABELS.not_involved).toBe('Not involved');
+		// Stated, never congratulated — no exclamation and no trophy.
+		expect(VIEWER_STATE_LABELS.won).toBe('You won');
+		expect(VIEWER_STATE_LABELS.won).not.toMatch(/[!]/);
 	});
 
 	it('gives every state its own non-empty shape, so greyscale still reads', () => {
@@ -425,6 +518,8 @@ describe('sorting — view state, total, and always tie-broken on the Player nam
 		readonly playerName: string;
 		readonly closesAt: string | null;
 		readonly price: number | null;
+		/** Which TIER the card sorts in. Closed is always the last one. */
+		readonly state: BoardCardState;
 	};
 
 	const rows: readonly Row[] = [
@@ -432,21 +527,24 @@ describe('sorting — view state, total, and always tie-broken on the Player nam
 			fantraxPlayerId: 'p-charlie',
 			playerName: 'Charlie',
 			closesAt: '2026-08-27T18:00:00.000Z',
-			price: 9_000_000
+			price: 9_000_000,
+			state: 'standard'
 		},
 		{
 			fantraxPlayerId: 'p-alice',
 			playerName: 'Alice',
 			closesAt: '2026-08-27T18:00:00.000Z',
-			price: 9_000_000
+			price: 9_000_000,
+			state: 'standard'
 		},
 		{
 			fantraxPlayerId: 'p-bob',
 			playerName: 'Bob',
 			closesAt: '2026-08-27T13:00:00.000Z',
-			price: 1_000_000
+			price: 1_000_000,
+			state: 'standard'
 		},
-		{ fantraxPlayerId: 'p-dana', playerName: 'Dana', closesAt: null, price: null }
+		{ fantraxPlayerId: 'p-dana', playerName: 'Dana', closesAt: null, price: null, state: 'awaiting_opening_bid' }
 	];
 
 	const names = (sorted: readonly Row[]) => sorted.map((row) => row.playerName);
@@ -486,8 +584,20 @@ describe('sorting — view state, total, and always tie-broken on the Player nam
 		// reshuffle this module exists to prevent, one level deeper, so every
 		// chain ends at the Player id, which is unique by construction.
 		const duplicates: readonly Row[] = [
-			{ fantraxPlayerId: 'p-aaa', playerName: 'Jalen Johnson', closesAt: null, price: null },
-			{ fantraxPlayerId: 'p-zzz', playerName: 'Jalen Johnson', closesAt: null, price: null }
+			{
+				fantraxPlayerId: 'p-aaa',
+				playerName: 'Jalen Johnson',
+				closesAt: null,
+				price: null,
+				state: 'awaiting_opening_bid'
+			},
+			{
+				fantraxPlayerId: 'p-zzz',
+				playerName: 'Jalen Johnson',
+				closesAt: null,
+				price: null,
+				state: 'awaiting_opening_bid'
+			}
 		];
 		const ids = (sorted: readonly Row[]) => sorted.map((row) => row.fantraxPlayerId);
 		const reversed = [...duplicates].reverse();
@@ -521,13 +631,15 @@ describe('sorting — view state, total, and always tie-broken on the Player nam
 				fantraxPlayerId: 'p-alice',
 				playerName: 'Alice',
 				closesAt: 'not-an-instant',
-				price: null
+				price: null,
+				state: 'standard'
 			},
 			{
 				fantraxPlayerId: 'p-bob',
 				playerName: 'Bob',
 				closesAt: '2026-08-27T13:00:00.000Z',
-				price: null
+				price: null,
+				state: 'standard'
 			}
 		];
 		expect(names(sortBoard(withGarbage, 'closing', NOW))).toEqual(['Bob', 'Alice']);
@@ -535,18 +647,38 @@ describe('sorting — view state, total, and always tie-broken on the Player nam
 });
 
 describe('filtering — view state, visibly stated', () => {
-	type Row = { readonly playerName: string; readonly viewerState: BoardCard['viewerState'] };
+	type Row = {
+		readonly playerName: string;
+		readonly viewerState: BoardCard['viewerState'];
+		readonly state: BoardCardState;
+	};
 	const rows: readonly Row[] = [
-		{ playerName: 'Alice', viewerState: 'you_lead' },
-		{ playerName: 'Bob', viewerState: 'outbid' },
-		{ playerName: 'Carla', viewerState: 'contender' },
-		{ playerName: 'Dana', viewerState: 'not_involved' }
+		{ playerName: 'Alice', viewerState: 'you_lead', state: 'standard' },
+		{ playerName: 'Bob', viewerState: 'outbid', state: 'standard' },
+		{ playerName: 'Carla', viewerState: 'contender', state: 'minimum_bid' },
+		{ playerName: 'Dana', viewerState: 'not_involved', state: 'awaiting_opening_bid' },
+		{ playerName: 'Eve', viewerState: 'won', state: 'closed' }
 	];
 
-	it('offers exactly three views, each with a word, defaulting to the whole board', () => {
-		expect([...FILTER_KEYS]).toEqual(['all', 'leading', 'contending']);
+	it('offers exactly five views, each with a word, defaulting to the whole board', () => {
+		expect([...FILTER_KEYS]).toEqual(['all', 'open', 'closed', 'leading', 'contending']);
 		expect(DEFAULT_FILTER).toBe('all');
 		for (const key of FILTER_KEYS) expect(FILTER_LABELS[key]).not.toBe('');
+	});
+
+	it('open hides every closed card ENTIRELY, and closed is its complement', () => {
+		// The acceptance criterion, stated: a Manager who selects `open` is
+		// asking for the board they had before anything closed, and a "mostly
+		// open" view would not be that.
+		expect(filterBoard(rows, 'open').map((r) => r.playerName)).toEqual([
+			'Alice',
+			'Bob',
+			'Carla',
+			'Dana'
+		]);
+		expect(filterBoard(rows, 'closed').map((r) => r.playerName)).toEqual(['Eve']);
+		// Together they are the whole board and they overlap in nothing.
+		expect(filterBoard(rows, 'open').length + filterBoard(rows, 'closed').length).toBe(rows.length);
 	});
 
 	it('all hides nothing', () => {
@@ -636,5 +768,262 @@ describe('the counts and phrases the board states', () => {
 		expect(ARCHIVED_EMPTY_BOARD_STATEMENT.toLowerCase()).toContain('auction phase is over');
 		// Reassures about STATE, not feelings: no apology, no exclamation.
 		expect(ARCHIVED_EMPTY_BOARD_STATEMENT).not.toMatch(/!|sorry|unfortunately/i);
+	});
+});
+
+// --- The leaderless Auction, pinned (Story 10.6, FR-40) ---------------------
+
+describe('a leaderless Auction renders as the unbid nomination the board already has', () => {
+	it('carries no price, no leader and no clock — and no state of its own', () => {
+		// Story 10.6 PINS this; it builds nothing. FR-40 leaves an Auction
+		// behind with every Bid cancelled and nothing restored, and the board
+		// gives it the treatment it already gives a Player Awaiting an Opening
+		// Bid. A "restarted" state would be a fourth thing for a Manager to
+		// learn about a card that has nothing new to say.
+		const { nominations, auctions } = project([
+			nominated('p-1', 'Jalen Green', 't-1', 'Lakers', '2026-08-26T00:00:00.000Z'),
+			bid('p-1', 't-2', 'Rockets', 8_500_000, '2026-08-26T12:00:00.000Z', '2026-08-27T12:00:00.000Z')
+		]);
+		const open = auctionForPlayer(auctions, 'p-1');
+		expect(open).not.toBeNull();
+		// The state FR-40 leaves: the Bids are still in `bids`, and the lead
+		// and the clock are gone.
+		const leaderless = {
+			byPlayer: {
+				...auctions.byPlayer,
+				'p-1': { ...(open as Auction), leadingBid: null, closesAt: null }
+			}
+		};
+
+		const card = cardFor(boardCardsFor(nominations, leaderless, INITIAL_CONTRACTS, INITIAL_DRAWS, new Map(), null), 'p-1');
+		const unbid = cardFor(
+			boardCardsFor(
+				project([nominated('p-2', 'Jalen Green', 't-1', 'Lakers', '2026-08-26T00:00:00.000Z')])
+					.nominations,
+				INITIAL_AUCTIONS,
+				INITIAL_CONTRACTS,
+				INITIAL_DRAWS,
+				new Map(),
+				null
+			),
+			'p-2'
+		);
+
+		expect(card.price).toBeNull();
+		expect(card.leadingTeamId).toBeNull();
+		expect(card.leadingTeamName).toBeNull();
+		expect(card.closesAt).toBeNull();
+		// The history is untouched — every Bid is still folded on the Auction.
+		expect((open as Auction).bids.length).toBeGreaterThan(0);
+		// And every field the card states about its state matches the unbid
+		// one, which is what "the treatment the board already has" means.
+		expect(card.viewerState).toBe(unbid.viewerState);
+		expect(card.price).toBe(unbid.price);
+		expect(card.closesAt).toBe(unbid.closesAt);
+	});
+
+	it('names no restarted state anywhere in the board vocabulary', () => {
+		for (const label of Object.values(AUCTION_STATE_LABELS)) {
+			expect(label.toLowerCase()).not.toContain('restart');
+		}
+		for (const label of Object.values(VIEWER_STATE_LABELS)) {
+			expect(label.toLowerCase()).not.toContain('restart');
+		}
+	});
+});
+
+describe('the closed card — the state a close used to delete off this board', () => {
+	const NOMINATED = '2026-08-26T00:00:00.000Z';
+	const CLOSED_AT = '2026-08-27T09:00:00.000Z';
+
+	/** One Player nominated, bid on, and closed to the Rockets for $8.5M. */
+	function closedBoard(viewerTeamId: string | null = null) {
+		const p = project([
+			nominated('p-1', 'Jalen Green', 't-1', 'Lakers', NOMINATED),
+			bid('p-1', 't-2', 'Rockets', 8_500_000, '2026-08-26T01:00:00.000Z', CLOSED_AT),
+			closedEvent('p-1', 'Jalen Green', 't-2', 'Rockets', CLOSED_AT, {
+				winningAmount: 8_500_000,
+				capHit: 8_500_000
+			})
+		]);
+		return boardCardsFor(p.nominations, p.auctions, p.contracts, p.draws, new Map(), viewerTeamId);
+	}
+
+	it('renders a card for an Auction BOTH live folds have dropped', () => {
+		const cards = closedBoard();
+		expect(cards).toHaveLength(1);
+		const card = cardFor(cards, 'p-1');
+		expect(card.state).toBe('closed');
+		expect(card.playerName).toBe('Jalen Green');
+		// The winner and the final amount. The placement sentence that stood
+		// beside them was removed as redundant: on a standard close its Cap Hit
+		// repeats the figure above it word for word.
+		expect(card.winningTeamName).toBe('Rockets');
+		expect(card.price).toBe(parseMoney(8_500_000));
+		expect(card.closedAt).toBe(CLOSED_AT);
+	});
+
+	it('carries NO clock and NO nominating Team, because neither is durable', () => {
+		const card = cardFor(closedBoard(), 'p-1');
+		// `nominationsReducer` deleted the nomination at the close, so the
+		// nominating Team is not durable and must not be invented — and with no
+		// `nominatedAt` there is no unbid phrase to print either.
+		expect(card.nominatedByTeamName).toBeNull();
+		expect(card.nominatedByTeamId).toBeNull();
+		expect(card.nominatedByManagerId).toBeNull();
+		expect(card.nominatedAt).toBeNull();
+		// No clock at all: the Auction is over, and a countdown on it would be
+		// an urgency device pointed at nothing.
+		expect(card.closesAt).toBeNull();
+		expect(card.leadingTeamName).toBeNull();
+		expect(card.contenderCount).toBe(0);
+	});
+
+	it('reads You won for the winning Team and Not involved for everyone else', () => {
+		// The viewer axis has exactly two answers on a settled Auction. "You
+		// lead" and "Contender" describe standings it no longer holds, and
+		// "Outbid" is the one state `attention` marks anywhere in this product
+		// — putting that colour on a card nobody can act on would be the worst
+		// of the three mistakes.
+		expect(cardFor(closedBoard('t-2'), 'p-1').viewerState).toBe('won');
+		expect(cardFor(closedBoard('t-1'), 'p-1').viewerState).toBe('not_involved');
+		expect(cardFor(closedBoard(null), 'p-1').viewerState).toBe('not_involved');
+	});
+
+	it('names the winning Manager only where a DRAW recorded one', () => {
+		const standard = cardFor(closedBoard(), 'p-1');
+		expect(standard.winningManagerId).toBeNull();
+
+		const p = project([
+			nominated('p-1', 'Jalen Green', 't-1', 'Lakers', NOMINATED),
+			drawnEvent('p-1', 't-2', 'm-2', CLOSED_AT),
+			closedEvent('p-1', 'Jalen Green', 't-2', 'Rockets', CLOSED_AT)
+		]);
+		const lottery = cardFor(
+			boardCardsFor(p.nominations, p.auctions, p.contracts, p.draws, new Map(), null),
+			'p-1'
+		);
+		expect(lottery.winningManagerId).toBe('m-2');
+	});
+
+	it('builds no card from a DRAW with no close behind it', () => {
+		const p = project([
+			nominated('p-1', 'Jalen Green', 't-1', 'Lakers', NOMINATED),
+			drawnEvent('p-2', 't-2', 'm-2', CLOSED_AT)
+		]);
+		const cards = boardCardsFor(p.nominations, p.auctions, p.contracts, p.draws, new Map(), null);
+		expect(cards.map((card) => card.fantraxPlayerId)).toEqual(['p-1']);
+		expect(cards[0]?.state).not.toBe('closed');
+	});
+
+	it('takes the reference name when there is one, the contract copy when not', () => {
+		const p = project([
+			nominated('p-1', 'Jalen Green', 't-1', 'Lakers', NOMINATED),
+			closedEvent('p-1', 'Fold Name', 't-2', 'Rockets', CLOSED_AT)
+		]);
+		// The close does NOT delete the `free_agent_players` row — only
+		// `import-promotion.ts` does — so the metadata survives it.
+		const withRow = cardFor(
+			boardCardsFor(
+				p.nominations,
+				p.auctions,
+				p.contracts,
+				p.draws,
+				metadataFor({ 'p-1': { playerName: 'Jalen Green', nbaTeam: 'HOU', positions: 'SG' } }),
+				null
+			),
+			'p-1'
+		);
+		expect(withRow.playerName).toBe('Jalen Green');
+		expect(metadataLine(withRow.nbaTeam, withRow.positions)).toBe('HOU · SG');
+
+		const without = cardFor(
+			boardCardsFor(p.nominations, p.auctions, p.contracts, p.draws, new Map(), null),
+			'p-1'
+		);
+		expect(without.playerName).toBe('Fold Name');
+		expect(metadataLine(without.nbaTeam, without.positions)).toBeNull();
+	});
+
+	it('sorts every closed card BENEATH every open one, in all three orders', () => {
+		// The acceptance criterion. `closing` is ascending time REMAINING, so a
+		// closed card carrying its `closedAt` would sort FIRST, above every
+		// running Auction; under `price` a large settled Auction would head a
+		// board a Manager is scanning for somewhere to bid. Closed is an
+		// explicit final tier instead, ordered among itself by the chosen key.
+		type Row = {
+			readonly fantraxPlayerId: string;
+			readonly playerName: string;
+			readonly closesAt: string | null;
+			readonly price: number | null;
+			readonly state: BoardCardState;
+		};
+		const mixed: readonly Row[] = [
+			{
+				fantraxPlayerId: 'p-closed-big',
+				playerName: 'Aaron',
+				closesAt: null,
+				price: 20_000_000,
+				state: 'closed'
+			},
+			{
+				fantraxPlayerId: 'p-open-small',
+				playerName: 'Zoe',
+				closesAt: '2026-08-27T18:00:00.000Z',
+				price: 1_000_000,
+				state: 'standard'
+			},
+			{
+				fantraxPlayerId: 'p-closed-small',
+				playerName: 'Bea',
+				closesAt: null,
+				price: 500_000,
+				state: 'closed'
+			},
+			{
+				fantraxPlayerId: 'p-unbid',
+				playerName: 'Yannick',
+				closesAt: null,
+				price: null,
+				state: 'awaiting_opening_bid'
+			}
+		];
+		for (const key of SORT_KEYS) {
+			const order = sortBoard(mixed, key, NOW).map((row) => row.state === 'closed');
+			// Two open cards, then two closed ones — whichever key was chosen
+			// and whatever it does inside each tier.
+			expect(order, key).toEqual([false, false, true, true]);
+		}
+		// And the chosen key still orders the closed tier among itself.
+		expect(sortBoard(mixed, 'price', NOW).map((row) => row.fantraxPlayerId).slice(2)).toEqual([
+			'p-closed-big',
+			'p-closed-small'
+		]);
+		expect(sortBoard(mixed, 'name', NOW).map((row) => row.fantraxPlayerId).slice(2)).toEqual([
+			'p-closed-big',
+			'p-closed-small'
+		]);
+		// `closing` too, which the two assertions above do not reach: every
+		// closed card carries `closesAt: null`, so the remaining-time comparator
+		// returns 0 for the whole tier and the ORDER falls to the tie-breaks.
+		// Untested, `Array.prototype.sort` would be free to reorder them between
+		// renders — the visible reshuffle `sortBoard`'s totality exists to
+		// prevent, on the one surface a Manager reads while it re-derives.
+		expect(sortBoard(mixed, 'closing', NOW).map((row) => row.fantraxPlayerId).slice(2)).toEqual([
+			'p-closed-big',
+			'p-closed-small'
+		]);
+	});
+
+	it('counts only the OPEN cards, because the sentence beside it says open', () => {
+		const p = project([
+			nominated('p-1', 'Jalen Green', 't-1', 'Lakers', NOMINATED),
+			nominated('p-2', 'Alperen Sengun', 't-2', 'Rockets', NOMINATED),
+			closedEvent('p-2', 'Alperen Sengun', 't-3', 'Heat', CLOSED_AT)
+		]);
+		const cards = boardCardsFor(p.nominations, p.auctions, p.contracts, p.draws, new Map(), null);
+		expect(cards).toHaveLength(2);
+		expect(openCardCount(cards)).toBe(1);
+		expect(boardCountSentence(openCardCount(cards))).toBe('One Auction is open.');
 	});
 });

@@ -1,0 +1,71 @@
+# Epic 7 Context: The referee's controls and the record
+
+<!-- Compiled from planning artifacts. Edit freely. Regenerate with compile-epic-context if planning docs change. -->
+
+## Goal
+
+This epic gives the Commissioner the full set of referee controls — void a Bid, adjust Cap Space, terminate an Auction, release a Nomination Slot, extend or expire a Clock, assign a contract length on a Team's behalf, pause and resume the whole auction — and makes every one of them a visible, reconstructible act carrying a mandatory free-text reason and a stated before/after. It also gives any Manager a complete, league-visible, append-only Audit Log to read, so fairness is checkable rather than trusted. Alongside those break-glass tools it delivers the everyday roster operations that keep cap arithmetic true while the auction runs: recording a trade or a drop that happened in Fantrax, carrying Dead Money, letting a Manager rearrange their own Minor League Slots, and detecting when Fantrax and the app have drifted apart.
+
+## Stories
+
+- Story 7.1: The Commissioner control class and the reason sheet
+- Story 7.2: Void a Bid and restore the Auction
+- Story 7.3: The remaining overrides
+- Story 7.4: Pause and resume the auction
+- Story 7.5: The league-visible Audit Log
+- Story 7.6: Dead Money and the rookie-scale designation
+- Story 7.7: Record a Roster Trade
+- Story 7.8: Record a Drop
+- Story 7.9: Detect a Roster Divergence from Fantrax
+- Story 7.10: Rename the Roster Move to a Roster Trade
+- Story 7.11: Rearrange a Roster's Slot Placements
+
+**Story numbers are identity, not build order.** Build order: 7.6 (parallel, no dependency), then 7.1 → 7.7 → 7.5 → 7.8 → 7.2 → 7.9 → 7.3/7.4, with 7.10 then 7.11 landed last among the trade-touching stories.
+
+## Requirements & Constraints
+
+- **No Commissioner act is ever a single tap.** Every override opens a reason sheet showing before → after for every affected value (including both Clocks), stating any non-obvious downstream consequence in words, with an empty reason field — no placeholder, no default, no skip. A reasonless submission must be refused server-side, proven by an automated test.
+- **Every override appends an event** carrying actor, timestamp, before-state, after-state and the reason, and is written to the Audit Log. Overrides are permitted in the Auction and Contract Assignment Phases and refused once archived. The Commissioner's own Team is subject to every ordinary rule with no privilege.
+- **The log is insert-only for every role.** A void appends a compensating `BidVoided`; the original `BidPlaced` is never deleted or mutated. No entry can be edited or deleted by anyone, Commissioner included, and the interface offers no affordance suggesting otherwise.
+- **A void shortens, never rewrites.** Voiding restores the prior Leading Bidder and prior Auction Clock value, releases the voided Team's committed capital and re-commits the restored bidder's, and removes that Bid's League Clock reset so the Clock recomputes from surviving resets. If that lands expiry in the past, the phase ends at the *next* evaluation, prospectively only — nothing accepted in the interim is invalidated.
+- **Pause stores remaining duration and never shifts absolute close times.** The tick checks paused state under the same global lock and closes nothing while paused; Bids and Nominations are refused with the pause stated as the reason, worded distinctly from rules refusals. Resume recomputes close times forward from the resume instant, each Clock keeping exactly the time it held. A break-glass pause path independent of Netlify must exist, be documented and be rehearsed.
+- **The Audit Log is a read of the event log**, not a parallel table. It covers Nominations, Bids, Closes, Randomizer draws (with revealed seed and the ordered Contender list as it stood at expiry), overrides, pause/resume, import and export. Filterable by Team, Player and event type; exportable; single-column and legible at 375px in every phase including Archived.
+- **A Roster Trade is one act naming two Teams,** either direction possibly empty, with **both Teams evaluated once against post-Trade state**. Slot Placement is re-evaluated against the receiving Team's occupancy and Cap Hit follows placement. Committed capital — leading Bids, contention entries, Cap Space — never moves. A Trade is not broadcast to Discord (the only Commissioner act that is not); neither is a Drop or a Move.
+- **A Drop converts the Player's *charged* Cap Hit into Dead Money at the same amount** — full from Active/Bench, full from Injury Reserve, nothing from a Minor League Slot — with no Slot kind special-cased. The single exception is a `2RK` Contract with a full unelapsed term (5 years, invariant), which is removed and releases its Cap Hit. Dead Money is excluded from both exports and is not importable in v1.
+- **A Roster Move is a Manager act on their own Team,** one Team, no counterparty, placement taken from the command rather than derived. Only Active/Bench and Minor League Slots participate; Injury Reserve is not rearrangeable and Dead Money is not a Slot. Cap Hit follows placement, Minors Exposure recomputes, Roster Count follows Active/Bench occupancy, no assigned length is cleared. The Team is resolved from the session, never a form field; the Commissioner may name any Team through the reason sheet.
+- **Refuse, never cascade.** A Trade, Drop or Move that leaves either Team failing the money or slots gate is refused whole with nothing written, naming the Team, gate, Auction and arithmetic. No Bid is ever cancelled by one of these acts — Bid Cancellation's only trigger remains an Auction Close.
+- **The divergence detector proposes and never applies.** Membership is the only fact taken; a placement difference is not a divergence. It reads at most once per hour and writes no event, row or projection. Paired differences propose a Trade, unpaired departures a Drop, unknown arrivals are a prominent error. Players won in this auction are excluded. A plausibility guard (all 30 Teams present, no empty roster, no pass affecting more than a tunable quarter of the League) must trip rather than raise, never clear itself, and repeated failure renders as **stopped**, never as "no divergences".
+
+## Technical Decisions
+
+- **Pure rules core, per-command-type gate sets.** A Roster Trade is a third command type and a Rearrange a fourth, each declared in `core/types.ts` with its own gate set. Both reuse `core/rules/bidding.ts`'s money and slot arithmetic as pure helper functions — never by synthesizing a `PlaceBid` and force-passing inapplicable gates, which would route two Teams' opposing deltas through a single-Team incremental cap gate. Neither writes an affordability check of its own.
+- **One restorer, two callers.** The void reuses `core/rules/restore.ts`'s `selectRestoration` with its own axes (`withdrawnBid: 'erase'`, `auctionClock: 'restore'`, `leagueClockReset: 'remove'`). The void writes no selector; a second walk of surviving history would be a second answer to a settled question.
+- **The world changes by mutation plus record.** Roster tables stay mutable and are updated in the same transaction as the record event, under the one global write lock — a Trade that moved three Players of five is never reachable. The event carries the **whole delta** (every Player, both Teams, both Slot kinds, both Cap Hits, figures before and after) so rebuild, restore and synthetic-clock replay reconstruct roster state at a past `seq` by folding reference-data-mutation events forward from the last snapshot — in memory, read-only, no migration.
+- **Existing Contracts move by `UPDATE` of `team_id`** — never delete-then-insert, because the Fantrax player id is unique across every Team. Auction Contracts have no row and move by the event alone, folded latest-transfer-wins (latest-placement-wins for a Move).
+- **Only a settled Contract moves.** A Player contested in an open Auction is refused by the rules core, as a third refusal ground checked *before* the money and slots gates.
+- **`RosterSlotKind` becomes a closed union of exactly four members** with `dead_money` added. `chargedCapHit` returns the full Cap Hit by falling through the existing `minor_league` check — the rule stays one expression, and that fallthrough is sanctioned there alone. `SLOT_CEILINGS` gains an unbounded entry; Roster Count still counts Active/Bench alone. Every switch over the union in `core/` and `adapters/` must be exhaustive with no `default`, so a missing branch is a compile error. Admitting the fourth kind is a **migration file applied dev-first**, never a dashboard edit.
+- **Persisted event names are immutable.** The rename keeps the wire string `'RosterMoveRecorded'` unchanged with a comment and a value-asserting test, renaming only the constant and surrounding modules. Shared types become act-named (`ActCapGateOutcome`, `ActSlotsGateOutcome`, `ActLeadingAuction`, `RosterActTeamFigures`) rather than trade-named, because they belong to `roster-act.ts`.
+- **Minor League eligibility is a fold, not a present-tense read** — the pool's flag union every Minor League occupancy the log has ever carried. Without it a demotion would be irreversible. Needs no column and no migration.
+- **Winning amount and Cap Hit stay distinct persisted fields**; no path derives one from the other.
+- **Fantrax knowledge is confined to one adapter.** The divergence reader is built against the observed live payload shape, runs in the shell outside the write lock, and is a pure function that never receives a database client, so a write from inside it is a type error. Ids are normalised in both directions (bare vs asterisk-wrapped), Team mapping is explicit and never by name, and salaries are **rounded to the nearest dollar and asserted against the $500,000 grid** — never truncated. The rookie-scale designation must survive import as structured data (round and full term), with the fix confined to that adapter.
+- **Deploy constraint.** Every story touching `core/` (7.6, 7.7, 7.8, 7.10, 7.11) fail-stops a deploy during a live Auction Phase: each needs a pause, a green §10 example suite, and a recorded reason. Land them before prod setup day and ideally before the moderator pilot.
+- **The §10 examples are the executable specification.** Examples 36–46 are this epic's regression tests, and several exist specifically to stop an act being implemented as a flat rule (40 vs 41; 40 vs 43; 44; 45).
+
+## UX & Interaction Patterns
+
+- **The Commissioner control class is form, not colour** — four independent differences: never filled, dashed 1px `admin` border, its own recessed `admin-ground` behind a dashed rule, and a persistent *"Commissioner · visible only to you"* label. No override control is a variant of a Manager control, and the commit control on the reason sheet is itself dashed.
+- **Overrides live in place, on the object being acted on** — the Auction, Team, Bid or Nomination Slot — so an act is performed with full context. Genuinely global administrative acts get their own admin destination. Visibility is never the check: every route refuses server-side regardless of what rendered, on `load` as well as on the action.
+- **The Manager confirmation sheet is a separate component**, not a conditional variant — same before → after and consequence-in-words, no reason field, solid commit control. A single sheet that grows a dashed border for the Commissioner would collapse the four differences exactly when they matter.
+- **Where a figure moves counterintuitively, say so in words** with an `attention` note — a Drop lowering Maximum Bid, a demotion that spends Cap Space to gain bidding power, a Cap Hit changed by re-placement.
+- **Dead Money renders labelled and separate from the roster** so Cap Space reconciles against the players visibly on the Team.
+- **Naming rule:** a Team is always spelled out with its Manager attached; a three-letter abbreviation means a real-life NBA team and nothing else. Money renders at exactly one decimal. Mobile-first at 375px throughout, including every Commissioner surface — a pause happens wherever the Commissioner physically is.
+- The paused banner is `attention`-bordered on a warm ground, present on every surface, carrying who paused, when and why.
+- Divergences appear on the Commissioner's surface only; a dismissed one stays suppressed until the underlying difference changes.
+
+## Cross-Story Dependencies
+
+- **7.6 depends on nothing** and ships independently; 7.8 depends on 7.6 and 7.1. Everything else in the epic depends on 7.1.
+- **7.5 is on the critical path for 7.7.** A recorded Trade is not broadcast to Discord, so the Audit Log is the only channel by which the league learns a rival's Cap Space moved. Shipping 7.7 without 7.5 makes every trade invisible to all thirty managers.
+- **7.2 is the remedy for a refused Trade,** not only a correction tool — without it a refusal stalls up to 24 hours waiting for a Close. Refusals are expected: the receiving Team fails the money gate, and a sending Team can be pushed over by giving players up.
+- **7.10 blocks 7.11** (building a new Move beside a Move about to be renamed means writing every import and test name twice) and should precede **7.9**, whose criteria say "proposes a Roster Move" and mean a Trade. 7.9 depends on 7.7 and 7.8; it is contingent and killable, gated on its own first AC.
+- **Outside this epic:** 7.1 builds on the Commissioner control class from Story 1.1, with the guard and stylesheet already shipped in Epic 1; 7.5 depends on Story 1.5. 7.2 consumes the restorer Story 10.4 shipped and reproduces a case Story 3.7 tested against a state literal. Story 10.6 should finish first — it touches the same bidding gates 7.7 reuses. 7.7's Contract-Assignment-Phase criterion (a cleared length re-blocking the export) cannot be fully exercised until Story 6.3 ships the export, so expect that one deferred. The core-touching stories should land before Stories 9.7 and 9.8.

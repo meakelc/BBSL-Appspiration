@@ -164,7 +164,7 @@ describe('§10 example 27 — a voided Bid shortens the League Clock', () => {
 		expect(AFTER.map((appended) => appended.type)).toContain(BID_VOIDED_EVENT);
 
 		const auctions = fold(INITIAL_AUCTIONS, AFTER, auctionsReducer);
-		expect(auctionForPlayer(auctions, 'p-1')?.leadingBid.amount).toBe(8_000_000);
+		expect(auctionForPlayer(auctions, 'p-1')?.leadingBid?.amount).toBe(8_000_000);
 
 		const nominations = fold(INITIAL_NOMINATIONS, AFTER, nominationsReducer);
 		expect(nominationForPlayer(nominations, 'p-1')?.playerName).toBe('Ausar Bright');

@@ -127,8 +127,9 @@ describe('the Teams index — every Team is a row', () => {
 		expect(row?.committedBidsLabel).toBe(bucks?.committedBidsLabel);
 		expect(row?.availableCapSpaceLabel).toBe(bucks?.availableCapSpaceLabel);
 		expect(row?.rosterCountHalves).toEqual(bucks?.rosterCountHalves);
-		expect(row?.minorLeagueHalves).toEqual(bucks?.minorLeagueHalves);
+		expect(row?.minorLeagueHalves).toEqual(bucks?.minorLeagueOccupancyHalves);
 		expect(row?.injuryReserveHalves).toEqual(bucks?.injuryReserveHalves);
+		expect(row?.deadMoneyHalves).toEqual(bucks?.deadMoneyHalves);
 		expect(row?.freeActiveBenchSlots).toBe(bucks?.freeActiveBenchSlots);
 		expect(row?.nominationSlotSentence).toBe(bucks?.nominationSlot.sentence);
 	});
@@ -138,6 +139,48 @@ describe('the Teams index — every Team is a row', () => {
 		expect(row?.rosterCountHalves.full).toBe('Roster 12 of 12');
 		expect(row?.minorLeagueHalves.full).toContain('Minor League 0 of 3');
 		expect(row?.injuryReserveHalves.full).toContain('outside the 12');
+	});
+
+	/**
+	 * A card lists no rows, so a Cap Space quietly reduced by Contracts
+	 * belonging to players who are not on the Team has nothing on the card to
+	 * reconcile against — unless the money is stated (Story 7.6, UX-DR40).
+	 */
+	it('states Dead Money on the row that carries it, and nowhere else', () => {
+		const withDeadMoney: TeamsIndexInput = {
+			...teamViewFor({
+				teamName: 'Nets',
+				managerNames: ['Meakel'],
+				rosterRows: [
+					{
+						fantraxPlayerId: 'p-gone',
+						playerName: 'Released Player',
+						capHit: parseMoney(2_000_000),
+						rosterSlotKind: 'dead_money',
+						won: false,
+						// Story 7.8's two columns. Dead Money is a charge and not a
+						// Contract, so neither is a fact about it.
+						contractYearsRemaining: null,
+						rookieScaleRound: null
+					}
+				],
+				team: teamWith({ capSpace: parseMoney(SALARY_CAP - 2_000_000), rosterCount: 9 }),
+				phase: 'Auction',
+				nomination: null,
+				viewerIsThisTeam: false,
+				now: NOW
+			}),
+			teamId: 't-nets'
+		};
+
+		const index = teamsIndexFor({ views: [...THREE, withDeadMoney], viewerTeamId: null });
+		const nets = index.rows.find((entry) => entry.teamId === 't-nets');
+		const bulls = index.rows.find((entry) => entry.teamId === 't-bulls');
+
+		expect(nets?.deadMoneyHalves?.full).toContain('Dead Money $2.0M');
+		// Absent rather than $0.0M for a Team carrying none: a zero on thirty
+		// cards teaches a reader to stop seeing the line.
+		expect(bulls?.deadMoneyHalves).toBeNull();
 	});
 
 	/**
@@ -457,5 +500,83 @@ describe('the index states figures and nothing ABOUT them', () => {
 		expect(TEAMS_SORT_LABELS.capSpace).toBe('Cap Space');
 		expect(TEAMS_SORT_LABELS.freeActiveBenchSlots).toBe('Free Active/Bench Slots');
 		expect(TEAMS_SORT_LABELS.name).toBe('Team name');
+	});
+});
+
+// --- The bids figures on a row (Story 10.6) ---------------------------------
+
+describe('the Teams index row — bids against the allowance, entries beside them', () => {
+	const lead = (fantraxPlayerId: string, amount: number, isContentionEntry = false) => ({
+		fantraxPlayerId,
+		playerName: fantraxPlayerId,
+		amount: parseMoney(amount),
+		isContentionEntry
+	});
+
+	function rowWith(team: TeamMoneyState) {
+		const view = teamViewFor({
+			teamName: 'Bulls',
+			managerNames: ['Meakel'],
+			rosterRows: [],
+			team,
+			phase: 'Auction',
+			nomination: null,
+			viewerIsThisTeam: false,
+			now: NOW
+		});
+		return teamsIndexFor({
+			views: [{ ...view, teamId: 't-bulls' }],
+			viewerTeamId: null
+		}).rows[0];
+	}
+
+	it('reads the row figures off the view, never re-deriving them', () => {
+		const row = rowWith(
+			teamWith({ rosterCount: 9, leading: [lead('p-1', 3_000_000), lead('p-2', 4_000_000)] })
+		);
+
+		expect(row?.outstandingBidsHalves?.full).toBe('2 of 4 bids');
+		expect(row?.outstandingBids).toBe(2);
+		expect(row?.bidAllowance).toBe(4);
+		expect(row?.openContentionEntries).toBe(0);
+		// The count is still a fact on the row; the SENTENCE is what is
+		// absent, because a Team holding no entries has nothing to report.
+		expect(row?.contentionEntriesHalves).toBeNull();
+	});
+
+	it('keeps the two figures separate — one non-entry Bid, four entries held', () => {
+		// The matrix row: bids `1 of 3`, and the four entries stated on their
+		// own and never summed into it.
+		const row = rowWith(
+			teamWith({
+				rosterCount: 10,
+				leading: [
+					lead('p-1', 3_000_000),
+					lead('lot-1', 1_000_000, true),
+					lead('lot-2', 1_000_000, true),
+					lead('lot-3', 1_000_000, true)
+				],
+				eligibleLeading: [lead('lot-4', 1_000_000, true)]
+			})
+		);
+
+		expect(row?.outstandingBidsHalves?.full).toBe('1 of 3 bids');
+		expect(row?.contentionEntriesHalves?.full).toBe('4 lottery entries');
+		// The two are never one figure: neither sentence contains the other's
+		// count, and 1 + 4 = 5 appears in neither.
+		expect(row?.outstandingBidsHalves?.full).not.toContain('4');
+		expect(row?.contentionEntriesHalves?.full).not.toContain('5');
+	});
+
+	it('reads 0 of n for a Team whose only commitments are entries', () => {
+		const row = rowWith(
+			teamWith({
+				rosterCount: 9,
+				leading: [lead('lot-1', 1_000_000, true), lead('lot-2', 1_000_000, true)]
+			})
+		);
+
+		expect(row?.outstandingBidsHalves?.full).toBe('0 of 4 bids');
+		expect(row?.contentionEntriesHalves?.full).toBe('2 lottery entries');
 	});
 });

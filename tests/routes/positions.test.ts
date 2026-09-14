@@ -308,7 +308,27 @@ describe('the Positions page — what it renders', () => {
 		// the fill and its ink, and no third use.
 		const attentionRules = [...PAGE.matchAll(/var\(--color-attention[^)]*\)/g)];
 		expect(attentionRules).toHaveLength(2);
-		expect(PAGE).toMatch(/\.chip-lead \{[\s\S]*?--color-border-strong[\s\S]*?\}/);
+		// You lead takes its OWN colour — never attention, and never brand,
+		// which DESIGN.md:47 forbids from signalling leading.
+		expect(PAGE).toMatch(/\.chip-lead \{[\s\S]*?--color-leading[\s\S]*?\}/);
+		expect(PAGE).not.toMatch(/\.chip-lead \{[\s\S]*?--color-brand[\s\S]*?\}/);
+	});
+
+	it('marks every You lead card with the leading edge, and no other group', () => {
+		// The group is computed for the signed-in Manager, so every card in it
+		// is one this reader leads — and no other Manager's page shows it.
+		const leadCards = [...PAGE.matchAll(/<li class="card leading"/g)];
+		expect(leadCards).toHaveLength(1);
+		expect(PAGE).toContain('border-left: var(--leading-edge-width) solid var(--color-leading)');
+		// It is NOT the lottery bar: that 3px device is exclusive to a
+		// Minimum-Bid Contention, and the leading rule is declared first so a
+		// card that is both takes the lottery bar.
+		const leadingBlock = /\.card\.leading \{[\s\S]*?\}/.exec(PAGE)?.[0] ?? '';
+		expect(leadingBlock).not.toContain('--accent-bar-width');
+		expect(PAGE.indexOf('.card.leading')).toBeLessThan(PAGE.indexOf('.card.lottery'));
+		// And it never carries the state alone — the chip beside it has the
+		// icon and the word.
+		expect(PAGE).toMatch(/class="state chip chip-lead"/);
 	});
 
 	it('gives the lottery bar to Minimum-Bid Contention and to nothing else', () => {
@@ -412,15 +432,32 @@ describe('the Positions page — what it renders', () => {
 		expect(empty).toMatch(/href=\{positions\.nominationSlot\.href\}/);
 	});
 
-	it('does not link a won Player to an Auction page that 404s', () => {
-		// A review finding. A close DELETES the Player from `auctionsReducer`
-		// and `nominationsReducer`, and the Auction route raises `error(404)`
-		// on that null read — so every card in the FIRST group on the landing
-		// page was a link to a refusal. `WonCard.href` is `null` until Epic
-		// 4's closed-Auction surface exists (`deferred-work.md`, spec-3-6).
+	it('links a won Player to the Closed state of their Auction', () => {
+		// The inverse of what this asserted while a closed Auction 404'd. The
+		// `{#if card.href !== null}` and its `{:else}` are GONE — the field is
+		// no longer nullable, and a branch on a value that cannot be null is a
+		// branch a later reader has to work out is dead.
 		const won = PAGE.slice(PAGE.indexOf('id="group-won"'), PAGE.indexOf('id="group-outbid"'));
-		expect(won).toMatch(/\{#if card\.href !== null\}/);
-		expect(won).toMatch(/\{:else\}[\s\S]*card-player[\s\S]*\{\/if\}/);
+		expect(won).not.toMatch(/\{#if card\.href !== null\}/);
+		expect(won).toMatch(/<a class="card-link" href=\{card\.href\}>/);
+	});
+
+	it('marks the Auction state on the cards, from the Board’s own record', () => {
+		// The Bid Board card's identity-row marker, on the landing's cards for
+		// the same Auctions: one state, one word, one shape, every surface.
+		expect(PAGE).toContain("from '$lib/core/board.ts'");
+		expect(PAGE).toContain('AUCTION_STATE_LABELS[card.contention]');
+		expect(PAGE).toContain('AUCTION_STATE_ICONS[card.contention]');
+		// Ambient, never a chip: it describes the Auction, not the reader, and
+		// the chip beside it already says where the reader stands.
+		expect(PAGE).toMatch(/state state-ambient card-state/);
+		// Both groups that carry a viewer chip carry the marker too.
+		for (const group of ['id="group-outbid"', 'id="group-you-lead"']) {
+			const start = PAGE.indexOf(group);
+			expect(start, group).toBeGreaterThan(-1);
+			const head = PAGE.slice(start, PAGE.indexOf('ROW 2', start));
+			expect(head, group).toContain('AUCTION_STATE_LABELS[card.contention]');
+		}
 	});
 
 	it('labels the leading bidder as its own figure, never under “Your Bid”', () => {

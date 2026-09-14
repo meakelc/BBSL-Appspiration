@@ -35,13 +35,17 @@
 	import {
 		ARCHIVED_EMPTY_BOARD_HEADING,
 		ARCHIVED_EMPTY_BOARD_STATEMENT,
+		BOARD_CLOSED_AT_LABEL,
 		BOARD_CLOSES_LABEL,
 		BOARD_FILTER_LEGEND,
+		BOARD_FINAL_LABEL,
 		BOARD_LEADING_LABEL,
 		BOARD_NOMINATED_LABEL,
+		BOARD_PANEL_HEADING,
 		BOARD_PRICE_LABEL,
 		BOARD_SORT_LEGEND,
 		BOARD_TITLE,
+		BOARD_WON_BY_LABEL,
 		DEFAULT_FILTER,
 		DEFAULT_SORT,
 		EMPTY_BOARD_ACTION,
@@ -54,19 +58,20 @@
 		boardCountSentence,
 		filterBoard,
 		filteredNoticeSentence,
+		openCardCount,
 		sortBoard,
 		unbidPhrase
 	} from '$lib/core/board.ts';
-	import type { BoardFilter, BoardSort, BoardViewerState } from '$lib/core/board.ts';
+	import type {
+		BoardCardState,
+		BoardFilter,
+		BoardSort,
+		BoardViewerState
+	} from '$lib/core/board.ts';
 	// The Auction deep-link shape is written ONCE, in the core, so `/board`,
 	// `/positions` and Story 5.3's Discord notification all emit one shape.
 	import { auctionPathFor } from '$lib/core/auction-link.ts';
-	import {
-		CONTENTION_CLOCK_UNMOVED,
-		closesInPhrase,
-		contenderCountSentence
-	} from '$lib/core/projection/auctions.ts';
-	import type { ContentionState } from '$lib/core/projection/auctions.ts';
+	import { closesInPhrase, contenderCountSentence } from '$lib/core/projection/auctions.ts';
 	import { figuresAgeSentence } from '$lib/core/freshness.ts';
 	import { freshness } from '$lib/client/freshness.svelte.ts';
 	import { formatInstant, parseInstant } from '$lib/core/instant.ts';
@@ -82,14 +87,21 @@
 		readonly leadingBidder: string;
 		readonly closesAt: string | null;
 		readonly auctionStateLabel: string;
+		readonly auctionStateLabelNarrow: string;
 		readonly auctionStateIcon: string;
-		readonly contention: ContentionState;
+		readonly state: BoardCardState;
 		readonly contenderCount: number;
 		readonly viewerState: BoardViewerState;
 		readonly viewerStateLabel: string;
 		readonly viewerStateIcon: string;
-		readonly nominatedBy: string;
-		readonly nominatedAt: string;
+		// Both `null` on a closed card: the close deleted the nomination, so
+		// there is no nominating Team and no nominated instant to render.
+		readonly nominatedBy: string | null;
+		readonly nominatedAt: string | null;
+		// The three a closed card carries and an open one does not, all
+		// pre-worded by the core exactly as every other field here is.
+		readonly wonBy: string | null;
+		readonly closedAt: string | null;
 	};
 
 	type Board = {
@@ -109,6 +121,16 @@
 	 */
 	let sort = $state<BoardSort>(DEFAULT_SORT);
 	let filter = $state<BoardFilter>(DEFAULT_FILTER);
+
+	/**
+	 * Whether either control is showing its choices. Presentation only — a
+	 * disclosure's own open flag, and the one thing on this page that is
+	 * neither a figure nor a view of one. Both start CLOSED: the board is what
+	 * the board's first screen is for, and the closed row still states which
+	 * sort and which filter are in force.
+	 */
+	let sortOpen = $state(false);
+	let filterOpen = $state(false);
 
 	/**
 	 * How often the page re-reads its own elapsed time. A named constant, and
@@ -168,8 +190,15 @@
 	 */
 	const shown = $derived(sortBoard(filterBoard(board.cards, filter), sort, nowIso));
 
-	/** How many Auctions are open — the WHOLE board, never the filtered view. */
-	const countSentence = $derived(boardCountSentence(board.cards.length));
+	/**
+	 * How many Auctions are OPEN — the whole board, never the filtered view,
+	 * and never the closed cards either.
+	 *
+	 * The sentence says "are open", so the figure has to be the open ones. The
+	 * count is the core's, not a `filter` written here: the surface prints
+	 * fields and words nothing, and that includes counting nothing.
+	 */
+	const countSentence = $derived(boardCountSentence(openCardCount(board.cards)));
 
 	/** What the filter is hiding, or `null` for the unfiltered view. */
 	const filteredNotice = $derived(
@@ -211,6 +240,7 @@
 	 */
 	let closesAtAbsolute = $state<Record<string, string>>({});
 	let nominatedAbsolute = $state<Record<string, string>>({});
+	let closedAtAbsolute = $state<Record<string, string>>({});
 
 	// `Intl.DateTimeFormat.format` throws `RangeError` on an Invalid Date, so
 	// an unreadable instant is checked for rather than formatted — the pure
@@ -228,12 +258,17 @@
 	$effect(() => {
 		const closes: Record<string, string> = {};
 		const nominated: Record<string, string> = {};
+		const closed: Record<string, string> = {};
 		for (const card of board.cards) {
 			if (card.closesAt !== null) closes[card.fantraxPlayerId] = formatAbsolute(card.closesAt);
-			nominated[card.fantraxPlayerId] = formatAbsolute(card.nominatedAt);
+			if (card.nominatedAt !== null) {
+				nominated[card.fantraxPlayerId] = formatAbsolute(card.nominatedAt);
+			}
+			if (card.closedAt !== null) closed[card.fantraxPlayerId] = formatAbsolute(card.closedAt);
 		}
 		closesAtAbsolute = closes;
 		nominatedAbsolute = nominated;
+		closedAtAbsolute = closed;
 	});
 </script>
 
@@ -246,11 +281,6 @@
 		<h1 class="display">{BOARD_TITLE}</h1>
 		<p class="section-label">BBSL offseason free agent auction</p>
 	</header>
-
-	<section class="panel">
-		<p class="section-label">Phase</p>
-		<p class="prose">{data.phase.sentence}</p>
-	</section>
 
 	{#if board.cards.length === 0}
 		<!-- The designed empty screen, not an edge case: it explains the state
@@ -276,7 +306,7 @@
 		{/if}
 	{:else}
 		<section class="panel">
-			<p class="section-label">Open Auctions</p>
+			<p class="section-label">{BOARD_PANEL_HEADING}</p>
 			<p class="prose" id="board-count">{countSentence}</p>
 
 			<!-- Every price on this board carries its age in anything but Live
@@ -288,38 +318,81 @@
 
 			<!-- Sorting and filtering are view state. Neither posts anything,
 			     neither reloads anything, and neither changes a figure on a
-			     card — the list is reordered and narrowed, and nothing else. -->
-			<fieldset class="controls">
-				<legend class="section-label">{BOARD_SORT_LEGEND}</legend>
-				{#each SORT_KEYS as key (key)}
-					<label class="choice" for={`board-sort-${key}`}>
-						<input
-							id={`board-sort-${key}`}
-							type="radio"
-							name="board-sort"
-							value={key}
-							bind:group={sort}
-						/>
-						<span class="prose">{SORT_LABELS[key]}</span>
-					</label>
-				{/each}
-			</fieldset>
+			     card — the list is reordered and narrowed, and nothing else.
 
-			<fieldset class="controls">
-				<legend class="section-label">{BOARD_FILTER_LEGEND}</legend>
-				{#each FILTER_KEYS as key (key)}
-					<label class="choice" for={`board-filter-${key}`}>
-						<input
-							id={`board-filter-${key}`}
-							type="radio"
-							name="board-filter"
-							value={key}
-							bind:group={filter}
-						/>
-						<span class="prose">{FILTER_LABELS[key]}</span>
-					</label>
-				{/each}
-			</fieldset>
+			     Both are CLOSED by default and each states its own current
+			     view on the closed row: the board's first screen is the board,
+			     not eight radios above it, and what a Manager needs to know
+			     without opening anything is which view they are looking at.
+			     The choices appear on a tap and the row that opened them keeps
+			     saying what is chosen, so the answer is never hidden by the
+			     control that holds it.
+
+			     `<details>`/`<summary>` and no script beyond the two flags:
+			     the disclosure opens on tap AND on Enter and is announced as
+			     expanded or collapsed, the same pattern `/nominate` already
+			     uses. Choosing closes it, because the choice is the whole
+			     reason it was opened and the list beneath is what the Manager
+			     came to read. -->
+			<details class="controls-disclosure" bind:open={sortOpen}>
+				<summary>
+					<span class="section-label">{BOARD_SORT_LEGEND}</span>
+					<span class="prose controls-current">{SORT_LABELS[sort]}</span>
+					<span class="controls-mark" aria-hidden="true">
+						<svg viewBox="0 0 16 16" width="16" height="16" focusable="false">
+							<path d="M4 6.5 8 10.5 12 6.5" />
+						</svg>
+					</span>
+				</summary>
+				<fieldset class="controls">
+					<!-- The legend still names the group for a screen reader
+					     reading the radios; the summary above is what names it
+					     on screen, and two visible copies would be the control
+					     titled twice. -->
+					<legend class="visually-hidden">{BOARD_SORT_LEGEND}</legend>
+					{#each SORT_KEYS as key (key)}
+						<label class="choice" for={`board-sort-${key}`}>
+							<input
+								id={`board-sort-${key}`}
+								type="radio"
+								name="board-sort"
+								value={key}
+								bind:group={sort}
+								onchange={() => (sortOpen = false)}
+							/>
+							<span class="prose">{SORT_LABELS[key]}</span>
+						</label>
+					{/each}
+				</fieldset>
+			</details>
+
+			<details class="controls-disclosure" bind:open={filterOpen}>
+				<summary>
+					<span class="section-label">{BOARD_FILTER_LEGEND}</span>
+					<span class="prose controls-current">{FILTER_LABELS[filter]}</span>
+					<span class="controls-mark" aria-hidden="true">
+						<svg viewBox="0 0 16 16" width="16" height="16" focusable="false">
+							<path d="M4 6.5 8 10.5 12 6.5" />
+						</svg>
+					</span>
+				</summary>
+				<fieldset class="controls">
+					<legend class="visually-hidden">{BOARD_FILTER_LEGEND}</legend>
+					{#each FILTER_KEYS as key (key)}
+						<label class="choice" for={`board-filter-${key}`}>
+							<input
+								id={`board-filter-${key}`}
+								type="radio"
+								name="board-filter"
+								value={key}
+								bind:group={filter}
+								onchange={() => (filterOpen = false)}
+							/>
+							<span class="prose">{FILTER_LABELS[key]}</span>
+						</label>
+					{/each}
+				</fieldset>
+			</details>
 
 			<!-- A filtered view is VISIBLY filtered and states its own count, so
 			     a short board is never mistaken for a quiet league. -->
@@ -334,77 +407,178 @@
 				     nothing else in the system. It never carries the state ALONE:
 				     the icon and the word beside it are what make a greyscale
 				     screenshot read identically. -->
-				<li class="card" class:lottery={card.contention === 'minimum_bid'}>
-					<a class="card-link" href={auctionPathFor(card.fantraxPlayerId)}>
-						<span class="display card-player">{card.playerName}</span>
-					</a>
-					{#if card.metadata !== null}
-						<p class="card-metadata">{card.metadata}</p>
-					{/if}
+				<!-- The pale green left edge marks an Auction THIS reader leads, and
+				     only this reader: `viewerState` is computed for the signed-in
+				     Manager, so nobody else's board shows it. Like the lottery bar it
+				     never carries the state alone — the filled `LEADING` chip on the
+				     figure row below carries the icon and the word. A card that is
+				     both leading and in a Minimum-Bid Contention shows the lottery
+				     bar: that 3px device is exclusive, and the chip still says the
+				     reader leads. -->
+				<li
+					class="card"
+					class:leading={card.viewerState === 'you_lead'}
+					class:lottery={card.state === 'minimum_bid'}
+				>
+					<!-- ROW 1 — identity and the Auction's own state.
+					     The name, the NBA team and position beside it, and the state
+					     word pushed to the far edge. The metadata is not a fact owed a
+					     line of its own, and the Auction state describes the same
+					     Player the name does; a card that gave each its own row cost
+					     vertical space a board of thirty cannot spare. It WRAPS rather
+					     than truncates — a long name takes a second line and the rest
+					     follows it, because a Player's name is the one thing on this
+					     card that may never be cut off. -->
+					<div class="card-head">
+						<a class="card-link" href={auctionPathFor(card.fantraxPlayerId)}>
+							<span class="display card-player">{card.playerName}</span>
+						</a>
+						{#if card.metadata !== null}
+							<span class="card-metadata">{card.metadata}</span>
+						{/if}
+						<!-- Every state carries an ICON and a WORD, never colour alone.
+						     The Auction state is never a chip: it describes the Auction,
+						     not the reader. -->
+						<!-- The state's name TWICE, one of them displayed: `Minimum
+						     Lottery` set at `--size-10` beside a Player's name still
+						     wraps this row on a phone, and a wrapped identity row is
+						     what the short name exists to prevent.
 
-					<p class="section-label">{BOARD_PRICE_LABEL}</p>
-					<p class="card-price" class:card-price-absent={card.price === null}>
-						{card.priceLabel}
-					</p>
+						     Two spans rather than one string chosen in script, because
+						     the choice is a VIEWPORT question and CSS is what can see a
+						     viewport — a `matchMedia` here would re-answer it on every
+						     resize, and answer it wrong for one paint during SSR.
+						     Whichever span is `display: none` is not announced either,
+						     so a screen reader reads exactly the name that is on
+						     screen. Both spellings are the core's. -->
+						<p class="state state-ambient card-state">
+							<span class="chip-icon" aria-hidden="true">{card.auctionStateIcon}</span>
+							<span class="chip-word chip-word-narrow">{card.auctionStateLabelNarrow}</span>
+							<span class="chip-word chip-word-wide">{card.auctionStateLabel}</span>
+						</p>
+					</div>
 
-					<!-- Every state carries an ICON and a WORD, never colour
-					     alone. The CHIP, though, is reserved for the two states
-					     DESIGN.md:194 gives one to: filled `attention` for
-					     Outbid, outlined `border-strong` for You lead. Ambient
-					     states — Open, Awaiting Opening Bid, Contender and Not
-					     involved — take a plain `text-secondary` label and no
-					     chip, so the chip keeps meaning "this one concerns
-					     you" rather than decorating every line on the card. -->
-					<p class="state state-ambient">
-						<span class="chip-icon" aria-hidden="true">{card.auctionStateIcon}</span>
-						<span class="chip-word">{card.auctionStateLabel}</span>
-					</p>
-					<p
-						class="state"
-						class:chip={card.viewerState === 'you_lead' || card.viewerState === 'outbid'}
-						class:chip-lead={card.viewerState === 'you_lead'}
-						class:chip-outbid={card.viewerState === 'outbid'}
-						class:state-ambient={card.viewerState !== 'you_lead' &&
-							card.viewerState !== 'outbid'}
-					>
-						<span class="chip-icon" aria-hidden="true">{card.viewerStateIcon}</span>
-						<span class="chip-word">{card.viewerStateLabel}</span>
-					</p>
+					<!-- ROW 2 — the price, with the viewer's own state opposite it.
+					     The four `section-label` rows this card used to carry are gone:
+					     DESIGN.md's Board card names no labels, and the price figure, a
+					     spelled-out Team and a countdown identify themselves by
+					     typography and position. The WORDS are not gone — each is still
+					     the core's own constant, rendered for a screen reader, so a
+					     value is never announced without its name.
 
-					{#if card.contention === 'minimum_bid'}
-						<!-- The Contender count and the statement that joining does
-						     not move the clock, both the fold's own sentences. -->
+					     The CHIP is reserved for the two states DESIGN.md:194 gives one
+					     to: filled `attention` for Outbid, filled `leading` for
+					     Leading. Contender is ambient — a plain `text-secondary` label,
+					     no chip. `not_involved` prints NOTHING at all: it is the state
+					     of most cards on most boards, and a marker on every one of them
+					     is a row of noise saying the reader has nothing to do here,
+					     which the absence of a marker already says. -->
+					<div class="card-figure">
+						<!-- One figure, two words. `Price` is what an Auction is
+						     asking; `Final amount` is what it went for, and the same
+						     number under the same word would leave a Manager scanning
+						     a mixed board unable to tell which they were reading.
+						     Both constants are the core's. -->
+						<p class="card-price" class:card-price-absent={card.price === null}>
+							<span class="visually-hidden"
+								>{card.state === 'closed' ? BOARD_FINAL_LABEL : BOARD_PRICE_LABEL}</span
+							>
+							{card.priceLabel}
+						</p>
+						{#if card.viewerState !== 'not_involved'}
+							<p
+								class="state"
+								class:chip={card.viewerState === 'you_lead' || card.viewerState === 'outbid'}
+								class:chip-lead={card.viewerState === 'you_lead'}
+								class:chip-outbid={card.viewerState === 'outbid'}
+								class:state-ambient={card.viewerState !== 'you_lead' &&
+									card.viewerState !== 'outbid'}
+							>
+								<span class="chip-icon" aria-hidden="true">{card.viewerStateIcon}</span>
+								<span class="chip-word">{card.viewerStateLabel}</span>
+							</p>
+						{/if}
+					</div>
+
+					{#if card.state === 'minimum_bid'}
+						<!-- The Contender count, the fold's own sentence. -->
 						<p class="prose">{contenderCountSentence(card.contenderCount)}</p>
-						<p class="prose">{CONTENTION_CLOCK_UNMOVED}</p>
 					{/if}
 
-					<p class="section-label">{BOARD_LEADING_LABEL}</p>
-					<p class="prose card-leader">{card.leadingBidder}</p>
+					{#if card.state === 'closed'}
+						<!-- ROW 3, CLOSED — who won, and where the Player landed.
+						     `EXPERIENCE.md:168` asks a Closed state for the winner, the
+						     final amount and the Slot placement; the figure above and
+						     these two lines are the whole card.
 
-					<p class="section-label">{BOARD_NOMINATED_LABEL}</p>
-					<p class="prose">{card.nominatedBy}</p>
-
-					{#if card.closesAt === null}
-						<!-- No clock at all: no Opening Bid has started one. What
-						     the card states instead is how long the nomination has
-						     stood unbid, from the core's own phrase. -->
-						<p class="card-when">{unbidPhrase(card.nominatedAt, nowIso)}</p>
-						<p class="card-when">
-							{#if nominatedAbsolute[card.fantraxPlayerId] !== undefined}
-								{nominatedAbsolute[card.fantraxPlayerId]}
-							{/if}
-						</p>
+						     There is NO countdown and no clock: the Auction is over, and
+						     a timer on it would be an urgency device pointed at nothing.
+						     There is no "Nominated by" either — `nominationsReducer`
+						     deletes the nomination at the close, so the nominating Team
+						     is not durable and must not be invented. And nothing here
+						     congratulates: a win is stated. -->
+						<div class="card-line">
+							<p class="card-leader">
+								<span class="section-label">{BOARD_WON_BY_LABEL}</span>
+								{card.wonBy}
+							</p>
+						</div>
+						<!-- ROW 4, CLOSED — the closed instant in the viewer's own
+						     timezone, on the footnote row the open card gives its own
+						     absolute stamp. Labelled, because a bare date on a card
+						     carrying no clock names nothing. -->
+						<div class="card-line card-footnote">
+							<p class="card-when">
+								{#if closedAtAbsolute[card.fantraxPlayerId] !== undefined}
+									<span class="section-label">{BOARD_CLOSED_AT_LABEL}</span>
+									{closedAtAbsolute[card.fantraxPlayerId]}
+								{/if}
+							</p>
+						</div>
 					{:else}
-						<p class="section-label">{BOARD_CLOSES_LABEL}</p>
-						<!-- Time TWICE: the relative phrase, and the absolute stamp
-						     in the viewer's own timezone. The absolute is never
-						     dropped to save space. -->
-						<p class="card-when">{closesInPhrase(card.closesAt, nowIso)}</p>
-						<p class="card-when">
-							{#if closesAtAbsolute[card.fantraxPlayerId] !== undefined}
-								{closesAtAbsolute[card.fantraxPlayerId]}
+						<!-- ROW 3 — who leads, and how long is left. One row, because they
+						     are the two halves of the same question and a Manager reads
+						     them together. -->
+						<div class="card-line">
+							<p class="card-leader">
+								<span class="visually-hidden">{BOARD_LEADING_LABEL}</span>
+								{card.leadingBidder}
+							</p>
+							{#if card.closesAt === null}
+								<!-- No clock at all: no Opening Bid has started one. What the
+								     card states instead is how long the nomination has stood
+								     unbid, from the core's own phrase. -->
+								<p class="card-when">{unbidPhrase(card.nominatedAt ?? '', nowIso)}</p>
+							{:else}
+								<p class="card-when">
+									<span class="visually-hidden">{BOARD_CLOSES_LABEL}</span>
+									{closesInPhrase(card.closesAt, nowIso)}
+								</p>
 							{/if}
-						</p>
+						</div>
+
+						<!-- ROW 4 — the footnote line: time TWICE, the absolute stamp in
+						     the viewer's own timezone beside the relative phrase above it,
+						     and never dropped to save space. The nominating Team rides the
+						     same row and keeps a VISIBLE label: two bare `Team — Manager`
+						     strings on one card would be indistinguishable from each other,
+						     and the Leading Bidder is the one the countdown beside it
+						     identifies. -->
+						<div class="card-line card-footnote">
+							<p class="card-when">
+								{#if card.closesAt === null}
+									{#if nominatedAbsolute[card.fantraxPlayerId] !== undefined}
+										{nominatedAbsolute[card.fantraxPlayerId]}
+									{/if}
+								{:else if closesAtAbsolute[card.fantraxPlayerId] !== undefined}
+									{closesAtAbsolute[card.fantraxPlayerId]}
+								{/if}
+							</p>
+							<p class="card-when">
+								<span class="section-label">{BOARD_NOMINATED_LABEL}</span>
+								{card.nominatedBy}
+							</p>
+						</div>
 					{/if}
 				</li>
 			{/each}
@@ -426,14 +600,31 @@
 
 	/*
 	 * The controls are a plain wrapping row of radios at the touch floor, not
-	 * a select: three choices each, and a native menu would hide the current
-	 * view behind a tap on the one surface whose view state must be obvious.
+	 * a select: a native menu would hide the current view behind a tap, and
+	 * the radios are still radios — every choice visible at once, with the one
+	 * in force marked — once the row above is opened.
+	 *
+	 * The DISCLOSURE is what changed: eight radios stood permanently between
+	 * the masthead and the first card, which on a 375px screen is most of the
+	 * first screen spent on a view that is almost always the default one. The
+	 * closed row is not a hidden control — it prints the choice in force, so
+	 * the answer the radios used to give by which one is ticked is now given
+	 * in words, and the choices themselves are one tap away.
 	 */
 	.controls {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
-		gap: var(--space-row-gap);
+		/*
+		 * The two axes are NOT the same gap. Across, the gap is what keeps two
+		 * choices from reading as one phrase. Down — which is what happens at
+		 * 375px, where five filters stack — each choice already carries a
+		 * touch-floor box, so a gap between two of them adds to slack that is
+		 * there anyway and the stack drifts apart. The rows meet; their boxes
+		 * do the spacing.
+		 */
+		column-gap: var(--space-row-gap);
+		row-gap: 0;
 		border: 0;
 		padding: 0;
 		margin: 0;
@@ -450,6 +641,97 @@
 		width: 22px;
 		height: 22px;
 		accent-color: var(--color-border-interactive);
+	}
+
+	/*
+	 * The closed row: the control's name, the view in force, and the mark that
+	 * says there is more behind it.
+	 *
+	 * NO `--control-height` and no `--touch-min` — `/nominate`'s explainer made
+	 * the same call for the same reason. A touch-floor box around a body-size
+	 * line left most of its height empty above and below each of two rows, and
+	 * stacked they were a band of empty panel between the count and the board.
+	 *
+	 * The target is not lost with it: the summary spans the panel's full
+	 * width, so the row is a wide target however short it is, and this is a
+	 * control whose mis-tap costs nothing — it opens a list of radios, each of
+	 * which keeps the floor on its own row. The floor stays, untouched, on
+	 * every control that spends something.
+	 */
+	.controls-disclosure > summary {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--space-row-gap);
+		cursor: pointer;
+		/* The mark below carries the affordance; the default triangle beside
+		   it would be two of them stacked — `/nominate`'s own reasoning. */
+		list-style: none;
+	}
+
+	.controls-disclosure > summary::-webkit-details-marker {
+		display: none;
+	}
+
+	.controls-disclosure > summary:focus-visible {
+		outline: 2px solid var(--color-text);
+		outline-offset: 2px;
+	}
+
+	/*
+	 * The view in force, set at the body size against the small uppercase
+	 * label beside it: the LABEL says which control this is and the value is
+	 * the thing being read, so the value is the one that carries the weight.
+	 */
+	.controls-current {
+		color: var(--color-text);
+	}
+
+	/*
+	 * The chevron, pushed to the trailing edge, drawn in `em` off the summary's
+	 * own font and stroked from `currentColor` — the same construction as
+	 * `/nominate`'s explainer mark, so the two disclosures in this codebase
+	 * carry one affordance rather than two.
+	 */
+	.controls-mark {
+		display: flex;
+		flex-shrink: 0;
+		margin-left: auto;
+		color: var(--color-text-tertiary);
+	}
+
+	.controls-mark svg {
+		width: 1.1em;
+		height: 1.1em;
+		stroke: currentColor;
+		stroke-width: 1.5;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+		fill: none;
+	}
+
+	/* Open or closed, the same mark; it turns to point at what it opened. */
+	.controls-disclosure[open] > summary .controls-mark {
+		color: var(--color-text);
+		transform: rotate(180deg);
+	}
+
+	/*
+	 * Open, the row needs no margin of its own: the first radio below it
+	 * carries a full touch-floor box, which is already more separation than a
+	 * gap would add.
+	 *
+	 * The same box is why the open list is pulled back INTO the panel's row
+	 * gap at the bottom. Each choice keeps its touch floor — that is not
+	 * negotiable on a control — but the floor is a hit area, not spacing, and
+	 * the empty part of the last row's box already reads as the gap beneath
+	 * it. Adding the panel's own gap on top of it stacked two separations
+	 * where the eye sees one. The negative margin cancels the second; the
+	 * target it hangs off is untouched, the same way `/nominate`'s mark grows
+	 * its hit box without growing its row.
+	 */
+	.controls-disclosure[open] > .controls {
+		margin-bottom: calc(-1 * var(--space-row-gap));
 	}
 
 	/*
@@ -476,12 +758,120 @@
 	}
 
 	/*
+	 * The Leading edge: a 2px pale green rule on an Auction the reader leads.
+	 * Deliberately NOT the 3px lottery bar below — that device is exclusive to
+	 * Minimum-Bid Contention — and declared FIRST so that a card which is both
+	 * leading and in a contention takes the lottery bar, never this one.
+	 */
+	.card.leading {
+		border-left: var(--leading-edge-width) solid var(--color-leading);
+	}
+
+	/*
 	 * The 3px left accent bar marking a Minimum-Bid Contention — the one
 	 * structural exception in the design, and no other element on any surface
 	 * may borrow the device. It never carries the state alone.
 	 */
 	.card.lottery {
 		border-left: var(--accent-bar-width) solid var(--color-lottery);
+	}
+
+	/*
+	 * The identity row: the name, the NBA team and position beside it, and
+	 * the Auction state at the far edge. Baseline-aligned, so the small
+	 * metadata and the state word sit on the name's own baseline rather than
+	 * their box centres, and wrapping, so 375px never scrolls sideways.
+	 */
+	.card-head {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: var(--space-row-gap);
+	}
+
+	/*
+	 * Pushed to the trailing edge by the free space rather than by a width,
+	 * so a long Player name simply takes the state word to the next line
+	 * instead of squeezing it.
+	 */
+	.card-state {
+		margin-left: auto;
+		text-transform: uppercase;
+		letter-spacing: 0.12em;
+		font-size: var(--size-10);
+	}
+
+	/*
+	 * The short name below 640px and the full one at and above it — the same
+	 * breakpoint `global.css` already uses for the strip, so the layout has
+	 * one width where it changes its mind rather than two.
+	 */
+	.chip-word-wide {
+		display: none;
+	}
+
+	@media (min-width: 640px) {
+		.chip-word-narrow {
+			display: none;
+		}
+
+		.chip-word-wide {
+			display: inline;
+		}
+	}
+
+	/*
+	 * On a Minimum-Bid Contention the state takes `lottery-text` — the icon and
+	 * the word together, so the diamond and the name it belongs to read as one
+	 * mark and the card's own accent bar has a word in its colour to point at.
+	 *
+	 * Selected through the card rather than by a class of its own: `lottery` is
+	 * already on the `<li>` and is the one fact this rule depends on, so the
+	 * state's class attribute keeps stating which state it is and nothing else.
+	 * Colour is never the carrier — the diamond and the word are.
+	 */
+	.card.lottery .card-state {
+		color: var(--color-lottery-text);
+	}
+
+	/*
+	 * The price, with the viewer's own state opposite it. Centred rather than
+	 * baselined: a chip is a box, and aligning its text baseline to a
+	 * `--size-26` figure would hang it off the bottom of the row.
+	 */
+	.card-figure {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-row-gap);
+	}
+
+	/*
+	 * The two-column lines: leader and countdown, then the absolute stamp and
+	 * the nominator. `space-between` with `flex-wrap`, so at 375px a long
+	 * pairing stacks instead of colliding.
+	 */
+	.card-line {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: var(--space-row-gap);
+	}
+
+	/*
+	 * The footnote line is the quietest on the card — DESIGN.md's `--size-11`
+	 * `text-tertiary` for timestamps and footnotes — so the absolute stamp and
+	 * the nominator sit a step below the leader row above them.
+	 */
+	.card-footnote .card-when {
+		font-size: var(--size-11);
+	}
+
+	/* The nominator's label rides inline with its value, not above it. */
+	.card-footnote .section-label {
+		margin-right: 0.4em;
 	}
 
 	.card-link {
@@ -517,8 +907,14 @@
 		color: var(--color-text-tertiary);
 	}
 
+	/*
+	 * `text-secondary` at the metadata size, matching the countdown it now
+	 * shares a row with — the two read as one line, not as a sentence with a
+	 * timestamp appended.
+	 */
 	.card-leader {
 		color: var(--color-text-secondary);
+		font-size: var(--size-12);
 	}
 
 	.card-when {
@@ -556,10 +952,15 @@
 		font-size: var(--size-12-5);
 	}
 
-	/* Outlined, never filled: leading is a standing fact, not an alert. */
+	/*
+	 * Filled pale green, the Outbid chip's own treatment in the opposite
+	 * colour: leading is the one other fact on this card that is about the
+	 * READER, and the two read as a pair. Not `brand`, which may never signal
+	 * leading, and not `attention`, which marks Outbid and nothing else.
+	 */
 	.chip-lead {
-		border: var(--border-width) solid var(--color-border-strong);
-		color: var(--color-text);
+		background-color: var(--color-leading);
+		color: var(--color-leading-ink);
 	}
 
 	/*

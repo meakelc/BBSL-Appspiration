@@ -59,7 +59,11 @@ import {
 import { bidStateFor, decide, teamMoneyStateFor } from '../../src/lib/core/rules/bidding.ts';
 import type { ContentionSeed, TeamMoneyState } from '../../src/lib/core/rules/bidding.ts';
 import { decideClose } from '../../src/lib/core/rules/close.ts';
-import type { AuctionClosedPayload, CloseState, ContentionDrawnPayload } from '../../src/lib/core/rules/close.ts';
+import type {
+	AuctionClosedPayload,
+	CloseState,
+	DrawnContentionPayload
+} from '../../src/lib/core/rules/close.ts';
 import { drawIndex, drawnWinnerFor } from '../../src/lib/core/rules/draw.ts';
 import type { AppendedEvent, PlaceBid } from '../../src/lib/core/types.ts';
 
@@ -184,15 +188,29 @@ function theDraw() {
 	// The shell reads the sealed seed under the lock and hands it here; the
 	// core generates nothing and reads no random source.
 	const drawnWinner = drawnWinnerFor(auction, SEED);
+	// Story 10.5 gave `ClosedWinner` an `undrawn` case for a lottery every
+	// Contender was cancelled from. Four Teams are contending here, so this
+	// example is stating "and it drew one" as part of its premise.
+	if (drawnWinner.kind !== 'drawn') throw new Error('example 8: the lottery drew nobody');
 	const state: CloseState = {
 		auction,
 		nomination: nominationForPlayer(nominations, 'p-1'),
 		playerIsMinorLeagueEligible: false,
 		minorLeagueOccupied: 0,
-		drawnWinner
+		// **Story 10.3's cascade inputs.** `auctions` is empty here, so the
+		// winning Team holds no other commitment and FR-40's cascade has
+		// nothing to cancel whichever way the figures beside it go — which is
+		// what keeps this example about the thing it is about.
+		auctions: { byPlayer: {} },
+		capSpace: parseMoney(0),
+		rosterCount: 0,
+		isMinorLeagueEligible: () => false,
+		playerNameFor: (playerId: string) => playerId,
+		drawnWinner,
+		rosterFiguresFor: () => null
 	};
 	// The Auction's OWN nominal expiry as `now` — never a wall clock (AD-10).
-	const decided = decideClose(state, auction.closesAt, drawnWinner);
+	const decided = decideClose(state, FIXED_CLOSE, drawnWinner);
 	return { log, auction, drawnWinner, decided };
 }
 
@@ -247,7 +265,7 @@ describe('§10 example 8 — the lottery draws', () => {
 	it('records the seed, the ordered list and the selection', () => {
 		// "Seed, ordered list, and selection are recorded and displayed."
 		const { decided } = theDraw();
-		const drawn = decided.events[0]?.payload as ContentionDrawnPayload;
+		const drawn = decided.events[0]?.payload as DrawnContentionPayload;
 
 		expect(drawn.seed).toBe(SEED);
 		// The commitment restated beside the reveal, so ONE row answers the
@@ -295,22 +313,35 @@ describe('§10 example 8 — the lottery draws', () => {
 
 		for (const [teamId] of CONTENDERS) {
 			expect(committedOn(theLottery(), teamId), teamId).toEqual([
-				{ fantraxPlayerId: 'p-1', playerName: 'Jalen Green', amount: MINIMUM_BID }
+				{
+					fantraxPlayerId: 'p-1',
+					playerName: 'Jalen Green',
+					amount: MINIMUM_BID,
+					// Story 10.2: every Contender's $1,000,000 is a lottery entry.
+					isContentionEntry: true
+				}
 			]);
 			expect(committedOn(theWholeThing(), teamId), teamId).toEqual([]);
 		}
 	});
 
-	it('releases Team D’s Nomination Slot', () => {
-		// "Team D's Nomination Slot releases." Not a line in this story either:
-		// `nominationsReducer` frees the seat and the Slot together by folding
-		// the same `AuctionClosed`, keyed on the Player.
+	it('frees the board seat but NOT Team D’s Nomination Slot — Team D did not win', () => {
+		// The worked example used to read "Team D's Nomination Slot releases",
+		// and FR-9's amendment is what changed it. `nominationsReducer` still
+		// frees the board seat by folding the `AuctionClosed`, keyed on the
+		// Player — Jalen Green leaves the board and is Team G's. The Slot is a
+		// separate release keyed on the WINNER, and Team D nominated him and
+		// lost the lottery, so Team D keeps a Slot spent on a Player they no
+		// longer have any claim on, until they win someone.
 		const before = fold(INITIAL_NOMINATIONS, theLottery(), nominationsReducer);
 		const after = fold(INITIAL_NOMINATIONS, theWholeThing(), nominationsReducer);
 
 		expect(nominationForTeam(before, 't-d')?.fantraxPlayerId).toBe('p-1');
-		expect(nominationForTeam(after, 't-d')).toBeNull();
+		expect(nominationForTeam(after, 't-d')?.fantraxPlayerId).toBe('p-1');
 		expect(nominationForPlayer(after, 'p-1')).toBeNull();
+		// Team G won, and held no Slot to be freed — they nominated nobody in
+		// this log. The release is a no-op rather than an error.
+		expect(nominationForTeam(after, 't-g')).toBeNull();
 	});
 
 	it('keeps the three facts after the Auction itself is gone', () => {
@@ -324,7 +355,7 @@ describe('§10 example 8 — the lottery draws', () => {
 		const draw = drawForPlayer(fold(INITIAL_DRAWS, log, drawsReducer), 'p-1');
 		expect(draw?.seed).toBe(SEED);
 		expect(draw?.contenders).toEqual(['t-e', 't-f', 't-g', 't-h']);
-		expect(draw?.winningTeamId).toBe('t-g');
+		expect(draw?.kind === 'drawn' ? draw.winningTeamId : null).toBe('t-g');
 	});
 
 	it('selects the same Team however many times the log is folded', () => {
@@ -334,7 +365,7 @@ describe('§10 example 8 — the lottery draws', () => {
 
 		const log = theWholeThing();
 		const twice = drawForPlayer(fold(INITIAL_DRAWS, [...log, ...log], drawsReducer), 'p-1');
-		expect(twice?.winningTeamId).toBe('t-g');
+		expect(twice?.kind === 'drawn' ? twice.winningTeamId : null).toBe('t-g');
 	});
 
 	it('is a LATE draw and never a wrong one (AD-10)', () => {
@@ -346,11 +377,21 @@ describe('§10 example 8 — the lottery draws', () => {
 			nomination: null,
 			playerIsMinorLeagueEligible: false,
 			minorLeagueOccupied: 0,
-			drawnWinner
+			// **Story 10.3's cascade inputs.** `auctions` is empty here, so the
+			// winning Team holds no other commitment and FR-40's cascade has
+			// nothing to cancel whichever way the figures beside it go — which is
+			// what keeps this example about the thing it is about.
+			auctions: { byPlayer: {} },
+			capSpace: parseMoney(0),
+			rosterCount: 0,
+			isMinorLeagueEligible: () => false,
+			playerNameFor: (playerId: string) => playerId,
+			drawnWinner,
+			rosterFiguresFor: () => null
 		};
 
 		expect(JSON.stringify(decideClose(state, '2026-08-25T15:00:00.000Z', drawnWinner))).toBe(
-			JSON.stringify(decideClose(state, auction.closesAt, drawnWinner))
+			JSON.stringify(decideClose(state, FIXED_CLOSE, drawnWinner))
 		);
 	});
 

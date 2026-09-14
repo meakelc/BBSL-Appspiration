@@ -112,17 +112,30 @@ describe('no email field exists anywhere in the product', () => {
 
 describe('the sign-in surface', () => {
 	it('states the phase from the server-resolved source, not from a typed sentence', () => {
-		expect(SIGNIN).toContain('data.phase.sentence');
-		// The sentence itself must not be copied here. Two copies are two
-		// sources, and they drift the first time one is edited.
+		// The phase panel is gone from every page: the LAYOUT states the phase
+		// once, in the chrome, for every route. What must still hold is that
+		// no page respells the sentence — two copies are two sources, and they
+		// drift the first time one is edited.
+		const layout = readFileSync(at('src', 'routes', '+layout.svelte'), 'utf8');
+		expect(layout).toContain('data.phase.sentence');
+		expect(SIGNIN).not.toContain('data.phase.sentence');
 		expect(SIGNIN).not.toContain('folds to Setup');
 		expect(SIGNIN_SERVER).toContain('locals.phase');
 	});
 
-	it('names the phase the same page the rest of the app does', async () => {
-		const home = readFileSync(at('src', 'routes', '+page.svelte'), 'utf8');
+	it('states the phase in ONE place for every route, and no page repeats it', async () => {
+		// The chrome mounts on every page: `HeaderMenu` when no Team is bound,
+		// `PersistentStrip` when one is, and both take the sentence.
+		const layout = readFileSync(at('src', 'routes', '+layout.svelte'), 'utf8');
+		expect(layout).toContain('phaseSentence={data.phase.sentence}');
+		for (const file of ROUTE_SVELTE) {
+			if (file.endsWith('+layout.svelte')) continue;
+			const source = readFileSync(file, 'utf8');
+			expect(source, `${relative(ROOT, file)}: states the phase a second time`).not.toContain(
+				'data.phase.sentence'
+			);
+		}
 		const homeServer = readFileSync(at('src', 'routes', '+page.server.ts'), 'utf8');
-		expect(home).toContain('data.phase.sentence');
 		expect(homeServer).toContain('locals.phase');
 		// And that one source currently folds to Setup, because there are no
 		// events yet and no events folds to Setup.

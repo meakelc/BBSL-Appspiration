@@ -38,9 +38,9 @@ import { ACTIVE_BENCH_SLOTS, MINIMUM_BID, NO_AUCTION_PROBE_ID } from './constant
 import { parseMoney } from './money.ts';
 import type { Money } from './money.ts';
 import type { LeaguePhase } from './projection/phase.ts';
-import { bidStateFor, evaluate } from './rules/bidding.ts';
-import type { TeamMoneyState } from './rules/bidding.ts';
-import type { CapGateOutcome, PlaceBid } from './types.ts';
+import { bidStateFor, evaluate, ordinal, outstandingBidFiguresFor } from './rules/bidding.ts';
+import type { OutstandingBidFigures, TeamMoneyState } from './rules/bidding.ts';
+import type { CapGateOutcome, PlaceBid, SlotsGateOutcome } from './types.ts';
 
 /**
  * The strip's own trigger label — the one word on the control that opens the
@@ -72,7 +72,9 @@ export const STRIP_REGION_LABEL = 'Your Team';
  * is a false statement rather than an empty one.
  *
  * Contract Assignment and Archived both render, carrying the Roster Count
- * alone (see `stripShowsMaximumBid`).
+ * alone — no Maximum Bid and no bids figure (see `stripShowsMaximumBid` and
+ * `stripShowsOutstandingBids`, which are two predicates because they answer
+ * two questions that happen to agree).
  */
 export function stripPresent(phase: LeaguePhase): boolean {
 	return phase !== 'Setup';
@@ -99,6 +101,39 @@ export function stripShowsMaximumBid(phase: LeaguePhase): boolean {
 }
 
 /**
+ * Whether the strip states the bids figure, given the phase (Story 10.6).
+ *
+ * **Auction Phase only, and for `stripShowsMaximumBid`'s reason rather than
+ * by borrowing its predicate.** Outstanding Bids against the Outstanding Bid
+ * Allowance is a figure about placing a Bid, and outside the Auction Phase no
+ * Bid is accepted at any amount — so `0 of 3 bids` in Archived would state
+ * something about outstanding Bids in a phase where none can exist. The
+ * Roster Count beside it stays, because a Roster Count is true in every phase
+ * that has a roster.
+ *
+ * **It is its own predicate on purpose.** The two currently return the same
+ * answer, and that is a coincidence of the rules rather than a shared
+ * meaning: `stripShowsMaximumBid` is named for the money half and is where
+ * Story 6.1's Contract Assignment figure would land if it ever arrives. A
+ * second caller reading it for the capacity half would make the name false of
+ * one of them the first time the two phases diverge, which is exactly the
+ * shared-name drift this module argues against everywhere else.
+ *
+ * **Every surface carrying the figure reads this one predicate**, the Teams
+ * index and the Team view included (resolved 2026-09-09). It first gated the
+ * strip alone, on the reasoning that a Team view is a record read on purpose
+ * while the strip is inherited by every screen — but the divergence it
+ * produced was worse than the asymmetry it defended: in Archived the strip
+ * omitted the figure while the index still stated `0 of 3 bids` on every row,
+ * so the two surfaces disagreed about the same Team at the same instant. The
+ * figure is false in the same way wherever it is printed, so it is gated in
+ * the same place.
+ */
+export function stripShowsOutstandingBids(phase: LeaguePhase): boolean {
+	return phase === 'Auction';
+}
+
+/**
  * The Roster Count, in the strip's own words.
  *
  * `ACTIVE_BENCH_SLOTS` is the source of the twelve — never a literal — so the
@@ -120,6 +155,125 @@ export function stripShowsMaximumBid(phase: LeaguePhase): boolean {
 export function rosterCountSentence(rosterCount: number): string {
 	const stated = Number.isFinite(rosterCount) ? Math.max(0, Math.trunc(rosterCount)) : 0;
 	return `Roster ${String(stated)} of ${String(ACTIVE_BENCH_SLOTS)}`;
+}
+
+/**
+ * The Team's outstanding Bids against its allowance, in words (Story 10.6).
+ *
+ * The neighbour of `rosterCountSentence` and worded here for the same reason:
+ * the strip states it beside the Roster Count, the Teams index states it on a
+ * row, and one wording is one thing to keep in step. Neither surface builds a
+ * string — `PersistentStrip.svelte` and `routes/teams/+page.svelte` print this
+ * one.
+ *
+ * **`null` for a viewer bound to no Team**, which is what makes the segment
+ * ABSENT rather than `0 of 0`: a Team that does not exist holds no Bids
+ * against no allowance, and an invented zero on the strip every screen
+ * inherits would be a false statement on all of them.
+ *
+ * The shape mirrors the Roster Count's — count, ceiling, noun — so the two
+ * read as one register with the `·` between them, and `slotSentenceHalves`
+ * splits it at the same ` of ` every other slot sentence is split at.
+ *
+ * **At parity the figure alone is the signal** (UX-DR35). There is no word
+ * here for "at your allowance", no punctuation that escalates and nothing for
+ * a surface to hang a colour on: `2 of 2 bids` says it.
+ */
+export function outstandingBidsSentence(figures: OutstandingBidFigures): string;
+export function outstandingBidsSentence(figures: OutstandingBidFigures | null): string | null;
+export function outstandingBidsSentence(figures: OutstandingBidFigures | null): string | null {
+	if (figures === null) return null;
+	return `${String(figures.outstandingBids)} of ${String(figures.allowance)} bids`;
+}
+
+/**
+ * The Team's open lottery entries, in their own words and never in the
+ * sentence above (UX-DR36).
+ *
+ * **A count with no ceiling, deliberately.** A Minimum-Bid Contention entry
+ * consumes no allowance and a Team may hold as many as its Cap Space allows,
+ * so this sentence has no `of n` half to give: writing one would state a
+ * limit FR-18 does not impose, and summing these into the bids figure would
+ * do the same thing more quietly.
+ *
+ * `null` for a viewer bound to no Team, with the figure above it.
+ */
+// No non-null overload, unlike its sibling: this sentence is absent for a
+// bound Team holding no entries as well as for no Team at all, so a caller
+// that knows it has figures still has to handle `null`.
+export function contentionEntriesSentence(figures: OutstandingBidFigures | null): string | null {
+	if (figures === null) return null;
+	const count = figures.openContentionEntries;
+	// **A Team holding none gets no sentence, not `0 lottery entries`.**
+	// Resolved 2026-09-09: the bids figure reads `0 of n` because the
+	// allowance exists whether or not it is spent, and a Manager needs the
+	// denominator. Entries have no ceiling at all (FR-18), so a zero there
+	// states nothing and, on a thirty-row index, states it thirty times. The
+	// figure appears when there is something to report and is absent
+	// otherwise — the same rule the null-Team case follows one line above.
+	if (count === 0) return null;
+	return `${String(count)} lottery ${count === 1 ? 'entry' : 'entries'}`;
+}
+
+/**
+ * The two sentences the strip and the Teams index both state, from ONE
+ * derivation over the Team's own facts.
+ *
+ * Callers pass a `TeamMoneyState` and get the words; nobody else calls
+ * `outstandingBidFiguresFor` and words the result a second time.
+ */
+export function outstandingBidLines(team: TeamMoneyState | null): {
+	readonly figures: OutstandingBidFigures | null;
+	readonly bids: string | null;
+	readonly entries: string | null;
+} {
+	const figures = outstandingBidFiguresFor(team);
+	return {
+		figures,
+		bids: outstandingBidsSentence(figures),
+		entries: contentionEntriesSentence(figures)
+	};
+}
+
+/**
+ * The trade the bid control names ONCE, before the confirm step (UX-DR34),
+ * or `null` when this Bid is not the one at risk.
+ *
+ * **It is stated on exactly one condition: this prospective Bid IS the
+ * allowance Bid.** The three absences are as load-bearing as the presence:
+ *
+ *  - under the allowance, this Bid is not the one a later win would take
+ *    back, so there is no trade to name;
+ *  - at `freeActiveBenchSlots === 0` the precondition has failed and NO Bid
+ *    is permitted at all, so a sentence about what this one costs would be
+ *    describing an act the gate refuses outright;
+ *  - a lottery entry spends no allowance however many are held (FR-18), so
+ *    the sentence would be false about it in both directions.
+ *
+ * `isContentionEntry` is read rather than inferred from the amount — the
+ * contention gate already decided it, and this module can no more see a
+ * dollar than the slots gate can.
+ *
+ * **Plain prose, and no alarm.** It is not a dialog, not a checkbox and not a
+ * warning; the cancellation it names is automatic and ordinary, which is
+ * exactly why a Manager is told about it before rather than after. The
+ * ordinal and the permitted count are `gateFigure`'s own — the same `ordinal`
+ * renderer and the same `allowance` field — so the sentence above the control
+ * and the row inside the panel cannot quote different figures.
+ */
+export function allowanceTradeSentence(slots: SlotsGateOutcome): string | null {
+	if (slots.isContentionEntry) return null;
+	const { projectedAdditions, freeActiveBenchSlots, allowance } = slots;
+	if (projectedAdditions === null || freeActiveBenchSlots === null || allowance === null) {
+		return null;
+	}
+	if (freeActiveBenchSlots < 1) return null;
+	if (projectedAdditions !== allowance) return null;
+	return (
+		`This would be your ${ordinal(projectedAdditions)} of ${String(allowance)} permitted ` +
+		'bids. If you win another Auction first, this Bid is cancelled and the next-highest Bid ' +
+		'leads.'
+	);
 }
 
 /**

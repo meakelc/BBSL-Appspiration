@@ -11,6 +11,10 @@
 import { describe, expect, it } from 'vitest';
 
 import { loadBoard } from '../../src/lib/server/board.ts';
+import { AUCTION_CLOSED_EVENT } from '../../src/lib/core/projection/nominations.ts';
+import { CONTENTION_DRAWN_EVENT } from '../../src/lib/core/projection/draws.ts';
+import { parseMoney } from '../../src/lib/core/money.ts';
+import { closedPayload } from '../fixtures/closed-event.ts';
 
 // --- The server read, executed ----------------------------------------------
 
@@ -210,8 +214,13 @@ describe('loadBoard — executed against a fake client', () => {
 		expect(card?.closesAt).toBe('2026-08-28T00:00:00.000Z');
 		// The viewer holds the leading Bid, so the state and its word agree.
 		expect(card?.viewerState).toBe('you_lead');
-		expect(card?.viewerStateLabel).toBe('You lead');
+		expect(card?.viewerStateLabel).toBe('Leading');
 		expect(card?.auctionStateLabel).toBe('Open');
+		expect(card?.state).toBe('standard');
+		// An open card carries none of the closed fields, so a surface that
+		// printed one would print an absence rather than a wrong figure.
+		expect(card?.wonBy).toBeNull();
+		expect(card?.closedAt).toBeNull();
 		// Every icon is non-empty, so no card can render a state as colour alone.
 		expect(card?.viewerStateIcon).not.toBe('');
 		expect(card?.auctionStateIcon).not.toBe('');
@@ -251,8 +260,130 @@ describe('loadBoard — executed against a fake client', () => {
 		expect(card?.priceLabel).toBe('No opening bid');
 		expect(card?.leadingBidder).toBe('No Team leads this Auction yet.');
 		expect(card?.closesAt).toBeNull();
-		expect(card?.auctionStateLabel).toBe('Awaiting Opening Bid');
+		expect(card?.auctionStateLabel).toBe('Unbid');
 		// No metadata row for this Player, so the line is omitted, not blanked.
 		expect(card?.metadata).toBeNull();
+	});
+});
+
+describe('loadBoard — the closed cards, off the two folds that survive a close', () => {
+	const CLOSED_AT = '2026-08-27T09:00:00.000Z';
+
+	it('emits a closed card, resolving the winner in the SAME manager statement', async () => {
+		const { gateway, statements } = fakeGateway({
+			events: [
+				row(
+					'NominationPlaced',
+					{
+						fantraxPlayerId: 'p-1',
+						playerName: 'Stale Fold Name',
+						teamId: 't-1',
+						teamName: 'Lakers',
+						managerId: 'm-1'
+					},
+					'2026-08-26T00:00:00.000Z'
+				),
+				row(
+					CONTENTION_DRAWN_EVENT,
+					{
+						fantraxPlayerId: 'p-1',
+						seed: '4d81f0b6a72c395e4d81f0b6a72c395e4d81f0b6a72c395e4d81f0b6a72c395e',
+						seedHash: '0f1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a6978',
+						contenders: ['t-1', 't-2'],
+						selectedIndex: 1,
+						winningTeamId: 't-2',
+						winningTeamName: 'Rockets',
+						winningManagerId: 'm-2'
+					},
+					CLOSED_AT
+				),
+				row(
+					AUCTION_CLOSED_EVENT,
+					closedPayload({
+						fantraxPlayerId: 'p-1',
+						playerName: 'Fold Copy',
+						teamId: 't-2',
+						teamName: 'Rockets',
+						winningAmount: 8_500_000,
+						capHit: 8_500_000,
+						closedAt: CLOSED_AT
+					}),
+					CLOSED_AT
+				)
+			],
+			players: [
+				{ fantrax_player_id: 'p-1', player_name: 'Jalen Green', positions: 'SG', nba_team: 'HOU' }
+			],
+			managers: [{ id: 'm-2', team_id: 't-2', display_name: 'Dana' }]
+		});
+
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const board = await loadBoard(gateway as any, 't-2');
+		expect(board.cards).toHaveLength(1);
+		const card = board.cards[0];
+
+		expect(card?.state).toBe('closed');
+		expect(card?.auctionStateLabel).toBe('Closed');
+		expect(card?.auctionStateIcon).not.toBe('');
+		// The reference row survives a close, so the metadata line does too.
+		expect(card?.playerName).toBe('Jalen Green');
+		expect(card?.metadata).toBe('HOU · SG');
+		// The final amount, through the core's one money renderer.
+		expect(card?.price).toBe(8_500_000);
+		expect(card?.priceLabel).toBe('$8.5M');
+		// The winner, spelled out with the Manager the DRAW recorded — resolved
+		// in the statement that already resolves leaders and nominators.
+		expect(card?.wonBy).toBe('Rockets — Dana');
+		expect(card?.closedAt).toBe(CLOSED_AT);
+		// The viewer holds the contract.
+		expect(card?.viewerState).toBe('won');
+		expect(card?.viewerStateLabel).toBe('You won');
+		// Neither is durable past a close, and neither is invented.
+		expect(card?.nominatedBy).toBeNull();
+		expect(card?.nominatedAt).toBeNull();
+		expect(card?.closesAt).toBeNull();
+
+		// Still ONE read of the log and ONE manager statement — a board
+		// carrying closed cards costs no extra round trip.
+		expect(statements.filter((sql) => /from auction_events/i.test(sql))).toHaveLength(1);
+		expect(statements.filter((sql) => /display_name/i.test(sql))).toHaveLength(1);
+		expect(statements.at(-1)).toMatch(/^rollback$/i);
+	});
+
+	it('names the winning Team ALONE when the close recorded no Manager', async () => {
+		// A Standard close records the winning Team and no Manager at all, so
+		// the card names the Team — never the Team paired with its own name,
+		// which would read as a Manager literally called "Rockets".
+		const { gateway } = fakeGateway({
+			events: [
+				row(
+					'NominationPlaced',
+					{
+						fantraxPlayerId: 'p-1',
+						playerName: 'Jalen Green',
+						teamId: 't-1',
+						teamName: 'Lakers',
+						managerId: 'm-1'
+					},
+					'2026-08-26T00:00:00.000Z'
+				),
+				row(
+					AUCTION_CLOSED_EVENT,
+					closedPayload({
+						fantraxPlayerId: 'p-1',
+						teamId: 't-2',
+						teamName: 'Rockets',
+						closedAt: CLOSED_AT
+					}),
+					CLOSED_AT
+				)
+			],
+			managers: [{ id: 'm-w', team_id: 't-2', display_name: 'Dana' }]
+		});
+
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const board = await loadBoard(gateway as any, null);
+		expect(board.cards[0]?.wonBy).toBe('Rockets');
+		expect(board.cards[0]?.viewerState).toBe('not_involved');
 	});
 });

@@ -2,7 +2,11 @@
 
 Companion to `SPEC.md`. Maps every capability to the requirements it realizes, the architecture decisions that govern it, the PRD §10 worked examples that test it, and where it lives in the source tree. Use it to check coverage before and after a change; use it when breaking capabilities into stories.
 
-Referenced documents: `prd.md` (FR-1 – FR-39, §10 examples 1–28), `ARCHITECTURE-SPINE.md` (AD-1 – AD-30), `addendum.md` (§A–§G), `DESIGN.md` and `EXPERIENCE.md` (the UX contract, adopted as companions 2026-08-18).
+Referenced documents: `prd.md` (FR-1 – FR-43, §10 examples 1–43), `ARCHITECTURE-SPINE.md` (AD-1 – AD-32), `addendum.md` (§A–§G), `DESIGN.md` and `EXPERIENCE.md` (the UX contract, adopted as companions 2026-08-18).
+
+Updated 2026-09-10: **CAP-22 (Record a Roster Move or a Drop) and CAP-23 (Detect a Roster Divergence) added**, by `sprint-change-proposal-2026-09-10.md` — managers trade and drop players in Fantrax while the auction runs, and both change the inputs to Maximum Bid. Two non-goals gave way: *"not a trade machine"* became *"not a trade broker"*, and *"not writing to Fantrax"* was restated as a **finding** rather than a choice, since re-verification found no write endpoint exists at all. The success signal now counts **corrective** overrides only — the old wording would have scored a recorded trade as an override and read a busy trade market as a failing product. New AD-32; **AD-31 is deliberately unamended**, its cancellation trigger preserved word for word by the decision to refuse rather than cascade. A second, unrelated gap surfaced while specifying this and is carried in the same change: Dead Money was not modelled and the `2RK` rookie designation was discarded at import — latent, since no Team carries dead money today, but wrong from the first mid-auction drop. **CAP-23 is the first capability in this spec carrying a contingency marker**; it depends on an undocumented endpoint that has never been called against this league. *This time the correct-course impact analysis routed a step to the SPEC — see the 2026-09-08 note below for why that is worth recording.*
+
+Updated 2026-09-08: **CAP-21 (Cancel a surplus commitment and restore the Auction) added and CAP-19 rewritten**, by `sprint-change-proposal-2026-09-07.md` — the Outstanding Bid Allowance. A Team may hold one outstanding Bid beyond its free Slots, and the surplus is cancelled at the Close that fills its roster. Ripples: CAP-8's lottery entries leave the capacity gate entirely (cap space is now their only limit); CAP-11's cancellation and restoration mentions ride the **existing `outbid` category** rather than a fourth; CAP-5, CAP-6, CAP-7 and CAP-20 each gained a clause. New AD-31, with AD-2, AD-11, AD-22 and AD-25 amended. **This spec was the last artifact still carrying the pre-allowance rule** — caught by the sprint-planning readiness gate, three artifacts after the change was approved, because the correct-course impact analysis listed the SPEC in scope but routed no step to it. *Fourth instance of the standing lesson: what nobody is assigned to update does not get updated.*
 
 Updated 2026-09-05: **Epic 9 (Stand it up and let the league in) added** by `sprint-change-proposal-2026-09-05.md`, carrying provisioning, league seeding, the AR-33 real-export confirmation, the setup runbook, a moderator pilot and prod setup day. **No capability changed, no FR moved, no AD touched, and no row in the map below is affected** — Epic 9 adds nothing to the contract; it executes CAP-1 – CAP-14 against real infrastructure for the first time. The one row worth reading alongside it is CAP-15/16/17, whose Epic 8 stories are the go-live gate Epic 9 feeds.
 
@@ -20,10 +24,11 @@ Updated 2026-08-18: the architecture spine grew to 30 ADs and the UX spines were
 | CAP-3 Nomination | FR-7, FR-8, FR-9, FR-10 | AD-1, AD-4, AD-6, AD-22 | 12 | `core/rules/nomination`, `shell/` |
 | CAP-4 Maximum Bid | FR-12, FR-25 | AD-1, AD-7, AD-8 | 3, 4, 5, 23 | `core/rules/bidding`, `core/money.ts` |
 | CAP-5 Place a Bid | FR-11, FR-13, FR-15 | AD-1, AD-6, AD-7, AD-9, AD-12 | 1, 2, 15, 26 | `core/rules/bidding`, `shell/`, `routes/` form actions |
-| CAP-19 Roster Capacity | FR-37 | AD-7, AD-1, AD-11, AD-23 | 24, 25 (and passes in 18, 19, 20, 23) | `core/rules/bidding` |
+| CAP-19 Roster Capacity | FR-37 | AD-7, AD-1, AD-11, AD-23 | 23, 24, 25, 29, 30 (and passes in 18, 19, 20) | `core/rules/bidding` |
+| **CAP-21 Cancel and restore** | **FR-40** | **AD-31**, AD-2, AD-4, AD-5, AD-11, AD-14, AD-22, AD-23 | 31, 32, 33, 34, 35 | `core/rules/restore`, `core/rules/close`, `core/projection/auctions` |
 | CAP-6 Commit and release capital | FR-14, FR-35 | AD-7, AD-6, AD-11, AD-23 | 16, 17, 18, 19, 20, 21, 22 | `core/rules/bidding` |
-| CAP-7 Clock and close | FR-16, FR-21 | AD-3, AD-10, AD-11, AD-12, AD-23 | 16, 17 | `core/rules/clock`, `supabase/functions/tick` |
-| CAP-8 Minimum-Bid Contention | FR-17, FR-18, FR-19, FR-20 | AD-14, AD-3, AD-11, AD-12 | 6, 7, 8, 9, 10, 11, 21, 22 | `core/rules/clock`, `core/rules/bidding`, `functions/tick` |
+| CAP-7 Clock and close | FR-16, FR-21 | AD-3, AD-10, AD-11, AD-12, AD-23 | 16, 17, 31, 35 | `core/rules/clock`, `supabase/functions/tick` |
+| CAP-8 Minimum-Bid Contention | FR-17, FR-18, FR-19, FR-20 | AD-14, AD-3, **AD-11**, AD-12 | 6, 7, 8, 9, 10, 11, 21, 22, 34, 35 | `core/rules/clock`, `core/rules/bidding`, `functions/tick` |
 | CAP-9 League Clock and phase end | FR-22 | AD-22, AD-3, AD-4 | 13, 27 | `core/rules/clock` |
 | CAP-10 Board and views | FR-23, FR-24, FR-25 | AD-5, AD-9, AD-16, AD-3, AD-7, **AD-29**, **AD-30** | — | `routes/`, projections, Supabase Realtime |
 | CAP-20 Teams index | FR-39 | AD-5, AD-7, AD-8, **AD-29**, **AD-30** | 28 | `routes/teams`, projections, `core/money.ts` |
@@ -31,6 +36,8 @@ Updated 2026-08-18: the architecture spine grew to 30 ADs and the UX spines were
 | CAP-12 Contract assignment | FR-28, FR-29 | AD-1, AD-4, AD-23 | 14 | `core/rules/allotment`, `routes/team/contracts` |
 | CAP-13 Export and archive | FR-30, FR-31, FR-36 | AD-24, AD-8, AD-23 | — | `adapters/fantrax/export`, `routes/admin/export` |
 | CAP-14 Overrides, pause, audit | FR-32, FR-33, FR-34 | AD-4, AD-13, AD-15, AD-20, AD-22 | 27 | `core/rules/override`, `routes/admin` |
+| **CAP-22 Roster Move and Drop** | **FR-41, FR-43** | **AD-32**, AD-4, AD-5, AD-6, AD-23, AD-26, AD-31 | **36, 37, 38, 39, 40, 41, 42, 43** | `core/rules/bidding` (gates reused), `core/rules/roster-import`, `core/projection/contracts`, `routes/admin`, one migration |
+| **CAP-23 Roster Divergence** *(contingent)* | **FR-42** | **AD-32**, AD-24, AD-19 | — | `adapters/fantrax/`, shell reader, `routes/admin` |
 | CAP-15 Synthetic-clock replay | — (NFR §5 rule correctness) | AD-3, AD-1, AD-25 | all 1–27 (28 is clock-independent) | `tests/`, rehearsal harness against the dev project |
 | CAP-16 Liveness and quota alerting | — (NFR §5 availability) | AD-19, AD-10, AD-17 | — | heartbeat row, external detector (third failure domain) |
 | CAP-17 Offsite export and restore | — (NFR §5 durability) | AD-21, AD-5, AD-4 | — | scheduled export job, offsite storage |
@@ -142,6 +149,10 @@ All nine PRD open questions were answered on 2026-08-17 and are recorded with th
 | --- | --- | --- |
 | Outage recovery procedure (>15-minute outage → pause + compensating clock adjustment) | CAP-14, CAP-16 | **Yes — blocking on auction open.** Scheduled inside the build epics per OQ-9 |
 | Obtain a real Fantrax export and confirm the salary and roster-slot columns | CAP-1 | Before setup day |
+| ~~Call `getTeamRosters` against the real league~~ | CAP-23 | **CLOSED 2026-09-10** — answers unauthenticated, 30 Teams, 303 rows, `status` distinguishes all four Slot kinds. CAP-23 viable. The probe falsified addendum §A finding 1 and surfaced three integration hazards, all now ACs on Story 7.9 |
+| Normalise player ids and establish an explicit Team mapping before the divergence diff runs | CAP-23 | **Yes — a silent total failure if missed.** Bare ids here vs asterisk-wrapped in the CSV; no Fantrax team id in the `teams` table |
+| Round-then-assert-the-grid on any read of the endpoint's `salary` | CAP-22, CAP-23 | Whenever anything reads that field. Truncation put 4 of 303 live rows off the $500,000 grid |
+| Confirm how Fantrax exports a Team carrying Dead Money | CAP-1, CAP-22 | Not this offseason — no Team carries any. An unrecognised `Status` refuses the file loudly on a future setup day |
 | Discord delivery shape (one message per event, or batched against 30 req/min) | CAP-11 | Decide at build time; revisit at rehearsal |
 | Outbox implementation (hand-rolled table vs Supabase Queues/pgmq) | CAP-11 | Decide at build time; AD-17's contract is unchanged either way |
 | Archive reachability across the dormant year (free tier pauses after a week idle) | CAP-13 | Revisit at archive time |

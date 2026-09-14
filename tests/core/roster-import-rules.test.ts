@@ -8,7 +8,9 @@ import {
 } from '../../src/lib/core/constants.ts';
 import { parseMoney } from '../../src/lib/core/money.ts';
 import {
+	SLOT_LABELS,
 	capSpaceRefusalDetail,
+	chargedCapHit,
 	checkSlotCeilings,
 	computeCapSpace,
 	slotCeilingRefusalDetail
@@ -23,6 +25,7 @@ function row(overrides: Partial<ParsedRosterRow> = {}): ParsedRosterRow {
 		capHit: parseMoney(1_000_000),
 		rosterSlotKind: 'active_bench',
 		contractYearsRemaining: 1,
+		rookieScaleRound: null,
 		...overrides
 	};
 }
@@ -105,6 +108,27 @@ describe('checkSlotCeilings', () => {
 		expect(breaches.map((b) => b.slotKind).sort()).toEqual(['active_bench', 'injury_reserve']);
 	});
 
+	/**
+	 * Dead Money is Injury Reserve without the ceiling (Story 7.6, FR-43): a
+	 * Team may carry as many released Contracts as it has released, and no
+	 * league rule bounds how many. `SLOT_CEILINGS` says so with
+	 * `Number.POSITIVE_INFINITY` rather than with a skip-branch in the loop,
+	 * so the reason lives in the record a reader is already looking at.
+	 */
+	it('never reports Dead Money, at any count', () => {
+		expect(checkSlotCeilings(rowsOf('dead_money', 9))).toEqual([]);
+		expect(checkSlotCeilings(rowsOf('dead_money', 500))).toEqual([]);
+		// And it does not mask a real breach sitting beside it.
+		expect(
+			checkSlotCeilings([
+				...rowsOf('dead_money', 9),
+				...rowsOf('active_bench', ACTIVE_BENCH_SLOTS + 1)
+			])
+		).toEqual([
+			{ slotKind: 'active_bench', count: ACTIVE_BENCH_SLOTS + 1, ceiling: ACTIVE_BENCH_SLOTS }
+		]);
+	});
+
 	it('returns empty for an empty roster', () => {
 		expect(checkSlotCeilings([])).toEqual([]);
 	});
@@ -133,5 +157,45 @@ describe('refusal wording — states the fact, then the arithmetic', () => {
 		expect(detail).toContain(String(ACTIVE_BENCH_SLOTS + 1));
 		expect(detail).toContain(String(ACTIVE_BENCH_SLOTS));
 		expect(detail).not.toContain('!');
+	});
+});
+
+describe('Dead Money — charged in full, bounded by nothing, named once', () => {
+	/**
+	 * The AR-43 fallthrough, asserted rather than assumed. `chargedCapHit`
+	 * zeroes `minor_league` and returns the stated hit for everything else, so
+	 * Dead Money arrived at the right answer by NOT writing code — and this
+	 * test is what would fail if someone "helpfully" added a branch that got
+	 * the sense backwards.
+	 */
+	it('charges a Dead Money row its full Cap Hit, through the untouched one expression', () => {
+		expect(chargedCapHit({ capHit: parseMoney(2_000_000), rosterSlotKind: 'dead_money' })).toBe(
+			2_000_000
+		);
+		// The only kind that is zeroed is still the only kind that is zeroed.
+		expect(chargedCapHit({ capHit: parseMoney(2_000_000), rosterSlotKind: 'minor_league' })).toBe(0);
+		expect(
+			chargedCapHit({ capHit: parseMoney(2_000_000), rosterSlotKind: 'injury_reserve' })
+		).toBe(2_000_000);
+	});
+
+	it('sums into Cap Space exactly as an Active/Bench row of the same amount does', () => {
+		const dead = computeCapSpace([
+			{ capHit: parseMoney(4_000_000), rosterSlotKind: 'active_bench' },
+			{ capHit: parseMoney(2_000_000), rosterSlotKind: 'dead_money' }
+		]);
+		const live = computeCapSpace([
+			{ capHit: parseMoney(4_000_000), rosterSlotKind: 'active_bench' },
+			{ capHit: parseMoney(2_000_000), rosterSlotKind: 'active_bench' }
+		]);
+		expect(dead.capHitTotal).toBe(6_000_000);
+		expect(dead.capSpace).toBe(live.capSpace);
+	});
+
+	it('is labelled "Dead Money", in the one record every surface reads', () => {
+		// `SLOT_LABELS` is a total `Record<RosterSlotKind, string>`, so it
+		// failed to compile until this entry existed — and it is what the Team
+		// view's group heading is taken from, so no `.svelte` file words it.
+		expect(SLOT_LABELS.dead_money).toBe('Dead Money');
 	});
 });

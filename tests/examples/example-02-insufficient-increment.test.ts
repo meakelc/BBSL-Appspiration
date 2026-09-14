@@ -141,7 +141,7 @@ describe('§10 example 2 — Insufficient increment, and off-grid', () => {
 		// The state literal is unchanged by the call: `decide` is pure. The
 		// Auction it was narrowed from is untouched too.
 		expect(STATE.leadingBid).toEqual({ teamId: 't-a', amount: 8_000_000 });
-		expect(AUCTION.leadingBid.amount).toBe(8_000_000);
+		expect(AUCTION.leadingBid?.amount).toBe(8_000_000);
 		expect(AUCTION.closesAt).toBe('2026-08-27T08:00:00.000Z');
 	});
 

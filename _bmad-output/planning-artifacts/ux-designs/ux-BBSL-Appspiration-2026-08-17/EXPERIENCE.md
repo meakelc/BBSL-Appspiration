@@ -1,7 +1,7 @@
 ---
 title: Appspiration Experience
 status: final
-updated: 2026-08-18
+updated: '2026-09-08'
 sources:
   - ../../../specs/spec-BBSL-Appspiration/SPEC.md
 design: ./DESIGN.md
@@ -28,7 +28,7 @@ The app changes shape four times. Destinations are filtered by phase and role, a
 | Phase | Live destinations |
 |---|---|
 | **Setup** | Sign-in · Import · Minor League Eligibility · Manager registration · Auction-open gate |
-| **Auction** | Your Positions · Bid Board · Auction · Nominate · Teams · Audit Log · Notification settings · *(Commissioner: admin, overrides in place)* |
+| **Auction** | Your Positions · Bid Board · Auction · Nominate · Rearrange roster · Teams · Audit Log · Notification settings · *(Commissioner: admin, overrides in place)* |
 | **Contract Assignment** | Contract Assignment · Teams · Audit Log · *(Commissioner: assignment monitoring, export gate)* |
 | **Archived** | Bid Board (frozen, readable) · Teams · Audit Log · Export (re-downloadable) |
 
@@ -69,6 +69,8 @@ Brand voice lives in [DESIGN.md](./DESIGN.md); this is how it behaves in microco
 
 **Never manufacture urgency.** No "ending soon", no "last chance", no "don't miss out". Time remaining is stated as a fact and never as pressure.
 
+**When the app acts against a manager, it leads with the cause** (added 2026-09-08, FR-40). A cancelled bid is the only thing in this product the app takes away from someone who did nothing wrong, and the effect stated without its cause — *"your bid on Marcus Carter was cancelled"* — is indistinguishable from a defect. The cause comes first and the effect second: *"You won Tyrese Maxey, which filled your last roster spot. Your $2.0M bid on Marcus Carter was cancelled."* No apology, which would concede the app erred; no alarm styling, which would say the same thing louder; and no congratulation wrapped around it, because pairing a win with a confiscation in a cheerful voice is worse than either alone. The register is the one the whole product already uses — a bank stating what it did and why, receipts attached.
+
 ## Component Patterns
 
 Visual specifications live in [DESIGN.md](./DESIGN.md); these are behaviours.
@@ -86,11 +88,19 @@ The most important screen in the product. Its parts, in order:
 1. **Headline** — "This bid was not placed."
 2. **The delta in one sentence** — "$15.0M exceeds your Maximum Bid of $14.0M by $1.0M."
 3. **Reassurance of state** — "Nothing has been committed and the Auction is unchanged."
-4. **Both gates, always** — `Cap · Refused` alongside `Slots · Passed — Roster Count would be 10 of 12`, neither collapsed behind a disclosure.
+4. **Both gates, always** — `Cap · Refused` alongside `Slots · Passed — your 2nd of 2 permitted bids; Roster Count would be 10 of 12`, neither collapsed behind a disclosure.
 5. **The full arithmetic**, timestamped "Your figures at 2:14 AM Wed".
 6. **The bid control, disabled, with its reason stated** where no legal bid exists.
 
 Point 4 exceeds the SPEC, which only requires the two grounds be *distinguishable*. Reporting the gate that **passed** proves every check ran and this is the only obstacle, which forecloses "what else is it not telling me". It costs one line on every refusal; auditability over convenience is the SPEC's stated tiebreaker.
+
+**The slots figure carries two numbers, not one** (added 2026-09-08, FR-37). Since a Team may hold one outstanding bid beyond its free slots, the roster count alone no longer explains the gate — a manager at `Roster Count 10 of 12` may be permitted two more bids or none, depending on what they already hold. Both figures appear on pass and on refusal alike, in the one-branch discipline this panel already keeps:
+
+- Passed: `Slots · Passed — your 2nd of 2 permitted bids; Roster Count would be 10 of 12`
+- Refused on the allowance: `Slots · Refused — this would be your 3rd outstanding bid; 1 free slot permits 2`
+- Refused on the precondition: `Slots · Refused — no free Active/Bench slot, so no bid is permitted`
+
+The three read differently on purpose. **"You are at your allowance" and "you have no room at all" have different remedies** — the first resolves itself when an auction closes, the second lasts the whole auction — and a manager who cannot tell them apart will either wait for a close that fixes nothing or give up on a wait that would have.
 
 Money and slots are two independent gates (CAP-4/CAP-6 and CAP-19). They carry distinct machine-readable reasons and distinct arithmetic. **Reporting a capacity refusal as a cap refusal is a defect**, and the interface must make the two visibly different, not merely differently worded.
 
@@ -104,7 +114,9 @@ An unbounded Maximum Bid is rendered in words per CAP-4. It appears in the break
 
 Pre-fills the minimum legal Bid. Never offers an amount above the viewer's Maximum Bid. Disables with a stated reason where the figure is below the minimum legal Bid — the state is reachable straight from import, so it must be visible on arrival rather than discovered at submission.
 
-**No control exists to cancel, edit, or lower an accepted Bid.** Not disabled — absent.
+**The allowance bid is named before it is placed, not after it is lost** (added 2026-09-08, FR-11/FR-40). When the bid about to be submitted would be the Team's allowance bid — one beyond its free slots — the control says so above the confirm step, in words and without alarm: *"This is your 2nd of 2 permitted bids. If you win a player before this auction closes, this bid is cancelled and the next highest bid leads."* Stated once, at the moment of the decision. It is not a warning dialog, not a checkbox, and not repeated on every subsequent view — a manager who understood it the first time should not be nagged, and a manager who did not should not meet the rule for the first time as a loss.
+
+**No control exists to cancel, edit, or lower an accepted Bid.** Not disabled — absent. The **system** can cancel one under FR-40, and that asymmetry is deliberate and worth stating plainly wherever it shows: a manager cannot withdraw a bid, and the app can. Presenting the cancellation as anything the manager did, chose, or could have avoided would be false.
 
 Submission is a deliberate two-part act: enter an amount, then confirm. One-tap raising is forbidden.
 
@@ -112,11 +124,15 @@ Submission is a deliberate two-part act: enter an amount, then confirm. One-tap 
 
 Present on every surface. Recomputes within one second of any Bid, Auction Close or override. Doubles as navigation.
 
+**It carries the allowance beside the roster** (added 2026-09-08). `Roster 9 of 12` alone stopped answering "can I bid on this" the moment the allowance existed, so the strip reads `Roster 9 of 12 · 2 of 4 bids` — commitments held against commitments permitted. A Team at its allowance shows the figure at parity (`4 of 4 bids`) and that is the whole signal; no colour, no badge, no warning treatment. It is a fact about the manager's own position, not a judgement about it, and the strip is the one surface every screen inherits — a nag here would be a nag everywhere.
+
 ### Commissioner control
 
 Visible only to the Commissioner, attached to the object being acted on. Distinguished from Manager controls by four independent differences — never filled, dashed border, its own recessed ground behind a dashed rule, and a persistent *"visible only to you"* label. See [mockups/Commissioner.dc.html](./mockups/Commissioner.dc.html).
 
 **No Commissioner act is ever a single tap.** Every one opens a reason sheet that shows before → after for each affected value including both Clocks, states any non-obvious downstream consequence in words, and requires free text with no default and no skip. The commit control on that sheet is itself dashed — even the confirmation is not a Manager button.
+
+**The converse is not true: not every sheet is a Commissioner act.** The Roster Move (FR-44) is a **Manager** act on their own Team, and it carries a confirmation sheet of its own — same before → after, same consequence-in-words, no reason field, solid commit control. See DESIGN.md's *Manager confirmation sheet*. Conflating the two would put a dashed referee control in the middle of a Manager's ordinary flow, which is exactly what the four differences exist to prevent.
 
 Overrides are refused once the auction is archived. The Commissioner's own Team is subject to every ordinary rule, and the ordinary Manager controls on it behave exactly as they do for anyone else.
 
@@ -124,7 +140,9 @@ Overrides are refused once the auction is archived. The Commissioner's own Team 
 
 The destination the IA has always listed and nothing specified until CAP-20 arrived. It answers one question — *who else can actually chase this player* — for all thirty Teams at once.
 
-**Row shape.** Team name and Manager(s) per the naming rule, then `Roster 9 of 12`, minor-league occupancy as `2 of 3`, Injury Reserve shown and visibly outside the twelve, Cap Space, Committed Bids, Available Cap Space, and Nomination Slot status. Every figure is one CAP-10 publishes for every Team; the index contributes adjacency, not access.
+**Row shape.** Team name and Manager(s) per the naming rule, then `Roster 9 of 12`, **outstanding bids against the allowance as `2 of 4 bids`** with open lottery entries counted separately, minor-league occupancy as `2 of 3`, Injury Reserve shown and visibly outside the twelve, Cap Space, Committed Bids, Available Cap Space, and Nomination Slot status. Every figure is one CAP-10 publishes for every Team; the index contributes adjacency, not access.
+
+The bids column is not decoration. This screen exists to answer *who else can actually chase this player*, and since 2026-09-08 the roster column alone answers it wrongly in both directions — a Team at `Roster 11 of 12` may have two bids in flight and no capacity left, while a Team that looks fuller may have just had one cancelled. Publishing slots without commitments would leave the index confidently misleading about its own question. Lottery entries are shown apart because they are governed by a different rule and consume no allowance; folding them into one figure would imply a ceiling that does not exist.
 
 **The viewer's own Team is marked and not moved.** No pinning to the top, no exemption from the sort. A manager should have to find themselves in the ordering, because seeing where you sit is the whole function of the screen and a pinned row quietly answers a different question.
 
@@ -161,6 +179,20 @@ Readable by any Manager, filterable by Team, Player and event type, exportable. 
 ### Viewer-relative states
 
 **You lead** · **Outbid** · **Contender** (in a lottery) · **Not involved**. Each carries a word and a shape. `{colors.attention}` marks Outbid only.
+
+### Cancelled and restored
+
+*(Added 2026-09-08 with FR-40. Three parties see one event, and they need three different things from it.)*
+
+**The manager whose bid was cancelled.** The notice leads with the **cause, not the effect**, because the effect without the cause reads as a malfunction: *"You won Jalen Duren, which filled your last roster spot. Your $2.0M bid on Marcus Carter was cancelled — you had no slot left to place him in."* Then the state: the $2.0M is released and back in Available Cap Space, and Marcus Carter now leads to another Team. **No apology and no alarm treatment.** The app did what the rules say and the manager gained a player; framing it as a loss, or as an error, would misdescribe a win. Equally, no congratulation — pairing "you won" with "we took something" in a cheerful voice is worse than either alone.
+
+**The restored manager.** They stopped watching this auction, possibly days ago. The notice has to re-establish context before it delivers news: *"You lead Marcus Carter again at $1.5M. The bid above yours was cancelled when that Team's roster filled."* Then the two things they need to act: **what it costs them now** ($1.5M re-committed against their cap) and **how long they have** — the clock did not reset, so it may be minutes. A restored manager finding out at expiry that they won a player they had forgotten bidding on is the failure mode this notice exists to prevent.
+
+**The league.** One line in the channel, stating the fact and its cause, in the same register as every other broadcast. The cancelled Team is named without editorial: no "unfortunately", no "had to be".
+
+**On the auction itself,** the cancelled bid stays in the visible history, struck through and labelled *cancelled*, with the win that caused it named. It is not deleted, hidden, or quietly reordered — a manager scrolling the history must be able to see that the bid was real, that it led, and why it stopped leading. This is the same posture the Audit Log takes toward a voided bid, with one difference the copy must carry: **a void says someone decided this bid should not have stood; a cancellation says nothing of the kind.** The bid was good. The slot went away.
+
+**Where nothing survives** and the auction returns to Awaiting Opening Bid, the board shows it as an unbid nomination again — the state it already has a treatment for — rather than inventing a "restarted" state. The history remains, so the auction reads as one a Team led and then did not, which is what happened.
 
 ### Phase transitions
 
@@ -277,7 +309,7 @@ The Auction Clock never pauses for hours of day. The interface states this plain
 
 1. **Discord notifications surface first.** The app is entered *from* Discord, not opened cold. An outbid mention landed within 60 seconds of the outbidding Bid.
 2. The link lands them on **Your Positions**: what they won overnight, what they were outbid on, which lotteries they are still a Contender in.
-3. They were outbid on Jalen Duren at $14.5M. They check the persistent strip — **Maximum Bid $14.0M, Roster 9 of 12**. They cannot re-enter, and the Auction says so in words rather than letting them find out by pressing a button.
+3. They were outbid on Jalen Duren at $14.5M. They check the persistent strip — **Maximum Bid $14.0M, Roster 9 of 12 · 2 of 4 bids**. They cannot re-enter, and the Auction says so in words rather than letting them find out by pressing a button.
 4. They open the **Bid Board** and filter to centres, comparing candidates on the metadata line — real team, position, existing salary and length. The app arranges; it does not advise. There is no "similar players" suggestion and no recommended amount.
 5. Their **Nomination Slot** is free. They nominate a comparable free agent — not because they want him, but to pull competing money away from the player they do want. The app has no opinion about that either, which is exactly what makes the move worth making.
 6. They go to work. The auction continues without them.
@@ -291,7 +323,7 @@ The Auction Clock never pauses for hours of day. The interface states this plain
 1. They type $15.0M on Jalen Duren.
 2. **Refused at submission.** Nothing was accepted and reversed; nothing appears in the Bid Board or the Audit Log as valid.
 3. The screen states the delta — $1.0M over — and reassures that nothing was committed.
-4. **Both gates report.** Cap refused; Slots passed, Roster Count would have been 10 of 12. Every check ran; this is the only obstacle.
+4. **Both gates report.** Cap refused; Slots passed — their 2nd of 2 permitted bids, Roster Count would have been 10 of 12. Every check ran; this is the only obstacle.
 5. The full arithmetic sums, timestamped, in figures they can verify by hand.
 6. The bid control is disabled, with the reason stated: the next legal bid is $15.0M and their Maximum Bid is $14.0M.
 
@@ -324,6 +356,19 @@ The Auction Clock never pauses for hours of day. The interface states this plain
 > **The climax is step 4** — thirty people waking up to an app that has changed shape without anyone touching it. It has to be immediately obvious what happened and what is now being asked, because the one thing nobody will do is read an explanation.
 
 ---
+
+### 6. The bid that was taken away — the rule most likely to be read as a bug
+
+**A manager in Denver, mid-morning, four days in.** They have one roster spot left and two players they want.
+
+1. They lead **Marcus Carter at $2.0M**. They go to bid on **Tyrese Maxey** as well. The bid control tells them, before they confirm: *"This is your 2nd of 2 permitted bids. If you win a player before this auction closes, this bid is cancelled and the next highest bid leads."* They read it, decide the double chase is worth it, and confirm.
+2. Overnight, **Maxey closes first** and they win him. Their roster fills.
+3. The Discord mention that wakes them leads with the win: *"You won Tyrese Maxey at $7.5M, which filled your last roster spot. Your $2.0M bid on Marcus Carter was cancelled — you had no slot left to place him in."*
+4. They open **Your Positions**. Maxey is in the won column. Carter is gone from their leading column, and the $2.0M is back in Available Cap Space. Nothing has to be reconciled by hand.
+5. They open the Carter auction out of curiosity. Their bid is **still there in the history**, struck through and labelled *cancelled*, naming the Maxey win as the cause. Another Team leads at $1.5M.
+6. They are annoyed at the trade-off they knowingly took, not at the app.
+
+> **The climax is step 1, not step 3.** The notice in step 3 is well-written and it is not what does the work — by then the outcome is fixed and the only question is whether the manager was ambushed. Step 1 is where that is decided. A product that explains this rule beautifully *after* it fires has already failed; the entire job is to have said it once, plainly, at the moment the manager chose to accept it. This is the one flow in the product where the interface's obligation is almost entirely discharged before anything happens.
 
 ## Open items
 

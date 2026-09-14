@@ -1,3 +1,4 @@
+import { CORE_VERSION } from '../../src/lib/core/constants.ts';
 import { describe, expect, it } from 'vitest';
 
 import { IMPORT_PROMOTED_EVENT as WRITER_IMPORT_PROMOTED_EVENT } from '../../src/lib/server/import-promotion.ts';
@@ -149,7 +150,7 @@ function logEvent(seq: number, type: string, payload: unknown): QueryResultRow {
 		seq,
 		occurred_at: new Date('2026-08-25T08:00:00.000Z'),
 		schema_version: 1,
-		core_version: 1,
+		core_version: CORE_VERSION,
 		manager_id: 'm-1',
 		team_id: 't-00',
 		event_type: type,
@@ -188,7 +189,7 @@ describe('openAuction — ready and confirmed', () => {
 		// The database clock, read once by the shell (AD-3) — never Date.now().
 		expect(event?.occurredAt).toBe(NOW.toISOString());
 		expect(event?.schemaVersion).toBe(1);
-		expect(event?.coreVersion).toBe(1);
+		expect(event?.coreVersion).toBe(CORE_VERSION);
 		expect(harness.state.committed).toBe(true);
 		expect(harness.state.released).toBe(1);
 	});

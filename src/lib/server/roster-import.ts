@@ -323,14 +323,23 @@ async function writeOutcome(
 				row.playerName,
 				row.capHit,
 				row.rosterSlotKind,
-				row.contractYearsRemaining
+				row.contractYearsRemaining,
+				// **Seven columns since Story 7.8, and the stride moved with
+				// them.** `rookie_scale_round` is nullable and `null` is the
+				// ordinary case, so it is written as the adapter parsed it and
+				// never defaulted — a `0` here would invent a draft round. The
+				// tuple width, the `at` stride and the `$n` run below are one
+				// fact stated three times, which is why they are changed
+				// together or not at all.
+				row.rookieScaleRound
 			);
-			const at = i * 6;
-			return `($${String(at + 1)}, $${String(at + 2)}, $${String(at + 3)}, $${String(at + 4)}, $${String(at + 5)}, $${String(at + 6)})`;
+			const at = i * 7;
+			return `($${String(at + 1)}, $${String(at + 2)}, $${String(at + 3)}, $${String(at + 4)}, $${String(at + 5)}, $${String(at + 6)}, $${String(at + 7)})`;
 		});
 		await client.query(
 			`insert into import_staged_rosters
-				(team_id, fantrax_player_id, player_name, cap_hit, roster_slot_kind, contract_years_remaining)
+				(team_id, fantrax_player_id, player_name, cap_hit, roster_slot_kind,
+				 contract_years_remaining, rookie_scale_round)
 			values ${tuples.join(', ')}`,
 			values
 		);

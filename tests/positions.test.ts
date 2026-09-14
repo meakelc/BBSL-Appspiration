@@ -24,25 +24,26 @@ import {
 	EMPTY_POSITIONS_HEADING,
 	EMPTY_POSITIONS_STATEMENT,
 	GROUP_HEADINGS,
+	POSITIONS_WON_LABEL,
 	POSITIONS_GROUP_ORDER,
 	emptyPositionsSentence,
 	leadCommitmentSentence,
 	nominationSlotSentence,
 	positionsFor,
 	reEntryFor,
-	reEntrySentence,
-	wonCardSentence
+	reEntrySentence
 } from '../src/lib/core/positions.ts';
 import type { ReEntry } from '../src/lib/core/positions.ts';
-import { AUCTION_PATH_PREFIX } from '../src/lib/core/auction-link.ts';
+import { AUCTION_PATH_PREFIX, auctionPathFor } from '../src/lib/core/auction-link.ts';
 import { VIEWER_STATE_ICONS, VIEWER_STATE_LABELS } from '../src/lib/core/board.ts';
 import type { BoardMetadata } from '../src/lib/core/board.ts';
 import { MINIMUM_BID, SALARY_CAP } from '../src/lib/core/constants.ts';
 import { parseMoney } from '../src/lib/core/money.ts';
 import {
+	BID_CANCELLED_EVENT,
 	BID_PLACED_EVENT,
 	INITIAL_AUCTIONS,
-	MINIMUM_BID_CONTENTION_LABEL,
+	MINIMUM_LOTTERY_LABEL,
 	auctionForPlayer,
 	auctionsReducer
 } from '../src/lib/core/projection/auctions.ts';
@@ -295,18 +296,25 @@ describe('Won — every Auction the viewer’s Team has won this phase', () => {
 		expect(card?.winningAmountLabel).toBe('$11.0M');
 		expect(card?.placement).toBe('active_bench');
 		expect(card?.closedAt).toBe(CLOSES);
-		// **No link.** A close DELETES the Player from `auctionsReducer`, and
-		// the Auction route 404s on that null read, so `auctionPathFor` on a
-		// won Player is a link to a refusal — in the FIRST group on the
-		// landing page. A review finding; `deferred-work.md`'s spec-3-6 entry
-		// owns the closed-Auction surface that will restore it.
-		expect(card?.href).toBeNull();
+		// **The link, restored.** It was `null` while a closed Auction 404'd:
+		// `auctionPathFor` on a won Player was a link to a refusal, in the
+		// FIRST group on the landing page. The route renders the Closed state
+		// now, so the link resolves — and it resolves to the one surface
+		// carrying what this card cannot, the revealed seed and the ordered
+		// Contender list of a lottery. Never a literal: `auctionPathFor` is the
+		// one place that path shape is spelled.
+		expect(card?.href).toBe(auctionPathFor('p-1'));
+		expect(card?.href).toBe(`${AUCTION_PATH_PREFIX}p-1`);
 	});
 
-	it('states the placement AND the Cap Hit, because they are independent (AD-23)', () => {
+	it('carries the placement AND the Cap Hit as facts, independent of each other (AD-23)', () => {
 		// A minors placement carries a $0 Cap Hit while the winning amount
-		// stands unchanged, so a card stating only the amount would let a $0
-		// charge read as an $8.5M one.
+		// stands unchanged. The card no longer STATES the pair — the placement
+		// sentence was removed as redundant on a standard close, where the Cap
+		// Hit simply repeats the figure above it — so what is asserted here is
+		// that the two remain separate FIELDS on the card and neither was
+		// collapsed into the other. A surface that wants to say so again has
+		// both to say it from.
 		const minors = build(
 			[
 				nominated('p-2', 'Santi Aldama', RIVAL),
@@ -316,9 +324,11 @@ describe('Won — every Auction the viewer’s Team has won this phase', () => {
 		);
 		const card = minors.won[0];
 		expect(card?.winningAmountLabel).toBe('$8.5M');
-		expect(card?.sentence).toBe(wonCardSentence('minor_league', parseMoney(0)));
-		expect(card?.sentence).toContain('Minor League Slot');
-		expect(card?.sentence).toContain('$0.0M');
+		expect(card?.placement).toBe('minor_league');
+		expect(card?.capHit).toBe(parseMoney(0));
+		// The two are genuinely independent: the Cap Hit is $0 and the winning
+		// amount is not, and neither field was derived from the other.
+		expect(card?.winningAmount).toBe(parseMoney(8_500_000));
 	});
 
 	it('orders newest closedAt first, tie-broken totally on the Player id', () => {
@@ -342,7 +352,12 @@ describe('Won — every Auction the viewer’s Team has won this phase', () => {
 
 	it('states no celebration', () => {
 		const positions = build(events);
-		expect(positions.won[0]?.sentence).not.toMatch(/congratul|well done|nice|!/i);
+		// The won card prints a name, a figure and an instant, and the group
+		// above it is called `Won`. None of those may congratulate: the app
+		// states what happened.
+		expect(GROUP_HEADINGS.won).not.toMatch(/congratul|well done|nice|!/i);
+		expect(POSITIONS_WON_LABEL).not.toMatch(/congratul|well done|nice|!/i);
+		expect(positions.won[0]?.playerName).not.toMatch(/congratul|well done|!/i);
 	});
 });
 
@@ -575,8 +590,9 @@ describe('Contending — a live Minimum-Bid Contention the viewer has joined', (
 		expect(positions.contending).toHaveLength(1);
 		const card = positions.contending[0];
 		expect(card?.contention).toBe('minimum_bid');
-		// The glossary term from the fold that owns it, never respelled.
-		expect(card?.contentionLabel).toBe(MINIMUM_BID_CONTENTION_LABEL);
+		// The contention's card name from the fold that owns it, never
+		// respelled — the same string the Bid Board card prints.
+		expect(card?.contentionLabel).toBe(MINIMUM_LOTTERY_LABEL);
 		expect(card?.stateLabel).toBe(VIEWER_STATE_LABELS.contender);
 		expect(card?.stateIcon).toBe(VIEWER_STATE_ICONS.contender);
 		expect(card?.contenderCount).toBe(2);
@@ -715,5 +731,127 @@ describe('a viewer bound to no Team', () => {
 		expect(answer.gateRows).toEqual([]);
 		expect(answer.maximumBidLabel).toBeNull();
 		expect(answer.sentence).toContain('not bound to a Team');
+	});
+});
+
+
+// --- A leaderless Auction (Story 10.3, FR-40) -----------------------------
+
+/** A `BidCancelled` naming one Bid's `seq`, as `rules/close.ts` writes it. */
+function cancelledBid(
+	fantraxPlayerId: string,
+	cancelledSeq: string,
+	teamId: string,
+	amount: number
+): AppendedEvent {
+	return event(
+		BID_CANCELLED_EVENT,
+		{
+			fantraxPlayerId,
+			playerName: `Player ${fantraxPlayerId}`,
+			cancelledSeq,
+			teamId,
+			teamName: `Team ${teamId}`,
+			managerId: `m-${teamId}`,
+			amount,
+			wasContentionEntry: false,
+			causeFantraxPlayerId: 'p-cause',
+			causePlayerName: 'Dex Brooks',
+			causeTeamId: teamId,
+			restoration: null
+		},
+		'2026-08-27T10:00:00.000Z'
+	);
+}
+
+describe('a leaderless Auction holds no position — for EITHER Team (Story 10.3)', () => {
+	/**
+	 * The §10 example 31 shape, on this page: the viewer leads at $4,000,000
+	 * over a rival's standing $2,000,000, and the viewer's Bid is then
+	 * cancelled by a Close elsewhere. Nothing leads until Story 10.4 restores
+	 * the rival, and every card in this module carries a price.
+	 */
+	function leaderlessLog() {
+		nextSeq = 0;
+		return [
+			nominated('p-1', 'Ellis Carter', 't-nom'),
+			bid('p-1', RIVAL, 2_000_000, '2026-08-26T09:00:00.000Z'),
+			bid('p-1', VIEWER, 4_000_000, '2026-08-26T10:00:00.000Z'),
+			// The viewer's own Bid — `seq` 3 — withdrawn.
+			cancelledBid('p-1', '3', VIEWER, 4_000_000)
+		];
+	}
+
+	it('leaves the fold leaderless with both Bids still standing in history', () => {
+		// The premise, stated before the page is asked about it: this is the
+		// state, not a state the test invented.
+		const auctions = project(leaderlessLog()).auctions;
+		const auction = auctionForPlayer(auctions, 'p-1');
+
+		expect(auction?.leadingBid).toBeNull();
+		expect(auction?.bids).toHaveLength(2);
+		// The clock is cleared: the cancellation recorded no restoration, so
+		// there is no leader — and since Story 10.4 an Auction with no leader
+		// has no clock either, however many Bids are still standing. The rival's
+		// $2,000,000 is one of them, and it is emphatically not leading.
+		expect(auction?.closesAt).toBeNull();
+	});
+
+	it('gives the cancelled ex-leader no card at all', () => {
+		// The Team whose Bid was cancelled. It holds nothing here: there is no
+		// price to state and no lead to report, and the board and the Auction
+		// page are where it still sees the Auction meanwhile.
+		const groups = build(leaderlessLog(), { viewerTeamId: VIEWER });
+
+		expect(groups.youLead).toEqual([]);
+		expect(groups.outbid).toEqual([]);
+		expect(groups.contending).toEqual([]);
+	});
+
+	it('gives the rival whose own Bid still stands no card either', () => {
+		// The other half, and the one that is easy to get wrong: the rival was
+		// never cancelled and its $2,000,000 is still in the history — but
+		// nothing leads, so there is no price for its card either, and it must
+		// not be shown as leading a Player nobody currently leads.
+		const groups = build(leaderlessLog(), { viewerTeamId: RIVAL });
+
+		expect(groups.youLead).toEqual([]);
+		expect(groups.outbid).toEqual([]);
+		expect(groups.contending).toEqual([]);
+	});
+
+	it('comes back the moment a Bid leads again', () => {
+		// The skip is about "no current price", not about the cancellation —
+		// so a fresh Bid above the survivor restores the card. (Story 10.4
+		// gets there the other way, by restoring the survivor itself.)
+		const groups = build(
+			[...leaderlessLog(), bid('p-1', VIEWER, 5_000_000, '2026-08-27T11:00:00.000Z')],
+			{ viewerTeamId: VIEWER }
+		);
+
+		expect(groups.youLead.map((card) => card.fantraxPlayerId)).toEqual(['p-1']);
+		expect(groups.youLead[0]?.price).toBe(5_000_000);
+	});
+
+	it('keeps a Contender’s card when a lottery’s artifact lead is cancelled', () => {
+		// The exception that needs no branch. In a lottery the lead is a fold
+		// artifact — every Contender holds the identical flat amount — so
+		// cancelling the opener moves it to the next surviving join and the
+		// contention goes on. The viewer joined and is still in it.
+		nextSeq = 0;
+		const groups = build(
+			[
+				nominated('p-lot', 'Ray Anderson', 't-nom'),
+				bid('p-lot', RIVAL, MINIMUM_BID, '2026-08-26T09:00:00.000Z'),
+				bid('p-lot', VIEWER, MINIMUM_BID, '2026-08-26T10:00:00.000Z'),
+				// The OPENER's Bid, which is the fold's artifact leader.
+				cancelledBid('p-lot', '2', RIVAL, MINIMUM_BID)
+			],
+			{ viewerTeamId: VIEWER }
+		);
+
+		expect(groups.contending.map((card) => card.fantraxPlayerId)).toEqual(['p-lot']);
+		expect(groups.contending[0]?.price).toBe(MINIMUM_BID);
+		expect(groups.contending[0]?.closesAt).toBe(CLOSES);
 	});
 });

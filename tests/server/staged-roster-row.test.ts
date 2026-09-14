@@ -1,0 +1,75 @@
+/**
+ * One staged roster row, mapped to the core's domain shape — and the guard
+ * that stands between the two (Stories 1.7, 7.6).
+ *
+ * What this file pins is a NON-widening. `RosterSlotKind` gained a fourth
+ * member, `dead_money`, and `KNOWN_SLOT_KINDS` is a `readonly
+ * RosterSlotKind[]` rather than a total record — so it typechecks at three
+ * entries and at four alike, and nothing would have complained had the fourth
+ * been added here. It must not be: Dead Money is produced by a Commissioner
+ * Drop, never read off a Fantrax export, and `import_staged_rosters`'s own
+ * three-value check constraint is what says so in the database. Widening this
+ * array would make Dead Money importable and remove that backstop.
+ */
+
+import { describe, expect, it } from 'vitest';
+
+import { KNOWN_SLOT_KINDS, toParsedRosterRow } from '../../src/lib/server/staged-roster-row.ts';
+
+function staged(overrides: Record<string, unknown> = {}) {
+	return {
+		fantrax_player_id: '*P1*',
+		player_name: 'Alice',
+		cap_hit: '2000000',
+		roster_slot_kind: 'active_bench',
+		contract_years_remaining: 2,
+		...overrides
+	};
+}
+
+describe('toParsedRosterRow — the three importable slot kinds, and no fourth', () => {
+	it('maps the three kinds a roster export can state', () => {
+		for (const kind of ['active_bench', 'injury_reserve', 'minor_league'] as const) {
+			expect(toParsedRosterRow(staged({ roster_slot_kind: kind })).rosterSlotKind).toBe(kind);
+		}
+	});
+
+	it('holds exactly three kinds, and dead_money is not one of them', () => {
+		expect([...KNOWN_SLOT_KINDS].sort()).toEqual([
+			'active_bench',
+			'injury_reserve',
+			'minor_league'
+		]);
+		expect(KNOWN_SLOT_KINDS).not.toContain('dead_money');
+	});
+
+	it('THROWS on a staged dead_money row, naming the value it refused', () => {
+		// Corruption or a wiring mistake, never a rule violation — so it
+		// throws (AD-1), and inside the promotion transaction the throw rolls
+		// the whole promotion back. Dropping the row would understate a Team's
+		// Cap Hit total instead.
+		expect(() => toParsedRosterRow(staged({ roster_slot_kind: 'dead_money' }))).toThrow(
+			/not a known slot kind.*dead_money/
+		);
+	});
+
+	it('reads the rookie-scale round back off the staged row (Story 7.8)', () => {
+		// `import_staged_rosters.rookie_scale_round` arrived with
+		// `20260911000000_rookie_scale_round.sql`. Until then this was a
+		// hardcoded `null` and FR-43's exception was unreachable.
+		expect(toParsedRosterRow(staged({ rookie_scale_round: 2 })).rookieScaleRound).toBe(2);
+		expect(toParsedRosterRow(staged({ rookie_scale_round: 1 })).rookieScaleRound).toBe(1);
+	});
+
+	it('reads an absent or null round as "an ordinary Contract", never as 0', () => {
+		// `null` means exactly what the adapter emits for a plain `2031` cell.
+		// A `Number(null)` of `0` would invent a draft round nobody was drafted
+		// in — and a row staged before the migration reads `null` here, which
+		// is why the remedy for already-imported rosters is a re-import.
+		expect(toParsedRosterRow(staged()).rookieScaleRound).toBeNull();
+		expect(toParsedRosterRow(staged({ rookie_scale_round: null })).rookieScaleRound).toBeNull();
+		expect(
+			toParsedRosterRow(staged({ rookie_scale_round: 'not a round' })).rookieScaleRound
+		).toBeNull();
+	});
+});

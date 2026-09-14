@@ -9,7 +9,9 @@
  * the only Contender with no branch, no special case and no second
  * `ClosedWinner` kind. Story 3.4 shaped `ClosedWinner` as a union of one
  * anticipating that this example might want its own; it does not, and a case
- * here would state something the arithmetic already states.
+ * here would state something the arithmetic already states. (Story 10.5 did
+ * add the second kind, for the opposite list: a lottery with NOBODY left in
+ * it, which no arithmetic can state.)
  *
  * **"The draw is recorded with a one-team list" is the half that IS written.**
  * The reveal carries a `contenders` array of length one rather than omitting
@@ -140,14 +142,27 @@ function theDraw() {
 	if (auction === null) throw new Error('example 11: the lottery did not fold');
 
 	const drawnWinner = drawnWinnerFor(auction, SEED);
+	// One Contender is still a Contender. Story 10.5's `undrawn` case is for a
+	// list with NOBODY in it, which is a different example entirely.
+	if (drawnWinner.kind !== 'drawn') throw new Error('example 11: the lottery drew nobody');
 	const state: CloseState = {
 		auction,
 		nomination: nominationForPlayer(fold(INITIAL_NOMINATIONS, log, nominationsReducer), 'p-1'),
 		playerIsMinorLeagueEligible: false,
 		minorLeagueOccupied: 0,
-		drawnWinner
+		// **Story 10.3's cascade inputs.** `auctions` is empty here, so the
+		// winning Team holds no other commitment and FR-40's cascade has
+		// nothing to cancel whichever way the figures beside it go — which is
+		// what keeps this example about the thing it is about.
+		auctions: { byPlayer: {} },
+		capSpace: parseMoney(0),
+		rosterCount: 0,
+		isMinorLeagueEligible: () => false,
+		playerNameFor: (playerId: string) => playerId,
+		drawnWinner,
+		rosterFiguresFor: () => null
 	};
-	return { log, auction, drawnWinner, decided: decideClose(state, auction.closesAt, drawnWinner) };
+	return { log, auction, drawnWinner, decided: decideClose(state, FIXED_CLOSE, drawnWinner) };
 }
 
 function theWholeThing(): readonly AppendedEvent[] {
@@ -206,11 +221,14 @@ describe('§10 example 11 — the single-contender lottery', () => {
 		expect(closed.contention).toBe('minimum_bid');
 	});
 
-	it('releases Team D’s Nomination Slot on the same close', () => {
+	it('frees the board seat on the close, and Team D’s Slot not at all', () => {
+		// Team E was the only Contender and won. Team D nominated the Player
+		// and did not, so since FR-9 was amended their Slot stays spent: the
+		// close frees the seat, and only a win frees a Slot.
 		const after = fold(INITIAL_NOMINATIONS, theWholeThing(), nominationsReducer);
 
-		expect(nominationForTeam(after, 't-d')).toBeNull();
 		expect(nominationForPlayer(after, 'p-1')).toBeNull();
+		expect(nominationForTeam(after, 't-d')?.fantraxPlayerId).toBe('p-1');
 	});
 
 	it('leaves the one-team draw readable after the Auction has gone', () => {
@@ -220,7 +238,7 @@ describe('§10 example 11 — the single-contender lottery', () => {
 
 		const draw = drawForPlayer(fold(INITIAL_DRAWS, log, drawsReducer), 'p-1');
 		expect(draw?.contenders).toEqual(['t-e']);
-		expect(draw?.winningTeamId).toBe('t-e');
+		expect(draw?.kind === 'drawn' ? draw.winningTeamId : null).toBe('t-e');
 		expect(draw?.seed).toBe(SEED);
 	});
 });

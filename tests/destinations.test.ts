@@ -79,11 +79,35 @@ const EXPECTED: Record<
 			'audit-log',
 			'notification-settings'
 		],
-		commissionerOnly: ['pause-resume', 'operational-health']
+		// The three roster acts, in the catalog's own order. FR-41 and FR-44
+		// permit them in the Auction Phase and the Contract Assignment Phase and
+		// nowhere else, so all three are absent from Setup and Archived.
+		//
+		// **`roster-move` is here rather than in the Manager list, and that is an
+		// operator decision rather than FR-44's.** FR-44 makes the Move a
+		// Manager's own act on their own Team; the Move shipped Commissioner-only
+		// while the Manager half waits (see `deferred-work.md`). Moving the id
+		// back to the `manager` array above is half of re-enabling it — the
+		// other half is the one `commissionerOnly` argument in each phase list.
+		//
+		// `pause-resume` and `operational-health` were removed on 2026-09-12:
+		// both were catalog rows with no route behind them, so every click was a
+		// 404. They return with their surfaces (Story 7.4, Epic 8).
+		// Story 7.9 adds `divergence` — the surface that says one of the three
+		// acts above is NEEDED. It is live in exactly the two phases they are, and
+		// absent from Setup and Archived for the same reason.
+		commissionerOnly: ['roster-move', 'roster-trade', 'roster-drop', 'divergence']
 	},
 	'Contract Assignment': {
 		manager: ['contract-assignment', 'teams', 'audit-log'],
-		commissionerOnly: ['assignment-monitoring', 'export-gate']
+		commissionerOnly: [
+			'roster-move',
+			'roster-trade',
+			'roster-drop',
+			'assignment-monitoring',
+			'export-gate',
+			'divergence'
+		]
 	},
 	Archived: {
 		manager: ['bid-board', 'teams', 'audit-log', 'export'],
