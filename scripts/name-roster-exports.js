@@ -37,39 +37,50 @@ import { readdirSync, readFileSync, mkdirSync, writeFileSync, existsSync } from 
 import { join } from 'node:path';
 
 /**
- * The download order, as stated by the Commissioner on 2026-09-05: the file
- * with no `(n)` suffix is their own Team, and `(1)` through `(29)` are the
- * remaining twenty-nine alphabetically **by full city name**.
+ * The download order, as stated by the Commissioner on **2026-09-14** for the
+ * setup-day export: **plain alphabetical by full team name, with no special
+ * first file.** The unsuffixed export is Atlanta, `(1)` is Boston, and so on
+ * through `(29)` Washington.
  *
- * By city, not by abbreviation — the two differ, and the difference is not
- * cosmetic. By abbreviation `BKN` precedes `BOS`; by city Boston precedes
- * Brooklyn. Getting that backwards silently swaps two Teams' rosters, which is
- * exactly the failure this file's header warns about.
+ * **This CHANGED on 2026-09-14 and the change is the dangerous kind.** The
+ * 2026-09-05 pilot download put the Commissioner's own Team (Utah Jazz) in the
+ * unsuffixed slot and ran the other twenty-nine alphabetically from `(1)`. The
+ * fresh export does not: Utah sits in its alphabetical position between Toronto
+ * and Washington like everyone else. Re-running the old list against the new
+ * files would have named thirty files for the wrong Teams — Utah's roster onto
+ * Atlanta, and every Team from Atlanta to Toronto shifted one slot early.
+ *
+ * Nothing in the data would have objected. That is why this list is the only
+ * place the order is written, and why it carries a date.
+ *
+ * By full team name, not by abbreviation — the two differ and the difference is
+ * not cosmetic. By abbreviation `BKN` precedes `BOS`; by name Boston precedes
+ * Brooklyn. The spellings below are the ones Fantrax itself returns from
+ * `getTeamRosters`, so sorting them here and sorting them there agree.
  *
  * Index 0 is the unsuffixed file. Index n is `(n)`.
  */
 const ORDERED_TEAMS = Object.freeze([
-	'Utah Jazz', // the unsuffixed export — the Commissioner's own Team
-	'Atlanta Hawks', // (1)
-	'Boston Celtics', // (2)
-	'Brooklyn Nets', // (3)
-	'Charlotte Hornets', // (4)
-	'Chicago Bulls', // (5)
-	'Cleveland Cavaliers', // (6)
-	'Dallas Mavericks', // (7)
-	'Denver Nuggets', // (8)
-	'Detroit Pistons', // (9)
-	'Golden State Warriors', // (10)
-	'Houston Rockets', // (11)
-	'Indiana Pacers', // (12)
-	'Los Angeles Clippers', // (13)
-	'Los Angeles Lakers', // (14)
-	'Memphis Grizzlies', // (15)
-	'Miami Heat', // (16)
-	'Milwaukee Bucks', // (17)
-	'Minnesota Timberwolves', // (18)
-	'New Orleans Pelicans', // (19)
-	'New York Knicks', // (20)
+	'Atlanta Hawks', // the unsuffixed export
+	'Boston Celtics', // (1)
+	'Brooklyn Nets', // (2)
+	'Charlotte Hornets', // (3)
+	'Chicago Bulls', // (4)
+	'Cleveland Cavaliers', // (5)
+	'Dallas Mavericks', // (6)
+	'Denver Nuggets', // (7)
+	'Detroit Pistons', // (8)
+	'Golden State Warriors', // (9)
+	'Houston Rockets', // (10)
+	'Indiana Pacers', // (11)
+	'Los Angeles Clippers', // (12)
+	'Los Angeles Lakers', // (13)
+	'Memphis Grizzlies', // (14)
+	'Miami Heat', // (15)
+	'Milwaukee Bucks', // (16)
+	'Minnesota Timberwolves', // (17)
+	'New Orleans Pelicans', // (18)
+	'New York Knicks', // (19)
 	// NO Oklahoma City Thunder. This league plays Seattle, and an OKC entry sat
 	// here until 2026-09-12 — the same mistake `seed-league.js` records against
 	// TEAMS, left uncorrected in this file after that one was fixed. It shifted
@@ -78,21 +89,26 @@ const ORDERED_TEAMS = Object.freeze([
 	// named for a Team that does not exist.
 	//
 	// Iteration 2 imported through that list and was corrected by hand
-	// afterwards. `_bmad-output/pilot-2-archive/team_rosters.json` is therefore
-	// evidence rather than assertion: the order below reproduces, for all thirty
-	// Teams, the highest-paid player each Manager confirmed as their own.
+	// afterwards. That correction is no longer what validates this list: the
+	// 2026-09-14 re-export changed the order, so `pilot-2-archive` now attests
+	// to the PREVIOUS arrangement and cannot vouch for this one. What validates
+	// this list is the check described below, run against the fresh files.
 	//
 	// Seattle sorts by FULL NAME — after San Antonio, before Toronto. By
 	// abbreviation SEA would follow SAS too, but that agreement is a coincidence
 	// of these two names and not the rule this list follows.
-	'Orlando Magic', // (21)
-	'Philadelphia 76ers', // (22)
-	'Phoenix Suns', // (23)
-	'Portland Trail Blazers', // (24)
-	'Sacramento Kings', // (25)
-	'San Antonio Spurs', // (26)
-	'Seattle SuperSonics', // (27)
-	'Toronto Raptors', // (28)
+	'Orlando Magic', // (20)
+	'Philadelphia 76ers', // (21)
+	'Phoenix Suns', // (22)
+	'Portland Trail Blazers', // (23)
+	'Sacramento Kings', // (24)
+	'San Antonio Spurs', // (25)
+	'Seattle SuperSonics', // (26)
+	'Toronto Raptors', // (27)
+	// Utah in its alphabetical place. It was index 0 for the pilot download and
+	// is not special any more; this single line is the whole difference between
+	// the two orderings, and it shifts every Team above it by one.
+	'Utah Jazz', // (28)
 	'Washington Wizards' // (29)
 ]);
 
