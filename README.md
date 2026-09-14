@@ -105,6 +105,41 @@ otherwise the integration tests prove things about a version nothing deploys on.
 > and prod in one organisation spend one allowance, and exhaustion stops the
 > tick.
 
+### The API keys
+
+Two are needed: the **publishable** key (`sb_publishable_…`) for
+`PUBLIC_SUPABASE_ANON_KEY`, and the **secret** key (`sb_secret_…`) for
+`SUPABASE_SERVICE_ROLE_KEY`.
+
+> ⚠️ **`supabase projects api-keys` returns the secret key MASKED**, and the
+> mask looks like a key: same `sb_secret_` prefix, plausible length, the tail
+> replaced by `·` characters. Piped into a variable it is accepted everywhere
+> without complaint and fails only when something tries to use it — as
+> `{"message":"Invalid API key"}` from a deployment, with nothing pointing at
+> where the bad value came from.
+>
+> Pass **`--reveal`** to get the real value, or copy it from the dashboard.
+> This cost a wrong `SUPABASE_SERVICE_ROLE_KEY` on the prod production context
+> during Story 9.8, caught before any deploy only because the key was tested
+> against the REST API rather than assumed.
+
+Verify a key rather than trusting it — no deploy required:
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  "https://<ref>.supabase.co/rest/v1/teams?select=name&limit=1" \
+  -H "apikey: $KEY" -H "Authorization: Bearer $KEY"
+```
+
+`200` is a working secret key. `401 Invalid API key` is a wrong or masked
+value. A `42501 permission denied` under the **publishable** key is the
+correct answer, not a fault: AD-16 gives `anon` no privilege anywhere, so that
+refusal proves both that the key is live and that the grants are right.
+
+Netlify marks secret values **write-only** — `env:get` and `env:list` return a
+mask, not the value. So a wrong secret cannot be detected by reading it back
+afterwards; check the key before setting it.
+
 ### The connection string
 
 Dashboard → **Connect** (top bar, not Settings). Take a **pooler** URI:
