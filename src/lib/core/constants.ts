@@ -196,3 +196,48 @@ export const CORE_VERSION = 2;
  * a key anyone else picks.
  */
 export const GLOBAL_WRITE_LOCK_KEY = 0x4242534c00000001n;
+
+/**
+ * How often the Fantrax rosters may be read, at most (Story 7.9, FR-42).
+ *
+ * **This is a rate-limit courtesy to an undocumented third party, and it is
+ * NOT a freshness figure.** `FRESHNESS_WINDOW` and `STALE_WINDOW` above are
+ * chosen against how quickly a Manager should be told the app has lost the
+ * server; this one is chosen against how often it is decent to ask a service
+ * that never agreed to answer us at all. Nothing degrades when an hour passes
+ * without a read: the comparison runs at RENDER against the stored membership,
+ * so the surface is exactly as current as the last read, and it says when that
+ * was.
+ *
+ * It is an interval, never an instant: nothing here reads a clock (AD-3).
+ * `server/divergence.ts` enforces it from the last `fantrax_reads` row rather
+ * than from a timer, so a second invocation inside the hour is skipped however
+ * it arrives — a re-enabled cron job, a hand-called endpoint, two deployments.
+ *
+ * Deliberately NOT on the 10-second tick. That pass closes Auctions under the
+ * global write lock, and hanging a stranger's latency off it would put a third
+ * party in the path of every close.
+ */
+export const DIVERGENCE_READ_INTERVAL = 60 * 60 * 1000;
+
+/**
+ * The share of the League a single comparison may touch before its
+ * plausibility guard trips (Story 7.9, FR-42). A quarter.
+ *
+ * **The DEFAULT, and the one constant in this file the shell may override.**
+ * Everything else here is a league rule that no environment variable edits
+ * (see this module's header). This is not a league rule: it is a tuning knob
+ * over a third party's behaviour, and FR-42 requires it changeable without a
+ * code change. So the default lives here, in the core, where the comparison
+ * that reads it lives — and `server/divergence.ts` may replace it from
+ * `$env/dynamic/private`, passing the effective value in as a PARAMETER.
+ * `core/rules/divergence.ts` never reads configuration and never reads this
+ * constant on its own behalf.
+ *
+ * A quarter rather than a half or a tenth: a real offseason day might see two
+ * or three Teams trade, which is a tenth of thirty and must not trip; nothing
+ * legitimate moves eight Teams at once between two hourly reads, and a payload
+ * that says so is far more likely to be the wrong league id, the wrong period,
+ * or a Fantrax outage answering with somebody else's data.
+ */
+export const DIVERGENCE_VOLUME_FRACTION = 0.25;

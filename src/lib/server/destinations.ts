@@ -143,7 +143,12 @@ const CATALOG: Readonly<Record<LeaguePhase, readonly Destination[]>> = Object.fr
 		// Story 7.7: recording a trade the League agreed elsewhere.
 		destination('roster-trade', 'Trade', '/roster-trade', true),
 		// Story 7.8: recording a release the Team made in Fantrax.
-		destination('roster-drop', 'Drop', '/roster-drop', true)
+		destination('roster-drop', 'Drop', '/roster-drop', true),
+		// Story 7.9: the surface that says an act above is NEEDED. Live in the
+		// same two phases the acts it proposes into are live in, and absent from
+		// Archived for the same reason they are — `requireOverridablePhase`
+		// refuses it a second time there.
+		destination('divergence', 'Fantrax divergence', '/divergence', true)
 	],
 	'Contract Assignment': [
 		destination('contract-assignment', 'Contract Assignment', '/contract-assignment', false),
@@ -155,7 +160,9 @@ const CATALOG: Readonly<Record<LeaguePhase, readonly Destination[]>> = Object.fr
 		destination('roster-trade', 'Trade', '/roster-trade', true),
 		destination('roster-drop', 'Drop', '/roster-drop', true),
 		destination('assignment-monitoring', 'Assignment monitoring', '/assignment-monitoring', true),
-		destination('export-gate', 'Export gate', '/export-gate', true)
+		destination('export-gate', 'Export gate', '/export-gate', true),
+		// Story 7.9, on the same terms as the Auction list above.
+		destination('divergence', 'Fantrax divergence', '/divergence', true)
 	],
 	Archived: [
 		destination('bid-board', 'Bid Board', '/board', false),

@@ -93,7 +93,10 @@ const EXPECTED: Record<
 		// `pause-resume` and `operational-health` were removed on 2026-09-12:
 		// both were catalog rows with no route behind them, so every click was a
 		// 404. They return with their surfaces (Story 7.4, Epic 8).
-		commissionerOnly: ['roster-move', 'roster-trade', 'roster-drop']
+		// Story 7.9 adds `divergence` — the surface that says one of the three
+		// acts above is NEEDED. It is live in exactly the two phases they are, and
+		// absent from Setup and Archived for the same reason.
+		commissionerOnly: ['roster-move', 'roster-trade', 'roster-drop', 'divergence']
 	},
 	'Contract Assignment': {
 		manager: ['contract-assignment', 'teams', 'audit-log'],
@@ -102,7 +105,8 @@ const EXPECTED: Record<
 			'roster-trade',
 			'roster-drop',
 			'assignment-monitoring',
-			'export-gate'
+			'export-gate',
+			'divergence'
 		]
 	},
 	Archived: {

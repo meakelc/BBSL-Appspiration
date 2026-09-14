@@ -341,7 +341,19 @@ describe('scope — exactly one override reaches for this mechanism', () => {
 			// Commissioner's is: it owns half of the mechanism's markup.
 			'src/lib/components/ManagerSheet.svelte',
 			'src/routes/roster-move/+page.server.ts',
-			'src/routes/roster-move/+page.svelte'
+			'src/routes/roster-move/+page.svelte',
+			// Story 7.9's `/divergence` — and it is the first file in this list
+			// that is NOT an override. It reaches exactly ONE of the four names,
+			// `requireOverridablePhase`, because it is a Commissioner-only surface
+			// in the two overridable phases and must be refused once Archived like
+			// the three acts it proposes into. It reaches `requireOverrideReason`,
+			// `reasonSheetView` and `ReasonSheet` nowhere, and that absence is the
+			// story's own argument: a dismissal changes nothing the arithmetic
+			// computes, so putting FR-32's mandatory reason on a "seen it" click
+			// would be auction-grade ceremony over a third party's noise. The
+			// assertion below is what would catch a later edit quietly giving it
+			// one.
+			'src/routes/divergence/+page.server.ts'
 		];
 		const naming = sources().filter((path) =>
 			/buildOverrideRecord|requireOverrideReason|requireOverridablePhase|reasonSheetView|ReasonSheet/.test(
@@ -372,12 +384,20 @@ describe('scope — exactly one override reaches for this mechanism', () => {
 		// Manager is looking at, so each gets a destination of its own rather
 		// than a control placed in context. The list stays exhaustive — a fourth
 		// appearing without this test being edited is one nobody reviewed.
+		//
+		// `/divergence` (Story 7.9) imports `override-guard.ts` and so appears
+		// here, and it is NOT a fourth override: it takes
+		// `requireOverridablePhase` alone, to be refused once Archived exactly as
+		// the three acts it proposes into are. The assertion below it is what
+		// holds that distinction — it reaches no reason sheet and no
+		// `requireOverrideReason`, because a dismissal is not an override.
 		const reaching = routeFiles.filter((path) =>
 			/override-guard|rules\/override|reason-sheet-view|ReasonSheet/.test(
 				readFileSync(join(ROOT, ...path.split('/')), 'utf8')
 			)
 		);
 		expect(reaching.sort()).toEqual([
+			'src/routes/divergence/+page.server.ts',
 			'src/routes/roster-drop/+page.server.ts',
 			'src/routes/roster-drop/+page.svelte',
 			'src/routes/roster-move/+page.server.ts',
@@ -385,6 +405,19 @@ describe('scope — exactly one override reaches for this mechanism', () => {
 			'src/routes/roster-trade/+page.server.ts',
 			'src/routes/roster-trade/+page.svelte'
 		]);
+
+		// And the divergence surface takes the ARCHIVED gate alone. A reason
+		// sheet or a `requireOverrideReason` appearing in it later would be a
+		// fourth override arriving through the one file this list admits for a
+		// different reason.
+		const divergence = readFileSync(
+			join(ROOT, 'src', 'routes', 'divergence', '+page.server.ts'),
+			'utf8'
+		);
+		expect(divergence).toContain('requireOverridablePhase');
+		expect(divergence).not.toContain('requireOverrideReason');
+		expect(divergence).not.toContain('reasonSheetView');
+		expect(divergence).not.toContain('ReasonSheet');
 	});
 
 	it('leaves the Epic 1 Commissioner stylesheet free of reason-sheet text', () => {
