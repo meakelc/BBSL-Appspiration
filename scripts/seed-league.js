@@ -154,7 +154,14 @@ const MANAGERS = Object.freeze([
 	['BKN', 'rc73', '404376181010333708', false],
 	['CHA', 'Alex', '693636065717780500', false],
 	['CHI', 'Tukeduke', '644271167200297023', false],
-	['GSW', 'gauchovic', '1131102481963831296', false],
+	// gauchovic is a MEMBER of the league server under one Discord account and
+	// SIGNS IN with another, so this is the login snowflake and deliberately
+	// does not match the guild member of the same name. The guild id is the
+	// mention address and lives in `managers.discord_mention_user_id` — see
+	// 20260917000000_manager_discord_mention_user_id.sql and
+	// scripts/set-discord-mention-id.js. Do NOT 'correct' this to the guild id:
+	// `discord_user_id` is what authentication matches, and nothing else.
+	['GSW', 'gauchovic', '735975796551712839', false],
 	['HOU', 'KDizzle', '698660868413587466', false],
 	['IND', 'SteveX', '611987528236400650', false],
 	['LAL', 'msaggio', '1261028905608020000', false],
@@ -165,7 +172,7 @@ const MANAGERS = Object.freeze([
 	['NOP', 'Captain Sprinkles', '606885233735893012', false],
 	['NYK', 'DaddyLightYears', '388499745745797121', false],
 	// The 31st Manager, and the only co-managed seat (see CO_MANAGED).
-	['NYK', 'Pesto', '345082937533792256', false],
+	['NYK', 'MayorMamdani', '345082937533792256', false],
 	['ORL', 'Kostas', '777613302310240277', false],
 	// The snowflake file spells this one PHO; TEAMS keys it PHX, which is the
 	// abbreviation the Phoenix Suns carry everywhere else in this repository.

@@ -273,7 +273,7 @@ describe('loadTeamsIndex — executed against a fake client', () => {
 
 		// The Nomination Slot this Team spent, named on its row.
 		expect(bucks?.nominationSlotSentence).toContain('Nominated Player');
-		expect(bulls?.nominationSlotSentence).toBe('The Nomination Slot is free.');
+		expect(bulls?.nominationSlotSentence).toBe('Nomination Slot is free.');
 
 		// Two Teams, so the median is the LOWER of the two — Bucks' $147.0M
 		// against Bulls' $155.0M.
