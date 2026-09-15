@@ -18,13 +18,25 @@
  * stays up and answers every request with a page that says the pilot is over
  * and names where the real auction is.
  *
- * **Why it gates on `APP_ENV`.** `netlify.toml` already sets `APP_ENV` per
- * context and commits that mapping rather than clicking it — `production` for
- * prod, `branch` for a branch deploy. So the gate needs no new variable set by
- * hand in the Netlify UI, and it cannot reach production by any value of any
- * setting: the production context sets `APP_ENV = "production"`, and this
- * returns the notice for `"branch"` and nothing else. An unset or unknown value
- * serves the app, which is what keeps `vite dev` and the test suite normal.
+ * **Why it gates on the HOSTNAME and not on `APP_ENV`.** The first cut of this
+ * read `APP_ENV`, which `netlify.toml` sets to `"branch"` for
+ * `[context.branch-deploy]` — committed rather than clicked, which made it look
+ * like the right signal. It deployed and the pilot kept serving a live auction.
+ * Variables declared in `netlify.toml` are **build-time only**: Netlify does not
+ * inject them into the Functions runtime, and with `adapter-netlify` every page
+ * here is a Function. `$env/dynamic/private` therefore read `undefined`. The
+ * repository already said as much and it was missed — every reader of `APP_ENV`
+ * or `SUPABASE_ENVIRONMENT` in this codebase is a local Node script reading a
+ * local `.env`, and nothing in `src/` has ever read a `netlify.toml` variable at
+ * runtime.
+ *
+ * The hostname, by contrast, is on the request. A branch deploy is served at
+ * `<branch>--<site>.netlify.app`, so the `pilot` branch deploy and only it
+ * answers to a `pilot--` host. That is also exactly the scope wanted: the thing
+ * being taken down is one URL Managers were handed. Production is
+ * `bbslapp.netlify.app` with no `--` at all and cannot match by any deploy
+ * setting, and deploy previews (`deploy-preview-66--bbslapp.netlify.app`) are
+ * left alone, which is right — a pull request still needs a working app.
  *
  * **This module reads no environment and performs no I/O**, so the test suite
  * can import it — the same split `security-headers.ts` documents. Only the
@@ -41,14 +53,46 @@
 export const LIVE_AUCTION_URL = 'https://bbslapp.netlify.app';
 
 /**
- * Does this deployment serve the signpost instead of the app?
+ * The branch whose deploy is closed.
  *
- * `'branch'` is the value `netlify.toml` sets for `[context.branch-deploy]`.
- * Everything else — `'production'`, `'preview'`, and the `undefined` of a local
- * `vite dev` or a test run — serves the app.
+ * Netlify serves a branch deploy at `<branch>--<site>.netlify.app`. Matching the
+ * branch label rather than the whole host keeps this true if the site is ever
+ * renamed, and it cannot match production, whose host has no `--` in it.
  */
-export function isClosedPilot(appEnv: string | undefined): boolean {
-	return appEnv === 'branch';
+const CLOSED_BRANCH = 'pilot';
+
+/**
+ * Is one hostname-ish string the closed pilot's?
+ *
+ * Tolerant about the shape because the callers are: a bare hostname, a
+ * `host: name:443` with a port, and an `x-forwarded-host` that may be a
+ * comma-separated chain all reach this.
+ */
+function namesClosedBranch(value: string): boolean {
+	return value
+		.split(',')
+		.some((part) => part.trim().toLowerCase().split(':')[0]?.startsWith(`${CLOSED_BRANCH}--`) === true);
+}
+
+/**
+ * Does this request's host serve the signpost instead of the app?
+ *
+ * **Every** hostname signal on the request is checked, and any one of them
+ * naming the branch closes the deployment. That is deliberate belt-and-braces:
+ * the first version of this gate shipped against a single signal that turned out
+ * to be empty at runtime, and the failure mode is silent — a dead pilot that
+ * looks like a working auction. Which of `event.url`, `x-forwarded-host` or
+ * `host` carries the truth through Netlify's proxy is not something this
+ * repository can prove, so it does not depend on the answer. None of the three
+ * can say `pilot--` on production, so the redundancy costs nothing.
+ *
+ * Anything else — production, a deploy preview, `localhost` under `vite dev`,
+ * the test suite — serves the app.
+ */
+export function isClosedPilotHost(...candidates: Array<string | null | undefined>): boolean {
+	return candidates.some(
+		(value) => typeof value === 'string' && value !== '' && namesClosedBranch(value)
+	);
 }
 
 /**

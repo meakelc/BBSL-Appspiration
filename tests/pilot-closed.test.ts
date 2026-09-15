@@ -1,60 +1,85 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import {
 	CLOSED_PILOT_HTML,
 	LIVE_AUCTION_URL,
 	closedPilotResponse,
-	isClosedPilot
+	isClosedPilotHost
 } from '../src/lib/server/pilot-closed.ts';
 import { CONSTANT_SECURITY_HEADERS } from '../src/lib/server/security-headers.ts';
-
-const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const NETLIFY_TOML = readFileSync(join(ROOT, 'netlify.toml'), 'utf8');
 
 /**
  * The closed-pilot signpost.
  *
- * The gate reads ONE string — `APP_ENV` — and the value it compares against is
- * written in `netlify.toml`, not here. A rename of that value in either place
- * would either leave the dead pilot serving a live auction or take production
- * down, so the first test reads the file rather than trusting the constant.
+ * The gate reads the request HOSTNAME. The first cut read `APP_ENV` from
+ * `netlify.toml`, deployed, and left the pilot serving a live auction: variables
+ * declared in `netlify.toml` are build-time only and never reach a Netlify
+ * Function. These tests pin the hostname behaviour on both sides — the pilot
+ * closed, and production emphatically not.
  */
 describe('the closed pilot', () => {
-	it('serves the notice for the value netlify.toml gives a branch deploy', () => {
-		const branch = /\[context\.branch-deploy\.environment\]([\s\S]*?)(?=\n\[|\s*$)/.exec(
-			NETLIFY_TOML
-		);
-		expect(branch).not.toBeNull();
-		const appEnv = /^\s*APP_ENV\s*=\s*"(.*)"$/m.exec(branch?.[1] ?? '');
-		expect(appEnv).not.toBeNull();
-		expect(isClosedPilot(appEnv?.[1])).toBe(true);
-	});
-
-	it('serves the app for the value netlify.toml gives production', () => {
-		const production = /\[context\.production\.environment\]([\s\S]*?)(?=\n\[|\s*$)/.exec(
-			NETLIFY_TOML
-		);
-		expect(production).not.toBeNull();
-		const appEnv = /^\s*APP_ENV\s*=\s*"(.*)"$/m.exec(production?.[1] ?? '');
-		expect(appEnv).not.toBeNull();
-		expect(isClosedPilot(appEnv?.[1])).toBe(false);
+	it('closes the pilot branch deploy', () => {
+		expect(isClosedPilotHost('pilot--bbslapp.netlify.app')).toBe(true);
+		// A hostname is case-insensitive.
+		expect(isClosedPilotHost('PILOT--BBSLAPP.NETLIFY.APP')).toBe(true);
+		// Still true if the site is ever renamed.
+		expect(isClosedPilotHost('pilot--somethingelse.netlify.app')).toBe(true);
 	});
 
 	/**
-	 * An unset `APP_ENV` is `vite dev` and the test suite. Failing OPEN is right
-	 * here and only here: the cost of guessing wrong is a local dev server
-	 * showing a notice, whereas a gate that defaulted closed would blank the app
-	 * for every developer and, if a context ever stopped setting the variable,
-	 * production too.
+	 * The shapes the three call sites actually pass: a bare hostname from
+	 * `event.url`, a `host` header carrying a port, and an `x-forwarded-host`
+	 * that may be a proxy chain.
 	 */
-	it('serves the app when APP_ENV is unset or unrecognised', () => {
-		expect(isClosedPilot(undefined)).toBe(false);
-		expect(isClosedPilot('')).toBe(false);
-		expect(isClosedPilot('preview')).toBe(false);
-		expect(isClosedPilot('Branch')).toBe(false);
+	it('reads the branch out of any hostname shape a proxy produces', () => {
+		expect(isClosedPilotHost('pilot--bbslapp.netlify.app:443')).toBe(true);
+		expect(isClosedPilotHost('pilot--bbslapp.netlify.app, bbslapp.netlify.app')).toBe(true);
+		expect(isClosedPilotHost(' pilot--bbslapp.netlify.app ')).toBe(true);
+	});
+
+	/**
+	 * Any ONE signal naming the branch closes the deployment, and an empty one
+	 * never vetoes a populated one. The first version of this gate read a single
+	 * signal that was empty at runtime and silently served a live auction.
+	 */
+	it('closes on any one signal, whichever of the three is populated', () => {
+		expect(isClosedPilotHost(undefined, 'pilot--bbslapp.netlify.app', null)).toBe(true);
+		expect(isClosedPilotHost('', null, 'pilot--bbslapp.netlify.app')).toBe(true);
+		expect(isClosedPilotHost('localhost', null, 'pilot--bbslapp.netlify.app')).toBe(true);
+		// All three empty is local development, not a closed pilot.
+		expect(isClosedPilotHost(undefined, null, '')).toBe(false);
+	});
+
+	/**
+	 * The one test that must never go green by accident. Production has no `--`
+	 * in its host, so no deploy setting and no rename can route it here.
+	 */
+	it('never closes production', () => {
+		expect(isClosedPilotHost('bbslapp.netlify.app')).toBe(false);
+		expect(isClosedPilotHost('www.bbslapp.netlify.app')).toBe(false);
+		// Not a prefix match anywhere but the branch label.
+		expect(isClosedPilotHost('bbslapp.netlify.app/pilot--')).toBe(false);
+	});
+
+	it('leaves deploy previews and local development alone', () => {
+		// A pull request still needs a working app to review.
+		expect(isClosedPilotHost('deploy-preview-66--bbslapp.netlify.app')).toBe(false);
+		expect(isClosedPilotHost('localhost')).toBe(false);
+		expect(isClosedPilotHost('127.0.0.1')).toBe(false);
+		expect(isClosedPilotHost(undefined)).toBe(false);
+		expect(isClosedPilotHost('')).toBe(false);
+	});
+
+	/**
+	 * `pilot` must not be an allow-listed branch once this ships — it is the
+	 * Netlify half of the same takedown, and a branch that can still build is a
+	 * branch someone can reopen the auction on by pushing to it. That setting
+	 * lives in Netlify rather than in the repository, so this only pins the
+	 * half the repository owns: the notice does not name the dead host as the
+	 * place to go.
+	 */
+	it('does not send a Manager back to the deployment serving the notice', () => {
+		expect(isClosedPilotHost(new URL(LIVE_AUCTION_URL).hostname)).toBe(false);
 	});
 
 	/**
