@@ -240,10 +240,10 @@ function fakeGateway(
 			// act for each AFFECTED Team — the Team the write site named, never
 			// the event's own. One synthetic snowflake per Team, so a test can
 			// read the affected set straight off the intents it filed.
-			if (/^select discord_user_id\s+from managers\s+where team_id = \$1/i.test(sql)) {
+			if (/^select coalesce\(.+\)\s+as discord_user_id\s+from managers\s+where team_id = \$1/i.test(sql)) {
 				return { rows: [{ discord_user_id: `discord-${String(queryParams[0])}` }] };
 			}
-			if (/^select discord_user_id\s+from managers\s+where team_id is not null/i.test(sql)) {
+			if (/^select coalesce\(.+\)\s+as discord_user_id\s+from managers\s+where team_id is not null/i.test(sql)) {
 				return {
 					rows: EVERY_LEAGUE_TEAM.map((teamId) => ({ discord_user_id: `discord-${teamId}` }))
 				};

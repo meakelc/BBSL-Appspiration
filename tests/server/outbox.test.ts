@@ -79,6 +79,16 @@ type OutboxRow = {
 type ManagerRow = {
 	teamId: string | null;
 	discordUserId: string;
+	/**
+	 * `managers.discord_mention_user_id` — the guild snowflake to @mention this
+	 * Manager at, when it is not the account they sign in with.
+	 *
+	 * OMITTED is the common case and means a NULL column, which the `coalesce`
+	 * in both real statements turns back into `discordUserId`. `addressOf`
+	 * below resolves it exactly once, so a fixture cannot address an intent by
+	 * one snowflake and name it by the other.
+	 */
+	discordMentionUserId?: string;
 	id?: string;
 	displayName?: string;
 	/**
@@ -93,6 +103,19 @@ type ManagerRow = {
 	 */
 	slotReleaseMuted?: boolean | string;
 };
+
+/**
+ * The snowflake a Manager is ADDRESSED at, as `coalesce(discord_mention_user_id,
+ * discord_user_id)` resolves it in `MANAGERS_OF_TEAM_SQL`,
+ * `MANAGERS_OF_EVERY_TEAM_SQL` and `MANAGER_NAMES_SQL` alike.
+ *
+ * One function for all three, because the three agreeing is the invariant the
+ * override depends on: the intent carries this value, and the directory's
+ * reverse map is keyed on it. A fake that resolved them separately could pass
+ * while the real statements disagreed.
+ */
+const addressOf = (manager: ManagerRow): string =>
+	manager.discordMentionUserId ?? manager.discordUserId;
 
 /** One `teams` row, as much of it as the directory read takes. */
 type TeamRow = { id: string; name: string };
@@ -182,19 +205,19 @@ function fakeGateway(
 				stagedEvents.push(row);
 				return { rows: [row] };
 			}
-			if (/^select discord_user_id from managers where team_id is not null/i.test(sql)) {
+			if (/^select coalesce\(.+\) as discord_user_id from managers where team_id is not null/i.test(sql)) {
 				return {
 					rows: managers
 						.filter((manager) => manager.teamId !== null)
-						.map((manager) => ({ discord_user_id: manager.discordUserId }))
+						.map((manager) => ({ discord_user_id: addressOf(manager) }))
 						.sort((a, b) => (a.discord_user_id < b.discord_user_id ? -1 : 1))
 				};
 			}
-			if (/^select discord_user_id from managers where team_id = \$1/i.test(sql)) {
+			if (/^select coalesce\(.+\) as discord_user_id from managers where team_id = \$1/i.test(sql)) {
 				return {
 					rows: managers
 						.filter((manager) => manager.teamId === params[0])
-						.map((manager) => ({ discord_user_id: manager.discordUserId }))
+						.map((manager) => ({ discord_user_id: addressOf(manager) }))
 						.sort((a, b) => (a.discord_user_id < b.discord_user_id ? -1 : 1))
 				};
 			}
@@ -263,7 +286,11 @@ function fakeGateway(
 						id: manager.id ?? manager.discordUserId,
 						display_name: manager.displayName ?? manager.discordUserId,
 						team_id: manager.teamId,
-						discord_user_id: manager.discordUserId,
+						// The ADDRESS, not the identity — the real statement
+						// selects the same `coalesce` under the same alias, so
+						// that `managerIdsByDiscordUserId` is the reverse of
+						// what an intent was addressed with.
+						discord_user_id: addressOf(manager),
 						slot_release_muted: manager.slotReleaseMuted ?? false
 					}))
 				};
@@ -1886,5 +1913,123 @@ describe('the directory fold carries the mute, and absence reads as not muted', 
 		expect(
 			harness.statements.filter((sql) => /manager_notification_preferences/i.test(sql))
 		).toHaveLength(1);
+	});
+});
+
+// --- the guild account, when it is not the login account ------------------
+
+describe('the mention address is discord_mention_user_id, and NULL means discord_user_id', () => {
+	/**
+	 * The snowflake the GSW Manager SIGNS IN with. It is a real Discord account
+	 * and a perfectly good identity; it is simply not a member of the league
+	 * server, so Discord cannot resolve `<@GUEST_LOGIN>` to anybody and renders
+	 * it as the literal text `@unknown-user`.
+	 */
+	const GUEST_LOGIN = '3333';
+	/** The snowflake the same person is a MEMBER of the league server as. */
+	const GUEST_GUILD = '4444';
+
+	/** One Team, one Manager, whose two Discord accounts differ. */
+	const splitAccount = () => ({
+		managers: [
+			{
+				teamId: TEAM,
+				discordUserId: GUEST_LOGIN,
+				discordMentionUserId: GUEST_GUILD,
+				id: MANAGER,
+				displayName: 'Victor'
+			}
+		],
+		// `Lakers` because `bidPlaced()` spells it in its own payload, and the
+		// broadcast line composes from the payload while the mention line
+		// composes from the directory. Two Team names here would make this test
+		// about the composer's sources rather than about the address.
+		teams: [{ id: TEAM, name: 'Lakers' }],
+		players: [{ fantraxPlayerId: PLAYER, playerName: 'Anthony Davis' }]
+	});
+
+	it('addresses the intent at the guild snowflake, never at the login one', async () => {
+		const harness = fakeGateway(splitAccount());
+		await write(harness.gateway, [bidPlaced()], 'accepted', enqueueMentions(() => [TEAM]));
+
+		// The intent is an ADDRESS, and `notification_outbox.recipient` is
+		// copied at insert and never joined at dispatch. If the login snowflake
+		// reached this row, no later fix could redirect it.
+		expect(harness.outbox).toEqual([
+			{
+				eventSeq: '1',
+				channel: DISCORD_CHANNEL,
+				recipient: GUEST_GUILD,
+				createdAt: expect.any(String)
+			}
+		]);
+	});
+
+	it('spells the guild snowflake in the body AND whitelists it, and still names the Team', async () => {
+		const harness = fakeGateway(splitAccount());
+		await write(
+			harness.gateway,
+			[
+				bidPlaced(),
+				auctionClosed({
+					teamId: TEAM,
+					teamName: 'Lakers',
+					managerId: MANAGER,
+					playerName: 'Kevin Durant',
+					winningAmount: 3_000_000
+				})
+			],
+			'accepted',
+			enqueueMentions(() => [TEAM])
+		);
+
+		const channel = fakeChannel();
+		await drainOutbox(harness.gateway, { channels: { [DISCORD_CHANNEL]: channel.port } });
+
+		expect(channel.posts).toHaveLength(1);
+		expect(channel.posts[0]).toEqual({
+			// **`Lakers — Victor` is the half that proves the reverse map.** It
+			// takes BOTH halves to ping: the `<@id>` in the text and the id in
+			// `allowed_mentions.users`. But the composer can only write the Team
+			// and the name if `managerIdsByDiscordUserId` resolved the recipient
+			// back to a Manager — and that map is built from the same
+			// `coalesce`. Key it on the raw `discord_user_id` instead and this
+			// line degrades to the bare notice with no mention at all, which is
+			// the silent failure the override exists to end.
+			body:
+				`Lakers — Victor bid $14.5M on Anthony Davis. Closes ${CLOSES_AT_MARKUP}.\n` +
+				`<@${GUEST_GUILD}> — Lakers — Victor were outbid.\n` +
+				'Kevin Durant to Lakers — Victor for $3.0M.\n' +
+				`<@${GUEST_GUILD}> — Lakers — Victor led this Auction at its close.`,
+			recipients: [GUEST_GUILD]
+		});
+
+		// Nothing anywhere on the wire carries the login snowflake.
+		expect(JSON.stringify(channel.posts)).not.toContain(GUEST_LOGIN);
+	});
+
+	it('leaves every other Manager addressed at discord_user_id — absence is the default', async () => {
+		// The twenty-nine rows that set nothing. A `not null` column with a
+		// backfill would have made the exception look like the rule; this is the
+		// assertion that it did not.
+		const harness = fakeGateway({
+			managers: [
+				{ teamId: TEAM, discordUserId: ALICE, id: MANAGER, displayName: 'Meakel' },
+				{
+					teamId: TEAM,
+					discordUserId: GUEST_LOGIN,
+					discordMentionUserId: GUEST_GUILD,
+					id: 'm-2',
+					displayName: 'Victor'
+				}
+			],
+			teams: [{ id: TEAM, name: 'Lakers' }],
+			players: [{ fantraxPlayerId: PLAYER, playerName: 'Anthony Davis' }]
+		});
+		await write(harness.gateway, [bidPlaced()], 'accepted', enqueueMentions(() => [TEAM]));
+
+		// Alice by her login snowflake, Victor by his guild one — one co-managed
+		// Team, two rules, resolved by the same `coalesce`.
+		expect(harness.outbox.map((row) => row.recipient).sort()).toEqual([ALICE, GUEST_GUILD].sort());
 	});
 });
