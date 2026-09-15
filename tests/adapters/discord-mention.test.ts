@@ -131,7 +131,7 @@ describe('mentionSuffixFor — one line per affected Team, on that event’s not
 		// The matrix's "A Manager is outbid" row, and the story's golden
 		// example's second line.
 		expect(mentionSuffixFor(bidPlaced(), [ARI_ID], DIRECTORY, ORIGIN)).toBe(
-			`<@${ARI_ID}> — Bulls — Ari no longer hold the leading Bid. ${LINK}`
+			`<@${ARI_ID}> — Bulls — Ari were outbid. ${LINK}`
 		);
 	});
 
@@ -142,7 +142,7 @@ describe('mentionSuffixFor — one line per affected Team, on that event’s not
 		const line = mentionSuffixFor(bidPlaced(), [KAI_ID, NOOR_ID], DIRECTORY, ORIGIN);
 
 		expect(line).toBe(
-			`<@${KAI_ID}> <@${NOOR_ID}> — Suns — Kai & Noor no longer hold the leading Bid. ${LINK}`
+			`<@${KAI_ID}> <@${NOOR_ID}> — Suns — Kai & Noor were outbid. ${LINK}`
 		);
 		// Distinct, and neither collapsed into the other or into a Team name.
 		expect(line).toContain(`<@${KAI_ID}>`);
@@ -229,7 +229,7 @@ describe('mentionSuffixFor — it degrades and it never throws', () => {
 		// The matrix's "The app origin is unset" row: the mention posts without
 		// a link rather than not at all.
 		expect(mentionSuffixFor(bidPlaced(), [ARI_ID], DIRECTORY, null)).toBe(
-			`<@${ARI_ID}> — Bulls — Ari no longer hold the leading Bid.`
+			`<@${ARI_ID}> — Bulls — Ari were outbid.`
 		);
 		// The default is the same answer — a caller that passes nothing has no
 		// origin either.
@@ -239,7 +239,7 @@ describe('mentionSuffixFor — it degrades and it never throws', () => {
 	it('drops the link when the payload names no Player, and keeps the ping', () => {
 		const line = mentionSuffixFor(event('BidPlaced', { teamId: LAKERS }), [ARI_ID], DIRECTORY, ORIGIN);
 
-		expect(line).toBe(`<@${ARI_ID}> — Bulls — Ari no longer hold the leading Bid.`);
+		expect(line).toBe(`<@${ARI_ID}> — Bulls — Ari were outbid.`);
 	});
 
 	it('falls back to a plain factual line for an unrecognised event type', () => {
@@ -320,7 +320,7 @@ describe('mentionSuffixFor — it degrades and it never throws', () => {
 
 	it('de-duplicates a snowflake that arrives twice', () => {
 		expect(mentionSuffixFor(bidPlaced(), [ARI_ID, ` ${ARI_ID} `], DIRECTORY, ORIGIN)).toBe(
-			`<@${ARI_ID}> — Bulls — Ari no longer hold the leading Bid. ${LINK}`
+			`<@${ARI_ID}> — Bulls — Ari were outbid. ${LINK}`
 		);
 	});
 });
@@ -389,7 +389,7 @@ describe('a muted Manager loses the mention and nothing else', () => {
 		// The matrix's "A mute never touches an unmutable notice" row. The mute
 		// is per category, not per Manager.
 		expect(mentionSuffixFor(bidPlaced(), [KAI_ID, NOOR_ID], muting(KAI, NOOR), ORIGIN)).toBe(
-			`<@${KAI_ID}> <@${NOOR_ID}> — Suns — Kai & Noor no longer hold the leading Bid. ${LINK}`
+			`<@${KAI_ID}> <@${NOOR_ID}> — Suns — Kai & Noor were outbid. ${LINK}`
 		);
 	});
 
@@ -514,7 +514,7 @@ describe('the copy rules hold for mention text as they do for broadcast text', (
 
 describe('mentionsPresentIn — allowed_mentions can only name what the body spells', () => {
 	it('keeps the snowflakes the body mentions and drops the rest', () => {
-		const body = `<@${ARI_ID}> — Bulls — Ari no longer hold the leading Bid.`;
+		const body = `<@${ARI_ID}> — Bulls — Ari were outbid.`;
 
 		expect(mentionsPresentIn(body, [ARI_ID, KAI_ID])).toEqual([ARI_ID]);
 	});

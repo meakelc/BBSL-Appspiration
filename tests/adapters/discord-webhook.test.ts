@@ -103,7 +103,7 @@ describe('the payload', () => {
 		// a prefix.** `server/outbox.ts` composes the `<@id>`s inline, on the
 		// notice for each one's own event, and sends here exactly the snowflakes
 		// that body spells. This file's remaining job is the whitelist.
-		const body = `${mentionFor('111')} — Bulls — Ari no longer hold the leading Bid.`;
+		const body = `${mentionFor('111')} — Bulls — Ari were outbid.`;
 		const payload = payloadFor({ body, recipients: ['111', '222'] });
 
 		expect(payload.content).toBe(body);
@@ -137,7 +137,7 @@ describe('the payload', () => {
 	it('leaves an already-inline mention exactly where the composer put it', () => {
 		const body =
 			'Lakers — Meakel bid $14.5M on Anthony Davis.\n' +
-			'<@9> — Bulls — Ari no longer hold the leading Bid.';
+			'<@9> — Bulls — Ari were outbid.';
 
 		expect(contentFor({ body, recipients: ['9'] })).toBe(body);
 	});
