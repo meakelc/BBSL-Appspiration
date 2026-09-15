@@ -822,11 +822,20 @@
 </svelte:head>
 
 <!-- **The Bid history, once, for both states of the page.** An open Auction and
-     a closed one render the identical record: every Bid, oldest first, each
+     a closed one render the identical record: every Bid, NEWEST first, each
      naming the Team and the acting Manager, cancelled ones struck through and
      labelled in unchanged `seq` order. The close removes the CONTROL, not the
      record, so a second copy of this markup under the closed branch would be
      two spellings of one list that could drift apart.
+
+     **Newest at the top.** The server hands the list back in `seq` order,
+     oldest first — that is the record's order and the core's, and it is not
+     touched. The reversal is a rendering decision made here and nowhere else:
+     the Bid that matters on an open Auction is the last one placed, and
+     reading down from it is reading the Auction backwards from where it
+     stands. `seq` order still decides what is ADJACENT to what, so a
+     cancelled Bid keeps its exact place among its neighbours (FR-40) — the
+     whole column is flipped, nothing is moved within it.
 
      `emptyStatement` is the one thing the two states word differently: an open
      Auction is waiting for an Opening Bid, and a closed one is not waiting for
@@ -835,8 +844,9 @@
 	{#if bids.length === 0}
 		<p class="prose" id="auction-history">{emptyStatement}</p>
 	{:else}
+		{@const newestFirst = [...bids].reverse()}
 		<ul class="history" id="auction-history">
-			{#each bids as bid (bid.seq)}
+			{#each newestFirst as bid (bid.seq)}
 				<!-- Who bid and when on the left, what they bid on the right —
 				     one row instead of three stacked lines, so a seven-Bid
 				     history is read rather than scrolled. The amounts share a
@@ -844,12 +854,12 @@
 				     figures scannable. -->
 				<!-- A cancelled Bid is struck through and labelled, in
 				     unchanged `seq` order — never deleted, hidden or
-				     reordered (FR-40). The label is one word and the
-				     sentence beneath it names the win that caused it; both
-				     are the core's, and both are worded so the row cannot
-				     be read as a void, which would say somebody decided the
-				     Bid should not have stood. A Bid that was never
-				     cancelled renders exactly as before. -->
+				     reordered relative to its neighbours (FR-40). The label is
+				     one word and the sentence beneath it names the win that
+				     caused it; both are the core's, and both are worded so
+				     the row cannot be read as a void, which would say
+				     somebody decided the Bid should not have stood. A Bid that
+				     was never cancelled renders exactly as before. -->
 				<li class="history-row" class:cancelled={bid.cancellation !== null}>
 					<span class="history-bidder">
 						<span class="prose">{bid.bidder}</span>
@@ -1308,7 +1318,7 @@
 
 		<section class="panel">
 			<p class="section-label">History</p>
-			<!-- Every Bid, oldest first, each naming the Team and the acting
+			<!-- Every Bid, newest first, each naming the Team and the acting
 			     Manager. No anonymity at any point. Nothing here lets a Bid be
 			     taken back, revised or reduced — that whole class of control is
 			     absent from this page, not merely turned off. -->
@@ -1326,7 +1336,7 @@
 			     viewer's own timezone, and the absolute is never dropped for
 			     space. -->
 			<p class="footnote" id="auction-nominated-at">
-				<span class="section-label">Nominated by</span>
+				<span class="section-label footnote-label">Nominated by</span>
 				<span id="auction-nominating-team">{auction.nominatingTeam}</span>
 				&middot;
 				<span id="auction-nominated-relative">{relative}</span>
@@ -1444,6 +1454,17 @@
 		color: var(--color-text-tertiary);
 		font-size: var(--size-11);
 		line-height: 1.55;
+	}
+
+	/*
+	 * The label takes a line of its own above the Team and the two times,
+	 * rather than riding inline in front of them: a long `Team — Manager`
+	 * pairing plus a relative phrase plus an absolute stamp already fills the
+	 * line at phone widths, and a heading that wraps into its own value reads
+	 * as neither. Above the row it is unambiguously the row's name.
+	 */
+	.footnote-label {
+		display: block;
 	}
 
 	form {
