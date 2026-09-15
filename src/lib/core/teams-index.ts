@@ -216,6 +216,88 @@ export const EMPTY_TEAMS_STATEMENT =
 	'Teams arrive with the roster import.';
 
 /**
+ * The third money cell's label on a ROW — `Available Cap`, the glossary's
+ * `Available Cap Space` with its last word taken off.
+ *
+ * **This is the one abbreviation on the surface, and the reason is the grid
+ * it sits in.** The three money cells are `repeat(3, 1fr)` of a 375px card,
+ * so each label gets about 110px; at the 10px uppercase `0.16em` the section
+ * labels are set in, `Available Cap Space` takes three lines there while
+ * `Cap Space` and `Committed Bids` beside it take two and one. The third word
+ * therefore does not cost one line on one card, it costs one line on all
+ * thirty, on the surface whose whole job is scrolling past thirty of them.
+ *
+ * **It is a TRUNCATION and not a synonym**, which is the distinction
+ * `TEAMS_SORT_LABELS` above is drawing when it refuses a chip reading
+ * `Available`: that word names no figure, while `Available Cap` is this
+ * figure's own name minus a word that `Cap Space` in the cell beside it has
+ * already said. The full term still reaches every reader who needs it —
+ * `/teams/<id>` heads the same figure with `TEAM_VIEW_LABELS.availableCapSpace`
+ * in full, the sort control that orders by it is labelled in full, and so is
+ * the median at the foot of this very page.
+ */
+export const AVAILABLE_CAP_SHORT_LABEL = 'Available Cap';
+
+/**
+ * The Nomination Slot's state on a ROW, in the fewest words that state it.
+ *
+ * `team-view.ts`'s `nominationSlotStatusSentence` is the sentence for a
+ * PAGE about one Team, and it carries the rule with it — "frees when that
+ * Team wins a Player" — because on that page there is room for the rule and
+ * one Team to read it about. Thirty copies of that clause is thirty copies of
+ * one league-wide rule, wrapping to two and three lines on a phone, on a list
+ * where nothing but the Player name differs between them.
+ *
+ * So the clause is said ONCE, at the head of the page
+ * (`NOMINATION_SLOT_FREES_NOTE`), and each row states only its own state.
+ * Nothing is lost from the surface; the rule simply stopped being repeated.
+ *
+ * The spent form is `Nomination Slot: <name>` — a label and its value, which
+ * is what the row is: there is no verb to save. The free form keeps its verb
+ * and its full stop, because `Nomination Slot: free` would read as a value
+ * where `is free` reads as the state it is.
+ */
+export function nominationSlotShortSentence(playerName: string | null): string {
+	if (playerName === null) return `${TEAM_VIEW_LABELS.nominationSlot} is free.`;
+	return `${TEAM_VIEW_LABELS.nominationSlot}: ${playerName}`;
+}
+
+/**
+ * What frees a Nomination Slot, said once at the head of the list — the clause
+ * `nominationSlotShortSentence` took off the rows.
+ *
+ * Addressed to the reader rather than to a Team, because it is the only copy
+ * on the page and the reader is the one who spends a Slot: the rows state
+ * thirty Teams' positions, and the rule behind all thirty is one rule. FR-9 as
+ * amended — ANY Player won frees it, which is why the note says *any*.
+ *
+ * `Player` is capitalised because it is the glossary's term and every other
+ * sentence in this codebase capitalises it.
+ */
+export const NOMINATION_SLOT_FREES_NOTE =
+	'Your Nomination Slot frees when you win any Player.';
+
+/**
+ * What a row's disclosure is called when it is closed.
+ *
+ * The three figures behind it — Minor League occupancy, Injury Reserve and
+ * Dead Money — are the ones a Manager comparing Teams does not read on every
+ * pass, and two of a card's lines is what they cost when they are always
+ * showing. Behind one 10px row they cost one.
+ *
+ * **It names its contents rather than saying `More`**, which is what keeps the
+ * closed row from being a control whose behaviour you have to try to learn. IR
+ * is abbreviated here and only here: the label has to survive a 375px card
+ * beside its chevron, and the sentence it opens onto says `Injury Reserve` in
+ * full the moment it is open.
+ *
+ * Unlike the sort disclosure above, the closed row cannot print the answer in
+ * words — there are three figures behind it, not one setting — so it prints
+ * what they are instead.
+ */
+export const ROW_DETAIL_LABEL = 'Minor League, IR and Dead Money';
+
+/**
  * How many Teams the index is listing, as a finished sentence.
  *
  * `board.ts`'s `boardCountSentence` pattern, including its singular: "1 Teams"
@@ -493,7 +575,10 @@ function rowFor(view: TeamsIndexInput, viewerTeamId: string | null): TeamsIndexR
 		capSpaceLabel: view.capSpaceLabel,
 		committedBidsLabel: view.committedBidsLabel,
 		availableCapSpaceLabel: view.availableCapSpaceLabel,
-		nominationSlotSentence: view.nominationSlot.sentence,
+		// The ROW's own short form, not `view.nominationSlot.sentence`: the
+		// clause that sentence carries is one league-wide rule, and it is said
+		// once at the head of the page instead of thirty times down it.
+		nominationSlotSentence: nominationSlotShortSentence(view.nominationSlot.playerName),
 
 		capSpace: view.capSpace,
 		availableCapSpace: view.availableCapSpace,

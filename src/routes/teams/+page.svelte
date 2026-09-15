@@ -27,9 +27,12 @@
 	// follows. `$lib/core` is a different matter: it is the pure core, and
 	// `sortTeamsIndex` below is the same function the tests drive.
 	import {
+		AVAILABLE_CAP_SHORT_LABEL,
 		DEFAULT_TEAMS_SORT,
 		EMPTY_TEAMS_HEADING,
 		EMPTY_TEAMS_STATEMENT,
+		NOMINATION_SLOT_FREES_NOTE,
+		ROW_DETAIL_LABEL,
 		TEAMS_INDEX_TITLE,
 		TEAMS_SORT_KEYS,
 		TEAMS_SORT_LABELS,
@@ -124,7 +127,19 @@
 <main class="page">
 	<header class="masthead">
 		<h1 class="section-label">{TEAMS_INDEX_TITLE}</h1>
-		<p class="prose" id="teams-count">{index.countSentence}</p>
+		<!-- The count, and BESIDE it the one rule every row's Nomination Slot
+		     line used to carry a copy of. It is said here once, in the core's
+		     own words, so thirty rows can state their own state and nothing
+		     else — and it reads as context for the list rather than as a
+		     sentence about any Team in it. One step quieter than the count,
+		     because the count is what the reader came to the head of the page
+		     for. They wrap and stack below 375px rather than compressing. -->
+		<div class="masthead-line">
+			<p class="prose" id="teams-count">{index.countSentence}</p>
+			<p class="prose masthead-note" id="teams-nomination-note">
+				{NOMINATION_SLOT_FREES_NOTE}
+			</p>
+		</div>
 		<!-- Every figure on this page carries its age in anything but Live
 		     (AD-29). Nothing here is disabled, because nothing here
 		     authorises. -->
@@ -275,46 +290,81 @@
 							>
 						</p>
 					{/if}
-					<div class="row-line">
-						<p class="figure" aria-label={row.minorLeagueHalves.full}>
-							<span>{row.minorLeagueHalves.lead}</span><span class="figure-qualifier"
-								>{row.minorLeagueHalves.qualifier}</span
+					<!-- **The reserves, behind a disclosure, closed by default.**
+					     The sort control above is the precedent, and the reason
+					     is the same one: Minor League occupancy, Injury Reserve
+					     and Dead Money are three figures a Manager scrolling a
+					     comparison list does not read on every pass, and always
+					     showing they cost two of a card's lines — sixty lines
+					     down a list of thirty, which is most of a phone screen's
+					     worth of scroll spent on the figures read least.
+
+					     Behind the closed row they cost ONE, and nothing is
+					     hidden that the reader cannot get at in a tap: the row
+					     NAMES its three figures rather than saying `More`, so
+					     what is behind it is known before it is opened.
+					     `<details>`/`<summary>` and no flag — it opens on tap
+					     AND on Enter, is announced expanded or collapsed, and
+					     each card keeps its own state because a Manager opening
+					     one Team's reserves has not asked about the other
+					     twenty-nine. Nothing closes it either: unlike the sort,
+					     opening is not a choice that completes.
+
+					     The figures themselves are UNTOUCHED — same markup, same
+					     registers, same `aria-label`ed sentences, same absence
+					     rules. Only whether they are on screen changed, and that
+					     is view state in the page's own sense: it reorders
+					     nothing, narrows nothing and cannot reach a figure. -->
+					<details class="row-detail">
+						<summary>
+							<span class="section-label">{ROW_DETAIL_LABEL}</span>
+							<span class="controls-mark" aria-hidden="true">
+								<svg viewBox="0 0 16 16" width="16" height="16" focusable="false">
+									<path d="M4 6.5 8 10.5 12 6.5" />
+								</svg>
+							</span>
+						</summary>
+						<div class="row-line">
+							<p class="figure" aria-label={row.minorLeagueHalves.full}>
+								<span>{row.minorLeagueHalves.lead}</span><span class="figure-qualifier"
+									>{row.minorLeagueHalves.qualifier}</span
+								>
+							</p>
+							<!-- Injury Reserve in `text-tertiary` and visibly
+							     outside the twelve — the figure most often wrongly
+							     folded into it. Beside the Minor League count
+							     rather than under it, and the quieter register is
+							     what keeps the pairing from reading as one group
+							     of slots: the two are set in two different colours
+							     and each states its own ceiling. Its separator is
+							     unconditional because, unlike the Bids figure
+							     above, this half is never absent. -->
+							<span class="row-separator" aria-hidden="true">·</span>
+							<p class="figure-tertiary" aria-label={row.injuryReserveHalves.full}>
+								<span>{row.injuryReserveHalves.lead}</span><span class="figure-qualifier"
+									>{row.injuryReserveHalves.qualifier}</span
+								>
+							</p>
+						</div>
+						<!-- Dead Money, in the same quiet register and for the
+						     same reason: money charged for Contracts the Team has
+						     released, outside the twelve (FR-43). ABSENT rather
+						     than zero for a Team carrying none — the core decides
+						     which. A card lists no rows, so this line is the only
+						     thing that reconciles a Cap Space reduced by players
+						     who are not on the Team (UX-DR40). -->
+						{#if row.deadMoneyHalves !== null}
+							<p
+								class="figure-tertiary"
+								id={`teams-dead-money-${row.teamId}`}
+								aria-label={row.deadMoneyHalves.full}
 							>
-						</p>
-						<!-- Injury Reserve in `text-tertiary` and visibly outside
-						     the twelve — the figure most often wrongly folded
-						     into it. Beside the Minor League count now rather
-						     than under it, and the quieter register is what keeps
-						     the pairing from reading as one group of slots: the
-						     two are set in two different colours and each states
-						     its own ceiling. Its separator is unconditional
-						     because, unlike the Bids figure above, this half is
-						     never absent. -->
-						<span class="row-separator" aria-hidden="true">·</span>
-						<p class="figure-tertiary" aria-label={row.injuryReserveHalves.full}>
-							<span>{row.injuryReserveHalves.lead}</span><span class="figure-qualifier"
-								>{row.injuryReserveHalves.qualifier}</span
-							>
-						</p>
-					</div>
-					<!-- Dead Money, in the same quiet register and for the same
-					     reason: money charged for Contracts the Team has
-					     released, outside the twelve (FR-43). ABSENT rather
-					     than zero for a Team carrying none — the core decides
-					     which. A card lists no rows, so this line is the only
-					     thing that reconciles a Cap Space reduced by players
-					     who are not on the Team (UX-DR40). -->
-					{#if row.deadMoneyHalves !== null}
-						<p
-							class="figure-tertiary"
-							id={`teams-dead-money-${row.teamId}`}
-							aria-label={row.deadMoneyHalves.full}
-						>
-							<span>{row.deadMoneyHalves.lead}</span><span class="figure-qualifier"
-								>{row.deadMoneyHalves.qualifier}</span
-							>
-						</p>
-					{/if}
+								<span>{row.deadMoneyHalves.lead}</span><span class="figure-qualifier"
+									>{row.deadMoneyHalves.qualifier}</span
+								>
+							</p>
+						{/if}
+					</details>
 
 					<div class="money">
 						<div class="cell">
@@ -326,7 +376,11 @@
 							<span class="figure">{row.committedBidsLabel}</span>
 						</div>
 						<div class="cell">
-							<span class="section-label">{TEAM_VIEW_LABELS.availableCapSpace}</span>
+							<!-- `Available Cap`, the glossary term's last word taken
+							     off — the core owns that truncation and its reason
+							     (`teams-index.ts`'s `AVAILABLE_CAP_SHORT_LABEL`).
+							     This file does not shorten anything. -->
+							<span class="section-label">{AVAILABLE_CAP_SHORT_LABEL}</span>
 							<span class="figure">{row.availableCapSpaceLabel}</span>
 						</div>
 					</div>
@@ -380,6 +434,35 @@
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-row-gap);
+	}
+
+	/*
+	 * The count and the Nomination Slot note, ACROSS rather than stacked — the
+	 * `.row-line` arrangement applied to prose. Two short sentences on two
+	 * lines is a masthead a phone screen pays for twice, and the second of
+	 * them is a standing rule rather than news.
+	 *
+	 * `flex-start`, not `space-between`: the two read as one line of context
+	 * and pushing them to opposite edges would make them two unrelated
+	 * readouts that happen to share a row — the reasoning `.row-line` gives at
+	 * length. Wrapping, so the width that genuinely cannot fit both stacks
+	 * them, which is what 375px does.
+	 */
+	.masthead-line {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		justify-content: flex-start;
+		gap: var(--space-card-gap);
+	}
+
+	/*
+	 * One step quieter than the count beside it. The count is what the reader
+	 * came to the head of the list for; the rule is there to be found once and
+	 * then not read again. A step in the greyscale ramp, not a hue.
+	 */
+	.masthead-note {
+		color: var(--color-text-secondary);
 	}
 
 	/*
@@ -531,6 +614,39 @@
 		color: var(--color-text-tertiary);
 	}
 
+	/*
+	 * A row's reserves disclosure. It borrows the sort control's summary
+	 * construction wholesale — the selectors above name both — so every
+	 * disclosure in this product opens the same way and carries one
+	 * affordance rather than two.
+	 *
+	 * What it does NOT borrow is a box: no border, no fill, no padding and no
+	 * rule of its own. Thirty of those down a ruled list would be thirty
+	 * panels inside thirty rows, and the row's own `border-bottom` is already
+	 * what separates one Team from the next. The closed row is a line of the
+	 * card set in the same 10px uppercase as the labels beneath it.
+	 *
+	 * The closed row carries no colour rule of its own: `section-label` on the
+	 * span already sets `text-tertiary`, which is the register Injury Reserve
+	 * and Dead Money behind it are set in — so the row belongs to the quiet
+	 * group it opens rather than to the figures above it, by taking the same
+	 * label treatment every other label on the card takes.
+	 */
+
+	/*
+	 * Open, the revealed figures stack on the card's OWN row gap, the same one
+	 * the lines above them sit on — the card's gap does not reach inside a
+	 * `<details>`, so it is restated here rather than left to collapse. Opening
+	 * the disclosure therefore adds lines to the card rather than a
+	 * differently-spaced block inside it. Only when open: a closed
+	 * `<details>` has one child and needs no layout.
+	 */
+	.row-detail[open] {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-row-gap);
+	}
+
 	.money {
 		display: grid;
 		grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -585,7 +701,8 @@
 	 * the floor on its own row. The floor stays, untouched, on every control
 	 * that spends something.
 	 */
-	.controls-disclosure > summary {
+	.controls-disclosure > summary,
+	.row-detail > summary {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
@@ -596,11 +713,13 @@
 		list-style: none;
 	}
 
-	.controls-disclosure > summary::-webkit-details-marker {
+	.controls-disclosure > summary::-webkit-details-marker,
+	.row-detail > summary::-webkit-details-marker {
 		display: none;
 	}
 
-	.controls-disclosure > summary:focus-visible {
+	.controls-disclosure > summary:focus-visible,
+	.row-detail > summary:focus-visible {
 		outline: 2px solid var(--color-text);
 		outline-offset: 2px;
 	}
@@ -638,7 +757,8 @@
 	}
 
 	/* Open or closed, the same mark; it turns to point at what it opened. */
-	.controls-disclosure[open] > summary .controls-mark {
+	.controls-disclosure[open] > summary .controls-mark,
+	.row-detail[open] > summary .controls-mark {
 		color: var(--color-text);
 		transform: rotate(180deg);
 	}

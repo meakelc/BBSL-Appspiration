@@ -18,19 +18,23 @@ import { describe, expect, it } from 'vitest';
 import { SALARY_CAP } from '../src/lib/core/constants.ts';
 import { parseMoney } from '../src/lib/core/money.ts';
 import type { Money } from '../src/lib/core/money.ts';
-import { teamViewFor } from '../src/lib/core/team-view.ts';
+import { TEAM_VIEW_LABELS, teamViewFor } from '../src/lib/core/team-view.ts';
 import type { TeamMoneyState } from '../src/lib/core/rules/bidding.ts';
 import {
+	AVAILABLE_CAP_SHORT_LABEL,
 	DEFAULT_TEAMS_SORT,
 	MEDIAN_GRID_NOTE,
 	MEDIAN_LABEL,
 	MEDIAN_UNAVAILABLE,
+	NOMINATION_SLOT_FREES_NOTE,
 	OWN_ROW_MARKER,
+	ROW_DETAIL_LABEL,
 	TEAMS_SORT_KEYS,
 	TEAMS_SORT_LABELS,
 	TEAM_PATH_PREFIX,
 	medianCoverageSentence,
 	medianFigureSentence,
+	nominationSlotShortSentence,
 	sortTeamsIndex,
 	teamCountSentence,
 	teamPathFor,
@@ -131,7 +135,69 @@ describe('the Teams index — every Team is a row', () => {
 		expect(row?.injuryReserveHalves).toEqual(bucks?.injuryReserveHalves);
 		expect(row?.deadMoneyHalves).toEqual(bucks?.deadMoneyHalves);
 		expect(row?.freeActiveBenchSlots).toBe(bucks?.freeActiveBenchSlots);
-		expect(row?.nominationSlotSentence).toBe(bucks?.nominationSlot.sentence);
+		// The ONE field that is not the view's string verbatim: the row states
+		// the Slot in its own short form. What it must still read off the view
+		// is the FACT — which Player, or none — so the row and `/teams/<id>`
+		// cannot disagree about the state even though they word it differently.
+		expect(row?.nominationSlotSentence).toBe(
+			nominationSlotShortSentence(bucks?.nominationSlot.playerName ?? null)
+		);
+	});
+
+	/**
+	 * The row's Nomination Slot line, and the clause it no longer carries.
+	 *
+	 * Thirty copies of one league-wide rule is what came off the rows; this
+	 * asserts both halves of that trade — the row says its own state and only
+	 * that, and the rule is still on the surface, once, at the head.
+	 */
+	it('states a row’s Nomination Slot in the fewest words, and the rule once', () => {
+		expect(nominationSlotShortSentence(null)).toBe('Nomination Slot is free.');
+		expect(nominationSlotShortSentence('Naz Reid')).toBe('Nomination Slot: Naz Reid');
+
+		// The rule is NOT on the row — not in either form.
+		for (const sentence of [
+			nominationSlotShortSentence(null),
+			nominationSlotShortSentence('Naz Reid')
+		]) {
+			expect(sentence).not.toContain('frees');
+			expect(sentence).not.toContain('wins');
+		}
+
+		// And it is said once, at the head, in the core's own words.
+		expect(NOMINATION_SLOT_FREES_NOTE).toBe(
+			'Your Nomination Slot frees when you win any Player.'
+		);
+	});
+
+	/**
+	 * `Available Cap` is a TRUNCATION of the glossary term and not a second
+	 * name for the figure: it must be a prefix of the term it shortens, and the
+	 * full term must still be what the sort control and the median say.
+	 */
+	it('heads a row’s third money cell with a truncation, never a synonym', () => {
+		expect(TEAM_VIEW_LABELS.availableCapSpace.startsWith(AVAILABLE_CAP_SHORT_LABEL)).toBe(true);
+		expect(AVAILABLE_CAP_SHORT_LABEL).toBe('Available Cap');
+
+		// The figure itself is untouched — only the label above it is shorter.
+		const index = teamsIndexFor({ views: THREE, viewerTeamId: null });
+		const [bulls] = THREE;
+		expect(index.rows[0]?.availableCapSpaceLabel).toBe(bulls?.availableCapSpaceLabel);
+
+		// Every OTHER place the figure is named on this page says it in full.
+		expect(TEAMS_SORT_LABELS.availableCapSpace).toBe(TEAM_VIEW_LABELS.availableCapSpace);
+		expect(index.median.availableCapSpace.label).toBe(TEAM_VIEW_LABELS.availableCapSpace);
+	});
+
+	/**
+	 * The reserves disclosure names its three figures rather than saying
+	 * `More`, which is the whole of why closing them by default hides nothing
+	 * a reader cannot see they are missing.
+	 */
+	it('names the figures a row’s disclosure holds', () => {
+		expect(ROW_DETAIL_LABEL).toContain('Minor League');
+		expect(ROW_DETAIL_LABEL).toContain('IR');
+		expect(ROW_DETAIL_LABEL).toContain('Dead Money');
 	});
 
 	it('carries the roster, minors and Injury Reserve sentences a row needs', () => {
