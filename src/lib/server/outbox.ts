@@ -251,12 +251,25 @@ export type OutboxIntent = {
 	readonly playerName: string | null;
 };
 
-/** Every Manager of one Team, in a total order. */
+/**
+ * Every Manager of one Team, in a total order.
+ *
+ * **`coalesce(discord_mention_user_id, discord_user_id)` is the ADDRESS, and
+ * the alias keeps that fact inside the SQL.** The two columns answer different
+ * questions: `discord_user_id` is the account that SIGNS IN and is all
+ * `server/supabase.ts` ever matches on, while the override — NULL for almost
+ * every Manager — is the guild account to @mention when a Manager belongs to
+ * the league server under a different Discord account than the one they
+ * authenticate with. An intent is an address, so the address is what is
+ * selected. See `20260917000000_manager_discord_mention_user_id.sql`.
+ *
+ * The order is by the resolved value, so it stays total.
+ */
 const MANAGERS_OF_TEAM_SQL = `
-	select discord_user_id
+	select coalesce(discord_mention_user_id, discord_user_id) as discord_user_id
 	from managers
 	where team_id = $1
-	order by discord_user_id asc
+	order by 1 asc
 `;
 
 /**
@@ -268,10 +281,10 @@ const MANAGERS_OF_TEAM_SQL = `
  * auction notice. `ContractAssignmentOpened` is the one trigger that uses it.
  */
 const MANAGERS_OF_EVERY_TEAM_SQL = `
-	select discord_user_id
+	select coalesce(discord_mention_user_id, discord_user_id) as discord_user_id
 	from managers
 	where team_id is not null
-	order by discord_user_id asc
+	order by 1 asc
 `;
 
 /**
@@ -744,6 +757,16 @@ const PENDING_INTENTS_SQL = `
  * ask whose Team one acts for. The two uses stay separate on `LeagueDirectory`
  * (`managerNames` versus `managerIdsByDiscordUserId`) so neither can be reached
  * for the other's job.
+ *
+ * **The snowflake selected here is the resolved ADDRESS, and it has to be.**
+ * `managerIdsByDiscordUserId` is the reverse of the value an intent was
+ * ADDRESSED with, and intents are addressed with
+ * `coalesce(discord_mention_user_id, discord_user_id)` — see
+ * `MANAGERS_OF_TEAM_SQL`. Keying this map on the raw `discord_user_id` instead
+ * would make that lookup MISS for exactly the Manager whose two accounts
+ * differ, and a miss is silent: the composer cannot name whose Team acted, so
+ * the notice degrades to a plain factual line and the ping the override exists
+ * to fix disappears again. The two sites resolve identically or neither works.
  */
 const TEAM_NAMES_SQL = 'select id, name from teams';
 
@@ -763,7 +786,7 @@ const MANAGER_NAMES_SQL = `
 		m.id,
 		m.display_name,
 		m.team_id,
-		m.discord_user_id,
+		coalesce(m.discord_mention_user_id, m.discord_user_id) as discord_user_id,
 		coalesce(p.slot_release_muted, false) as slot_release_muted
 	from managers m
 	left join manager_notification_preferences p on p.manager_id = m.id

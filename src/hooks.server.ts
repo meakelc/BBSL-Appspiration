@@ -37,11 +37,35 @@ import {
 	verifyBreakGlassCookie
 } from '$lib/server/commissioner-recovery.ts';
 import { resolveLeagueReadOrDefault } from '$lib/server/phase.ts';
+import { closedPilotResponse, isClosedPilotHost } from '$lib/server/pilot-closed.ts';
 import { securityHeaders } from '$lib/server/security-headers.ts';
 import { gatherSessionFacts, type SessionGateway } from '$lib/server/session.ts';
 import { managerRegistry, requestClient } from '$lib/server/supabase.ts';
 
 export const handle: Handle = async ({ event, resolve }) => {
+	// The closed pilot, answered before anything else touches the database.
+	//
+	// `pilot--bbslapp.netlify.app` is a branch deploy Managers were sent
+	// directly, so the link outlives the pilot in their bookmarks and in Discord.
+	// Netlify keeps serving a branch subdomain's last deploy after the branch is
+	// de-allow-listed, so without this the dead pilot stays a working auction
+	// someone can bid in. See `lib/server/pilot-closed.ts` for the whole why,
+	// including why this reads the HOST and not `APP_ENV` — `netlify.toml`
+	// variables are build-time only and never reach this Function.
+	//
+	// First statement in the hook, deliberately: the notice must not depend on
+	// Supabase, the event log or a session, and a deployment serving it should
+	// stop reading the dev database altogether.
+	if (
+		isClosedPilotHost(
+			event.url.hostname,
+			event.request.headers.get('x-forwarded-host'),
+			event.request.headers.get('host')
+		)
+	) {
+		return closedPilotResponse(securityHeaders(publicEnv['PUBLIC_SUPABASE_URL']));
+	}
+
 	// The fail-closed behaviour (any read failure resolves to Setup and the
 	// watermark to '0' rather than 500ing the request) lives inside
 	// resolveLeagueReadOrDefault itself, not here — this file reads

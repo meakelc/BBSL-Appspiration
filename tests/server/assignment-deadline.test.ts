@@ -113,11 +113,11 @@ function fakeGateway(options: { events?: QueryResultRow[]; now?: Date } = {}) {
 					]
 				};
 			}
-			if (/^select discord_user_id\s+from managers\s+where team_id = \$1/i.test(sql)) {
+			if (/^select coalesce\(.+\)\s+as discord_user_id\s+from managers\s+where team_id = \$1/i.test(sql)) {
 				order.push('resolve-managers');
 				return { rows: [{ discord_user_id: `discord-${String(queryParams[0])}` }] };
 			}
-			if (/^select discord_user_id\s+from managers\s+where team_id is not null/i.test(sql)) {
+			if (/^select coalesce\(.+\)\s+as discord_user_id\s+from managers\s+where team_id is not null/i.test(sql)) {
 				order.push('resolve-every-manager');
 				return { rows: [{ discord_user_id: 'discord-every' }] };
 			}
