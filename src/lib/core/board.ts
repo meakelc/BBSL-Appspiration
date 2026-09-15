@@ -341,6 +341,13 @@ export const BOARD_FILTER_LEGEND = 'Filter';
 export const BOARD_PRICE_LABEL = 'Price';
 export const BOARD_LEADING_LABEL = 'Leading Bidder';
 export const BOARD_NOMINATED_LABEL = 'Nominated by';
+/**
+ * The same label abbreviated for narrow cards. A long `Team — Manager` pairing
+ * beside the full spelling wraps the footnote onto a second line at 375px, and
+ * the nominator is the quietest fact on the card — it is the label that gives
+ * way, not the name.
+ */
+export const BOARD_NOMINATED_LABEL_NARROW = 'Nom. by';
 export const BOARD_CLOSES_LABEL = 'Auction Clock';
 
 /**

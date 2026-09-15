@@ -41,6 +41,7 @@
 		BOARD_FINAL_LABEL,
 		BOARD_LEADING_LABEL,
 		BOARD_NOMINATED_LABEL,
+		BOARD_NOMINATED_LABEL_NARROW,
 		BOARD_PANEL_HEADING,
 		BOARD_PRICE_LABEL,
 		BOARD_SORT_LEGEND,
@@ -575,7 +576,8 @@
 								{/if}
 							</p>
 							<p class="card-when">
-								<span class="section-label">{BOARD_NOMINATED_LABEL}</span>
+								<span class="section-label chip-word-narrow">{BOARD_NOMINATED_LABEL_NARROW}</span>
+								<span class="section-label chip-word-wide">{BOARD_NOMINATED_LABEL}</span>
 								{card.nominatedBy}
 							</p>
 						</div>
@@ -805,6 +807,10 @@
 	 * The short name below 640px and the full one at and above it — the same
 	 * breakpoint `global.css` already uses for the strip, so the layout has
 	 * one width where it changes its mind rather than two.
+	 *
+	 * The state chip and the footnote's `Nominated by` label both take this
+	 * pair: one rule for every place on the card that has a narrow spelling,
+	 * so they all abbreviate at the same width.
 	 */
 	.chip-word-wide {
 		display: none;
