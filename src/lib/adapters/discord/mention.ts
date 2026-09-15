@@ -78,11 +78,11 @@ const EM_DASH = '—';
  * degrades to the plain factual line rather than inventing a sentence.
  *
  * The subject of every clause is the addressed TEAM, so each reads as
- * `Bulls — Ari no longer hold the leading Bid.` The plural verb is deliberate:
+ * `Bulls — Ari were outbid.` The plural verb is deliberate:
  * a Team is the subject, and a co-managed one legitimately has two Managers on
  * the line.
  */
-const OUTBID_CLAUSE = 'no longer hold the leading Bid.';
+const OUTBID_CLAUSE = 'were outbid.';
 const LED_AT_CLOSE_CLAUSE = 'led this Auction at its close.';
 const SLOT_RELEASED_CLAUSE = 'no longer hold this Nomination Slot.';
 const CONTENDER_CLAUSE = 'were a Contender in this draw.';

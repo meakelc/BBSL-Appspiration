@@ -1072,7 +1072,7 @@ describe('drainOutbox — one pass', () => {
 		expect(channel.posts[0]?.body).toBe(
 			`Lakers — Meakel bid $14.5M on Anthony Davis. Closes ${CLOSES_AT_MARKUP}.
 ` +
-				`<@${ALICE}> <@${BOB}> — Lakers — Meakel & Dana no longer hold the leading Bid.`
+				`<@${ALICE}> <@${BOB}> — Lakers — Meakel & Dana were outbid.`
 		);
 		expect(channel.posts[0]?.recipients).toEqual([ALICE, BOB]);
 	});
@@ -1214,7 +1214,7 @@ describe('drainOutbox — the budget', () => {
 			// the text now says which line is whose.
 			body:
 				`Lakers — Meakel bid $14.5M on Anthony Davis. Closes ${CLOSES_AT_MARKUP}.\n` +
-				`<@${ALICE}> — Lakers — Meakel no longer hold the leading Bid.\n` +
+				`<@${ALICE}> — Lakers — Meakel were outbid.\n` +
 				'Kevin Durant to Bulls — Ari for $3.0M.\n' +
 				`<@${BOB}> — Bulls — Ari led this Auction at its close.`,
 			recipients: [ALICE, BOB]
@@ -1847,7 +1847,7 @@ describe('the directory fold carries the mute, and absence reads as not muted', 
 		expect(channel.posts[0]).toEqual({
 			body:
 				`Lakers — Meakel bid $14.5M on Anthony Davis. Closes ${CLOSES_AT_MARKUP}.\n` +
-				`<@${ALICE}> <@${BOB}> — Lakers — Meakel & Dana no longer hold the leading Bid.`,
+				`<@${ALICE}> <@${BOB}> — Lakers — Meakel & Dana were outbid.`,
 			recipients: [ALICE, BOB]
 		});
 	});
