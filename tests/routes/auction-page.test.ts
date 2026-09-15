@@ -333,19 +333,22 @@ describe('the Auction page — what it renders', () => {
 		expect(marker).not.toContain('chip');
 	});
 
-	it('renders every Bid in chronological order, each naming its Team and Manager — AC6', () => {
+	it('renders every Bid in seq order newest first, each naming its Team and Manager — AC6', () => {
 		// The loop lives in the `bidHistory` snippet both states of the page
 		// render through, so the list is asserted at its one definition and at
 		// the open branch's call to it.
 		expect(PAGE).toMatch(/\{#snippet bidHistory\(/);
-		expect(PAGE).toMatch(/\{#each bids as bid \(bid\.seq\)\}/);
+		expect(PAGE).toMatch(/\{#each newestFirst as bid \(bid\.seq\)\}/);
 		expect(PAGE).toContain('{@render bidHistory(auction.bids, OPEN_HISTORY_EMPTY)}');
 		expect(PAGE).toContain('bid.bidder');
 		expect(PAGE).toContain('bid.amount');
 		expect(PAGE).toContain('bid.occurredAt');
-		// The server hands the list back already in seq order; the surface
-		// must not re-sort it into some other order.
-		expect(PAGE).not.toMatch(/\bbids\.(sort|reverse|toSorted)/);
+		// The server hands the list back in seq order, oldest first, and that
+		// order is what decides adjacency. The surface flips the whole column so
+		// the last Bid placed reads first — on a COPY, and with no sort of its
+		// own, so nothing re-orders the record itself.
+		expect(PAGE).toContain('{@const newestFirst = [...bids].reverse()}');
+		expect(PAGE).not.toMatch(/\bbids\.(sort|toSorted)/);
 	});
 
 	it('renders no anonymity anywhere — every history line carries a named bidder', () => {
@@ -1831,9 +1834,11 @@ describe('the Auction history tells a cancelled Bid from a live one', () => {
 	});
 
 	it('strikes the row through and labels it, in unchanged seq order', () => {
-		// The loop is unchanged — every Bid, keyed by `seq`, oldest first —
-		// and nothing filters, sorts or hides.
-		expect(PAGE_CODE).toContain('{#each bids as bid (bid.seq)}');
+		// The loop is every Bid, keyed by `seq`, newest first — the column is
+		// flipped as a whole, so a cancelled Bid keeps its exact place among its
+		// neighbours. Nothing filters, sorts or hides.
+		expect(PAGE_CODE).toContain('{#each newestFirst as bid (bid.seq)}');
+		expect(PAGE_CODE).toContain('{@const newestFirst = [...bids].reverse()}');
 		expect(PAGE_CODE).not.toMatch(/\bbids\.filter/);
 		expect(PAGE_CODE).not.toMatch(/\bbids\.sort/);
 		// The row treatment, conditioned on the fact and on nothing else.
