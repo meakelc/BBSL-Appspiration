@@ -45,7 +45,10 @@
 		POOL_POSITION_LEGEND,
 		POOL_POSITION_NAMES,
 		POOL_SEARCH_LABEL,
+		POOL_SHOW_UNAVAILABLE_LABEL,
+		countUnavailable,
 		filterPool,
+		hiddenPoolSentence,
 		isFiltering,
 		poolCountSentence
 	} from '$lib/core/pool-filter.ts';
@@ -101,7 +104,7 @@
 	 * What the Manager has asked to look at. Narrowing only — it changes what
 	 * is RENDERED and nothing else.
 	 *
-	 * Neither control is posted, neither is a gate, and neither is sent to the
+	 * No control here is posted, none is a gate, and none is sent to the
 	 * server: the pool arrives whole and the server re-derives every gate under
 	 * the lock on submit regardless of what this page was showing. A filter
 	 * that could change a refusal would be a rule wearing a control's costume.
@@ -112,7 +115,25 @@
 	let search = $state('');
 	let positions = $state<string[]>([]);
 
-	const filter = $derived({ search, positions });
+	/**
+	 * Whether the Players who cannot be nominated are listed.
+	 *
+	 * `false` at rest, which is the one default on this page that hides
+	 * something. By the middle of an auction most of the pool is a Player
+	 * somebody already nominated, and those rows cannot be tapped — a list
+	 * whose majority refuses the tap is a list a Manager scrolls past rather
+	 * than reads. They are one control away, not gone.
+	 *
+	 * It is still only RENDERING. Hiding a row changes nothing about the gate:
+	 * an unavailable Player was already unnominatable with their row on
+	 * screen, and the server re-derives every refusal under the lock.
+	 */
+	let showUnavailable = $state(false);
+
+	const filter = $derived({ search, positions, showUnavailable });
+
+	/** How much of the pool the availability default is holding back. */
+	const hiddenCount = $derived(countUnavailable(pool.players));
 
 	/**
 	 * The rows to render.
@@ -297,18 +318,68 @@
 				</fieldset>
 
 				<!--
+					The Players who cannot be nominated, and the one control that
+					brings them back.
+
+					HIDDEN BY DEFAULT. Every one of these rows is a radio that
+					refuses the tap, and by the middle of an auction they are
+					most of the pool — so the list a Manager scrolls is mostly
+					Players they cannot have, with the ones they can scattered
+					through it. Hiding them is a change to what is RENDERED and
+					to nothing else: the gate that made the row unavailable is
+					the server's, it is unchanged, and it is re-derived under the
+					lock on submit.
+
+					They are not gone, because "who went already" is a real
+					question and this page is the only list that answers it. One
+					tap opens the disclosure, one tick puts them back — greyed,
+					with the same state phrase their rows always carried.
+
+					A `<details>` and not a permanently visible checkbox, for the
+					reason the cost disclosure above is one: this is a phone-first
+					page whose first screen already carries a search field, seven
+					chips, a count and the list itself. The summary states the
+					fact so a collapsed control still says what it is holding
+					back; the instruction is on the checkbox inside it.
+				-->
+				<details class="explainer filter-hidden">
+					<summary>
+						<span class="prose">{hiddenPoolSentence(hiddenCount, filter)}</span>
+						<!-- The affordance as a mark, `aria-hidden` because the
+						     disclosure is already announced as expanded or
+						     collapsed — the cost disclosure's own reasoning, and
+						     its styles. A chevron rather than the info circle:
+						     what opens here is a control, not a sentence. -->
+						<span class="explainer-mark" aria-hidden="true">
+							<svg viewBox="0 0 16 16" width="16" height="16" focusable="false">
+								<path d="M4 6.5 8 10.5l4-4" />
+							</svg>
+						</span>
+					</summary>
+					<label class="show-unavailable" for="show-unavailable">
+						<input id="show-unavailable" type="checkbox" bind:checked={showUnavailable} />
+						<span class="prose">{POOL_SHOW_UNAVAILABLE_LABEL}</span>
+					</label>
+				</details>
+
+				<!--
 					How much of the pool is showing, once there is something to
 					say — and it is announced, because a Manager who types into
 					the search has no other way to learn that they narrowed
 					1,467 Players down to none.
 
-					EMPTY at rest, and the element stays in the DOM while it is.
-					A pool size is not news: it is the same figure on every
-					visit and it cost a line of a first screen the list, the
-					filter and the control are already competing for. But a live
-					region that is added and removed is not announced by every
-					screen reader, so the region is always here and sometimes
-					says nothing. `poolCountSentence` decides which.
+					It says ONE thing: that the filter matched nobody. There is
+					no running count — "Showing 42 of 1,467" was arithmetic
+					about a list that is on screen to be read, it moved on every
+					keystroke, and neither number is one a Manager does anything
+					with.
+
+					The empty region stays in the DOM while it has nothing to
+					say, because a live region that is added and removed is not
+					announced by every screen reader — and the sentence it
+					carries is the one a Manager who narrowed the pool to
+					nothing cannot do without. `poolCountSentence` decides when
+					it speaks.
 
 					There is no line explaining that no position is picked
 					either. Seven unfilled chips already say that, and a
@@ -800,6 +871,64 @@
 		 * of it doubled that and left the legend floating between the two
 		 * groups rather than belonging to the one below it.
 		 */
+	}
+
+	/*
+	 * The hidden-Player disclosure, sitting under the chips as a third filter.
+	 *
+	 * It borrows `.explainer`'s summary rules — the flex row, the dropped
+	 * marker, the mark's tap target — because it IS that pattern: a summary
+	 * that states something and a body that carries the rest. What it adds is
+	 * the room above, which separates it from the chips the way the chips are
+	 * separated from the search field.
+	 *
+	 * Its summary carries a sentence rather than a section label, so the text
+	 * is allowed to wrap and the mark is pinned to the first line rather than
+	 * centred against two.
+	 */
+	.filter-hidden {
+		margin-top: var(--space-row-gap);
+		color: var(--color-text-tertiary);
+	}
+
+	.filter-hidden > summary {
+		align-items: flex-start;
+	}
+
+	/* The sentence takes the row and the mark keeps its place at the end of
+	   it: a wrapped flex row would otherwise drop the mark to its own line
+	   the moment the count reached four digits. */
+	.filter-hidden > summary .prose {
+		flex: 1 1 auto;
+		min-width: 0;
+	}
+
+	/* The chevron turns to point at what it opened, which is the one state a
+	   collapsed disclosure cannot say in words it is already using. */
+	.filter-hidden[open] .explainer-mark svg {
+		transform: rotate(180deg);
+	}
+
+	/*
+	 * The control itself, at the full touch height.
+	 *
+	 * It is `--control-height` here and NOT the chips' lighter padding: a chip
+	 * is one of seven on a wrapped line and its mis-tap is undone by the next
+	 * tap, while this is a single control behind a disclosure whose mis-tap
+	 * re-lists ~1,200 rows and moves everything below it.
+	 */
+	.show-unavailable {
+		display: flex;
+		align-items: center;
+		gap: var(--space-row-gap);
+		min-height: var(--control-height);
+		color: var(--color-text);
+	}
+
+	.show-unavailable input[type='checkbox'] {
+		width: 22px;
+		height: 22px;
+		accent-color: var(--color-border-interactive);
 	}
 
 	/*
