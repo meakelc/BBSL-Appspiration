@@ -777,6 +777,19 @@ describe('the Auction page — the lottery it renders', () => {
 		);
 	});
 
+	it('drops the Contender names the moment the contention converts', () => {
+		// The fold NEVER clears `contenders` — a non-empty list is what
+		// `ContentionDissolved` tests to know a reveal belongs to this Auction
+		// — so a converted Auction still carries every Team that joined. They
+		// hold nothing once a strictly higher Bid leads outright, and naming
+		// them under that new leader would say a draw is still coming.
+		//
+		// The gate is the fold's own state literal, through `isContention`, and
+		// never the list being empty: the Bid Board card and the Your Positions
+		// card each already read it that way.
+		expect(PAGE).toMatch(/const otherContenders = \$derived\(\s*!isContention\s*\?\s*\[\]/);
+	});
+
 	it('renders for every viewer — it hangs off no Team fact', () => {
 		// A lottery is a fact about the Auction, not about who is looking at
 		// it. The bar is conditional on `isContention` alone, which is the
