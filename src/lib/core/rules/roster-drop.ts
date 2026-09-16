@@ -6,25 +6,33 @@
  * two lines:
  *
  * ```
- * deadMoney = releasesToNothing(row) ? $0 : chargedCapHit(row)
+ * deadMoney = chargedCapHit(row)
  * removed   = deadMoney is $0
  * ```
  *
- * and all four outcomes fall out of them. An Active/Bench or Injury Reserve
+ * and every outcome falls out of them. An Active/Bench or Injury Reserve
  * Contract carries its full charge and its row is reclassified `dead_money`.
  * A Minor League row was charging `$0`, so nothing is carried and the row is
- * removed. A full-term second-round rookie deal is released to `$0` by
- * FR-43's exception and removed the same way — and removing the row IS the
- * release of its Cap Hit back to Cap Space. Nothing here tests
- * `rosterSlotKind` to decide either half: a branch on `minor_league` would be
- * a second spelling of `chargedCapHit`, which is the one statement of "a
- * Minor League row charges $0" and is not edited by this story (AR-43).
+ * removed — and removing the row IS the release of its Cap Hit back to Cap
+ * Space. Nothing here tests `rosterSlotKind` to decide either half: a branch
+ * on `minor_league` would be a second spelling of `chargedCapHit`, which is
+ * the one statement of "a Minor League row charges $0" (AR-43).
  *
- * **The exception needs BOTH facts.** Round 2 alone is a rookie deal that may
- * be part-served; a full term alone is an ordinary Contract that has simply
- * not started. `rookieScaleRound === 2` AND `contractYearsRemaining === 5`,
- * because the second-round rookie scale is five years and invariant — which
- * is exactly what makes the term test a sound proxy for "unelapsed".
+ * **There is no rookie-scale exception, and its absence is the rule.** FR-43
+ * carried one — a second-round rookie Contract from the current draft class
+ * cleared entirely — and it was removed on 2026-09-16 because the League does
+ * not waive Dead Money during the auction at all. The waiver is an AMNESTY
+ * PERIOD that runs BEFORE the auction opens, settled in Fantrax and already
+ * reflected in the rosters this app imports. By the time a Drop can be
+ * recorded here there is nothing left to waive, so a Contract released in
+ * this product always carries what it was charging.
+ *
+ * The exception was live long enough to fire once, on a $1,000,000 `2RK`
+ * Contract (Washington, 2026-09-16), which removed the row and handed the
+ * Team back $1,000,000 it should have kept charging. `rookieScaleRound` is
+ * still parsed, persisted and written into the `DropRecorded` payload — it is
+ * a fact about the Contract and the events already in the log carry it — but
+ * nothing reads it to decide anything.
  *
  * **It does no arithmetic of its own** (AR-42). Cap and capacity come from
  * `rules/roster-act.ts`, which is the evaluation a Trade already runs; this
@@ -40,7 +48,7 @@
  */
 
 import { MINIMUM_BID } from '../constants.ts';
-import { compareMoney, formatExactDollars, parseMoney, subtractMoney } from '../money.ts';
+import { compareMoney, formatExactDollars, parseMoney } from '../money.ts';
 import type { Money } from '../money.ts';
 import type { OpenAuctions } from '../projection/auctions.ts';
 import type { DroppedContract, RosterActTeamFigures } from '../projection/contracts.ts';
@@ -78,19 +86,6 @@ import { SLOT_LABELS } from './roster-import.ts';
  * computation of either is exactly what AR-42 forbids.
  */
 const SLOT_RESERVE: Money = parseMoney(MINIMUM_BID);
-
-/**
- * The draft round FR-43's exception is about, and the full term of a deal in
- * it — the two literals the exception turns on, named rather than inlined.
- *
- * The second-round rookie scale is FIVE years and that length is invariant,
- * which is the whole reason a term test can stand in for "unelapsed": a
- * second-round deal with five years left has had none of it served. A
- * FIRST-round deal is out of scope whatever its term, because FR-43's
- * exception is second-round only.
- */
-export const ROOKIE_SCALE_EXEMPT_ROUND = 2;
-export const ROOKIE_SCALE_EXEMPT_TERM = 5;
 
 /**
  * One Contract as a Drop can release it.
@@ -218,22 +213,6 @@ export type DropOutcome =
 	  };
 
 /**
- * FR-43's one exception, asked as one question of one row.
- *
- * Both facts or neither. Exported so a surface can state WHY a Contract
- * cleared without re-spelling the test.
- */
-export function releasesToNothing(row: {
-	readonly rookieScaleRound: number | null;
-	readonly contractYearsRemaining: number | null;
-}): boolean {
-	return (
-		row.rookieScaleRound === ROOKIE_SCALE_EXEMPT_ROUND &&
-		row.contractYearsRemaining === ROOKIE_SCALE_EXEMPT_TERM
-	);
-}
-
-/**
  * The Dead Money one release carries — **the one expression that decides the
  * amount**, and the only one.
  *
@@ -242,9 +221,16 @@ export function releasesToNothing(row: {
  * Cap Space was computed from a line earlier. That is what makes "Cap Space
  * stands still" in §10 example 40 an identity rather than a coincidence: the
  * row keeps charging exactly what it charged.
+ *
+ * **It is `chargeOf` and nothing else.** There is no waiver to test for here:
+ * the League's amnesty runs before the auction opens and is already settled
+ * in the imported rosters, so every Contract this product releases carries
+ * what it was charging. A Minor League row still leaves nothing behind, and
+ * it does so because it was charging `$0` — not because this function knows
+ * anything about Slots.
  */
 function deadMoneyFor(row: DroppablePlayer): Money {
-	return releasesToNothing(row) ? NO_MONEY : chargeOf(row);
+	return chargeOf(row);
 }
 
 /**
@@ -516,26 +502,22 @@ export function dropRefusalDetail(
  * What one release costs the Team's bidding power, in words — the sentence
  * FR-43 requires on the reason sheet before a Drop commits (UX-DR40).
  *
- * **Two facts, stated separately, because only one of them is universal.**
- * Every Active/Bench release frees a SLOT, and a free Slot costs
- * `MINIMUM_BID` to reserve — that is true of all of them. What it NETS to is
- * not: §10 example 40 carries its Cap Hit as Dead Money and the Maximum Bid
- * FALLS $1,000,000, while §10 example 41 is the same Slot, the same
- * $2,000,000 and the same act and the Maximum Bid RISES $1,000,000, because
- * the charge went back to Cap Space. So the reserve is one sentence and the
- * net direction is another, and the second is COMPUTED from what the release
- * actually returned rather than assumed.
+ * **Two facts, and the second is the one the sheet exists for.** Every
+ * Active/Bench release frees a SLOT, and a free Slot costs `MINIMUM_BID` to
+ * reserve. What it NETS to is the counterintuitive half: Cap Space does not
+ * move, Roster Count falls, and a Commissioner reading only those two figures
+ * reads a gain — when the Maximum Bid has in fact FALLEN by the reserve on
+ * the hole the Drop just opened (§10 example 40).
  *
- * **Stating it backwards is worse than not stating it.** A sheet showing only
- * the two states shows a Cap Space that did not move and a Roster Count that
- * fell, and a Commissioner reads that as a gain; a sheet that asserts one
- * direction for both cases is wrong for exactly the release whose direction
- * is least obvious, which is the one this requirement exists for.
- *
- * **The rookie clause is gated on `releasesToNothing`, not on `removed`.**
- * `removed` says only that the carried Dead Money is `$0`, and an ordinary
- * Contract charging `$0` satisfies that too — citing FR-43's second-round
- * exception over such a release would state a reason that did not happen.
+ * **There is now exactly one direction, and that is the rule rather than a
+ * simplification.** It used to be computed, because FR-43's rookie-scale
+ * exception could return more to Cap Space than the reserve took and move the
+ * Maximum Bid the other way (§10 example 41). That exception is gone — the
+ * League waives Dead Money only in an amnesty before the auction opens — so
+ * an Active/Bench release returns nothing, ever: a Contract charging
+ * something carries all of it, and one charging `$0` has nothing to give
+ * back. The sentence states the one direction that remains rather than
+ * branching on a case that cannot arise.
  *
  * `null` for an Injury Reserve or Minor League release, because neither frees
  * an Active/Bench Slot and neither moves Maximum Bid by this route — the
@@ -546,41 +528,31 @@ export function dropAttention(release: DropRelease): string | null {
 	if (release.fromPlacement !== 'active_bench') return null;
 
 	// Fact one, true of EVERY Active/Bench release: the freed hole has to be
-	// reserved, so Roster Reserve rises by `MINIMUM_BID` whatever else happens.
+	// reserved, so Roster Reserve rises by `MINIMUM_BID`.
 	const freed =
 		`Dropping ${release.playerName} frees an Active/Bench Slot, and a free Slot costs ` +
 		`${describeActAmount(SLOT_RESERVE)} to reserve — so Roster Reserve rises by that much.`;
 
-	// Fact two: what, if anything, goes back to Cap Space. **The rookie clause
-	// is gated on `releasesToNothing` and not on `removed`**, because `removed`
-	// only says the carried Dead Money is $0 — which an ordinary Contract
-	// charging $0 also satisfies, and telling its Commissioner it cleared under
-	// FR-43's exception would be false.
-	const returned = release.removed ? release.chargedCapHit : NO_MONEY;
-	const fate = !release.removed
-		? `None of the ${describeActAmount(release.chargedCapHit)} comes back — the Contract keeps charging it ` +
-			`as Dead Money under nobody's name.`
-		: releasesToNothing(release)
-			? `The ${describeActAmount(release.chargedCapHit)} returns to Cap Space: a second-round rookie-scale ` +
-				`Contract released with its full term unelapsed carries no Dead Money (FR-43).`
-			: `The Contract was charging ${describeActAmount(release.chargedCapHit)}, so it leaves no Dead Money ` +
-				`behind and that is what returns to Cap Space.`;
+	// Fact two: what goes back to Cap Space. **Nothing ever does**, and that is
+	// now a property of the rule rather than of this release. A Contract that
+	// was charging something carries all of it as Dead Money; one that was
+	// charging `$0` has nothing to give back. There is no third case, because
+	// the League's amnesty runs before the auction opens and this product
+	// waives nothing.
+	const fate = release.removed
+		? `The Contract was charging ${describeActAmount(release.chargedCapHit)}, so it leaves no Dead Money ` +
+			`behind — and nothing returns to Cap Space either.`
+		: `None of the ${describeActAmount(release.chargedCapHit)} comes back — the Contract keeps charging it ` +
+			`as Dead Money under nobody's name.`;
 
-	// The NET direction, for THIS release — and it is the half the sheet exists
-	// for, so it is computed rather than asserted. §10 example 40 carries its
-	// Cap Hit and the Maximum Bid FALLS $1,000,000; §10 example 41 is the same
-	// Slot, the same amount and the same act, and it RISES $1,000,000. A
-	// sentence that stated one direction for both would be wrong for one of the
-	// two examples FR-43 exists to distinguish.
-	const direction = compareMoney(returned, SLOT_RESERVE);
+	// The NET direction, which follows from the two above and has exactly one
+	// answer: the reserve on the freed hole rises and nothing offsets it. This
+	// used to be computed, because FR-43's rookie-scale exception could hand
+	// back more than the reserve and move it the other way (§10 example 41).
+	// With that exception removed the other direction is unreachable, and a
+	// branch a reader has to prove dead is worse than the sentence itself.
 	const net =
-		direction === 0
-			? `Net, this Drop leaves the Team's Maximum Bid unchanged.`
-			: direction > 0
-				? `Net, this Drop RAISES the Team's Maximum Bid by ` +
-					`${describeActAmount(subtractMoney(returned, SLOT_RESERVE))}.`
-				: `Net, this Drop LOWERS the Team's Maximum Bid by ` +
-					`${describeActAmount(subtractMoney(SLOT_RESERVE, returned))}.`;
+		`Net, this Drop LOWERS the Team's Maximum Bid by ${describeActAmount(SLOT_RESERVE)}.`;
 
 	return `${freed} ${fate} ${net}`;
 }

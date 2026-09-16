@@ -203,8 +203,8 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 		'40 — A Drop lowers the Maximum Bid'
 	],
 	[
-		'example-41-the-three-characters-worth-2000000.test.ts',
-		'41 — The three characters worth $2,000,000'
+		'example-41-retired-the-three-characters-decide-nothing.test.ts',
+		'41 — The three characters that decide nothing (retired 2026-09-16)'
 	],
 	[
 		'example-42-a-won-player-traded-after-the-auction-phase.test.ts',

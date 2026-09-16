@@ -36,8 +36,7 @@ import {
 	dropActSentence,
 	dropAttention,
 	dropRefusalDetail,
-	evaluateDrop,
-	releasesToNothing
+	evaluateDrop
 } from '../src/lib/core/rules/roster-drop.ts';
 import type { DroppablePlayer, RosterDropState } from '../src/lib/core/rules/roster-drop.ts';
 import { dropReasonRows } from '../src/lib/reason-sheet-view.ts';
@@ -147,7 +146,14 @@ describe('the one conversion — no Slot kind is a special case', () => {
 		expect(delta.after.minorLeagueOccupied).toBe(0);
 	});
 
-	it('releases a full-term SECOND-round rookie deal to nothing', () => {
+	it('carries a full-term SECOND-round rookie deal in full - there is no exception', () => {
+		// **The regression for the removal.** This is the exact row that used to
+		// clear entirely under FR-43's rookie-scale exception, and it fired once
+		// in production before the exception was removed (Washington, Malique
+		// Lewis, $1,000,000, 2026-09-16). The League waives Dead Money only in an
+		// amnesty period BEFORE the auction opens, settled in Fantrax and already
+		// reflected in the imported rosters - so nothing this app records ever
+		// waives it, and Cap Space must not move.
 		const { release, delta } = releaseOf(
 			stateOf([
 				player('p-rk', 'Rookie', 'active_bench', 2_000_000, {
@@ -158,14 +164,13 @@ describe('the one conversion — no Slot kind is a special case', () => {
 			'p-rk'
 		);
 
-		expect(release?.deadMoney).toBe(0);
-		expect(release?.removed).toBe(true);
-		// Removing the row IS the release: Cap Space rises by exactly what he
-		// was charging.
-		expect(delta.after.capSpace).toBe(delta.before.capSpace + 2_000_000);
+		expect(release?.deadMoney).toBe(2_000_000);
+		expect(release?.removed).toBe(false);
+		// The row keeps charging what it charged, so Cap Space stands still.
+		expect(delta.after.capSpace).toBe(delta.before.capSpace);
 	});
 
-	it('carries a FIRST-round rookie deal in full — the exception is second-round only', () => {
+	it('carries a FIRST-round rookie deal in full', () => {
 		const { release } = releaseOf(
 			stateOf([
 				player('p-1rk', 'First Rounder', 'active_bench', 2_000_000, {
@@ -196,12 +201,25 @@ describe('the one conversion — no Slot kind is a special case', () => {
 		expect(release?.removed).toBe(false);
 	});
 
-	it('asks BOTH facts of the exception, never one', () => {
-		expect(releasesToNothing({ rookieScaleRound: 2, contractYearsRemaining: 5 })).toBe(true);
-		expect(releasesToNothing({ rookieScaleRound: 2, contractYearsRemaining: 4 })).toBe(false);
-		expect(releasesToNothing({ rookieScaleRound: 1, contractYearsRemaining: 5 })).toBe(false);
-		expect(releasesToNothing({ rookieScaleRound: null, contractYearsRemaining: 5 })).toBe(false);
-		expect(releasesToNothing({ rookieScaleRound: 2, contractYearsRemaining: null })).toBe(false);
+	it('reads NEITHER rookie fact to decide the amount', () => {
+		// The designation is still parsed and still written into the
+		// `DropRecorded` payload - it is a fact about the Contract - but no
+		// combination of round and term changes what is carried.
+		for (const rookieScaleRound of [null, 1, 2, 3]) {
+			for (const contractYearsRemaining of [null, 0, 3, 4, 5]) {
+				const { release } = releaseOf(
+					stateOf([
+						player('p-any', 'Any', 'active_bench', 2_000_000, {
+							rookieScaleRound,
+							contractYearsRemaining
+						})
+					]),
+					'p-any'
+				);
+				expect(release?.deadMoney).toBe(2_000_000);
+				expect(release?.removed).toBe(false);
+			}
+		}
 	});
 
 	it('writes the conversion ONCE — no branch on the Slot kind decides the amount', () => {
@@ -213,9 +231,10 @@ describe('the one conversion — no Slot kind is a special case', () => {
 			.replace(/^\s*\/\/.*$/gm, '');
 		expect(source).not.toMatch(/rosterSlotKind\s*===\s*'minor_league'/);
 		expect(source).not.toMatch(/rosterSlotKind\s*===\s*'injury_reserve'/);
-		// One `deadMoneyFor`, and it is the only place `releasesToNothing`
-		// chooses between $0 and the charge.
-		expect(source.match(/releasesToNothing\(row\) \? NO_MONEY : chargeOf\(row\)/g)).toHaveLength(1);
+		// One `deadMoneyFor`, and it is `chargeOf` alone - no waiver, no ternary,
+		// nothing that could grow a second answer.
+		expect(source).not.toMatch(/releasesToNothing|ROOKIE_SCALE_EXEMPT/);
+		expect(source.match(/return chargeOf\(row\);/g)).toHaveLength(1);
 		expect(source.match(/const removed = compareMoney\(deadMoney, NO_MONEY\) === 0;/g)).toHaveLength(
 			1
 		);
@@ -566,11 +585,11 @@ describe('the sheet', () => {
 		expect(sentence).not.toMatch(/(his|him|he)/i);
 	});
 
-	it('says the OPPOSITE for a full-term 2RK release — §10 example 41 RISES', () => {
-		// The same Slot, the same amount and the same act as the case above,
-		// and the Maximum Bid moves the other way: $2,000,000 returns to Cap
-		// Space against $1,000,000 of new reserve, a net rise of $1,000,000.
-		// Stating "LOWERS" here would be the sheet's worst available outcome.
+	it('says the SAME for a full-term 2RK release - no waiver, so it still LOWERS', () => {
+		// The row that used to be example 41, asserting its inverse. Same Slot,
+		// same amount and same act as the case above, and now the same answer
+		// too: the Contract carries its Dead Money, nothing returns to Cap
+		// Space, and the reserve on the freed hole is the whole of the move.
 		const { release } = releaseOf(
 			stateOf([
 				player('p-rk', 'Rookie', 'active_bench', 2_000_000, {
@@ -584,19 +603,18 @@ describe('the sheet', () => {
 		const sentence = dropAttention(release);
 
 		expect(sentence).toContain('$1.0M to reserve');
-		expect(sentence).toContain('RAISES');
+		expect(sentence).toContain('LOWERS');
 		expect(sentence).toContain('$1.0M');
-		expect(sentence).not.toContain('LOWERS');
-		// The exception IS cited here, because it is what actually happened.
-		expect(sentence).toContain('rookie-scale');
-		expect(sentence).not.toMatch(/(his|him|he)/i);
+		expect(sentence).not.toContain('RAISES');
+		// No waiver is cited, because none was applied.
+		expect(sentence).not.toContain('rookie-scale');
+		expect(sentence).not.toContain('FR-43');
 	});
 
-	it('never cites the rookie exception for a $0-charged release that merely `removed`', () => {
-		// `removed` only says the carried Dead Money is $0, and an ordinary
-		// Active/Bench Contract charging $0 satisfies that too. Telling its
-		// Commissioner it cleared under FR-43's second-round exception would be
-		// false — the clause is gated on `releasesToNothing`, not on `removed`.
+	it('cites no waiver for a $0-charged release that merely `removed`', () => {
+		// `removed` says only that the carried Dead Money is $0, which an
+		// ordinary Active/Bench Contract charging $0 satisfies. There is no
+		// waiver in this product for it to cite.
 		const { release } = releaseOf(
 			stateOf([player('p-free', 'Free Agent Deal', 'active_bench', 0)]),
 			'p-free'

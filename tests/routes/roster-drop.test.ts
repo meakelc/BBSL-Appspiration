@@ -313,11 +313,11 @@ describe('/roster-drop — the three steps', () => {
 		expect(data.sheet?.reasonFieldName).toBe('reason');
 	});
 
-	it('states the NET direction on the sheet, and states it correctly both ways', async () => {
+	it('states the NET direction on the sheet - and it is LOWERS, for every Slot', async () => {
 		// The counterintuitive half FR-43 requires in words before commit, and
-		// the half a flat "a Drop lowers the Maximum Bid" sentence gets wrong.
+		// the half a flat "a Drop raises the Maximum Bid" reading gets wrong.
 		const carried = await loadAt('?team=t-1&drop=p-1&confirm=yes');
-		const cleared = await loadAt('?team=t-1&drop=p-3&confirm=yes');
+		const rookie = await loadAt('?team=t-1&drop=p-3&confirm=yes');
 
 		const carriedNote = carried.sheet?.attentionNotes[0] ?? '';
 		expect(carriedNote).toContain('$1.0M to reserve');
@@ -325,13 +325,15 @@ describe('/roster-drop — the three steps', () => {
 		expect(carriedNote).toContain('LOWERS');
 		expect(carriedNote).toContain('$1.0M');
 
-		// The same Slot, the same act — and a full-term second-round rookie
-		// deal, so $2,000,000 returns against $1,000,000 of new reserve.
-		const clearedNote = cleared.sheet?.attentionNotes[0] ?? '';
-		expect(clearedNote).toContain('RAISES');
-		expect(clearedNote).toContain('$1.0M');
-		expect(clearedNote).toContain('rookie-scale');
-		expect(clearedNote).not.toContain('LOWERS');
+		// The same Slot and the same act on a full-term second-round rookie
+		// deal, which used to be the one release that moved it the other way.
+		// With the exception removed it reads exactly like the one above, and
+		// cites no waiver.
+		const rookieNote = rookie.sheet?.attentionNotes[0] ?? '';
+		expect(rookieNote).toContain('LOWERS');
+		expect(rookieNote).toContain('$1.0M');
+		expect(rookieNote).not.toContain('RAISES');
+		expect(rookieNote).not.toContain('rookie-scale');
 	});
 
 	it('carries EVERY selected id on the commit action and on Cancel', async () => {
@@ -385,10 +387,12 @@ describe('/roster-drop — committing', () => {
 		expect(world.statements.join('\n')).not.toMatch(/notification_outbox/i);
 	});
 
-	it('DELETEs the row of a release that carries nothing', async () => {
+	it('DELETEs the row of a release that carries nothing - a Minor League stash', async () => {
+		// A Minor League row was charging $0, which since the rookie-scale
+		// exception was removed is the only way a release carries nothing.
 		world.statements.length = 0;
 
-		await commit('?team=t-1&drop=p-3', 'The rookie deal, released in full term.');
+		await commit('?team=t-1&drop=p-2', 'Stashed Player, released in Fantrax.');
 
 		expect(world.statements.filter((sql) => /^delete from team_rosters/i.test(sql))).toHaveLength(
 			1

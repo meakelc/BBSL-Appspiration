@@ -89,9 +89,10 @@
 			<p class="commissioner-label">Choose the Team</p>
 			<p class="prose">
 				A Drop records a release the Team already made in Fantrax. The Contract stops
-				counting against the twelve, and unless it is a second-round rookie-scale deal with
-				its full term unelapsed it keeps charging the Cap as Dead Money. Nothing is recorded
-				until you have read the sheet and given a reason.
+				counting against the twelve and keeps charging the Cap as Dead Money, at exactly
+				what it was charging before — the League waives Dead Money only in the amnesty
+				before the auction opens, never here. Nothing is recorded until you have read the
+				sheet and given a reason.
 			</p>
 
 			<!--
