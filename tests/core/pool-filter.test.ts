@@ -4,7 +4,9 @@ import {
 	NO_POOL_FILTER,
 	POOL_POSITIONS,
 	POOL_POSITION_NAMES,
+	countUnavailable,
 	filterPool,
+	hiddenPoolSentence,
 	isFiltering,
 	matchesPoolFilter,
 	poolCountSentence,
@@ -22,30 +24,49 @@ const WHITE: FilterablePlayer = {
 	fantraxPlayerId: 'p-white',
 	playerName: 'Derrick White',
 	positions: 'PG,SG,G',
-	nbaTeam: 'BOS'
+	nbaTeam: 'BOS',
+	available: true
 };
 const BAM: FilterablePlayer = {
 	fantraxPlayerId: 'p-bam',
 	playerName: 'Bam Adebayo',
 	positions: 'PF,F,C',
-	nbaTeam: 'MIA'
+	nbaTeam: 'MIA',
+	available: true
 };
 const MIKAL: FilterablePlayer = {
 	fantraxPlayerId: 'p-mikal',
 	playerName: 'Mikal Bridges',
 	positions: 'SG,G,SF,F',
-	nbaTeam: 'NYK'
+	nbaTeam: 'NYK',
+	available: true
 };
 const CHET: FilterablePlayer = {
 	fantraxPlayerId: 'p-chet',
 	playerName: 'Chet Holmgren',
 	positions: 'C',
-	nbaTeam: 'OKC'
+	nbaTeam: 'OKC',
+	available: true
+};
+
+/** Already on the Bid Board: the state the resting filter hides. */
+const NOMINATED: FilterablePlayer = {
+	fantraxPlayerId: 'p-jokic',
+	playerName: 'Nikola Jokic',
+	positions: 'C',
+	nbaTeam: 'DEN',
+	available: false
 };
 
 // Named rather than indexed: `noUncheckedIndexedAccess` is on, and a fixture
 // that has to be non-null-asserted at every use reads worse than four consts.
 const POOL: readonly FilterablePlayer[] = [WHITE, BAM, MIKAL, CHET];
+
+/** The same pool with one Player already nominated, in the export's order. */
+const MIXED: readonly FilterablePlayer[] = [WHITE, BAM, NOMINATED, MIKAL, CHET];
+
+/** The filter a Manager who has asked for everything is looking at. */
+const SHOW_ALL: PoolFilter = { ...NO_POOL_FILTER, showUnavailable: true };
 
 const filter = (part: Partial<PoolFilter> = {}): PoolFilter => ({ ...NO_POOL_FILTER, ...part });
 const idsOf = (players: readonly FilterablePlayer[]) => players.map((p) => p.fantraxPlayerId);
@@ -104,8 +125,49 @@ describe('matchesPoolFilter', () => {
 	});
 
 	it('treats blank text as no filter at all', () => {
-		expect(isFiltering(filter({ search: '   ' }))).toBe(false);
+		expect(isFiltering({ ...SHOW_ALL, search: '   ' })).toBe(false);
 		expect(matchesPoolFilter(CHET, filter({ search: '   ' }))).toBe(true);
+	});
+
+	it('refuses a Player who cannot be nominated unless asked for them', () => {
+		// The resting filter hides them: their radio refuses the tap, and by
+		// the middle of an auction they are most of the pool.
+		expect(matchesPoolFilter(NOMINATED, NO_POOL_FILTER)).toBe(false);
+		expect(matchesPoolFilter(NOMINATED, SHOW_ALL)).toBe(true);
+	});
+
+	it('ANDs availability against the search, so a hidden Player stays hidden', () => {
+		// Searching a name that is already on the Bid Board finds nothing until
+		// the control is on — and the count sentence is what says so.
+		expect(matchesPoolFilter(NOMINATED, filter({ search: 'jokic' }))).toBe(false);
+		expect(matchesPoolFilter(NOMINATED, { ...SHOW_ALL, search: 'jokic' })).toBe(true);
+	});
+});
+
+describe('the availability default', () => {
+	it('counts as narrowing, because at rest the list is short of the pool', () => {
+		// The count sentence is gated on this. Calling the default "not
+		// narrowing" would keep it silent about the largest thing it hides.
+		expect(isFiltering(NO_POOL_FILTER)).toBe(true);
+		expect(isFiltering(SHOW_ALL)).toBe(false);
+	});
+
+	it('counts what it is holding back, over the whole pool', () => {
+		expect(countUnavailable(MIXED)).toBe(1);
+		expect(countUnavailable(POOL)).toBe(0);
+		expect(countUnavailable([])).toBe(0);
+	});
+
+	it('states the fact when collapsed and the state when open', () => {
+		// "Nominated" for all three refused states: the summary of a collapsed
+		// control is not where a Manager learns the refusal vocabulary, and
+		// every revealed row still carries its own state phrase.
+		expect(hiddenPoolSentence(1, NO_POOL_FILTER)).toBe('1 nominated Player is hidden.');
+		expect(hiddenPoolSentence(1204, NO_POOL_FILTER)).toBe('1,204 nominated Players are hidden.');
+		// Nothing to hide is worth saying too: it is the one reading under
+		// which an empty-looking control is not a control that broke.
+		expect(hiddenPoolSentence(0, NO_POOL_FILTER)).toBe('Every Player in the pool can be nominated.');
+		expect(hiddenPoolSentence(1204, SHOW_ALL)).toContain('are listed');
 	});
 });
 
@@ -115,6 +177,24 @@ describe('filterPool', () => {
 		// in the input's order, which is the export's order.
 		expect(idsOf(filterPool(POOL, filter({ positions: ['F'] })))).toEqual(['p-bam', 'p-mikal']);
 		expect(idsOf(filterPool(POOL, NO_POOL_FILTER))).toEqual(idsOf(POOL));
+	});
+
+	it('drops the Players who cannot be nominated, and puts them back in order', () => {
+		// Hidden by default; revealed in the export's order, never appended.
+		expect(idsOf(filterPool(MIXED, NO_POOL_FILTER))).toEqual([
+			'p-white',
+			'p-bam',
+			'p-mikal',
+			'p-chet'
+		]);
+		expect(idsOf(filterPool(MIXED, SHOW_ALL))).toEqual(idsOf(MIXED));
+	});
+
+	it('still keeps a chosen Player who has become unavailable', () => {
+		// The gate is the server's and it can turn a row unavailable between
+		// page loads. The radio carrying the selection must survive it anyway,
+		// or the form posts nobody.
+		expect(idsOf(filterPool(MIXED, NO_POOL_FILTER, ['p-jokic']))).toContain('p-jokic');
 	});
 
 	it('keeps the chosen Player even when the filter excludes them', () => {
@@ -129,8 +209,10 @@ describe('filterPool', () => {
 		expect(idsOf(narrowed)).toEqual(['p-bam', 'p-mikal', 'p-chet']);
 	});
 
-	it('returns everything when nothing is asked of it', () => {
-		expect(filterPool(POOL, NO_POOL_FILTER)).toBe(POOL);
+	it('returns the list itself when nothing is being hidden at all', () => {
+		// The identity fast path, which now needs the availability control on:
+		// the resting filter has something to do.
+		expect(filterPool(POOL, SHOW_ALL)).toBe(POOL);
 	});
 
 	it('never returns a Player twice when they both match and are kept', () => {
@@ -140,24 +222,37 @@ describe('filterPool', () => {
 });
 
 describe('poolCountSentence', () => {
-	it('says NOTHING when the Manager has not narrowed anything', () => {
-		// A pool size is not news: the same figure on every visit, answering a
-		// question nobody asked, costing a line of a phone's first screen. The
-		// count earns its line only once narrowing has changed it.
-		expect(poolCountSentence(1467, 1467, NO_POOL_FILTER)).toBe('');
-		expect(poolCountSentence(1, 1, NO_POOL_FILTER)).toBe('');
-		// Blank text is not narrowing either.
-		expect(poolCountSentence(1467, 1467, filter({ search: '  ' }))).toBe('');
+	it('says NOTHING while there is a list on screen to read', () => {
+		// There is no running count. "Showing 42 of 1,467" was arithmetic about
+		// a list the Manager can see, it moved on every keystroke, and neither
+		// number is one they do anything with.
+		expect(poolCountSentence(1467, 1467, SHOW_ALL)).toBe('');
+		expect(poolCountSentence(1, 1, SHOW_ALL)).toBe('');
+		expect(poolCountSentence(1467, 1467, { ...SHOW_ALL, search: '  ' })).toBe('');
+		// Narrowed, and still silent: rows came back, so they answer for
+		// themselves.
+		expect(poolCountSentence(42, 1467, filter({ search: 'w' }))).toBe('');
+		expect(poolCountSentence(1204, 1467, NO_POOL_FILTER)).toBe('');
 	});
 
-	it('states BOTH numbers when narrowed', () => {
-		// The question is not "how many can I see" but "how much am I not
-		// looking at", so a bare count of the visible rows will not do.
-		expect(poolCountSentence(42, 1467, filter({ search: 'w' }))).toBe('Showing 42 of 1,467 Players.');
+	it('names only the controls that are actually narrowing', () => {
+		// Telling a Manager to clear a search they never typed is advice about
+		// a control they did not touch.
+		const hiddenOnly = poolCountSentence(0, 1467, NO_POOL_FILTER);
+		expect(hiddenOnly).toContain('show the nominated Players');
+		expect(hiddenOnly).not.toContain('clear the search');
+
+		const typedOnly = poolCountSentence(0, 1467, { ...SHOW_ALL, search: 'zzz' });
+		expect(typedOnly).toContain('clear the search or the positions');
+		expect(typedOnly).not.toContain('nominated Players');
+
+		const both = poolCountSentence(0, 1467, filter({ search: 'zzz' }));
+		expect(both).toContain('clear the search or the positions');
+		expect(both).toContain('show the nominated Players');
 	});
 
 	it('says how to get back when nothing matches', () => {
-		const sentence = poolCountSentence(0, 1467, filter({ search: 'zzz' }));
+		const sentence = poolCountSentence(0, 1467, { ...SHOW_ALL, search: 'zzz' });
 		expect(sentence).toContain('No Player matches');
 		expect(sentence).toContain('1,467');
 		expect(sentence).toContain('clear');
@@ -166,11 +261,13 @@ describe('poolCountSentence', () => {
 	it('groups digits without Intl, which the pure core forbids', () => {
 		// `check-core-purity.js` fails the build on `Intl`, so the separator is
 		// inserted by hand — these are the boundaries that catch an off-by-one.
-		// Asked through the narrowed branch, since the resting one is silent.
-		const narrowed = filter({ search: 'a' });
-		expect(poolCountSentence(999, 999, narrowed)).toBe('Showing 999 of 999 Players.');
-		expect(poolCountSentence(1000, 1000, narrowed)).toBe('Showing 1,000 of 1,000 Players.');
-		expect(poolCountSentence(1, 1234567, narrowed)).toContain('1,234,567');
-		expect(poolCountSentence(12, 12, narrowed)).toBe('Showing 12 of 12 Players.');
+		// Asked through the no-match branch, the only one that prints a number.
+		const narrowed = { ...SHOW_ALL, search: 'zzz' };
+		expect(poolCountSentence(0, 999, narrowed)).toContain('999 are in the pool');
+		expect(poolCountSentence(0, 1000, narrowed)).toContain('1,000 are in the pool');
+		expect(poolCountSentence(0, 1234567, narrowed)).toContain('1,234,567');
+		expect(poolCountSentence(0, 12, narrowed)).toContain('12 are in the pool');
+		// And the same boundaries through the hidden count's own sentence.
+		expect(hiddenPoolSentence(1000, NO_POOL_FILTER)).toContain('1,000 nominated Players are hidden');
 	});
 });
