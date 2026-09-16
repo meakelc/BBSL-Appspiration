@@ -45,7 +45,7 @@ plus `teamName`, a Fantrax team id, and `salaryCap: 165000000.0` per Team. **Sal
 2. **Player ids are unwrapped here** (`01eon`) and asterisk-wrapped in the CSV export (`*04ewu*`), which the importer stores verbatim. Compared unnormalised, every row reads simultaneously as a departure and an unknown arrival.
 3. **`status` carries all four slot kinds** — `ACTIVE`, `RESERVE`, `MINORS`, `INJURED_RESERVE` — but the underscore form does not match the CSV importer's `injured reserve` alias. Two mappings, not one.
 
-**One rule confirmed against live data:** `2RK31` appears exactly 30 times, one per Team — this year's second-round class — validating both the five-year term and the *"full term unelapsed"* test FR-43 relies on. The first-round ladder runs `1RK27`–`1RK30` with no `1RK31`, so **first-round scale is four years, not five**; the drop exception is `2RK`-only and unaffected, but nobody should generalise the five-year term to `1RK`.
+**One fact confirmed against live data:** `2RK31` appears exactly 30 times, one per Team — this year's second-round class — confirming the five-year second-round term. The first-round ladder runs `1RK27`–`1RK30` with no `1RK31`, so **first-round scale is four years, not five**; nobody should generalise the five-year term to `1RK`. *(Amended 2026-09-16. This originally also validated the *"full term unelapsed"* test that FR-43's rookie-scale drop exception relied on. **That exception is removed** — the league waives Dead Money only in the amnesty period before the auction opens, so no rule tests the term any more. The rookie-scale designation still survives the import and still decides nothing; the term figures above stand on their own.)*
 
 **Three findings drove the v1 decision:**
 
@@ -155,7 +155,43 @@ FR-20 requires a draw any manager can independently reproduce. Mechanism guidanc
 
 ---
 
-## G. Deferred features — rationale kept for the v2 conversation
+## G. The retraction window — what the downstream documents must amend
+
+*Added 2026-09-16 with FR-15. This section is a handoff, not a design: it names the amendments the retraction window forces in documents this workflow does not own, so that `bmad-architecture` and `bmad-spec` inherit the list rather than rediscovering it.*
+
+### The restorer already fits, with one forbidden exception
+
+`ARCHITECTURE-SPINE.md` AD-31 is titled *"one restorer, two callers, three parameters"* and parameterises `core/rules/restore.ts` over exactly the three axes on which a cancellation and a void disagree — `withdrawnBid` retain/erase, `auctionClock` leave/restore, `leagueClockReset` keep/remove. A retraction is a **third caller passing the void's existing triple**, `erase`/`restore`/`remove`, unchanged. No fourth axis and no new selector: the walk-down-and-skip already does what FR-15 needs.
+
+**With exactly one exception, and it is forbidden rather than parameterised.** The Bid that *dissolves* a Minimum-Bid Contention under FR-19 discards the Contender list and releases every Contender's $1,000,000. Retracting it cannot use this selector at all, because the selector walks to the next-highest **surviving Bid** and a dissolved contention has none — only a discarded list of equal entries. Restoring that state would be a genuine **fourth restoration shape**. FR-15 therefore makes a converting Bid final on submission, so the shape is never needed. An implementation that finds itself reaching for a fourth axis has mis-read the requirement.
+
+### AD-22 needs a sentence it does not currently have
+
+AD-22 enumerates what **resets** the League Clock and says new event types default to **not** resetting it. FR-15 introduces a type that **removes** a reset, which AD-22 addresses only for `BidVoided` and only by name. The amendment must say that a retraction takes the void's treatment and not the cancellation's — the AD already warns that these two are "one line apart in any reducer" and that conflating them "will shorten the Auction Phase every time a roster fills." A retraction is now the third line in that neighbourhood and the most likely to be built wrong, because it resembles a cancellation socially (a Team's Bid goes away) and a void mechanically.
+
+### AD-31's termination argument does not cover retraction, and must be extended rather than assumed
+
+AD-31 bounds the cascade with *"cancellation is triggered only by a Close, and never by a restoration."* That argument is about re-entrancy inside one close and says nothing about a human-invoked withdrawal. FR-15's termination argument is different in kind: **every retraction is anchored to a Bid's own timestamp, and each step down the history is anchored to a strictly older Bid**, so a chain shortens by construction and cannot extend itself (PRD §10 example 52). Both arguments should stand in AD-31 side by side. Note also that FR-40's trigger bound is **unchanged** — a retraction calls the restorer without being a cancellation and without causing one.
+
+**Relevant precedent, and why it does not apply.** On 2026-09-10 the commissioner rejected reusing the restorer for Roster Trades and Drops, on the recorded grounds that it would require amending AD-31's deliberately bounded trigger and would *"let an administrative act strip a Player from a Team that took no action."* Neither half transfers: a retraction **restores** rather than strips, and it is invoked by the bidding Team itself. That decision stands for FR-41/FR-43/FR-44 and is not disturbed.
+
+### Documents that still assert the old FR-15, and are out of scope here
+
+- **`SPEC.md` CAP-5** carries the prohibition almost verbatim — *"no control to cancel, edit, or lower an accepted Bid exists"* and *"A Bid once accepted cannot be withdrawn **by the Team that placed it**"* — plus the enumeration *"Two things outside the Team can end it."* All three statements need the matching amendment — and the enumeration's count is now three, not two. Owned by `bmad-spec`.
+- **`epics.md`** line 257 summarises FR-15 as *"No **voluntary** bid retraction — the control is absent, not disabled · narrowed by Epic 10 (the system may cancel; the Team still may not)."* Owned by `bmad-create-epics-and-stories`.
+- **`sprint-change-proposal-2026-09-07.md`** §5.1.4 also carries it. That is a dated historical input and correctly stays as written.
+
+### The one rule here that must not be built as an implementation detail
+
+A Bid placed within ninety seconds of the same Team's own retraction earns **no League Clock reset** (FR-15). It is not a rate limit and must not be built as one: it is the only thing standing between this feature and a Team holding the Auction Phase open indefinitely for free, since FR-18 resets the League Clock on every lottery join and the League Clock is the sole terminator. It belongs in `league-clock.ts`, beside the `BidVoided` case, and PRD §10 example 54 is its test.
+
+### One note that genuinely is not a rule
+
+The window is a **fold over the log and nothing else** — a comparison between a Bid's own timestamp, the injected server time, and the sequence of events touching the displaced Team since. There is no timer to schedule, no row to expire, and nothing for the close sweep to do, which is the reason this requirement is cheap despite reversing a load-bearing one. The read path may render a live countdown from the same derivation it uses to enable the control, and must not cache it.
+
+---
+
+## H. Deferred features — rationale kept for the v2 conversation
 
 - **Web push / PWA notifications.** Was the best notification UX by a distance when the alternative was email. Largely moot since FR-27 moved to Discord `@mentions`: Discord's own push already delivers an instant, phone-native alert through an app every manager has installed, which is most of what web push would have bought. iOS PWA push remains disproportionate for v1. The failure mode now worth watching is not latency but *notification fatigue* — a mention lost in a busy channel.
 - **Overnight clock freeze.** Rejected as a *rules change*, not as an engineering problem — the league runs 24/7 clocks by rule and changing that needs league buy-in, not a PM decision. Note that FR-34's pause machinery already implements most of the mechanism, so if the league votes for it later, the lift is small.
