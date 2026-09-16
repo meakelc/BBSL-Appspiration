@@ -741,11 +741,27 @@
 	 *
 	 * The ORDER is never touched: AD-14 makes ascending join `seq` an input
 	 * to the winner, so this filters and nothing else.
+	 *
+	 * **Empty the moment the contention is no longer live.** The fold NEVER
+	 * clears `contenders` — a non-empty list is the one durable evidence that
+	 * a lottery ran on this Auction, which is what `ContentionDissolved`
+	 * tests to know a reveal belongs here at all — so a CONVERTED Auction
+	 * still carries every Team that joined. They are not Contenders any more:
+	 * the converting Bid is strictly higher than the join amount, so it leads
+	 * outright and nobody behind it holds a ticket in a draw that will never
+	 * run. Printing those names under the new Leading Bidder would say a
+	 * lottery is still standing over Teams the raise has already passed.
+	 *
+	 * The gate is the fold's own state LITERAL and never the list being
+	 * empty — the same reading the Bid Board card (`state === 'minimum_bid'`)
+	 * and the Your Positions card each already take of it.
 	 */
 	const otherContenders = $derived(
-		auction.contenders.filter(
-			(_, position) => control.contenderTeamIds[position] !== control.leadingTeamId
-		)
+		!isContention
+			? []
+			: auction.contenders.filter(
+					(_, position) => control.contenderTeamIds[position] !== control.leadingTeamId
+				)
 	);
 
 	// The absolute stamps are NOT safe to derive during SSR.
@@ -1093,7 +1109,12 @@
 			     The leading Team is dropped rather than printed twice, matched by
 			     ID and never by the display string beside it: `contenderTeamIds`
 			     is the same fold array in the same order as the names, which is
-			     what makes the index safe to line up. -->
+			     what makes the index safe to line up.
+
+			     Absent once the contention converts: `otherContenders` empties
+			     itself on the fold's state literal, because the fold keeps the
+			     Contender list forever and a raise past the join amount leaves
+			     those Teams with nothing to be named for. -->
 			{#if otherContenders.length > 0}
 				<ul class="contenders" id="auction-contenders">
 					{#each otherContenders as contender, position (position)}

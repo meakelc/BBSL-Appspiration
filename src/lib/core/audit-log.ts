@@ -804,11 +804,13 @@ function renderRosterTrade(payload: Payload, refs: AuditReferences): AuditRender
  * the two cases that leave nothing behind, and FR-43's whole subtlety is that
  * they look identical on the Cap until you read this row.
  *
- * **"Released to nothing" is worded, never inferred from a `$0`.** A Minor
- * League row was charging `$0` already and a full-term second-round rookie
- * deal is released to `$0` by the exception; both leave no Dead Money, and
- * the round and the term are printed so a later reading can see which of the
- * two happened rather than guess.
+ * **"Released to nothing" is worded, never inferred from a `$0`.** A release
+ * that carries nothing was charging `$0` to begin with — since the
+ * rookie-scale exception was removed on 2026-09-16 that means a Minor League
+ * row, or a Contract at `$0`. The round and the term are still printed, for
+ * the events already in the log that were decided WHILE the exception stood:
+ * this function renders history, so it must keep saying what those payloads
+ * hold.
  */
 function releaseRow(release: Payload, refs: AuditReferences): AuditDetail {
 	const player = playerNamed(refs, text(release, 'fantraxPlayerId'), text(release, 'playerName'));

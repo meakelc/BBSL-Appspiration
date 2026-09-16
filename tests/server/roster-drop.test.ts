@@ -179,7 +179,8 @@ const TEAMS = [{ id: 't-h', name: 'Team H' }];
 
 /**
  * Team H holds four Contracts: an ordinary Active/Bench deal, a full-term
- * second-round rookie deal, a stash and one it keeps.
+ * second-round rookie deal (which carries like any other since the
+ * rookie-scale exception was removed), a stash and one it keeps.
  */
 const ROSTERS: readonly RosterRow[] = [
 	{
@@ -251,7 +252,10 @@ describe('recordDrop — one transaction, one statement per release, and no outb
 		expect(sqls).not.toMatch(/insert into team_rosters/i);
 	});
 
-	it('DELETEs the row that carries nothing — a full-term second-round rookie deal', async () => {
+	it('UPDATEs a full-term second-round rookie deal like any other - no exception', async () => {
+		// The server-side regression for the removed rookie-scale exception. This
+		// row used to be DELETEd and its Cap Hit handed back; it is now
+		// reclassified `dead_money` like every other released Contract.
 		const harness = fakeGateway({ rosters: ROSTERS, teams: TEAMS });
 
 		const outcome = await recordDrop(
@@ -262,16 +266,14 @@ describe('recordDrop — one transaction, one statement per release, and no outb
 		);
 
 		expect(outcome.kind).toBe('accepted');
-		const deletes = harness.statements.filter((statement) =>
-			/^delete from team_rosters/i.test(statement.sql)
+		expect(harness.order.filter((step) => step === 'carry-row')).toHaveLength(1);
+		expect(harness.order.filter((step) => step === 'remove-row')).toHaveLength(0);
+		const updates = harness.statements.filter((statement) =>
+			/^update team_rosters/i.test(statement.sql)
 		);
-		expect(deletes).toHaveLength(1);
-		expect(deletes[0]?.sql).toBe(REMOVE_ROSTER_ROW_SQL);
-		expect(deletes[0]?.params).toEqual(['p-rookie']);
-		// Nothing was reclassified: the exception removes rather than converts.
-		expect(harness.statements.map((s) => s.sql).join('\n')).not.toMatch(/^update team_rosters/im);
+		expect(updates).toHaveLength(1);
+		expect(updates[0]?.params).toEqual(['p-rookie']);
 	});
-
 	it('DELETEs a Minor League release too, by the SAME rule — it was charging $0', async () => {
 		const harness = fakeGateway({ rosters: ROSTERS, teams: TEAMS });
 
@@ -292,7 +294,7 @@ describe('recordDrop — one transaction, one statement per release, and no outb
 		await recordDrop(
 			harness.gateway,
 			ACTOR,
-			{ teamId: 't-h', fantraxPlayerIds: ['p-plain', 'p-rookie'], reason: REASON },
+			{ teamId: 't-h', fantraxPlayerIds: ['p-plain', 'p-stash'], reason: REASON },
 			'desktop'
 		);
 
@@ -340,7 +342,7 @@ describe('recordDrop — one transaction, one statement per release, and no outb
 		await recordDrop(
 			harness.gateway,
 			ACTOR,
-			{ teamId: 't-h', fantraxPlayerIds: ['p-plain', 'p-rookie'], reason: REASON },
+			{ teamId: 't-h', fantraxPlayerIds: ['p-plain', 'p-stash'], reason: REASON },
 			'desktop'
 		);
 
@@ -357,16 +359,19 @@ describe('recordDrop — one transaction, one statement per release, and no outb
 		expect(payload.reason).toBe(REASON);
 		expect(payload.released.map((release) => release.fantraxPlayerId)).toEqual([
 			'p-plain',
-			'p-rookie'
+			'p-stash'
 		]);
-		// Each carried amount, and the fate that followed from it.
+		// Each carried amount, and the fate that followed from it. The stash was
+		// charging $0, which is the ONLY way a release now carries nothing.
 		expect(payload.released[0]?.deadMoney).toBe(2_000_000);
 		expect(payload.released[0]?.removed).toBe(false);
 		expect(payload.released[1]?.deadMoney).toBe(0);
 		expect(payload.released[1]?.removed).toBe(true);
-		// Roster Count falls by two; Cap Space rises by only the rookie's.
-		expect(payload.teamBefore.rosterCount - payload.teamAfter.rosterCount).toBe(2);
-		expect(payload.teamAfter.capSpace - payload.teamBefore.capSpace).toBe(2_000_000);
+		// Roster Count falls by one - a Minor League row never counted toward
+		// the twelve - and Cap Space does not move at all: the Active/Bench
+		// Contract keeps charging as Dead Money and the stash was charging $0.
+		expect(payload.teamBefore.rosterCount - payload.teamAfter.rosterCount).toBe(1);
+		expect(payload.teamAfter.capSpace - payload.teamBefore.capSpace).toBe(0);
 	});
 
 	it('writes NOTHING when a gate refuses — no event, no row, no commit', async () => {
