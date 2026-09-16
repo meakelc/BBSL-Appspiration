@@ -584,12 +584,22 @@ describe('the nomination surface', () => {
 		);
 	});
 
-	it('puts the cost behind the heading, without hiding it from the act', () => {
+	it('puts the cost behind the Slot heading, without hiding it from the act', () => {
 		// A `<details>`, not a hover tooltip: this page is designed for a phone
 		// and there is no hover there. It opens on tap and on Enter, announces
 		// its own expanded state, and needs no script.
 		expect(SOURCE).toContain('<details class="explainer">');
 		expect(SOURCE).toContain('<summary>');
+		// It hangs off "Your Nomination Slot", beside the Slot a nomination
+		// spends — not off a second heading over the list. There is no second
+		// heading: "Nominate a Player" named the page a Manager is already on,
+		// between a title and a submit button that both say it.
+		expect(MARKUP, 'the list carries a heading that restates the page').not.toContain(
+			'Nominate a Player'
+		);
+		const disclosureAt = SOURCE.indexOf('<details class="explainer">');
+		expect(SOURCE.indexOf('Your Nomination Slot')).toBeGreaterThan(disclosureAt);
+		expect(SOURCE.indexOf('id="nominate-slot"')).toBeGreaterThan(disclosureAt);
 		expect(SOURCE, 'a hover-only affordance on a phone-first page').not.toMatch(
 			/title=|role="tooltip"/
 		);
@@ -670,7 +680,8 @@ describe('the nomination surface', () => {
 		// core's and is still on the page; there is one of it.
 		expect(SOURCE).toContain('pool.consequence');
 		expect(SOURCE.match(/pool\.consequence/g)?.length).toBe(1);
-		// And it lives behind the heading of the box it belongs to.
+		// And it lives behind the heading of the panel that states the Slot it
+		// is charged against.
 		const disclosureAt = SOURCE.indexOf('<details class="explainer">');
 		expect(SOURCE.indexOf('pool.consequence')).toBeGreaterThan(disclosureAt);
 	});

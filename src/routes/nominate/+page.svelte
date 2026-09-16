@@ -187,7 +187,59 @@
 	</header>
 
 	<section class="manager-block">
-		<p class="section-label">Your Nomination Slot</p>
+		<!--
+			The Slot heading, with what a nomination costs behind it.
+
+			The cost used to hang off a second heading, "Nominate a Player",
+			over the list below. That heading named the page a Manager was
+			already on — the title says Nominate a Free Agent, the submit says
+			Nominate the chosen Player — so it was a line of a phone's first
+			screen spent restating the obvious, and it put the cost sentence
+			next to the list rather than next to the Slot the cost is charged
+			against. Here the disclosure sits on the one heading that survives,
+			and the panel under it is the Slot the sentence is about.
+
+			`<details>`/`<summary>` and not a tooltip element: a real tooltip is
+			hover, and this page is designed for a phone where there is no
+			hover. The disclosure opens on tap AND on Enter, is announced as
+			expanded or collapsed, and needs no script — the same pattern the
+			persistent strip's own sheet already uses, so this introduces none.
+
+			It is CLOSED by default, and since the confirmation stopped
+			repeating it this is the ONE place the consequence is stated. That
+			is a deliberate trade: the sentence ran beneath the confirmation as
+			well until the same ~40 words appeared twice on one screen, at
+			which point the second copy read as small print rather than as a
+			thing to read. What a Manager cannot miss is the act itself — the
+			Slot is spent by a separate, deliberate tick, and the control says
+			so — and the cost is one tap from the heading of the panel that
+			states the Slot.
+		-->
+		<details class="explainer">
+			<summary>
+				<span class="section-label">Your Nomination Slot</span>
+				<!-- The affordance, as a mark rather than a sentence. Drawn in
+				     `em` off the summary's own font and stroked from
+				     `currentColor`, the way the strip's burger is, so it tracks
+				     the text instead of pinning a second size literal in.
+
+				     `aria-hidden`, because a screen reader is already told this
+				     is a disclosure and whether it is expanded — an icon
+				     announced beside that would be the control named twice. The
+				     words the icon stands in for are carried by the hidden span
+				     below, so the trigger still says what expanding it reveals
+				     rather than leaving "Your Nomination Slot" to imply it. -->
+				<span class="explainer-mark" aria-hidden="true">
+					<svg viewBox="0 0 16 16" width="16" height="16" focusable="false">
+						<circle cx="8" cy="8" r="6.5" />
+						<path d="M8 7.25v4" />
+						<path d="M8 4.75v.5" />
+					</svg>
+				</span>
+				<span class="visually-hidden">What does nominating cost?</span>
+			</summary>
+			<p class="prose">{pool.consequence}</p>
+		</details>
 		<!-- Whether this Team may nominate at all, stated once and in words,
 		     rather than greying out every row as though every Player were
 		     unavailable. The sentence is the core's.
@@ -214,50 +266,14 @@
 
 	<section class="manager-block">
 		<!--
-			The heading, with what a nomination costs behind it.
-
-			`<details>`/`<summary>` and not a tooltip element: a real tooltip is
-			hover, and this page is designed for a phone where there is no
-			hover. The disclosure opens on tap AND on Enter, is announced as
-			expanded or collapsed, and needs no script — the same pattern the
-			persistent strip's own sheet already uses, so this introduces none.
-
-			It is CLOSED by default, and since the confirmation stopped
-			repeating it this is the ONE place the consequence is stated. That
-			is a deliberate trade: the sentence ran beneath the confirmation as
-			well until the same ~40 words appeared twice on one screen, at
-			which point the second copy read as small print rather than as a
-			thing to read. What a Manager cannot miss is the act itself — the
-			Slot is spent by a separate, deliberate tick, and the control says
-			so — and the cost is one tap from the heading of the box it belongs
-			to rather than set under a checkbox.
+			NO HEADING. This section is the list and the act, and "Nominate a
+			Player" over it named the page a Manager is already on: the title
+			says Nominate a Free Agent, the submit says Nominate the chosen
+			Player, and between them sat a third statement of the same thing
+			costing a line of a 375px first screen. The cost sentence it
+			carried was not lost with it — it moved to the Slot panel's own
+			heading above, beside the Slot that a nomination spends.
 		-->
-		<details class="explainer">
-			<summary>
-				<span class="section-label">Nominate a Player</span>
-				<!-- The affordance, as a mark rather than a sentence. Drawn in
-				     `em` off the summary's own font and stroked from
-				     `currentColor`, the way the strip's burger is, so it tracks
-				     the text instead of pinning a second size literal in.
-
-				     `aria-hidden`, because a screen reader is already told this
-				     is a disclosure and whether it is expanded — an icon
-				     announced beside that would be the control named twice. The
-				     words the icon stands in for are carried by the hidden span
-				     below, so the trigger still says what expanding it reveals
-				     rather than leaving "Nominate a Player" to imply it. -->
-				<span class="explainer-mark" aria-hidden="true">
-					<svg viewBox="0 0 16 16" width="16" height="16" focusable="false">
-						<circle cx="8" cy="8" r="6.5" />
-						<path d="M8 7.25v4" />
-						<path d="M8 4.75v.5" />
-					</svg>
-				</span>
-				<span class="visually-hidden">What does nominating cost?</span>
-			</summary>
-			<p class="prose">{pool.consequence}</p>
-		</details>
-
 		{#if pool.players.length === 0}
 			<p class="prose">
 				The Free Agent pool is empty. There is nobody to nominate until an import has been
@@ -780,6 +796,37 @@
 		padding: var(--space-row-gap);
 		margin: calc(-1 * var(--space-row-gap));
 		color: var(--color-text-tertiary);
+	}
+
+	/*
+	 * What the disclosure reveals, set into the panel as its own block.
+	 *
+	 * It is a DIFFERENT THING from the panel it opens inside: the Slot panel
+	 * states the Slot in one line, and this is ~40 words about what spending
+	 * it costs. Printed on the same ground as its neighbour, an opened
+	 * disclosure read as the panel having simply grown a second paragraph, and
+	 * the Manager had to work out where the answer started. A recessed block
+	 * says where the answer is without a heading to announce it.
+	 *
+	 * `--color-ground` and NOT `--color-surface-sunken`: the sunken token is
+	 * documented as the ground for input fields and disabled controls
+	 * (`tokens.css`), and dressing a paragraph in it would give prose the look
+	 * of a control. The page's own ground, inside a panel that sits on it, is
+	 * the recess that carries no such claim — and the border is
+	 * `--color-border`, the decorative rule, for the same reason: this block
+	 * is not a control boundary.
+	 *
+	 * It is scoped to the direct `p.prose` child, so the availability
+	 * disclosure below — whose body is a checkbox, not prose — keeps the plain
+	 * ground a control belongs on.
+	 */
+	.explainer > p.prose {
+		margin-top: var(--space-row-gap);
+		padding: var(--space-panel-padding);
+		color: var(--color-text-prose);
+		background-color: var(--color-ground);
+		border: var(--border-width) solid var(--color-border);
+		border-radius: var(--rounded-panel);
 	}
 
 	.explainer-mark svg {
