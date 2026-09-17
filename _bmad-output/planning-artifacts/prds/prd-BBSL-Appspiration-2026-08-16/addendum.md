@@ -183,7 +183,7 @@ AD-31 bounds the cascade with *"cancellation is triggered only by a Close, and n
 
 ### The one rule here that must not be built as an implementation detail
 
-A Bid placed within ninety seconds of the same Team's own retraction earns **no League Clock reset** (FR-15). It is not a rate limit and must not be built as one: it is the only thing standing between this feature and a Team holding the Auction Phase open indefinitely for free, since FR-18 resets the League Clock on every lottery join and the League Clock is the sole terminator. It belongs in `league-clock.ts`, beside the `BidVoided` case, and PRD §10 example 54 is its test.
+A Bid placed within ninety seconds of the same Team's own retraction earns **no League Clock reset** (FR-15). It is not a rate limit and must not be built as one: it is the only thing standing between this feature and a Team holding the Auction Phase open indefinitely for free, since FR-18 resets the League Clock on every lottery join and the League Clock is the sole terminator. It belongs in `league-clock.ts`, beside the `BidVoided` case. PRD §10 example 54 is its test, and §10 example **55** is the one that pins the **anchor** — the ninety seconds run from the retraction, not from the retracted Bid, and 54 passes under either reading. *(Added 2026-09-16 by the architecture spine's binding pass, which found the anchor unstated. Anchored to the retracted Bid the stall returns: retract at `T+89s`, re-bid at `T+91s`, fresh reset every cycle.)*
 
 ### One note that genuinely is not a rule
 
