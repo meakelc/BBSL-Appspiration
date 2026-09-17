@@ -828,11 +828,15 @@
 	 *
 	 * The colour stays `text` rather than taking the brand green a bare `a`
 	 * would: the name is the card's identity first and its control second, and
-	 * a board of thirty green names would read as thirty calls to act.
+	 * a board of thirty green names would read as thirty calls to act. The RULE
+	 * under it is `text-secondary`, the grey of the labels and the closed
+	 * card's edge — present enough to mark the control, quiet enough that the
+	 * name itself stays the brightest ink on the card.
 	 */
 	.card-link {
 		color: var(--color-text);
 		text-decoration: underline;
+		text-decoration-color: var(--color-text-secondary);
 	}
 
 	.card-player {

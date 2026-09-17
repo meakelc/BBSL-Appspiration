@@ -449,6 +449,9 @@ describe('the Positions page — what it renders', () => {
 		// call to act.
 		const style = PAGE_CODE.slice(PAGE_CODE.indexOf('<style>'));
 		expect(style).toMatch(/\.card-link \{[^}]*text-decoration: underline;/);
+		expect(style).toMatch(
+			/\.card-link \{[^}]*text-decoration-color: var\(--color-text-secondary\);/
+		);
 		expect(style).not.toMatch(/\.card-link \{[^}]*text-decoration: none;/);
 	});
 
