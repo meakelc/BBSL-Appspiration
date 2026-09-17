@@ -818,9 +818,21 @@
 		margin-right: 0.4em;
 	}
 
+	/*
+	 * The Player's name is the card's one control -- it opens that Player's own
+	 * Auction page -- so it is UNDERLINED and says so. The `none` that stood
+	 * here left a link identifiable only by its cursor, which a phone does not
+	 * have: on touch the only way to discover the card was tappable was to tap
+	 * it. Thickness and offset come from `global.css`'s own `a` rule, so this
+	 * underline is the same one every other link in the product draws.
+	 *
+	 * The colour stays `text` rather than taking the brand green a bare `a`
+	 * would: the name is the card's identity first and its control second, and
+	 * a board of thirty green names would read as thirty calls to act.
+	 */
 	.card-link {
 		color: var(--color-text);
-		text-decoration: none;
+		text-decoration: underline;
 	}
 
 	.card-player {

@@ -442,6 +442,16 @@ describe('the Positions page — what it renders', () => {
 		expect(won).toMatch(/<a class="card-link" href=\{card\.href\}>/);
 	});
 
+	it('underlines the Player name, because the name is the card’s one control', () => {
+		// A link identifiable only by its cursor is not identifiable on a phone.
+		// Thickness and offset come from `global.css`'s own `a` rule; the colour
+		// stays `text`, so the name reads as the card's identity and not as a
+		// call to act.
+		const style = PAGE_CODE.slice(PAGE_CODE.indexOf('<style>'));
+		expect(style).toMatch(/\.card-link \{[^}]*text-decoration: underline;/);
+		expect(style).not.toMatch(/\.card-link \{[^}]*text-decoration: none;/);
+	});
+
 	it('marks the Auction state on the cards, from the Board’s own record', () => {
 		// The Bid Board card's identity-row marker, on the landing's cards for
 		// the same Auctions: one state, one word, one shape, every surface.
