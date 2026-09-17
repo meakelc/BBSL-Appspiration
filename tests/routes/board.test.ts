@@ -148,6 +148,25 @@ describe('load — the destination guard runs FIRST', () => {
 		expect(style).toMatch(/\.chip-word-narrow \{\s*display: none;/);
 	});
 
+	it('sets a long Player name a step down the scale, and never truncates one', () => {
+		// `Giannis Antetokounmpo` at `--size-18` takes the whole identity row on
+		// a 375px phone and pushes the Auction state onto a line of its own. The
+		// name drops to the adjacent step above a named length — a LENGTH and not
+		// a viewport, because the longest names are long at every width.
+		expect(PAGE).toContain('const LONG_NAME_LENGTH = 18;');
+		expect(PAGE).toMatch(
+			/class:card-player-long=\{card\.playerName\.length > LONG_NAME_LENGTH\}/
+		);
+		const style = PAGE.slice(PAGE.indexOf('<style>'));
+		expect(style).toMatch(/\.card-player-long \{\s*font-size: var\(--size-15\);/);
+		// It VARIES the name rather than clipping it: the Player's name is the
+		// one thing on this card that may never be cut off.
+		// Comments stripped: the rule's own commentary NAMES the device it
+		// rejects, and a raw substring search would read that as the device.
+		expect(PAGE_CODE.slice(PAGE_CODE.indexOf('<style>'))).not.toContain('text-overflow');
+		expect(PAGE_CODE).not.toMatch(/\.slice\(0,|substring\(|\.\.\.'/);
+	});
+
 	it('serves the board to a Manager in the Auction Phase', async () => {
 		const result = (await route.load({
 			locals: locals({ kind: 'registered', manager: MANAGER })
