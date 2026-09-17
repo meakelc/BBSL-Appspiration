@@ -75,6 +75,8 @@
 	import { closesInPhrase, contenderCountSentence } from '$lib/core/projection/auctions.ts';
 	import { figuresAgeSentence } from '$lib/core/freshness.ts';
 	import { freshness } from '$lib/client/freshness.svelte.ts';
+	// Outbid cards dismissed on Your Positions lose their chip here too.
+	import { dismissals } from '$lib/client/dismissals.svelte.ts';
 	import { formatInstant, parseInstant } from '$lib/core/instant.ts';
 
 	import type { PageData } from './$types';
@@ -197,6 +199,19 @@
 			clearInterval(ticking);
 		};
 	});
+
+	// Client-only, like every storage read. Any dismissal the reader is no
+	// longer outbid on is dropped, so a later outbid shows its chip again.
+	$effect(() => {
+		dismissals.load(
+			board.cards.filter((card) => card.viewerState === 'outbid').map((card) => card.fantraxPlayerId)
+		);
+	});
+
+	/** An outbid the reader dismissed on Your Positions prints no chip. */
+	function outbidDismissed(card: BoardCardView): boolean {
+		return card.viewerState === 'outbid' && dismissals.has(card.fantraxPlayerId);
+	}
 
 	/**
 	 * The list as it is read: filtered, then ordered.
@@ -564,7 +579,7 @@
 								<span class="visually-hidden">{BOARD_PRICE_LABEL}</span>
 								{card.priceLabel}
 							</p>
-							{#if card.viewerState !== 'not_involved'}
+							{#if card.viewerState !== 'not_involved' && !outbidDismissed(card)}
 								<p
 									class="state"
 									class:chip={card.viewerState === 'you_lead' || card.viewerState === 'outbid'}
@@ -1092,8 +1107,11 @@
 		color: var(--color-text-secondary);
 	}
 
+	/* The two chips that concern the reader set in capitals. */
 	.chip {
 		padding: 2px var(--space-row-gap);
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
 	}
 
 	.chip-icon {

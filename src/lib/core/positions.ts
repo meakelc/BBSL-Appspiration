@@ -144,6 +144,12 @@ export const NOMINATE_PATH = '/nominate';
 /** What the two links off this page are called. */
 export const POSITIONS_BOARD_ACTION = 'Open the board';
 export const POSITIONS_NOMINATE_ACTION = 'Nominate a Free Agent';
+/**
+ * What clearing an outbid card is called. Dismissing is VIEW STATE: it hides
+ * the card here and the matching chip on the board for this reader, and it
+ * changes no Bid, no figure and nothing any other Manager sees.
+ */
+export const POSITIONS_DISMISS_ACTION = 'Dismiss';
 
 // --- The re-entry answer ---------------------------------------------------
 
