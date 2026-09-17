@@ -141,6 +141,23 @@
 	const TICK_MS = 1000;
 
 	/**
+	 * How long a Player's name may be before it is set a step down the scale.
+	 *
+	 * `Giannis Antetokounmpo` at `--size-18` takes the whole identity row on a
+	 * 375px phone and pushes the Auction state onto a line of its own, which
+	 * costs the card a row and breaks the alignment of every state word down
+	 * the board. Above this length the name takes `--size-15` — the adjacent
+	 * step, so the card still sets its name from the same ten-step scale as
+	 * everything else on it.
+	 *
+	 * A LENGTH, not a viewport: the name is the one thing on this card that may
+	 * never be truncated, and the longest names are long at every width. The
+	 * threshold is a presentation measure and lives here rather than in
+	 * `board.ts`, which owns what a card SAYS and not how wide it sets.
+	 */
+	const LONG_NAME_LENGTH = 18;
+
+	/**
 	 * Milliseconds measured on this device since the first paint. A DELTA,
 	 * never an origin — it starts at zero, which is what makes the
 	 * server-rendered HTML and the first client paint agree, and it is clamped
@@ -433,7 +450,11 @@
 					     card that may never be cut off. -->
 					<div class="card-head">
 						<a class="card-link" href={auctionPathFor(card.fantraxPlayerId)}>
-							<span class="display card-player">{card.playerName}</span>
+							<span
+								class="display card-player"
+								class:card-player-long={card.playerName.length > LONG_NAME_LENGTH}
+								>{card.playerName}</span
+							>
 						</a>
 						{#if card.metadata !== null}
 							<span class="card-metadata">{card.metadata}</span>
@@ -983,6 +1004,16 @@
 	.card-player {
 		font-size: var(--size-18);
 		color: var(--color-text);
+	}
+
+	/*
+	 * A long name, set one step down the scale — see `LONG_NAME_LENGTH`. This
+	 * is the ONLY size the card varies by content, and it varies the name
+	 * rather than clipping it: `text-overflow: ellipsis` on a Player's name
+	 * would cut off the one thing on this card a Manager identifies it by.
+	 */
+	.card-player-long {
+		font-size: var(--size-15);
 	}
 
 	.card-metadata {
