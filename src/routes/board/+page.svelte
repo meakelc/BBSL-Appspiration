@@ -57,8 +57,6 @@
 		SORT_KEYS,
 		SORT_LABELS,
 		boardCountSentence,
-		closedCardCount,
-		closedCountSentence,
 		filterBoard,
 		flipDirection,
 		openCardCount,
@@ -280,26 +278,6 @@
 	const countSentence = $derived(boardCountSentence(openCardCount(board.cards)));
 
 	/**
-	 * And how many are over, or `null` when none is.
-	 *
-	 * It rides the SAME line as the count above, because the two are one
-	 * account of the board — what can still be bid on, and what is finished —
-	 * and a Manager reads them together. Both are the core's own sentences over
-	 * the core's own counts, for `boardCountSentence`'s stated reason: the
-	 * surface prints fields and counts nothing.
-	 *
-	 * It also carries the switch's position, which is why it takes
-	 * `boardView.hideClosed` — a closed card that is HIDDEN is a different fact
-	 * from a closed card that is merely closed, and this is the line that says
-	 * which. It is the whole of what discharges the visibly-filtered obligation
-	 * now: the separate notice line it replaced said the same thing a second
-	 * time, one row lower.
-	 */
-	const closedSentence = $derived(
-		closedCountSentence(closedCardCount(board.cards), boardView.hideClosed)
-	);
-
-	/**
 	 * The age of every price on this board, in anything but Live (AD-29).
 	 *
 	 * The board renders up to thirty prices and authorises nothing — there is
@@ -417,24 +395,21 @@
 			     shorter than a touch floor, so this row is as tall as the text
 			     on it and no taller. -->
 			<div class="panel-top">
-				<!-- The board's whole account of itself, on one line: how many
-				     Auctions are open, and how many are over. The second half is
-				     omitted entirely when nothing has closed rather than printing
-				     a zero — "0 Auctions are closed" is a sentence about nothing,
-				     and the board would say it on every screen of the phase's
-				     first week.
+				<!-- How many Auctions are OPEN, and that alone.
 
-				     It is also where a Manager learns the switch is on, because a
-				     closed card that is HIDDEN is a different fact from one that
-				     is merely closed and the core words the difference. That is
-				     the visibly-filtered obligation discharged on the line the
-				     figure is already on — and now on the row the switch is on
-				     too, so the setting and its consequence are read together. -->
-				<p class="prose" id="board-count">
-					{countSentence}{#if closedSentence !== null}&nbsp;<span id="board-closed-count"
-							>{closedSentence}</span
-						>{/if}
-				</p>
+				     A closed count stood beside it and is gone: on a phone, which
+				     is where this board is read, two sentences took this row onto
+				     a second and sometimes a third line, and pushed the switch off
+				     the count it belongs beside. One figure, one line.
+
+				     The visibly-filtered obligation survives it — the SWITCH is
+				     what discharges it. A labelled control on this row, stating
+				     its own position, is a stronger guarantee than a sentence
+				     describing the setting: it is visible whether or not anything
+				     is hidden, and it is what a Manager passes on the way to the
+				     cards. The obligation was written against a filter buried in a
+				     collapsed disclosure, which this board no longer has. -->
+				<p class="prose" id="board-count">{countSentence}</p>
 
 				<!-- The board's one filter, and it is a SWITCH rather than a
 				     disclosure over radios: one question with a yes and a no does
@@ -1063,6 +1038,28 @@
 		border: var(--border-width) solid var(--color-border);
 		border-radius: var(--rounded-panel);
 		padding: var(--space-panel-padding);
+	}
+
+	/*
+	 * The Closed card is set in the grey its own edge takes.
+	 *
+	 * The Player name and the final amount are the two things on any card set
+	 * in full-strength `text`, and on a closed card they were the brightest ink
+	 * on the board — a settled record shouting over the Auctions a Manager can
+	 * still act on. Dropped to `text-secondary` they read as what they are:
+	 * still perfectly legible, no longer competing. The name keeps its
+	 * underline, because it is still the control that opens the Closed page,
+	 * and the underline's own colour comes with it.
+	 *
+	 * Colour is never a carrier here — it is not doing the work of saying the
+	 * Auction is closed. The card already says that three times over: the state
+	 * word on the identity row, the `Won by` and `Closed` labels, and the edge
+	 * below. A greyscale screenshot loses none of them.
+	 */
+	.card.closed .card-link,
+	.card.closed .card-player,
+	.card.closed .card-price {
+		color: var(--color-text-secondary);
 	}
 
 	/*

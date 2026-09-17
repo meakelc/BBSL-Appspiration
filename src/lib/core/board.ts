@@ -478,54 +478,28 @@ export const ARCHIVED_EMPTY_BOARD_STATEMENT =
 	'The Auction Phase is over and no Auction remains open, so there is nothing here to read. ' +
 	'Nominating has closed with it.';
 
-/**
- * How many Auctions have CLOSED, as a finished sentence — or `null` when none
- * has, because a board with nothing closed has nothing to add.
+/*
+ * There is no closed-count sentence, and there were two attempts at one.
  *
- * It stands beside `boardCountSentence` on one line, and the pair is the whole
- * account the board gives of itself: what can still be bid on, and what is
- * over. Two figures rather than one, because they answer opposite questions
- * and a single total would answer neither.
+ * The first was a notice line under the control: `Hide Closed Auctions is on.
+ * 4 of 7 shown; 3 Auctions are hidden.` The second was a second sentence on
+ * the count line: `7 Auctions are open. 3 Auctions are closed and hidden.`
+ * Both existed to discharge the visibly-filtered obligation — a narrowed board
+ * must never be mistakable for a quiet league — and the second ran onto a
+ * second and sometimes a third line on a phone, which is where the board is
+ * read.
  *
- * **`hideClosed` is what discharges the visibly-filtered obligation.** A
- * filtered view must never be mistakable for a quiet league, and that duty got
- * HEAVIER when the switch learned to persist — the setting outlives the visit
- * that made it, so a Manager can meet a short board with no memory of having
- * narrowed it. The sentence therefore names the state of the switch in the
- * same breath as the figure it applies to: the cards are not merely closed,
- * they are closed AND HIDDEN, and the count says how many.
+ * The obligation is discharged without either, and the switch is what
+ * discharges it. It is a labelled control on the count's own row, stating its
+ * own position, that a Manager cannot reach the board without passing. That is
+ * a stronger guarantee than a sentence: the sentence described the setting,
+ * the switch IS the setting, and it is visible whether or not anything is
+ * hidden. The device the obligation was written against was a filter buried in
+ * a collapsed disclosure, which this board no longer has.
  *
- * This replaced a separate notice line that led with the switch's own name.
- * Two lines said one thing twice — the count of what is closed IS the count of
- * what is hidden — and the notice's "N of M shown" restated a figure the line
- * above it already carried. One sentence, on the line the board's own count is
- * already on.
- *
- * The singular is written out because "1 Auctions are closed" is the kind of
- * sentence that tells a Manager at 4am that nobody proof-read the thing they
- * are being asked to trust.
+ * `boardCountSentence` is what remains, and it counts the OPEN Auctions — the
+ * question a Manager scans the board to answer.
  */
-export function closedCountSentence(count: number, hideClosed: boolean): string | null {
-	if (count <= 0) return null;
-	const ending = hideClosed ? 'closed and hidden' : 'closed';
-	if (count === 1) return `One Auction is ${ending}.`;
-	return `${String(count)} Auctions are ${ending}.`;
-}
-
-/**
- * How many of these cards are CLOSED — `closedCountSentence`'s one input, and
- * the exact complement of `openCardCount`.
- *
- * Derived rather than taken as `total - open`, for the reason the counts are
- * two functions at all: a subtraction at the call site would be a third place
- * that decides what "closed" means, and the one place it is decided is the
- * card's own `state`.
- */
-export function closedCardCount<T extends { readonly state: BoardCardState }>(
-	cards: readonly T[]
-): number {
-	return cards.filter((card) => card.state === 'closed').length;
-}
 
 /**
  * How many Auctions are on the board, as a finished sentence.
