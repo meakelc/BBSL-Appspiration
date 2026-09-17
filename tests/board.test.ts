@@ -39,8 +39,6 @@ import {
 	VIEWER_STATE_LABELS,
 	boardCardsFor,
 	boardCountSentence,
-	closedCardCount,
-	closedCountSentence,
 	filterBoard,
 	flipDirection,
 	metadataLine,
@@ -52,6 +50,10 @@ import {
 	viewerStateFor
 } from '../src/lib/core/board.ts';
 import type { BoardCard, BoardCardState, BoardMetadata } from '../src/lib/core/board.ts';
+// The whole module, so an absence claim about its EXPORTS is provable rather
+// than merely unwritten — a named import of something gone is a type error,
+// which is not the same as a test that it is gone.
+import * as board from '../src/lib/core/board.ts';
 import { CLOSED_LABEL, CLOSED_LABEL_NARROW } from '../src/lib/core/projection/closed.ts';
 import { MINIMUM_BID } from '../src/lib/core/constants.ts';
 import { parseMoney } from '../src/lib/core/money.ts';
@@ -824,40 +826,18 @@ describe('filtering — view state, visibly stated', () => {
 		expect(filterBoard(rows, false)).toBe(rows);
 	});
 
-	it('counts the closed cards, and says so beside the open count', () => {
-		// The board's whole account of itself is two figures on one line: what
-		// can still be bid on, and what is over. They are separate counts because
-		// they answer opposite questions and a single total would answer neither.
-		expect(closedCardCount(rows)).toBe(1);
-		expect(closedCountSentence(3, false)).toBe('3 Auctions are closed.');
-		// The exact complement of `openCardCount`, derived off the card's own
-		// state rather than subtracted from a length — so "closed" is decided in
-		// one place.
-		expect(closedCardCount(rows) + openCardCount(rows)).toBe(rows.length);
-	});
-
-	it('says the closed cards are HIDDEN when the switch is on', () => {
-		// This is what discharges the visibly-filtered obligation, and it matters
-		// MORE now that the switch persists: a Manager can meet a board narrowed
-		// by a tap they made yesterday, so the line has to say so unprompted.
-		expect(closedCountSentence(3, true)).toBe('3 Auctions are closed and hidden.');
-		// And the two readings are genuinely different sentences — a closed card
-		// that is hidden is not the same fact as one that is merely closed.
-		expect(closedCountSentence(3, true)).not.toBe(closedCountSentence(3, false));
-	});
-
-	it('writes the singular out rather than printing “1 Auctions”', () => {
-		expect(closedCountSentence(1, false)).toBe('One Auction is closed.');
-		expect(closedCountSentence(1, true)).toBe('One Auction is closed and hidden.');
-	});
-
-	it('says nothing at all when nothing has closed', () => {
-		// A zero here would print "0 Auctions are closed" on every screen of the
-		// phase's first week — a sentence about nothing, beside a figure that is
-		// about something. It is omitted, in both switch positions: with nothing
-		// closed the switch hides nothing, and its own box states its position.
-		expect(closedCountSentence(0, false)).toBeNull();
-		expect(closedCountSentence(0, true)).toBeNull();
+	it('counts only the OPEN Auctions, and states no second figure', () => {
+		// A closed count stood beside the open one and is gone: on a phone, where
+		// this board is read, two sentences took the row onto a second and
+		// sometimes a third line and pushed the switch off the count it belongs
+		// beside. The board states one figure — the question a Manager scans it
+		// to answer — and the SWITCH is what says the closed cards are hidden.
+		expect(openCardCount(rows)).toBe(4);
+		expect(boardCountSentence(openCardCount(rows))).toBe('4 Auctions are open.');
+		// And the second sentence is gone from the module, not merely unused: a
+		// dead export is the next surface's invitation to print it again.
+		expect(Object.keys(board)).not.toContain('closedCountSentence');
+		expect(Object.keys(board)).not.toContain('closedCardCount');
 	});
 });
 

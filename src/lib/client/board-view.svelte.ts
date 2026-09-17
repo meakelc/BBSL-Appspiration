@@ -22,10 +22,11 @@
  * site data degrades to the default, which is the board showing everything.
  *
  * A setting that persists carries an obligation the one-visit version did not:
- * the board it produces must account for itself. `closedCountSentence` is what
- * discharges it — the board's own count line says the closed Auctions are
- * closed AND HIDDEN, so a Manager returning to a short board is told why it is
- * short rather than left to infer a quiet league.
+ * the board it produces must account for itself. The SWITCH is what discharges
+ * it — a labelled control on the count's own row, stating its own position,
+ * that a Manager cannot reach the cards without passing. Two sentences were
+ * tried for the job first and both said, more weakly, what the control itself
+ * shows; `core/board.ts` records why neither survived.
  */
 
 import { DEFAULT_HIDE_CLOSED } from '$lib/core/board.ts';

@@ -260,7 +260,6 @@ describe('the board page — what it renders', () => {
 			'EMPTY_BOARD_STATEMENT',
 			'EMPTY_BOARD_ACTION',
 			'boardCountSentence',
-			'closedCountSentence',
 			'unbidPhrase'
 		]) {
 			expect(PAGE, symbol).toContain(symbol);
@@ -466,17 +465,13 @@ describe('the board page — what it renders', () => {
 		// into it would make the one figure on the page false the moment an
 		// Auction closes. The filtered notice still measures the whole board.
 		expect(PAGE).toMatch(/boardCountSentence\(openCardCount\(board\.cards\)\)/);
-		// And the closed count beside it, on the SAME line: the board's two
-		// figures are one account of itself and a Manager reads them together.
-		expect(PAGE).toMatch(
-			/closedCountSentence\(closedCardCount\(board\.cards\), boardView\.hideClosed\)/
-		);
-		const countLine = PAGE.slice(
-			PAGE.indexOf('id="board-count"'),
-			PAGE.indexOf('</p>', PAGE.indexOf('id="board-count"'))
-		);
-		expect(countLine).toContain('{countSentence}');
-		expect(countLine).toContain('{closedSentence}');
+		// ONE figure on that line. A closed count stood beside it and is gone:
+		// on a phone, where this board is read, two sentences took the row onto
+		// a second and sometimes a third line and pushed the switch off the
+		// count it belongs beside.
+		expect(PAGE).toContain('<p class="prose" id="board-count">{countSentence}</p>');
+		expect(PAGE).not.toContain('closedCountSentence');
+		expect(PAGE).not.toContain('board-closed-count');
 		// The separate notice line is GONE: it led with the switch's own name
 		// and then restated, one row lower, the figure the count line already
 		// carried. The `and hidden` half of the closed sentence is what says
@@ -656,6 +651,27 @@ describe('the board page — the Closed card', () => {
 		// And the row is a row: a column here is what stacked them.
 		expect(PAGE).toMatch(/\.card-closed-figure \{[^}]*display: flex;/);
 		expect(PAGE).not.toMatch(/\.card-closed-figure \{[^}]*flex-direction: column;/);
+	});
+
+	it('sets the closed card’s name and figure in the grey its edge takes', () => {
+		// The Player name and the final amount are the two things on any card
+		// set in full-strength `text`, which on a closed card made a settled
+		// record the brightest ink on the board — shouting over the Auctions a
+		// Manager can still act on.
+		expect(PAGE).toMatch(
+			/\.card\.closed \.card-link,\s*\n\s*\.card\.closed \.card-player,\s*\n\s*\.card\.closed \.card-price \{\s*\n\s*color: var\(--color-text-secondary\);/
+		);
+		// From the token, never a literal — the same grey the closed edge, the
+		// labels and the secondary text already take.
+		expect(PAGE).not.toMatch(/#[0-9a-fA-F]{6}\b/);
+		// Colour is not carrying the state. The card says it is closed in the
+		// state word, in both labelled lines and in its edge, so a greyscale
+		// screenshot loses nothing — the rule this whole page is built on.
+		// The state word rides the shared identity row above the arm, so it is
+		// asserted on the page rather than inside it.
+		expect(PAGE).toContain('card.auctionStateLabel');
+		expect(CLOSED_ARM).toContain('{BOARD_WON_BY_LABEL}');
+		expect(CLOSED_ARM).toContain('{BOARD_CLOSED_AT_LABEL}');
 	});
 });
 
