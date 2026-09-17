@@ -351,6 +351,17 @@ describe('the Positions page — what it renders', () => {
 		expect(PAGE).toContain('gate.figure');
 		// No conditional hiding a passing gate.
 		expect(PAGE_CODE).not.toMatch(/\{#if gate\.passed/);
+		// Collapsed behind the board's disclosure, with every verdict still on
+		// the closed row.
+		expect(PAGE).toMatch(/<details class="gates-disclosure">\s*<summary>[\s\S]*?\{gate\.chip\}[\s\S]*?<\/summary>/);
+	});
+
+	it('lets the reader dismiss an outbid card, as view state only', () => {
+		expect(PAGE).toContain('POSITIONS_DISMISS_ACTION');
+		expect(PAGE).toMatch(/onclick=\{\(\) => dismissals\.dismiss\(card\.fantraxPlayerId\)\}/);
+		expect(PAGE).toMatch(/\{#each outbidShown as card \(card\.fantraxPlayerId\)\}/);
+		// The button spends nothing: no form, no action, no fetch.
+		expect(PAGE_CODE).not.toMatch(/<form|fetch\(/);
 	});
 
 	it('carries no per-Team Maximum Bid — the strip owns that figure', () => {
@@ -449,6 +460,9 @@ describe('the Positions page — what it renders', () => {
 		// call to act.
 		const style = PAGE_CODE.slice(PAGE_CODE.indexOf('<style>'));
 		expect(style).toMatch(/\.card-link \{[^}]*text-decoration: underline;/);
+		expect(style).toMatch(
+			/\.card-link \{[^}]*text-decoration-color: var\(--color-text-secondary\);/
+		);
 		expect(style).not.toMatch(/\.card-link \{[^}]*text-decoration: none;/);
 	});
 

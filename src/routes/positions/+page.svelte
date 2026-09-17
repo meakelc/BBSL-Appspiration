@@ -36,6 +36,7 @@
 		POSITIONS_BOARD_ACTION,
 		POSITIONS_CLOSED_LABEL,
 		POSITIONS_CLOSES_LABEL,
+		POSITIONS_DISMISS_ACTION,
 		POSITIONS_LEADING_LABEL,
 		POSITIONS_NOMINATE_ACTION,
 		POSITIONS_PRICE_LABEL,
@@ -52,6 +53,7 @@
 	import type { ContentionState } from '$lib/core/projection/auctions.ts';
 	import { figuresAgeSentence } from '$lib/core/freshness.ts';
 	import { freshness } from '$lib/client/freshness.svelte.ts';
+	import { dismissals } from '$lib/client/dismissals.svelte.ts';
 	import { formatInstant, parseInstant } from '$lib/core/instant.ts';
 
 	import type { PageData } from './$types';
@@ -209,6 +211,22 @@
 	);
 
 	/**
+	 * The outbid cards still on the page: every one the reader has not
+	 * dismissed. Dismissing is view state (`dismissals.svelte.ts`) — it hides a
+	 * card and changes nothing on it.
+	 */
+	const outbidShown = $derived(
+		positions.outbid.filter((card) => !dismissals.has(card.fantraxPlayerId))
+	);
+
+	// Client-only, like every storage read: the set is empty during SSR and
+	// fills after hydration. Any id the reader is no longer outbid on is
+	// dropped, so a later outbid on the same Player is shown again.
+	$effect(() => {
+		dismissals.load(positions.outbid.map((card) => card.fantraxPlayerId));
+	});
+
+	/**
 	 * The empty screen's own sentence — the Nomination Slot's state and the
 	 * open-Auction count, from the core.
 	 */
@@ -360,11 +378,11 @@
 			</section>
 		{/if}
 
-		{#if positions.outbid.length > 0}
+		{#if outbidShown.length > 0}
 			<section class="group" id="group-outbid">
 				<h2 class="section-label">{GROUP_HEADINGS.outbid}</h2>
 				<ul class="cards">
-					{#each positions.outbid as card (card.fantraxPlayerId)}
+					{#each outbidShown as card (card.fantraxPlayerId)}
 						<li class="card" class:lottery={card.contention === 'minimum_bid'}>
 							<!-- ROW 1 — identity, with the state at the far edge. The
 							     chip is reserved for Outbid and Leading
@@ -458,15 +476,45 @@
 							<!-- BOTH gates, always — refused and passed alike (AD-7).
 							     A capacity refusal may never be reported as a cap
 							     refusal, and each row carries its own arithmetic so
-							     two rows cannot be read as one. -->
-							<ul class="gates">
-								{#each card.reEntryGates as gate (gate.gate)}
-									<li class="gate">
-										<span class="gate-chip">{gate.chip}</span>
-										<span class="gate-figure">{gate.figure}</span>
-									</li>
-								{/each}
-							</ul>
+							     two rows cannot be read as one.
+
+							     Collapsed by default, the board's sort and filter
+							     disclosure: the closed row still states every gate's
+							     verdict, so which gate refused is never hidden, and
+							     the arithmetic behind each is one tap away. -->
+							<details class="gates-disclosure">
+								<summary>
+									<span class="gates-verdicts">
+										{#each card.reEntryGates as gate (gate.gate)}
+											<span class="gate-chip">{gate.chip}</span>
+										{/each}
+									</span>
+									<span class="controls-mark" aria-hidden="true">
+										<svg viewBox="0 0 16 16" width="16" height="16" focusable="false">
+											<path d="M4 6.5 8 10.5 12 6.5" />
+										</svg>
+									</span>
+								</summary>
+								<ul class="gates">
+									{#each card.reEntryGates as gate (gate.gate)}
+										<li class="gate">
+											<span class="gate-chip">{gate.label}</span>
+											<span class="gate-figure">{gate.figure}</span>
+										</li>
+									{/each}
+								</ul>
+							</details>
+
+							<!-- Clears this outbid from the reader's own view, here
+							     and as the chip on the board. View state only: it
+							     posts nothing and changes no figure. -->
+							<button
+								type="button"
+								class="card-dismiss"
+								onclick={() => dismissals.dismiss(card.fantraxPlayerId)}
+							>
+								{POSITIONS_DISMISS_ACTION}
+							</button>
 						</li>
 					{/each}
 				</ul>
@@ -828,11 +876,15 @@
 	 *
 	 * The colour stays `text` rather than taking the brand green a bare `a`
 	 * would: the name is the card's identity first and its control second, and
-	 * a board of thirty green names would read as thirty calls to act.
+	 * a board of thirty green names would read as thirty calls to act. The RULE
+	 * under it is `text-secondary`, the grey of the labels and the closed
+	 * card's edge — present enough to mark the control, quiet enough that the
+	 * name itself stays the brightest ink on the card.
 	 */
 	.card-link {
 		color: var(--color-text);
 		text-decoration: underline;
+		text-decoration-color: var(--color-text-secondary);
 	}
 
 	.card-player {
@@ -894,8 +946,11 @@
 		color: var(--color-lottery-text);
 	}
 
+	/* The two chips that concern the reader set in capitals. */
 	.chip {
 		padding: 2px var(--space-row-gap);
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
 	}
 
 	.chip-icon {
@@ -939,6 +994,87 @@
 
 	.re-entry-blocked {
 		color: var(--color-text);
+	}
+
+	/*
+	 * The gate disclosure — the board's sort and filter construction: a
+	 * summary with no touch-floor box that spans the card, the verdicts in
+	 * force, and the chevron at the trailing edge that turns when open.
+	 */
+	.gates-disclosure > summary {
+		display: flex;
+		align-items: center;
+		gap: var(--space-row-gap);
+		cursor: pointer;
+		list-style: none;
+	}
+
+	.gates-disclosure > summary::-webkit-details-marker {
+		display: none;
+	}
+
+	.gates-disclosure > summary:focus-visible {
+		outline: 2px solid var(--color-text);
+		outline-offset: 2px;
+	}
+
+	.gates-verdicts {
+		display: flex;
+		flex-wrap: wrap;
+		column-gap: var(--space-card-gap);
+		row-gap: 2px;
+	}
+
+	.controls-mark {
+		display: flex;
+		flex-shrink: 0;
+		margin-left: auto;
+		color: var(--color-text-tertiary);
+	}
+
+	.controls-mark svg {
+		width: 1.1em;
+		height: 1.1em;
+		stroke: currentColor;
+		stroke-width: 1.5;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+		fill: none;
+	}
+
+	.gates-disclosure[open] > summary .controls-mark {
+		color: var(--color-text);
+		transform: rotate(180deg);
+	}
+
+	.gates-disclosure[open] > .gates {
+		margin-top: var(--space-row-gap);
+	}
+
+	/*
+	 * Small and quiet at the card's bottom-right corner: a control that spends
+	 * nothing, so it takes no fill and no attention colour.
+	 */
+	.card-dismiss {
+		align-self: flex-end;
+		padding: 4px var(--space-row-gap);
+		background: none;
+		border: var(--border-width) solid var(--color-border);
+		border-radius: var(--rounded-chip);
+		font-size: var(--size-10);
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		color: var(--color-text-secondary);
+		cursor: pointer;
+	}
+
+	.card-dismiss:hover {
+		color: var(--color-text);
+	}
+
+	.card-dismiss:focus-visible {
+		outline: 2px solid var(--color-text);
+		outline-offset: 2px;
 	}
 
 	.gates {

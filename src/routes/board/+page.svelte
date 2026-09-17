@@ -75,6 +75,8 @@
 	import { closesInPhrase, contenderCountSentence } from '$lib/core/projection/auctions.ts';
 	import { figuresAgeSentence } from '$lib/core/freshness.ts';
 	import { freshness } from '$lib/client/freshness.svelte.ts';
+	// Outbid cards dismissed on Your Positions lose their chip here too.
+	import { dismissals } from '$lib/client/dismissals.svelte.ts';
 	import { formatInstant, parseInstant } from '$lib/core/instant.ts';
 
 	import type { PageData } from './$types';
@@ -197,6 +199,19 @@
 			clearInterval(ticking);
 		};
 	});
+
+	// Client-only, like every storage read. Any dismissal the reader is no
+	// longer outbid on is dropped, so a later outbid shows its chip again.
+	$effect(() => {
+		dismissals.load(
+			board.cards.filter((card) => card.viewerState === 'outbid').map((card) => card.fantraxPlayerId)
+		);
+	});
+
+	/** An outbid the reader dismissed on Your Positions prints no chip. */
+	function outbidDismissed(card: BoardCardView): boolean {
+		return card.viewerState === 'outbid' && dismissals.has(card.fantraxPlayerId);
+	}
 
 	/**
 	 * The list as it is read: filtered, then ordered.
@@ -564,7 +579,7 @@
 								<span class="visually-hidden">{BOARD_PRICE_LABEL}</span>
 								{card.priceLabel}
 							</p>
-							{#if card.viewerState !== 'not_involved'}
+							{#if card.viewerState !== 'not_involved' && !outbidDismissed(card)}
 								<p
 									class="state"
 									class:chip={card.viewerState === 'you_lead' || card.viewerState === 'outbid'}
@@ -1006,11 +1021,15 @@
 	 *
 	 * The colour stays `text` rather than taking the brand green a bare `a`
 	 * would: the name is the card's identity first and its control second, and
-	 * a board of thirty green names would read as thirty calls to act.
+	 * a board of thirty green names would read as thirty calls to act. The RULE
+	 * under it is `text-secondary`, the grey of the labels and the closed
+	 * card's edge — present enough to mark the control, quiet enough that the
+	 * name itself stays the brightest ink on the card.
 	 */
 	.card-link {
 		color: var(--color-text);
 		text-decoration: underline;
+		text-decoration-color: var(--color-text-secondary);
 	}
 
 	.card-player {
@@ -1088,8 +1107,11 @@
 		color: var(--color-text-secondary);
 	}
 
+	/* The two chips that concern the reader set in capitals. */
 	.chip {
 		padding: 2px var(--space-row-gap);
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
 	}
 
 	.chip-icon {

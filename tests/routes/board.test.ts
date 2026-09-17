@@ -294,6 +294,11 @@ describe('the board page — what it renders', () => {
 		expect([...PAGE.matchAll(/--accent-bar-width/g)]).toHaveLength(1);
 	});
 
+	it('drops the Outbid chip on a card dismissed from Your Positions', () => {
+		expect(PAGE).toContain("from '$lib/client/dismissals.svelte.ts'");
+		expect(PAGE).toMatch(/\{#if card\.viewerState !== 'not_involved' && !outbidDismissed\(card\)\}/);
+	});
+
 	it('marks Outbid with attention and marks nothing else with it', () => {
 		expect(PAGE).toMatch(/\.chip-outbid \{[\s\S]*?--color-attention[\s\S]*?\}/);
 		expect(PAGE).toMatch(/--color-attention-ink/);
@@ -502,6 +507,9 @@ describe('the board page — what it renders', () => {
 		// call to act.
 		const style = PAGE_CODE.slice(PAGE_CODE.indexOf('<style>'));
 		expect(style).toMatch(/\.card-link \{[^}]*text-decoration: underline;/);
+		expect(style).toMatch(
+			/\.card-link \{[^}]*text-decoration-color: var\(--color-text-secondary\);/
+		);
 		expect(style).not.toMatch(/\.card-link \{[^}]*text-decoration: none;/);
 	});
 
