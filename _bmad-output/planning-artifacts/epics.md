@@ -1,7 +1,8 @@
 ---
 stepsCompleted: [1, 2, 3]
-updated: 2026-09-16
+updated: 2026-09-17
 amendments:
+  - '2026-09-17 — **No epic and no story added; six passages amended, and two of them stated the live rule''s exact opposite.** Driven by PRD ninth pass and commit `e5b9cbc`, after SPEC.md CAP-3/CAP-11 were re-derived the same day. The root cause is older than the change signal: **FR-9 was rewritten on 2026-09-14** (commit `523a82a`) so that a Nomination Slot is released when its Team **wins a Player** and at no other time, and neither this file nor SPEC.md absorbed it — so for three days both confidently described the superseded rule, which is the dangerous direction of staleness because nothing fails. Requirements inventory amended in place, as every prior entry did: **FR-9 rewritten**, **FR-10''s 24-hour notification struck** (removed from scope 2026-09-04 as unnecessary rather than deferred — the board flag stays and is the actual requirement), **FR-27 rewritten** (a Close mentions the **winner alone**; the Slot release rides that same line; **no category is mutable**). Epic 5''s header line amended. **Shipped stories are annotated, never rewritten** — the Story 7.6 and 7.10 precedent: Story 2.3''s two fold criteria, Story 5.3''s trigger list and its 24-hour criterion, Story 5.4''s three-mutable-categories and mute-suppression criteria, Story 10.5''s *"the Slot is released as on any Close"* (backwards — a termination has no winner and frees no Slot), and Story 10.6''s inherited *"the mutable set stays exactly slot_release"*. Story 5.4 keeps its now-false TITLE deliberately, with a note, because the title is part of the record. Nothing is renumbered. Story 5.4''s unmutable criterion was **broadened rather than struck** — it is the one that got *more* true. Amend this file in place, as every entry here did; bmad-create-epics-and-stories has no update path and its step-01 would overwrite the file.'
   - '2026-09-16 — **Epic 11 (Take it back — ninety seconds to undo a bid) appended**, and **Story 7.12 appended to Epic 7**, after PRD FR-15 was REVERSED from a prohibition to a rule (commit c49898e) and the architecture spine, the PRD again, and SPEC.md were all brought current for it the same day. Requirements inventory amended in place: **FR-15 rewritten** — it read "no voluntary bid retraction" from 2026-08-16, and the 2026-09-08 narrowing existed specifically to keep the Team locked out while FR-40 let the system act; **FR-43 exception STRUCK**, deleted upstream 2026-09-16; **AR-45 … AR-48 added**; **UX-DR42 … UX-DR44 added**; **four stale ranges corrected** — the FR inventory header (FR-40 to FR-44), the Coverage Map header (FR-43 to FR-44), and NFR1 and AR-25 (examples 1–28 to 1–57). Epics 1–6 and 8–10 are untouched, as are Stories 7.1–7.11, which are NOT renumbered. **Story 7.6 is annotated rather than rewritten**: it shipped 2026-09-10, and its rookie-scale acceptance criterion is struck through with a superseding note instead of being edited away, because it is the record its code was verified against — the same treatment Story 7.10 gave Story 7.9. **Story 7.12 RECORDS work already in the code** (commit 5222c13) rather than scheduling it, because a deleted rule is the dangerous direction of staleness: it leaves an artifact confidently describing behaviour that no longer exists, and nothing fails. PRD §10 example 12 is deliberately left OUT of Epic 11 — it is the unbid-nomination case and belongs with Epic 2''s nomination stories. Amend this file in place, as every entry here did; bmad-create-epics-and-stories has no update path and its step-01 would overwrite the file.'
   - '2026-09-12 — Stories 7.10 and 7.11 appended to Epic 7 after the approved Sprint Change Proposal 2026-09-12 (the Roster Trade rename, and the within-Team Roster Move). Requirements inventory amended in place: **FR-41 renamed** *Record a Roster Move* -> *Record a Roster Trade* with no change of substance, **FR-44 added**, **AR-44 added**, **UX-DR41 added**; FR-42 given an explicit placement clause; SM-2 and SM-7 extended. Epics 1-6 and 8-10 untouched, as are Stories 7.1-7.9, which are NOT renumbered. The persisted event type `RosterMoveRecorded` is deliberately **not** renamed -- AD-4 forbids mutating the log. The 2026-09-10 entry below keeps its original wording: it names a proposal that was titled "Roster Moves" on the day, and falsifying it would lose the provenance of the rename. Amend this file in place, as every entry here did; `bmad-create-epics-and-stories` has no update path and its step-01 would overwrite the file.'
   - '2026-09-10 — Stories 7.6 … 7.9 appended to Epic 7 after the approved Sprint Change Proposal 2026-09-10 (Roster Moves, Drops, Dead Money). Requirements inventory amended in place: FR-41, FR-42, FR-43 added, AR-41 … AR-43 added, UX-DR39 … UX-DR40 added. Epics 1–6 and 8–10 and their stories are untouched, as are Stories 7.1–7.5, which are NOT renumbered. Note for whoever runs this next: `bmad-create-epics-and-stories` has no update path — its step-01 instructs a full template overwrite and re-extraction, which would destroy this file. Amend in place, as this entry and the 2026-09-08 one both did.'
@@ -47,8 +48,8 @@ FR-6: The Commissioner holds league-administrative privileges on top of full ord
 
 FR-7: A Manager can nominate any Free Agent to the Bid Board while their Team's Nomination Slot is unused — the Player appears in Awaiting Opening Bid with no clock, the Slot is marked used, no cap space is committed, the League Clock resets to 48 hours, and the act is logged and broadcast.
 FR-8: The system refuses a Nomination when the Team's Slot is in use (naming the holding Player), when the Player is already on the board, already won, or under Contract, or when the League is not in Auction Phase; two concurrent Nominations of one Player produce exactly one.
-FR-9: A Team's Nomination Slot is released at the Auction Close of the Player it nominated — regardless of winner, regardless of whether the nominator ever bid, and on no timer of its own; its Managers are notified.
-FR-10: The system makes an unbid Nomination visible — flagged on the board past 24 hours, stated plainly in the nominating Team's own view as holding their Slot, notified to its Managers at the 24-hour mark, with no automatic expiry or return-to-pool.
+FR-9: **REWRITTEN 2026-09-14 (commit `523a82a`), and this inventory carried the superseded rule until 2026-09-17.** A Team's Nomination Slot is released when that Team **wins a Player** — any Player — and at no other time. Losing does not give it back, and an Auction ending with no winner releases nothing. Its Managers are told on the notice that reports the win itself (FR-27). *Previously: released at the Auction Close of the Player it nominated, regardless of winner. That is the opposite rule, so a story written against it is inverted rather than merely stale.*
+FR-10: The system makes an unbid Nomination visible — flagged on the board past 24 hours, stated plainly in the nominating Team's own view as holding their Slot ~~notified to its Managers at the 24-hour mark~~ (**notification STRUCK: removed from scope 2026-09-04 as unnecessary rather than deferred; the flag and the Team's own view carry the visibility**), with no automatic expiry or return-to-pool.
 
 **§4.4 Bidding and Cap Enforcement**
 
@@ -86,7 +87,7 @@ FR-39: Any Manager can see all 30 Teams in one index with remaining roster slots
 **§4.7 Notifications**
 
 FR-26: The system posts league-wide auction events to a configured Discord channel — Nominations, Bids, Closes, draws (with seed and Contender list), and phase start/end — each naming Team, acting Manager, Player, amount and new close time; a delivery failure never blocks or reverses the underlying action and is surfaced to the Commissioner; at most one post per event even under retry.
-FR-27: The system alerts Managers about Team-affecting events by Discord `@mention` — outbid within 60 seconds, Close of an Auction they lead or contend in, Nomination Slot release, the 24-hour unbid-Nomination warning, and Contract Assignment opening; both co-Managers mentioned individually; exactly three mutable categories where muting suppresses the mention but not the post; outbid and phase notices never mutable; every payload declaring its permitted mentions.
+FR-27: **AMENDED 2026-09-17.** The system alerts Managers about Team-affecting events by Discord `@mention` — outbid within 60 seconds, **winning an Auction** (which is also where a released Nomination Slot is reported, on the same line), **being a Contender in a draw**, and Contract Assignment opening; a Close mentions the **winner alone** and not the Team that nominated; both co-Managers mentioned individually; **no category is mutable** and every mute request is refused server-side with stated wording. *Previously: a Close also mentioned the nominator to tell them their Slot was released, the 24-hour unbid-Nomination warning was a trigger, and three categories were mutable with muting suppressing the mention but not the post. All three claims died with FR-9's amendment and the 2026-09-04 scope decision.*
 
 **§4.8 Contract Assignment**
 
@@ -365,7 +366,7 @@ Every auction event reaches the league Discord channel, and every Manager affect
 
 **FRs covered:** FR-26, FR-27
 
-**Also carries:** the transactional outbox with its `(event seq, channel, recipient)` idempotency key, explicit `allowed_mentions` on every payload, batching and 429 backoff against the 30 requests/minute webhook ceiling, mute-suppresses-the-mention-not-the-post semantics, and individual mentions for both co-Managers.
+**Also carries:** the transactional outbox with its `(event seq, channel, recipient)` idempotency key, explicit `allowed_mentions` on every payload, batching and 429 backoff against the 30 requests/minute webhook ceiling, ~~mute-suppresses-the-mention-not-the-post semantics~~ (**retired 2026-09-17 — no category is mutable; the epic now carries mute-requests-are-refused-with-stated-wording instead**), and individual mentions for both co-Managers.
 
 **Standalone:** the 24-hour clock stops being a trap.
 
@@ -925,8 +926,11 @@ So that the consequence of the rules as written is something I saw coming rather
 **Given** the event log
 **When** a Team's Nomination Slot status is computed
 **Then** it is a **fold over the log** — the Slot is held while the Player it nominated has an open Auction — never a stored flag toggled by a handler
-**And** the fold releases the Slot on an `AuctionClosed` event for that Player **regardless of which Team won and regardless of whether the nominating Team ever bid**
-**And** the Slot is released at Auction Close and **not before** — not when the nominating Team is outbid, and on no timer of its own
+~~**And** the fold releases the Slot on an `AuctionClosed` event for that Player **regardless of which Team won and regardless of whether the nominating Team ever bid**~~
+~~**And** the Slot is released at Auction Close and **not before** — not when the nominating Team is outbid, and on no timer of its own~~
+
+> **SUPERSEDED 2026-09-17.** FR-9 was rewritten on 2026-09-14 (commit `523a82a`) and these two criteria now state the **opposite** of the rule. The fold releases the Slot on an `AuctionClosed` naming that Team as the **winner** — of any Player, not necessarily the one it nominated — and on nothing else: being outbid on your own nomination keeps the Slot held, and an Auction ending with no winner releases nothing. The board **seat** still ends when the Auction ends, either way it can end, so the seat and the Slot became two facts keyed on different things and the `byTeam` claim now outlives its `byPlayer` seat. Struck rather than edited: this story shipped and is the record its code was verified against, the treatment Story 7.10 gave Story 7.9.
+
 **And** an automated test appends a synthetic `AuctionClosed` and asserts the Slot frees, so Epic 3 requires no change here
 
 **Given** an Auction in Awaiting Opening Bid for more than 24 hours
@@ -1833,7 +1837,7 @@ So that a 24-hour clock is a fair contest rather than a trap for whoever happens
 
 **Given** the events that trigger a mention
 **When** they are enumerated
-**Then** they are: the Manager's Team is **outbid**; an Auction their Team **leads or contends in closes**; their **Nomination Slot is released**; their **unbid Nomination hits 24 hours**; and the **Contract Assignment Phase opens**
+~~**Then** they are: the Manager's Team is **outbid**; an Auction their Team **leads or contends in closes**; their **Nomination Slot is released**; their **unbid Nomination hits 24 hours**; and the **Contract Assignment Phase opens**
 
 **Given** an outbidding Bid
 **When** the previous Leading Bidder is notified
@@ -1849,12 +1853,16 @@ So that a 24-hour clock is a fair contest rather than a trap for whoever happens
 **Then** it **links directly to the relevant Auction**
 **And** following that link lands the Manager on that Auction, already signed in, with their position on it visible without a further tap
 
-**Given** the 24-hour unbid-Nomination warning
-**When** it fires
-**Then** it is driven by the tick evaluating Nomination age, not by a per-nomination timer
-**And** it complements the board flag already derived on read in Story 2.3
+~~**Given** the 24-hour unbid-Nomination warning~~
+~~**When** it fires~~
+~~**Then** it is driven by the tick evaluating Nomination age, not by a per-nomination timer~~
+~~**And** it complements the board flag already derived on read in Story 2.3~~
+
+> **SUPERSEDED 2026-09-17.** The trigger list above and this whole criterion are struck. **Two separate decisions reached them.** The 24-hour warning was **removed from scope on 2026-09-04** — unnecessary, not deferred, so no `deferred-work.md` entry records it and none should; the board flag it was to complement is the requirement and it stands alone. And FR-9's 2026-09-14 amendment retired *"their Nomination Slot is released"* as a trigger of its own: a Slot is released by **winning**, so the fact rides the winner's own Close line. The live trigger set is **outbid**, **won an Auction**, **Contender in a draw**, and **Contract Assignment opened**. Struck rather than edited — this story shipped.
+
 
 ### Story 5.4: Notification settings — three mutable categories, and only three
+*(Title kept as shipped. As of 2026-09-17 there are **no** mutable categories — see the superseding note below. Not renumbered and not retitled: this story shipped and the title is part of the record.)*
 
 As a Manager,
 I want to turn down the noise without turning off the alert that actually matters,
@@ -1862,24 +1870,30 @@ So that a busy channel does not cost me a player.
 
 **Acceptance Criteria:**
 
-**Given** the notification settings surface
-**When** it renders
-**Then** it offers exactly **three** mutable categories: **Nomination Slot released**, the **unbid-Nomination 24-hour warning**, and **closes for Auctions the viewer's Team did not lead or contend in**
+~~**Given** the notification settings surface~~
+~~**When** it renders~~
+~~**Then** it offers exactly **three** mutable categories: **Nomination Slot released**, the **unbid-Nomination 24-hour warning**, and **closes for Auctions the viewer's Team did not lead or contend in**~~
 
-**Given** a muted category
-**When** an event in it occurs
-**Then** **the post still appears in the channel** and only the `@mention` is withheld
-**And** the public record therefore stays complete — muting suppresses the ping, never the record
+~~**Given** a muted category~~
+~~**When** an event in it occurs~~
+~~**Then** **the post still appears in the channel** and only the `@mention` is withheld~~
+~~**And** the public record therefore stays complete — muting suppresses the ping, never the record~~
 
-**Given** **outbid** notices and **Contract Assignment Phase** notices
-**When** a Manager looks for a way to mute them
-**Then** **no control to do so exists** — they are structurally unmutable, because muting an outbid notice would undermine the fairness premise of a 24/7 clock
-**And** a direct request attempting to mute either is refused server-side
+> **SUPERSEDED 2026-09-17.** **No category is mutable, and the three named above each died of a different cause.** *Nomination Slot released* was the only one ever shipped, and FR-9's 2026-09-14 amendment retired the notice behind it: a Slot is released by **winning**, so the fact moved onto the winner's own Close line — whose other half reports a Contract the Team is bound by, and was never mutable. The *unbid-Nomination 24-hour warning* was removed from scope **2026-09-04**. *Closes a Team did not lead or contend in* never had a population at all, since a Close mentions only Teams it happened to. The settings surface now **states that nothing can be muted** rather than presenting a control that can only be refused, and the mute action is kept so a page someone already had open gets a stated refusal rather than a 404. Struck rather than edited — this story shipped and is the record its code was verified against.
+
+**Given** **every** notification category
+**When** a Manager looks for a way to mute one
+**Then** **no control to do so exists** — all four are structurally unmutable
+**And** a direct request naming any of them is refused server-side with stated wording
+**And** a request naming the **retired** `slot_release` id is refused as an id no module names, not as a category that cannot be muted
+*(Broadened 2026-09-17 from **outbid** and **Contract Assignment** alone. The fairness-premise reasoning for outbid survives and is still the argument — it simply no longer distinguishes outbid from anything else.)*
 
 **Given** the settings surface
 **When** it renders at 375px
 **Then** it is single-column and fully operable one-handed
-**And** each category states in words what muting it will and will not do, rather than presenting a bare toggle
+~~**And** each category states in words what muting it will and will not do, rather than presenting a bare toggle~~
+
+> **SUPERSEDED 2026-09-17.** There is no toggle and nothing to mute, so there is no muting to describe. The surface states **that nothing can be muted** and gives each category the reason it carries no control — which is the same principle this criterion was written for (state it in words, never leave an absence to be interpreted), applied to an absence that is now total.
 
 ---
 
@@ -3261,7 +3275,7 @@ So that I can still reproduce the draw by hand and satisfy myself it was fair.
 **When** it closes
 **Then** it closes with **no winner** and the Player returns to the Free Agent pool
 **And** the empty list and the reason are recorded exactly as a drawn one would be
-**And** the nominating Team's Nomination Slot is released as on any Close (FR-9)
+~~**And** the nominating Team's Nomination Slot is released as on any Close (FR-9)~~ — > **SUPERSEDED 2026-09-17.** **exactly backwards as of 2026-09-14.** An `AuctionTerminated` has **no winner**, and only a win releases a Slot, so a terminated lottery frees the board seat and the Player into the pool while the nominating Team's Slot **stays spent**. The Team is still the one party notified, because its Player is back in the pool; nothing in that notice says anything about a Slot.
 
 **Given** several lotteries expiring in the same sweep with one Team contending in each
 **When** the sweep runs
@@ -3300,8 +3314,8 @@ So that losing it is a trade I chose rather than something the app did to me.
 **Then** the cancelled Manager's notice leads with the **cause** and then the effect, with no apology, no alarm styling and no congratulation wrapped around it
 **And** the restored Manager's notice re-establishes context, then states what it costs their cap **and how long they have**, since the Clock did not reset
 **And** the league channel carries one line in the existing register (UX-DR37)
-**And** both mentions are carried by the **`outbid` category**, adding two new clauses to `clauseFor` in `adapters/discord/mention.ts` — **no fourth category is added**, and the mutable set stays exactly `slot_release` as Story 5.4 left it
-**And** they are therefore **unmutable server-side** like every `outbid` mention: a posted request naming the category is refused with the stated wording, unchanged from Story 5.4
+**And** both mentions are carried by the **`outbid` category**, adding two new clauses to `clauseFor` in `adapters/discord/mention.ts` — **no fourth category is added**, ~~and the mutable set stays exactly `slot_release` as Story 5.4 left it~~ (> **SUPERSEDED 2026-09-17.** `slot_release` was **retired** on 2026-09-17 and the mutable set is now **empty**; the no-new-category half of this criterion stands unchanged)
+**And** they are therefore **unmutable server-side** like every `outbid` mention: a posted request naming the category is refused with the stated wording — which as of 2026-09-17 is true of **every** category rather than of these alone
 **And** the category's *name* now covers three things that are not literally an outbid — being outbid, having a Bid cancelled, and being restored — which is accepted deliberately: the category is the **"your position in an Auction changed without you"** class, and a Manager must not be able to mute the notice telling them they lost a Player through no act of their own
 
 **Given** an Auction with a cancelled Bid
