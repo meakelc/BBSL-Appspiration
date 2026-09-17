@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 08-18-2026 13:11
-last_updated: 09-14-2026 13:00
+last_updated: 09-16-2026 15:00
 project: BBSL-Appspiration
 project_key: NOKEY
 tracking_system: file-system
@@ -101,11 +101,12 @@ development_status:
   7-4-pause-and-resume-the-auction: backlog
   7-5-the-league-visible-audit-log: done
   7-6-dead-money-and-the-rookie-scale-designation: done
-  7-7-record-a-roster-move: done
+  7-7-record-a-roster-trade: done
   7-8-record-a-drop: done
   7-9-detect-a-roster-divergence-from-fantrax: done
   7-10-rename-the-roster-move-to-a-roster-trade: done
   7-11-rearrange-a-roster-s-slot-placements: done
+  7-12-delete-the-rookie-scale-exception-from-dead-money: done
   epic-7-retrospective: optional
 
   epic-8: backlog
@@ -115,7 +116,7 @@ development_status:
   8-4-the-outage-recovery-procedure-and-the-go-live-gate: backlog
   epic-8-retrospective: optional
 
-  epic-9: in-progress
+  epic-9: done
   9-1-provision-supabase-dev-and-apply-the-schema: done
   9-2-provision-the-discord-application-channel-and-webhook: done
   9-3-admit-realtime-to-the-csp: done
@@ -123,7 +124,7 @@ development_status:
   9-5-confirm-the-fantrax-column-maps-against-a-real-export: done
   9-6-the-setup-runbook: done
   9-7-run-the-moderator-pilot: done
-  9-8-provision-prod-and-run-setup-day-for-real: in-progress
+  9-8-provision-prod-and-run-setup-day-for-real: done
   epic-9-retrospective: optional
 
   epic-10: done
@@ -134,3 +135,52 @@ development_status:
   10-5-a-lottery-whose-contenders-were-cancelled: done
   10-6-say-it-on-the-board-and-in-discord: done
   epic-10-retrospective: optional
+
+  epic-11: backlog
+  11-1-the-retractbid-command-and-its-four-gates: backlog
+  11-2-the-window-derived-pause-adjusted-half-open: backlog
+  11-3-the-cut-short-over-four-figures-and-not-a-list-of-acts: backlog
+  11-4-the-void-s-treatment-three-axes-one-restorer-and-the-clock-r: backlog
+  11-5-retraction-inside-a-minimum-bid-contention: backlog
+  11-6-the-control-the-countdown-and-the-record: backlog
+  epic-11-retrospective: optional
+action_items:
+  - epic: 7
+    action: >-
+      Story 7.12 is done because the code shipped in commit 5222c13 ("a released
+      Contract carries what it was charging, always"), NOT because a story was
+      implemented against it. It records a rule the League deleted on 2026-09-16
+      that four planning documents went on asserting. Do not reopen it as pending
+      work, and do not read its done status as verification that the code matches
+      its acceptance criteria.
+    owner: Meakel
+    status: open
+  - epic: 11
+    action: >-
+      AD-20 CONSTRAINT, LIVE. Epic 11 is entirely core/ work and was written to land
+      before Stories 9.7 and 9.8. Both are now done - the moderator pilot ran and
+      prod setup day is complete - so that ordering can no longer be honoured.
+      AD-20 fail-stops any core/ deploy during a live Auction Phase, so shipping
+      Epic 11 needs a pause under AD-13, the PRD section 10 suite green, and a
+      recorded reason. Settle it before the first Epic 11 story starts, not at
+      deploy time.
+    owner: Meakel
+    status: open
+  - epic: 11
+    action: >-
+      Epic 11 blocks on Story 7.4 (pause and resume the auction), which is backlog.
+      Story 11.2's criteria are written over pause semantics - the window stops with
+      every other clock, a retraction is refused while paused, an open pause counts
+      to now - so 11.2 cannot be closed until 7.4 ships. Its half-open boundary and
+      derived-not-stored criteria can be built first. Epic 11's entry previously
+      claimed only shipped dependencies; corrected in epics.md 2026-09-16.
+    owner: Meakel
+    status: open
+  - epic: 2
+    action: >-
+      PRD section 10 example 12 has no test file and is NOT Epic 11's - it is the
+      unbid-nomination case and belongs with Epic 2's nomination stories. AD-25
+      counts twelve example tests in arrears overall: example 12 plus 47-57. The
+      eleven for 47-57 are Story 11.6's.
+    owner: Meakel
+    status: open
