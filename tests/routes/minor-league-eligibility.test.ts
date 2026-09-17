@@ -17,6 +17,9 @@ import type { ResolvedPhase } from '../../src/lib/server/phase.ts';
 
 const stub = vi.hoisted(() => ({
 	players: [] as unknown[],
+	poolWithheld: null as string | null,
+	/** The phase `load` handed the reader, so the route's wiring is observable. */
+	loadedPhase: null as string | null,
 	result: { outcome: { kind: 'accepted', events: [] as unknown[] }, plan: null } as Record<
 		string,
 		unknown
@@ -28,7 +31,10 @@ const setCalls = vi.hoisted(
 );
 
 vi.mock('$lib/server/eligibility.ts', () => ({
-	loadEligibilityPool: async () => ({ players: stub.players }),
+	loadEligibilityPool: async ({ phase }: { phase: string }) => {
+		stub.loadedPhase = phase;
+		return { players: stub.players, poolWithheld: stub.poolWithheld };
+	},
 	setEligibility: vi.fn(
 		async (
 			_gateway: unknown,
@@ -108,14 +114,35 @@ describe('load — Commissioner-only, gated on both the guard and the destinatio
 		);
 	});
 
-	it('refuses a Commissioner outside Setup — this destination is not live in Auction', async () => {
-		await expectRefusal(
-			() =>
-				route.load({
-					locals: locals({ kind: 'registered', manager: COMMISSIONER }, AUCTION_PHASE)
-				} as never),
-			LIVE_DESTINATION_REFUSAL_STATUS
-		);
+	it('loads for a Commissioner in Auction — the destination is live there since FR-44', async () => {
+		// It was refused here until 2026-09-16. The phase gates POOLED Players,
+		// whose flag is an FR-35 input to an open Auction's cap arithmetic; a
+		// rostered Contract has no open Auction, so the surface stays reachable
+		// and lists the half that can still be changed.
+		stub.players = [];
+		stub.poolWithheld = 'The phase is Auction, not Setup, so the Free Agent pool is not listed: …';
+
+		const data = (await route.load({
+			locals: locals({ kind: 'registered', manager: COMMISSIONER }, AUCTION_PHASE)
+		} as never)) as { poolWithheld: string | null };
+
+		// The route hands the reader the phase NAME, never the phase object —
+		// the sentence interpolates it, so an object would ship as
+		// "The phase is [object Object]".
+		expect(stub.loadedPhase).toBe('Auction');
+		expect(data.poolWithheld).toContain('not listed');
+	});
+
+	it('passes Setup through and withholds nothing there', async () => {
+		stub.players = [];
+		stub.poolWithheld = null;
+
+		const data = (await route.load({
+			locals: locals({ kind: 'registered', manager: COMMISSIONER })
+		} as never)) as { poolWithheld: string | null };
+
+		expect(stub.loadedPhase).toBe('Setup');
+		expect(data.poolWithheld).toBeNull();
 	});
 
 	it('loads the pool for a Commissioner in Setup, sentences and all', async () => {
@@ -185,19 +212,22 @@ describe('actions.set — gated the same way, and never the check itself', () =>
 		expect(setCalls).toEqual([]);
 	});
 
-	it('refuses outside Setup — the destination guard runs on the action too', async () => {
-		await expectRefusal(
-			() =>
-				setAction(
-					setEvent(
-						[['ids', 'p-1'], ['eligible', 'yes']],
-						{ kind: 'registered', manager: COMMISSIONER },
-						AUCTION_PHASE
-					)
-				),
-			LIVE_DESTINATION_REFUSAL_STATUS
+	it('reaches the transaction in Auction — the phase is re-derived there, not here', async () => {
+		// The destination guard no longer refuses this phase, so the submission
+		// travels to `setEligibility`, which folds the phase from the log under
+		// the lock and refuses a POOLED id there. The route must not pre-empt
+		// that decision: it cannot see which ids are pooled, and `locals.phase`
+		// was resolved when the page loaded.
+		await setAction(
+			setEvent(
+				[['ids', 'p-1'], ['eligible', 'yes']],
+				{ kind: 'registered', manager: COMMISSIONER },
+				AUCTION_PHASE
+			)
 		);
-		expect(setCalls).toEqual([]);
+		expect(setCalls).toEqual([
+			{ actor: { managerId: 'm-1', teamId: 't-1' }, ids: ['p-1'], target: true }
+		]);
 	});
 
 	it('refuses an empty selection with 400, in the core’s words, writing nothing', async () => {

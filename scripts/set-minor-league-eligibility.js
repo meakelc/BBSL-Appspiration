@@ -22,15 +22,27 @@
  * hands it ids. Every gate is therefore the real one, re-derived inside the
  * real transaction under the real advisory lock:
  *
- *   - the phase, folded from the log (this refuses outside Setup, by FR-35 —
- *     the flag is an input to cap arithmetic on every open Auction);
+ *   - the phase, folded from the log. Outside Setup this refuses a POOLED
+ *     Player, by FR-35 — that Player's flag is an input to cap arithmetic on
+ *     every open Auction. It does NOT refuse a rostered Contract, which can
+ *     have no open Auction, so a CSV naming only rostered Contracts runs in
+ *     any phase. That is what the rostered-correction CSV is for;
  *   - the unknown-id check, against the live pool;
  *   - the no-op skip, so a Player already at the target value appends nothing.
  *
  * Vite is a devDependency, so this is a development/setup tool that a deploy
  * cannot run. That is the correct blast radius.
  *
- * **The CSV is the whole truth, so the script makes the pool match it.** Two
+ * **The CSV is the whole truth ABOUT THE PLAYERS IT NAMES.** For the pool CSV
+ * that is the whole pool, which is what the paragraph below assumes. For a
+ * CSV naming only rostered Contracts — the FR-44 correction path — it is the
+ * whole truth about those Contracts and says nothing about the pool, so the
+ * unset pass below touches only rows that CSV lists as `False` and `verify`
+ * skips the column comparison entirely. Never mix the two populations in one
+ * file: a pool CSV that omits a rostered Contract would not unset it, but a
+ * reader would reasonably expect it to.
+ *
+ * Two
  * transactions run: one setting every `eligible=true` row, one unsetting every
  * `eligible=false` row. The second is not redundant — it is what makes a
  * re-run CORRECT a flag set wrongly by an earlier run or by hand, rather than
@@ -249,7 +261,8 @@ async function main() {
 					`${String(notEligible.length)} as not, in two transactions.\n` +
 					'A Player already at the requested value appends no event.\n' +
 					'Re-run with --confirm to append. The phase is folded from the log inside the\n' +
-					'transaction, so that run refuses unless the phase is still Setup.\n'
+					'transaction: that run refuses any POOLED Player named above unless the phase is\n' +
+					'still Setup, and refuses no rostered Contract in any phase.\n'
 			);
 			return;
 		}
@@ -287,29 +300,73 @@ async function main() {
 		}
 
 		process.stdout.write('\n');
-		await verify(gateway, eligible.length);
+		await verify(gateway, eligible);
 	} finally {
 		await vite.close();
 	}
 }
 
-/** Read the column back, rather than trusting the writes above. */
-async function verify(gateway, expected) {
+/**
+ * Read the column back, rather than trusting the writes above.
+ *
+ * **The column can only ever answer for POOLED Players.**
+ * `minor_league_eligible` lives on `free_agent_players` and there is no such
+ * column on `team_rosters`, so a CSV naming rostered Contracts — which FR-44
+ * permits, and which the rostered-correction CSV is made entirely of — writes
+ * a flag this check cannot see. Comparing the column against such a CSV's row
+ * count compares two different populations and fails every time.
+ *
+ * So the expectation is computed from the ids the CSV names that ARE in the
+ * pool, and a CSV naming none of them skips the comparison and says so. That
+ * is not a weaker check, it is the only one the column can support: the
+ * authority for a rostered Contract is the fold, and the run's own
+ * accepted/changed report above is the fold's account of itself. Re-run the
+ * script to confirm — a second pass over an unchanged CSV must report every
+ * Player unchanged and append zero events.
+ *
+ * `eligible < named` rather than `!==`: the column legitimately holds MORE
+ * eligible Players than this CSV names, because a rostered-correction CSV
+ * names none of the 947 the pool run already set. Only a shortfall against
+ * what this CSV asked for is a defect.
+ */
+async function verify(gateway, eligibleIds) {
 	const client = await gateway.connect();
 	try {
 		const { rows } = await client.query(
 			`select count(*)::int as pool,
-			        count(*) filter (where minor_league_eligible)::int as eligible
-			   from public.free_agent_players`
+			        count(*) filter (where minor_league_eligible)::int as eligible,
+			        count(*) filter (where fantrax_player_id = any($1::text[]))::int as named
+			   from public.free_agent_players`,
+			[[...eligibleIds]]
 		);
 		const pool = Number(rows[0]['pool']);
 		const eligible = Number(rows[0]['eligible']);
+		const named = Number(rows[0]['named']);
 		process.stdout.write(
 			`free_agent_players: ${String(pool)} Players, ${String(eligible)} Minor League Eligible\n`
 		);
-		if (eligible !== expected) {
+
+		if (named === 0) {
 			process.stdout.write(
-				`\n  ⚠ the CSV names ${String(expected)} eligible Players and the column holds ${String(eligible)}.\n` +
+				`  the CSV names ${String(eligibleIds.length)} eligible Players and NONE of them is in\n` +
+					'  the pool, so every one is a rostered Contract and the column above says nothing\n' +
+					'  about them. The fold is their authority; re-run this script to confirm it took —\n' +
+					'  a second pass must report every Player unchanged and append no event.\n'
+			);
+			return;
+		}
+
+		if (named !== eligibleIds.length) {
+			process.stdout.write(
+				`  ${String(named)} of the CSV's ${String(eligibleIds.length)} eligible Players are pooled;\n` +
+					'  the rest are rostered Contracts, which the column cannot hold.\n'
+			);
+		}
+
+		if (eligible < named) {
+			process.stdout.write(
+				`\n  ⚠ the CSV names ${String(named)} eligible POOLED Players and the column holds only ` +
+					`${String(eligible)}.\n` +
 					'    An id in the CSV that is not in the live pool is refused before any write, so this\n' +
 					'    means the pool and the CSV disagree about who is in it. Re-derive the CSV.\n'
 			);

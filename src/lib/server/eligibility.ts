@@ -50,9 +50,11 @@ import type {
 } from '../core/projection/eligibility.ts';
 import { INITIAL_PHASE, phaseReducer } from '../core/projection/phase.ts';
 import {
+	eligibilityPoolWithheldSentence,
 	eligibilityRefusalDetail,
 	eligibilityRowSentence,
-	planEligibilityChanges
+	planEligibilityChanges,
+	pooledAmong
 } from '../core/rules/eligibility.ts';
 import type {
 	EligibilityCandidate,
@@ -64,6 +66,7 @@ import type { EventEnvelope, RosterSlotKind } from '../core/types.ts';
 import { runTransactionalWrite } from '../shell/write.ts';
 import type { ConnectionGateway, TransactionalClient, WriteOutcome } from '../shell/write.ts';
 import { PAGE_SIZE, loadAppendedEvents, loadEventsViaClient } from './event-log.ts';
+import type { LeaguePhase } from './phase.ts';
 import { serviceRoleClient } from './supabase.ts';
 
 const FREE_AGENT_PLAYERS_TABLE = 'free_agent_players';
@@ -108,6 +111,12 @@ export type EligibilityPoolRow = {
 /** Everything the flag can be set on, as the surface receives it, by name. */
 export type EligibilityPool = {
 	readonly players: readonly EligibilityPoolRow[];
+	/**
+	 * Why the Free Agent pool is absent from `players`, or `null` in Setup
+	 * where it is present. `eligibilityPoolWithheldSentence`'s output,
+	 * verbatim — the surface prints it and never re-words it.
+	 */
+	readonly poolWithheld: string | null;
 };
 
 type PoolRow = {
@@ -239,10 +248,31 @@ async function loadRosteredCandidates(
  * An empty pool is a legitimate state — nothing has been promoted yet — and
  * an empty roster set likewise. Both come back as an empty list for the
  * surface to render as such, not as an error.
+ *
+ * **`phase` decides whether the pool half is listed at all.** Outside Setup
+ * the transaction refuses a pooled Player, so offering one a checkbox would
+ * be offering a control whose only outcome is a refusal. The rostered half is
+ * listed in every phase because the transaction accepts it in every phase.
+ * This is a RENDERING decision and not a gate: `refuseEligibilityChange`
+ * re-derives the same rule from the log inside the transaction, so a page
+ * that rendered during Setup cannot race a pooled change past an auction that
+ * has since opened, exactly as before.
  */
-export async function loadEligibilityPool(
-	client: SupabaseClient = serviceRoleClient()
-): Promise<EligibilityPool> {
+export async function loadEligibilityPool({
+	phase,
+	client = serviceRoleClient()
+}: {
+	/**
+	 * Typed as `LeaguePhase`, not `string`, and named rather than positional.
+	 * Both are deliberate: this function used to take the client as its only
+	 * argument, so a positional `phase` would have let every existing caller
+	 * keep compiling with a `SupabaseClient` bound to it — and the phase is
+	 * interpolated into a sentence, so the failure would have shipped as
+	 * "The phase is [object Object]" rather than as a type error.
+	 */
+	readonly phase: LeaguePhase;
+	readonly client?: SupabaseClient;
+}): Promise<EligibilityPool> {
 	const pooled = await readEveryRow<PoolRow>(FREE_AGENT_PLAYERS_TABLE, (from, to) =>
 		client
 			.from(FREE_AGENT_PLAYERS_TABLE)
@@ -253,17 +283,28 @@ export async function loadEligibilityPool(
 
 	const pooledIds = new Set(pooled.map((row) => row.fantrax_player_id));
 
-	const players: EligibilityPoolRow[] = pooled.map((row) => {
-		const eligible = row.minor_league_eligible === true;
-		return {
-			fantraxPlayerId: row.fantrax_player_id,
-			playerName: row.player_name,
-			detail: `Positions: ${row.positions}`,
-			heldBy: `Free Agent pool · ${row.nba_team}`,
-			eligible,
-			consequence: eligibilityRowSentence(row.player_name, eligible)
-		};
-	});
+	// **Outside Setup the pool is READ and then withheld, not skipped.** The
+	// read still happens because `pooledIds` is what keeps a Contract that is
+	// somehow in both tables from rendering twice, and because the sentence
+	// below counts the Players it is declining to list. Dropping the read to
+	// save it would trade a correct list for one query on a Commissioner-only
+	// page that renders once a visit.
+	const withheld = phase === 'Setup' ? null : eligibilityPoolWithheldSentence(phase, pooled.length);
+
+	const players: EligibilityPoolRow[] =
+		withheld !== null
+			? []
+			: pooled.map((row) => {
+					const eligible = row.minor_league_eligible === true;
+					return {
+						fantraxPlayerId: row.fantrax_player_id,
+						playerName: row.player_name,
+						detail: `Positions: ${row.positions}`,
+						heldBy: `Free Agent pool · ${row.nba_team}`,
+						eligible,
+						consequence: eligibilityRowSentence(row.player_name, eligible)
+					};
+				});
 
 	for (const row of await loadRosteredCandidates(client, pooledIds)) {
 		players.push(row);
@@ -273,7 +314,7 @@ export async function loadEligibilityPool(
 	// among the pooled Players rather than in a block after them.
 	players.sort((left, right) => left.playerName.localeCompare(right.playerName));
 
-	return { players };
+	return { players, poolWithheld: withheld };
 }
 
 /**
@@ -343,7 +384,7 @@ async function loadEligibilityState(client: TransactionalClient): Promise<Eligib
 	const eligible = fold(INITIAL_ELIGIBILITY, events, eligibilityReducer);
 
 	const candidateResult = await client.query(
-		`select fantrax_player_id, player_name
+		`select fantrax_player_id, player_name, source
 		from (
 			select distinct on (fantrax_player_id) fantrax_player_id, player_name, source
 			from (
@@ -356,12 +397,20 @@ async function loadEligibilityState(client: TransactionalClient): Promise<Eligib
 		order by player_name asc`
 	);
 
+	// `source` was always selected in the inner query, to make `distinct on`
+	// deterministic; it is carried out to the caller now because the phase gate
+	// asks which table a candidate came from. `0` is the pool — the same tie
+	// the `distinct on` resolves in the pool's favour above, read the same way
+	// here, so one Player appearing in both tables is POOLED for the gate as
+	// well as for the plan. That is the safe direction: a duplicate is refused
+	// outside Setup rather than quietly changed.
 	const candidates = candidateResult.rows.map((row) => {
 		const fantraxPlayerId = String(row['fantrax_player_id']);
 		return {
 			fantraxPlayerId,
 			playerName: String(row['player_name']),
-			eligible: isEligible(eligible, fantraxPlayerId)
+			eligible: isEligible(eligible, fantraxPlayerId),
+			pooled: Number(row['source']) === 0
 		};
 	});
 
@@ -369,21 +418,44 @@ async function loadEligibilityState(client: TransactionalClient): Promise<Eligib
 }
 
 /**
- * The gates, in order: phase, then the empty selection, then unknown ids.
+ * The gates, in order: the empty selection, then unknown ids, then the phase.
  *
- * Phase first, for `refusePromotion`'s reason: once the auction has opened,
- * which ids were submitted is beside the point. Exported so a test can drive
- * the ordering as pure logic rather than infer it.
+ * **Phase is LAST now, and the reorder is the point of this gate's narrowing.**
+ * It used to run first on `refusePromotion`'s reasoning — "once the auction
+ * has opened, which ids were submitted is beside the point". That reasoning
+ * died with FR-44. Which ids were submitted is now exactly the point: the
+ * phase refuses a POOLED Player, because FR-35 binds a pooled Player's flag to
+ * the Committed Bids of an open Auction, and it refuses a rostered Contract
+ * not at all, because `teamMoneyStateFor` partitions `auctions.byPlayer` and a
+ * rostered Contract can never appear there. A gate that cannot answer without
+ * knowing which ids were submitted cannot run before they are classified, and
+ * an id that names nothing has no classification — so `unknown_players` is
+ * resolved first and a ghost can never slip past the phase on its way to it.
+ *
+ * The empty selection stays ahead of both: it names no Player, so neither of
+ * the other two has anything to look at.
+ *
+ * **Every phase gates pooled Players identically.** The narrowing is pooled
+ * vs rostered, never Setup vs Auction vs Contract Assignment — a pooled Player
+ * is refused in every phase but Setup, and a rostered Contract is refused in
+ * none.
+ *
+ * Exported so a test can drive the ordering as pure logic rather than infer it.
  */
 export function refuseEligibilityChange(
 	state: EligibilityState,
 	ids: readonly string[],
 	plan: EligibilityPlan
 ): EligibilityRefusal | null {
-	if (state.phase !== 'Setup') return { kind: 'phase', phase: state.phase };
 	if (ids.length === 0) return { kind: 'empty_selection' };
 	if (plan.unknownIds.length > 0) {
 		return { kind: 'unknown_players', fantraxPlayerIds: plan.unknownIds };
+	}
+	if (state.phase !== 'Setup') {
+		const pooled = pooledAmong(state.candidates, ids);
+		if (pooled.length > 0) {
+			return { kind: 'phase', phase: state.phase, fantraxPlayerIds: pooled };
+		}
 	}
 	return null;
 }

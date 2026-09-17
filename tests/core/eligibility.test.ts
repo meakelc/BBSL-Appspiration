@@ -43,10 +43,13 @@ function setEvent(seq: number, id: string, before: boolean, after: boolean): App
 	});
 }
 
+// Alice and Bob are pooled Players; Carla is a rostered Contract. The mix is
+// deliberate: `planEligibilityChanges` must stay indifferent to which is which,
+// and `pooledAmong` must tell them apart.
 const POOL: readonly EligibilityCandidate[] = [
-	{ fantraxPlayerId: 'p-1', playerName: 'Alice', eligible: false },
-	{ fantraxPlayerId: 'p-2', playerName: 'Bob', eligible: true },
-	{ fantraxPlayerId: 'p-3', playerName: 'Carla', eligible: false }
+	{ fantraxPlayerId: 'p-1', playerName: 'Alice', eligible: false, pooled: true },
+	{ fantraxPlayerId: 'p-2', playerName: 'Bob', eligible: true, pooled: true },
+	{ fantraxPlayerId: 'p-3', playerName: 'Carla', eligible: false, pooled: false }
 ];
 
 describe('the eligibility reducer', () => {
@@ -203,12 +206,20 @@ describe('the sentences, each with exactly one definition', () => {
 		expect(eligibilityRowSentence('Alice', true)).toContain('Alice');
 	});
 
-	it('names the phase, the FR-35 consequence and the override in the phase refusal', () => {
-		const detail = eligibilityRefusalDetail({ kind: 'phase', phase: 'Auction' });
+	it('names the phase, the pooled Players, FR-35 and the rostered exception', () => {
+		const detail = eligibilityRefusalDetail({
+			kind: 'phase',
+			phase: 'Auction',
+			fantraxPlayerIds: ['p-1', 'p-2']
+		});
 		expect(detail).toContain('Auction');
 		expect(detail).toContain('FR-35');
-		expect(detail).toContain('override');
-		expect(detail).toContain('does not offer one');
+		// The refusal names WHICH Players caused it, never just a count.
+		expect(detail).toContain('p-1');
+		expect(detail).toContain('p-2');
+		expect(detail).toContain('Free Agent pool');
+		// And states the half that WOULD be accepted, so the gate is not a dead end.
+		expect(detail).toContain('rostered Contract');
 	});
 
 	it('names every unknown id in the unknown-players refusal', () => {
@@ -228,7 +239,7 @@ describe('the sentences, each with exactly one definition', () => {
 
 	it('never apologises, exclaims or advises', () => {
 		const every = [
-			eligibilityRefusalDetail({ kind: 'phase', phase: 'Auction' }),
+			eligibilityRefusalDetail({ kind: 'phase', phase: 'Auction', fantraxPlayerIds: ['x'] }),
 			eligibilityRefusalDetail({ kind: 'unknown_players', fantraxPlayerIds: ['x'] }),
 			eligibilityRefusalDetail({ kind: 'empty_selection' }),
 			eligibilityRefusalDetail({ kind: 'unbound_actor' }),
