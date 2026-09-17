@@ -171,7 +171,49 @@ body:has(.mobile-nav) {
 	gap: var(--space-row-gap);
 }
 
-/* 10px, uppercase, 0.16em tracking, text-tertiary. */
+/*
+ * A HEADING AND WHAT IT NAMES — the shape `/positions` established and
+ * `/board` copied verbatim before it was hoisted here. Usually a list of
+ * cards; on `/board` it also holds the label over the control panel, which
+ * wants exactly the same closeness to the thing beneath it.
+ *
+ * One column at every width, because `EXPERIENCE.md` requires every Manager
+ * surface to be single-column at 375px with no lateral scrolling and a column
+ * of cards has no second axis to gain from a wider one.
+ *
+ * The gap is the CARD gap, not `--space-section-gap`. The section gap is what
+ * divides the blocks of a page, and a heading set that far from its own first
+ * card reads as detached from the thing it names — the heading and what it
+ * names are one object, and this is what says so. A heading left as a bare
+ * child of `.page` takes the section gap instead, which is the bug this
+ * wrapper exists to prevent and which `/board`'s panel label shipped.
+ *
+ * The heading itself is a `.section-label`, below: small uppercase furniture,
+ * which is what a label over a list wants to be. A group states what it is at
+ * the point its list starts, and both surfaces that group cards do it the one
+ * way.
+ */
+.group {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-card-gap);
+	width: 100%;
+}
+
+/*
+ * 10px, uppercase, 0.16em tracking, text-tertiary.
+ *
+ * It sets no FONT-WEIGHT, deliberately, and the element it lands on decides
+ * one: an `h2` is bold from the browser's own default and a `span` or a `p` is
+ * not. That is the difference between a label that HEADS something — the group
+ * headings on `/positions` and `/board`, which are `h2` — and one that names a
+ * value inline, which every card label is. The two are not the same kind of
+ * thing and do not want the same weight.
+ *
+ * So the tag is load-bearing here. A heading written as a `<p>` takes this
+ * class and still comes out a shade lighter than the headings beside it, which
+ * is a real bug and has been one: `/board`'s panel label shipped that way.
+ */
 .section-label {
 	font-size: var(--size-10);
 	text-transform: uppercase;
