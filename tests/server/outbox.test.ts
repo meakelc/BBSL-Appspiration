@@ -91,17 +91,6 @@ type ManagerRow = {
 	discordMentionUserId?: string;
 	id?: string;
 	displayName?: string;
-	/**
-	 * Story 5.4's preference, as the LEFT JOIN delivers it. OMITTED is the
-	 * common case and means "no row in `manager_notification_preferences`",
-	 * which the `coalesce` in the real statement turns into `false`.
-	 *
-	 * A STRING is allowed because a driver is allowed to hand one back:
-	 * `isTrueFlag` accepts `'t'`/`'true'` for exactly that reason, and a
-	 * fixture that could only produce real booleans would leave that branch —
-	 * the one whose failure silently unmutes the whole league — unrun.
-	 */
-	slotReleaseMuted?: boolean | string;
 };
 
 /**
@@ -274,14 +263,14 @@ function fakeGateway(
 			if (/^select id, name from teams$/i.test(sql)) {
 				return { rows: teams.map((team) => ({ id: team.id, name: team.name })) };
 			}
-			if (/left join manager_notification_preferences/i.test(sql)) {
+			if (/^select\s+m\.id,\s+m\.display_name/i.test(sql)) {
 				return {
-					// The LEFT JOIN and its `coalesce`, as the real statement
-					// spells them (Story 5.4): a Manager with NO preference row
-					// arrives as `false`, never as `null`, which is what makes
-					// "absence is the default" true in the fold rather than in a
-					// comment. A fixture row that states nothing is such a
-					// Manager.
+					// The registry read, with NO join. Story 5.4 left-joined
+					// `manager_notification_preferences` here so the composer
+					// could withhold a muted Manager's `<@id>`; no category is
+					// mutable since FR-9's amendment retired `slot_release`, so
+					// the read asks for the registry alone and the fixture
+					// states no preference to hand back.
 					rows: managers.map((manager) => ({
 						id: manager.id ?? manager.discordUserId,
 						display_name: manager.displayName ?? manager.discordUserId,
@@ -290,8 +279,7 @@ function fakeGateway(
 						// selects the same `coalesce` under the same alias, so
 						// that `managerIdsByDiscordUserId` is the reverse of
 						// what an intent was addressed with.
-						discord_user_id: addressOf(manager),
-						slot_release_muted: manager.slotReleaseMuted ?? false
+						discord_user_id: addressOf(manager)
 					}))
 				};
 			}
@@ -431,6 +419,12 @@ function auctionClosed(input: {
 	readonly managerId: string;
 	readonly playerName: string;
 	readonly winningAmount: number;
+	/**
+	 * Whether this close freed the WINNER's Nomination Slot (FR-9, amended).
+	 * Defaults to `false` — the winner who held none, which must not be told
+	 * a Slot came back.
+	 */
+	readonly releasedNominationSlot?: boolean;
 }): EventEnvelope {
 	return {
 		type: 'AuctionClosed',
@@ -443,7 +437,8 @@ function auctionClosed(input: {
 			winningAmount: input.winningAmount,
 			capHit: input.winningAmount,
 			contractYears: null,
-			closedAt: CLOSES_AT
+			closedAt: CLOSES_AT,
+			releasedNominationSlot: input.releasedNominationSlot ?? false
 		},
 		managerId: input.managerId,
 		teamId: input.teamId
@@ -1753,45 +1748,37 @@ describe('drainOutbox — the broadcast post', () => {
 	});
 });
 
-// --- the mute, through the directory read (Story 5.4) ----------------------
+// --- the close that frees a Slot, end to end (FR-9, amended) --------------
 
-describe('the directory fold carries the mute, and absence reads as not muted', () => {
+describe('the winner is told its Slot freed, and nothing is suppressed', () => {
 	const CAROL = '3333';
 
 	/**
-	 * A close that RELEASES the Lakers' Nomination Slot: the Bulls won, so the
-	 * addressed Team's clause is `slot_release` — the one mutable category.
-	 * The Lakers are co-managed, which is the case the mute has to get right.
+	 * A close the LAKERS won, having been holding a Nomination Slot — so this
+	 * close both awards the Contract and pays the Slot back. The Lakers are
+	 * co-managed, which is the case one line for one Team has to get right.
+	 *
+	 * Story 5.4's version of this block drove the same event the other way
+	 * round: the Bulls won, and the Lakers were addressed as the NOMINATOR
+	 * under `slot_release`, the one mutable category. FR-9's amendment ended
+	 * both halves of that — losing keeps the Slot held, and nothing is mutable.
 	 */
-	function slotReleasedForLakers(): EventEnvelope {
+	function wonWithSlotFreed(releasedNominationSlot = true): EventEnvelope {
 		return auctionClosed({
-			teamId: OTHER_TEAM,
-			teamName: 'Bulls',
-			managerId: 'm-3',
+			teamId: TEAM,
+			teamName: 'Lakers',
+			managerId: MANAGER,
 			playerName: 'Kevin Durant',
-			winningAmount: 3_000_000
+			winningAmount: 3_000_000,
+			releasedNominationSlot
 		});
 	}
 
-	function coManagedLeague(
-		mutes: { alice?: boolean | string; bob?: boolean | string } = {}
-	): Parameters<typeof fakeGateway>[0] {
+	function coManagedLeague(): Parameters<typeof fakeGateway>[0] {
 		return {
 			managers: [
-				{
-					teamId: TEAM,
-					discordUserId: ALICE,
-					id: MANAGER,
-					displayName: 'Meakel',
-					...(mutes.alice === undefined ? {} : { slotReleaseMuted: mutes.alice })
-				},
-				{
-					teamId: TEAM,
-					discordUserId: BOB,
-					id: 'm-2',
-					displayName: 'Dana',
-					...(mutes.bob === undefined ? {} : { slotReleaseMuted: mutes.bob })
-				},
+				{ teamId: TEAM, discordUserId: ALICE, id: MANAGER, displayName: 'Meakel' },
+				{ teamId: TEAM, discordUserId: BOB, id: 'm-2', displayName: 'Dana' },
 				{ teamId: OTHER_TEAM, discordUserId: CAROL, id: 'm-3', displayName: 'Ari' }
 			],
 			teams: [
@@ -1801,69 +1788,59 @@ describe('the directory fold carries the mute, and absence reads as not muted', 
 		};
 	}
 
-	async function drainSlotRelease(harness: ReturnType<typeof fakeGateway>) {
-		await write(
-			harness.gateway,
-			[slotReleasedForLakers()],
-			'accepted',
-			enqueueMentions(() => [TEAM])
-		);
+	async function drainClose(harness: ReturnType<typeof fakeGateway>, event: EventEnvelope) {
+		await write(harness.gateway, [event], 'accepted', enqueueMentions(() => [TEAM]));
 		const channel = fakeChannel();
 		await drainOutbox(harness.gateway, { channels: { [DISCORD_CHANNEL]: channel.port } });
 		return channel;
 	}
 
-	const NOTICE = 'Kevin Durant to Bulls — Ari for $3.0M.';
+	const NOTICE = 'Kevin Durant to Lakers — Meakel for $3.0M.';
 
-	it('reads a Manager with NO preference row as not muted', async () => {
-		// The matrix's "Default state" row, through the real left join: the
-		// fixture states nothing for either Manager, the `coalesce` answers
-		// `false`, and both are mentioned.
-		const channel = await drainSlotRelease(fakeGateway(coManagedLeague()));
+	it('says both facts on one line, to both Managers of the Team', async () => {
+		const channel = await drainClose(fakeGateway(coManagedLeague()), wonWithSlotFreed());
 
 		expect(channel.posts[0]).toEqual({
 			body:
 				`${NOTICE}\n` +
-				`<@${ALICE}> <@${BOB}> — Lakers — Meakel & Dana no longer hold this Nomination Slot.`,
+				`<@${ALICE}> <@${BOB}> — Lakers — Meakel & Dana led this Auction at its close, ` +
+				'and your Nomination Slot is free again.',
 			recipients: [ALICE, BOB]
 		});
 	});
 
-	it('withholds one co-Manager’s mention and posts the notice in full', async () => {
-		// The story's acceptance criterion, end to end: the notice appears in
-		// full, and neither the body nor `allowed_mentions.users` — which is
-		// what `recipients` becomes — names the muted Manager.
-		const channel = await drainSlotRelease(fakeGateway(coManagedLeague({ bob: true })));
+	it('claims no release when the winner was holding no Slot', async () => {
+		const channel = await drainClose(fakeGateway(coManagedLeague()), wonWithSlotFreed(false));
 
-		expect(channel.posts[0]).toEqual({
-			body: `${NOTICE}\n<@${ALICE}> — Lakers — Meakel no longer hold this Nomination Slot.`,
-			recipients: [ALICE]
-		});
-		expect(channel.posts[0]?.body).toContain(NOTICE);
-		expect(channel.posts[0]?.body).not.toContain(BOB);
+		expect(channel.posts[0]?.body).toContain('led this Auction at its close.');
+		expect(channel.posts[0]?.body).not.toContain('Nomination Slot');
 	});
 
-	it('posts the notice alone when every recipient in the batch has muted', async () => {
-		// The matrix's last row. `recipients` empties, the batch posts as
-		// broadcast only, and the pass completes without throwing.
-		const harness = fakeGateway(coManagedLeague({ alice: true, bob: true }));
-		const channel = await drainSlotRelease(harness);
+	it('reads the registry in ONE statement, with no preferences join', async () => {
+		// The directory is read once per pass, off one snapshot — the property
+		// `LeagueDirectory` states, and the reason it rides the directory
+		// rather than being looked up beside `mention.ts`. A second read would
+		// let one message carry two spellings of the league.
+		//
+		// And it no longer joins `manager_notification_preferences` at all: no
+		// category is mutable, so the join would narrow nothing, and a read
+		// whose result nothing consults is a silence waiting to happen.
+		const harness = fakeGateway(coManagedLeague());
+		await drainClose(harness, wonWithSlotFreed());
 
-		expect(channel.posts).toHaveLength(1);
-		expect(channel.posts[0]).toEqual({ body: NOTICE, recipients: [] });
-
-		// The intents were still FILED and still recorded as dispatched — the
-		// suppression is at composition and never at enqueue, so NFR11's
-		// measurement can tell a muted notice from a failed one.
-		expect(harness.outbox).toHaveLength(2);
-		expect(outcomes(harness)).toHaveLength(2);
+		expect(
+			harness.statements.filter((sql) => /from managers m/i.test(sql))
+		).toHaveLength(1);
+		expect(
+			harness.statements.filter((sql) => /manager_notification_preferences/i.test(sql))
+		).toEqual([]);
 	});
 
-	it('leaves an OUTBID notice for the same muted Manager untouched', async () => {
-		// The matrix's "A mute never touches an unmutable notice" row, through
-		// the real SQL: the mute is per category, not per Manager.
+	it('withholds no mention on any trigger, because nothing is mutable', async () => {
+		// Story 5.4 could drop one co-Manager's `<@id>` from this very line.
+		// Nothing can now, so both are named on every notice the drain composes.
 		const harness = fakeGateway({
-			...coManagedLeague({ alice: true, bob: true }),
+			...coManagedLeague(),
 			players: [{ fantraxPlayerId: PLAYER, playerName: 'Anthony Davis' }]
 		});
 		await write(harness.gateway, [bidPlaced()], 'accepted', enqueueMentions(() => [TEAM]));
@@ -1877,42 +1854,6 @@ describe('the directory fold carries the mute, and absence reads as not muted', 
 				`<@${ALICE}> <@${BOB}> — Lakers — Meakel & Dana were outbid.`,
 			recipients: [ALICE, BOB]
 		});
-	});
-
-	it.each([
-		['t', 'f'],
-		['true', 'false'],
-		['T', 'FALSE']
-	])(
-		'reads a driver’s %s/%s strings as the booleans they are',
-		async (yes: string, no: string) => {
-			// `isTrueFlag`'s string branch, run for real. Postgres' text output
-			// for `bool` is `t`/`f`, and a coercion that read `'t'` as falsy
-			// would unmute every Manager in the league — a failure that looks
-			// like nothing at all from the outside.
-			const channel = await drainSlotRelease(
-				fakeGateway(coManagedLeague({ alice: no, bob: yes }))
-			);
-
-			expect(channel.posts[0]).toEqual({
-				body: `${NOTICE}
-<@${ALICE}> — Lakers — Meakel no longer hold this Nomination Slot.`,
-				recipients: [ALICE]
-			});
-		}
-	);
-
-	it('reads the mute in ONE statement, joined onto the registry read', async () => {
-		// The directory is read once per pass, off one snapshot — the property
-		// `LeagueDirectory` states and the reason the mute rides the directory
-		// rather than being looked up beside `mention.ts`. A second read would
-		// let one message carry two spellings of the league.
-		const harness = fakeGateway(coManagedLeague({ bob: true }));
-		await drainSlotRelease(harness);
-
-		expect(
-			harness.statements.filter((sql) => /manager_notification_preferences/i.test(sql))
-		).toHaveLength(1);
 	});
 });
 

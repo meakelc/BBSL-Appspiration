@@ -148,6 +148,7 @@ function theDraw() {
 	const state: CloseState = {
 		auction,
 		nomination: nominationForPlayer(fold(INITIAL_NOMINATIONS, log, nominationsReducer), 'p-1'),
+		winnerHoldsNominationSlot: false,
 		playerIsMinorLeagueEligible: false,
 		minorLeagueOccupied: 0,
 		// **Story 10.3's cascade inputs.** `auctions` is empty here, so the

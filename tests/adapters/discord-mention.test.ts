@@ -67,19 +67,8 @@ const DIRECTORY: LeagueDirectory = {
 		[ARI, BULLS],
 		[KAI, SUNS],
 		[NOOR, SUNS]
-	]),
-	/**
-	 * Nobody has muted. Story 5.4's suppression rows below build their own
-	 * directories off this one with `muting(...)`, so every assertion above
-	 * stays a statement about an UNMUTED league and cannot drift.
-	 */
-	mutedSlotReleaseManagerIds: new Set<string>()
+	])
 };
-
-/** `DIRECTORY`, with exactly these Managers having muted `slot_release`. */
-function muting(...managerIds: readonly string[]): LeagueDirectory {
-	return { ...DIRECTORY, mutedSlotReleaseManagerIds: new Set(managerIds) };
-}
 
 function event(
 	eventType: string,
@@ -109,8 +98,15 @@ function bidPlaced(): BroadcastEvent {
 	});
 }
 
-/** An `AuctionClosed` payload, whose `teamId` is the WINNER's. */
-function auctionClosed(winner = SUNS): BroadcastEvent {
+/**
+ * An `AuctionClosed` payload, whose `teamId` is the WINNER's.
+ *
+ * `releasedNominationSlot` says whether this close freed the winner's
+ * Nomination Slot, and it defaults to `false` — the winner who was holding no
+ * Slot, which is the commoner case late in an auction and the one that must
+ * not claim a release.
+ */
+function auctionClosed(winner = SUNS, releasedNominationSlot = false): BroadcastEvent {
 	return event('AuctionClosed', {
 		fantraxPlayerId: PLAYER,
 		playerName: 'Anthony Davis',
@@ -120,7 +116,8 @@ function auctionClosed(winner = SUNS): BroadcastEvent {
 		winningAmount: 3_000_000,
 		capHit: 3_000_000,
 		contractYears: null,
-		closedAt: '2026-09-04T02:30:00.000Z'
+		closedAt: '2026-09-04T02:30:00.000Z',
+		releasedNominationSlot
 	});
 }
 
@@ -168,16 +165,36 @@ describe('mentionSuffixFor — one line per affected Team, on that event’s not
 		);
 	});
 
-	it('tells the NOMINATING Team its Slot released, on that same close', () => {
-		// The matrix's "The Nomination Slot is released" row: one event, two
-		// Teams, two clauses — and the nominator is not the winner. The Slot's
-		// release is not an event of its own, so this close is where it is
-		// said.
-		const line = mentionSuffixFor(auctionClosed(SUNS), [KAI_ID, ARI_ID], DIRECTORY, ORIGIN);
+	it('tells the WINNER its Slot freed, on the same line as the close', () => {
+		// FR-9, amended: a Slot is released by WINNING a Player. Two facts, one
+		// Team, one line — the Slot release is not an event of its own, so this
+		// close is where it is said, and the Team it is said to is the winner.
+		expect(
+			mentionSuffixFor(auctionClosed(SUNS, true), [KAI_ID, NOOR_ID], DIRECTORY, ORIGIN)
+		).toBe(
+			`<@${KAI_ID}> <@${NOOR_ID}> — Suns — Kai & Noor led this Auction at its close, and ` +
+				`your Nomination Slot is free again. ${LINK}`
+		);
+	});
 
-		expect(line).toBe(
-			`<@${KAI_ID}> — Suns — Kai led this Auction at its close. ${LINK}\n` +
-				`<@${ARI_ID}> — Bulls — Ari no longer hold this Nomination Slot. ${LINK}`
+	it('claims NO release for a winner who was holding no Slot', () => {
+		// The default case, and the one the old rule could not tell apart: a Team
+		// that wins having already had its Slot paid back, or having never
+		// nominated, is told what it won and nothing about a Slot.
+		const line = mentionSuffixFor(auctionClosed(SUNS, false), [KAI_ID], DIRECTORY, ORIGIN);
+
+		expect(line).toBe(`<@${KAI_ID}> — Suns — Kai led this Auction at its close. ${LINK}`);
+		expect(line).not.toContain('Nomination Slot');
+	});
+
+	it('says nothing to a Team on a close it did not win', () => {
+		// The outbid NOMINATOR, who used to be told the close had released their
+		// Slot and now keeps it held. `server/close.ts` no longer addresses them
+		// at all; if one ever arrives here it is a targeting bug, and this module
+		// degrades to the plain factual line rather than inventing a sentence
+		// about somebody else's close.
+		expect(mentionSuffixFor(auctionClosed(SUNS, true), [ARI_ID], DIRECTORY, ORIGIN)).toBe(
+			`<@${ARI_ID}> — A AuctionClosed was recorded (event #7).`
 		);
 	});
 
@@ -325,136 +342,43 @@ describe('mentionSuffixFor — it degrades and it never throws', () => {
 	});
 });
 
-// --- the mute (Story 5.4) -------------------------------------------------
+// --- the retired mute (Story 5.4) -----------------------------------------
 
-describe('a muted Manager loses the mention and nothing else', () => {
-	/**
-	 * The close that releases a CO-MANAGED Team's Nomination Slot: the Bulls
-	 * won, so the Suns are addressed as the nominator and their clause is the
-	 * one mutable category. Every row below drives this one event, because the
-	 * mute has to be read per CATEGORY and this is the only category that
-	 * carries one.
-	 */
-	const slotReleased = () => auctionClosed(BULLS);
-
-	it('drops one snowflake of two, and names only the Manager still on the line', () => {
-		// The matrix's "Co-managed, one muted" row. One `<@id>`, not two — and
-		// the subject narrows with it, because `subjectFor` is given the group
-		// that survived suppression rather than the Team's whole roster.
-		const line = mentionSuffixFor(slotReleased(), [ARI_ID, KAI_ID, NOOR_ID], muting(KAI), ORIGIN);
-
-		expect(line).toBe(
-			`<@${ARI_ID}> — Bulls — Ari led this Auction at its close. ${LINK}\n` +
-				`<@${NOOR_ID}> — Suns — Noor no longer hold this Nomination Slot. ${LINK}`
-		);
-		expect(line).not.toContain(`<@${KAI_ID}>`);
-		expect(line).not.toContain('Kai');
-	});
-
-	it('emits NO line for a Team whose every addressee has muted', () => {
-		// The matrix's "Co-managed, both muted" row. The suppression happens
-		// before the grouping loop, so the Suns group never exists — there is
-		// no empty subject and no stray dash. The winner's line is untouched.
-		const line = mentionSuffixFor(
-			slotReleased(),
-			[ARI_ID, KAI_ID, NOOR_ID],
-			muting(KAI, NOOR),
-			ORIGIN
-		);
-
-		expect(line).toBe(`<@${ARI_ID}> — Bulls — Ari led this Auction at its close. ${LINK}`);
-		expect(line.split('\n')).toHaveLength(1);
-	});
-
-	it('says nothing at all when every recipient in the batch has muted', () => {
-		// The matrix's last row. `''` is the same answer an event that affected
-		// nobody gets, and it is the answer that lets the broadcast notice post
-		// alone — the pass completes and nothing throws.
-		expect(mentionSuffixFor(slotReleased(), [KAI_ID, NOOR_ID], muting(KAI, NOOR), ORIGIN)).toBe(
-			''
-		);
-	});
-
-	it('leaves the sentence for the surviving addressee byte-identical to the unmuted case', () => {
-		// The story's manual check: the notice sentence must not change because
-		// somebody else muted. Only the addressee list narrows.
-		const muted = mentionSuffixFor(slotReleased(), [NOOR_ID], muting(KAI), ORIGIN);
-		const unmuted = mentionSuffixFor(slotReleased(), [NOOR_ID], DIRECTORY, ORIGIN);
-
-		expect(muted).toBe(unmuted);
-		expect(muted).toContain('no longer hold this Nomination Slot.');
-	});
-
-	it('does not touch an OUTBID notice for the same muted Manager', () => {
-		// The matrix's "A mute never touches an unmutable notice" row. The mute
-		// is per category, not per Manager.
-		expect(mentionSuffixFor(bidPlaced(), [KAI_ID, NOOR_ID], muting(KAI, NOOR), ORIGIN)).toBe(
+describe('nothing is suppressed, because no category is mutable', () => {
+	it('mentions every addressee it is handed, on every trigger', () => {
+		// Story 5.4 withheld the `<@id>` of a Manager who had muted
+		// `slot_release`. That category was retired when FR-9 was amended — the
+		// notice it governed was re-addressed to the winner and merged into the
+		// close line, which reports a Contract and was never mutable — so
+		// `LeagueDirectory` carries no mute set and this module consults none.
+		expect(mentionSuffixFor(bidPlaced(), [KAI_ID, NOOR_ID], DIRECTORY, ORIGIN)).toBe(
 			`<@${KAI_ID}> <@${NOOR_ID}> — Suns — Kai & Noor were outbid. ${LINK}`
 		);
-	});
-
-	it('does not touch a Contender notice, or the phase notice, for a muted Manager', () => {
-		const drawn = event('ContentionDrawn', {
-			fantraxPlayerId: PLAYER,
-			seed: '9f3c8a1d',
-			seedHash: 'h',
-			contenders: [SUNS],
-			selectedIndex: 0,
-			winningTeamId: SUNS,
-			winningTeamName: 'Suns',
-			winningManagerId: KAI,
-			drawnAt: '2026-09-04T02:30:00.000Z'
-		});
-
-		expect(mentionSuffixFor(drawn, [KAI_ID], muting(KAI), ORIGIN)).toBe(
-			`<@${KAI_ID}> — Suns — Kai were a Contender in this draw. ${LINK}`
-		);
 		expect(
-			mentionSuffixFor(event('ContractAssignmentOpened', {}), [KAI_ID], muting(KAI), ORIGIN)
-		).toBe(`<@${KAI_ID}> — Contract Assignment is open.`);
+			mentionSuffixFor(auctionClosed(SUNS, true), [KAI_ID, NOOR_ID], DIRECTORY, ORIGIN)
+		).toContain('your Nomination Slot is free again.');
 	});
 
-	it('does not apply when the nominator ALSO led — that clause is unmutable', () => {
-		// The matrix's "The nominator also led" row. The payload names the Suns
-		// as the winner, so their clause is `led at close`, which no Manager may
-		// mute, and `muting(KAI)` changes nothing about it.
-		expect(mentionSuffixFor(auctionClosed(SUNS), [KAI_ID], muting(KAI), ORIGIN)).toBe(
-			`<@${KAI_ID}> — Suns — Kai led this Auction at its close. ${LINK}`
-		);
-	});
-
-	it('keeps allowed_mentions exactly the set the body spells, in every muted case', () => {
-		// The acceptance criterion, asserted through the very function
-		// `server/outbox.ts` narrows the wire list with. A withheld snowflake
-		// drops out of `allowed_mentions.users` by construction, because the
-		// filter runs against the body that was rendered.
+	it('keeps allowed_mentions exactly the set the body spells', () => {
+		// The acceptance criterion outlived the mute, and is asserted through
+		// the very function `server/outbox.ts` narrows the wire list with: a
+		// snowflake this module declines to name drops out of
+		// `allowed_mentions.users` by construction.
 		const wire = [ARI_ID, KAI_ID, NOOR_ID];
+		const line = mentionSuffixFor(auctionClosed(SUNS, true), wire, DIRECTORY, ORIGIN);
 
-		const oneMuted = mentionSuffixFor(slotReleased(), wire, muting(KAI), ORIGIN);
-		expect(mentionsPresentIn(oneMuted, wire)).toEqual([ARI_ID, NOOR_ID]);
-
-		const bothMuted = mentionSuffixFor(slotReleased(), wire, muting(KAI, NOOR), ORIGIN);
-		expect(mentionsPresentIn(bothMuted, wire)).toEqual([ARI_ID]);
-
-		const allMuted = mentionSuffixFor(slotReleased(), [KAI_ID, NOOR_ID], muting(KAI, NOOR), ORIGIN);
-		expect(mentionsPresentIn(allMuted, [KAI_ID, NOOR_ID])).toEqual([]);
+		// Ari is on the wire but is not the winner, so their line degrades to
+		// the plain factual one — and they are still spelled in the body.
+		expect(mentionsPresentIn(line, wire)).toEqual(wire);
+		expect(mentionsPresentIn('', wire)).toEqual([]);
 	});
 
-	it('reads a Manager absent from the mute set as NOT muted', () => {
-		// Absence is the default, not an error — the same direction an absent
-		// preference row reads in through the drain's left join.
-		expect(mentionSuffixFor(slotReleased(), [KAI_ID], muting(), ORIGIN)).toBe(
-			`<@${KAI_ID}> — Suns — Kai no longer hold this Nomination Slot. ${LINK}`
-		);
-	});
-
-	it('reads a muted Manager the directory cannot resolve as NOT muted', () => {
-		// A snowflake with no Manager id behind it has no preference to read, so
-		// it degrades to the plain factual line exactly as it did before 5.4 —
-		// the mute cannot turn an unnameable addressee into a silence.
-		expect(mentionSuffixFor(slotReleased(), ['999999999999999999'], muting(KAI), ORIGIN)).toBe(
-			`<@999999999999999999> — A AuctionClosed was recorded (event #7).`
-		);
+	it('degrades an unnameable addressee to the plain factual line', () => {
+		// A snowflake with no Manager id behind it cannot be placed on a Team,
+		// so there is no subject to render and no clause that would be honest.
+		expect(
+			mentionSuffixFor(auctionClosed(SUNS, true), ['999999999999999999'], DIRECTORY, ORIGIN)
+		).toBe(`<@999999999999999999> — A AuctionClosed was recorded (event #7).`);
 	});
 });
 
@@ -586,12 +510,12 @@ describe('mentionSuffixFor — the assignment deadline’s two markers', () => {
 		);
 	});
 
-	it('is not silenced by a slot_release mute — the category is contract_assignment', () => {
-		// `contract_assignment` is unmutable (`core/notification-categories.ts`),
-		// and both markers ride it. A Manager who muted `slot_release` still
-		// hears about the deadline.
+	it('is silenced by nothing — no category is mutable', () => {
+		// `contract_assignment` was unmutable when a mute existed, and every
+		// category is now (`core/notification-categories.ts`). Both markers
+		// ride it, and both reach the Manager.
 		expect(
-			mentionSuffixFor(markerEvent('AssignmentRemindersSent'), [MEAKEL_ID], muting(MEAKEL), ORIGIN)
+			mentionSuffixFor(markerEvent('AssignmentRemindersSent'), [MEAKEL_ID], DIRECTORY, ORIGIN)
 		).toContain(`<@${MEAKEL_ID}>`);
 	});
 

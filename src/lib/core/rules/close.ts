@@ -205,6 +205,22 @@ export type CloseState = {
 	readonly auction: Auction | null;
 	/** The nomination naming the Player. `null` is "no Auction" — a bug here. */
 	readonly nomination: OpenNomination | null;
+	/**
+	 * Whether the WINNING Team is holding a Nomination Slot at this close —
+	 * and so whether this close releases one (FR-9, amended).
+	 *
+	 * **Not `nomination` above, and the two are rarely the same fact.** That
+	 * one is the nomination naming the PLAYER being closed, which is read for
+	 * the Player's name; this is `nominationForTeam` asked of the WINNER,
+	 * whose held Slot usually names somebody else entirely and often a Player
+	 * who left the board days ago. A Team that wins a Player it did not
+	 * nominate still has its Slot freed, and a Team that nominated and lost
+	 * still does not.
+	 *
+	 * `false` when nobody won — an undrawn lottery closes with no winning Team
+	 * to ask about, and terminating frees no Slot (Story 10.5).
+	 */
+	readonly winnerHoldsNominationSlot: boolean;
 	/** The eligibility FOLD's answer, never `free_agent_players`' column. */
 	readonly playerIsMinorLeagueEligible: boolean;
 	/** The WINNING Team's occupied Minor League Slots at this close. Raw. */
@@ -540,6 +556,35 @@ export type AuctionClosedPayload = {
 	readonly contractYears: null;
 	/** The Auction's own persisted expiry — never the transaction clock. */
 	readonly closedAt: string;
+	/**
+	 * Whether this close released the WINNING Team's Nomination Slot — that
+	 * is, whether that Team was holding one at the moment it won (FR-9,
+	 * amended).
+	 *
+	 * **Recorded on the event, never looked up afterwards**, for
+	 * `OpenNomination.holdsSlot`'s reason exactly: the fold that could answer
+	 * it has already released the Slot by the time anything downstream reads
+	 * this event, so a later derivation would answer about a different moment.
+	 * It states what was true when the close happened, and stays true forever.
+	 *
+	 * **It exists because a MENTION needs it and nothing else can supply it.**
+	 * `adapters/discord/mention.ts` runs in the drain, holding one event row
+	 * and no log to fold, and the sentence it must choose between — "led this
+	 * Auction at its close" and "led this Auction at its close, and your
+	 * Nomination Slot is free again" — turns on this fact alone. No gate,
+	 * refusal or fold reads it: `nominationsReducer` releases the Slot by
+	 * folding the winner off `teamId`, which it did before this field existed
+	 * and still does.
+	 *
+	 * `false` for a winner who held no Slot — a Team whose earlier win already
+	 * paid it back, one that has not nominated, or one whose nomination was a
+	 * Commissioner's and so spent none (Story 9.8). An `AuctionClosed` written
+	 * before this field existed carries no such claim, and `readClosedFacts`
+	 * deliberately does not require it: a close is well formed without it, and
+	 * the mention degrades to the shorter clause rather than inventing a
+	 * release nobody can point at.
+	 */
+	readonly releasedNominationSlot: boolean;
 };
 
 /**
@@ -1427,7 +1472,11 @@ export function decideClose(
 		contractYears: null,
 		// The Auction's OWN persisted expiry, not `now`. This is the whole of
 		// what makes a late close produce the same event as an on-time one.
-		closedAt: closesAt
+		closedAt: closesAt,
+		// Stated here because here is the last moment anything knows it: one
+		// line below, this event is what releases the Slot, and every later
+		// reader folds a log in which it is already gone.
+		releasedNominationSlot: state.winnerHoldsNominationSlot
 	};
 
 	const closed: EventEnvelope = {

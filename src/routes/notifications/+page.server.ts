@@ -1,6 +1,6 @@
 /**
- * The `/notifications` route: what a Manager has asked not to be mentioned on,
- * and the one action that changes it (Story 5.4, FR-27).
+ * The `/notifications` route: which notices reach a Manager, and why not one
+ * of them can be turned off (Story 5.4, FR-27).
  *
  * **The catalog entry existed before the route did.**
  * `server/destinations.ts:81` has advertised `notification-settings` ->
@@ -9,81 +9,50 @@
  * order and before any read — the pattern `/minor-league-eligibility` and
  * `/positions` establish. Hiding a form is never the check.
  *
- * **THE UNMUTABLE CATEGORIES ARE REFUSED SERVER-SIDE, not merely absent from
- * the page.** A request posting `outbid`, `contract_assignment`, or an id no
- * module names, is refused with wording from
- * `core/notification-categories.ts` and writes nothing. Every sentence comes
- * from that pure module — this file words no refusal of its own, so the page,
- * the tests and the refusal all read one wording.
+ * **EVERY MUTE IS REFUSED SERVER-SIDE, not merely absent from the page.** The
+ * one mutable category, `slot_release`, was retired when FR-9 was amended —
+ * `core/notification-categories.ts` carries that argument — so this action now
+ * refuses every submission it can receive: an id no module names, and an id
+ * that names one of the four categories, which are all unmutable. It writes
+ * nothing on either path, and it wrote nothing on those paths before either.
+ * Every sentence comes from that pure module; this file words no refusal of
+ * its own, so the page, the tests and the refusal all read one wording.
  *
- * **Muting suppresses the MENTION, never the post.** Nothing here touches the
- * outbox, the enqueue, or any auction write path. The preference is one row;
- * the drain reads it as a left join once per pass and withholds the `<@id>` at
- * composition time.
+ * **The action is kept rather than deleted.** A form posted from a page a
+ * Manager already had open, or by hand, must be answered with a stated refusal
+ * rather than a 404 that leaves them guessing — and the refusal is the same
+ * one the page's own prose gives.
  *
- * The actor is resolved server-side from the session (AD-4/AD-15) and never
- * from a form field — a `managerId` in the request body would be the whole
- * vulnerability of a per-Manager setting.
+ * Nothing here touches the outbox, the enqueue, or any auction write path, and
+ * nothing here reads or writes `manager_notification_preferences`: the table
+ * and `server/notification-preferences.ts` are left in place, simply unread.
  */
 
 import { fail } from '@sveltejs/kit';
 
 import {
-	MUTABLE_NOTIFICATION_CATEGORY,
 	isMutableNotificationCategory,
 	isNotificationCategory,
-	notificationMuteOutcomeDetail,
 	notificationMuteRefusalDetail
 } from '$lib/core/notification-categories.ts';
 import { requireLiveDestination } from '$lib/server/destinations.ts';
-import {
-	DEFAULT_NOTIFICATION_PREFERENCES,
-	loadNotificationPreferences,
-	setSlotReleaseMuted
-} from '$lib/server/notification-preferences.ts';
-import { writeGateway } from '$lib/shell/db.ts';
 
 import type { Actions, PageServerLoad } from './$types';
 
 const NOTIFICATION_DESTINATION_ID = 'notification-settings';
 
 /**
- * Read the `muted` form field: `'yes'` and `'no'`, and nothing else.
+ * **No read, because there is no preference left to render.** This used to
+ * load the Manager's `slot_release` mute so the page could state which way the
+ * control was set; no category is mutable, so the page is a list of categories
+ * and their reasons and nothing on it varies by Manager.
  *
- * Two direct comparisons rather than a lookup object, for
- * `/minor-league-eligibility`'s stated reason: a plain object literal inherits
- * from `Object.prototype`, so `muted=toString` would resolve to an inherited
- * member instead of `undefined` and pass an "is this a known direction?" check
- * with a Function bound as the value.
+ * `server/notification-preferences.ts` and the table behind it are untouched
+ * and unread — a stored preference is not deleted because nothing consults it.
  */
-function readMuted(value: FormDataEntryValue | null): boolean | undefined {
-	if (value === 'yes') return true;
-	if (value === 'no') return false;
-	return undefined;
-}
-
 export const load: PageServerLoad = async ({ locals }) => {
 	requireLiveDestination(locals.session, locals.phase.name, NOTIFICATION_DESTINATION_ID);
-
-	// The guard above has already refused every non-registered session — the
-	// catalog answers `[Sign-in]` and nothing else for one — so this narrowing
-	// is the type system catching up rather than a second gate. A registered
-	// Manager with no Team still has preferences: the mute is a fact about the
-	// person, and `managers.team_id` is nullable.
-	const session = locals.session;
-	if (session.kind !== 'registered') {
-		return {
-			phase: locals.phase,
-			slotReleaseMuted: DEFAULT_NOTIFICATION_PREFERENCES.slotReleaseMuted
-		};
-	}
-
-	const preferences = await loadNotificationPreferences(writeGateway(), session.manager.id);
-
-	return {
-		phase: locals.phase,
-		slotReleaseMuted: preferences.slotReleaseMuted
-	};
+	return { phase: locals.phase };
 };
 
 export const actions: Actions = {
@@ -92,7 +61,10 @@ export const actions: Actions = {
 
 		const form = await request.formData();
 		const category = form.get('category');
-		const muted = readMuted(form.get('muted'));
+		// The `muted` direction is deliberately not read. It decides nothing:
+		// both refusals below are about the CATEGORY, and a submission is
+		// refused whichever way it asked. Reading it would only invite a
+		// refusal that answered the wrong half of the request.
 
 		// **Order matters, and this is the order.** An unknown id is answered
 		// before an unmutable one, because "no such category" and "that
@@ -115,34 +87,17 @@ export const actions: Actions = {
 			});
 		}
 
-		if (muted === undefined) {
-			return fail(400, {
-				notice: notificationMuteRefusalDetail({ kind: 'unstated_target' })
-			});
-		}
-
-		const session = locals.session;
-		if (session.kind !== 'registered') {
-			// Unreachable behind the guard above, which answers `[Sign-in]` for
-			// every non-registered session; kept because `requireLiveDestination`
-			// returns void rather than the Manager, and a preference has to be
-			// attributed to somebody to be written at all.
-			return fail(400, {
-				notice: notificationMuteRefusalDetail({ kind: 'unregistered_actor' })
-			});
-		}
-
-		const preferences = await setSlotReleaseMuted(
-			writeGateway(),
-			session.manager.id,
-			muted
+		// **Unreachable, and it is the exhaustiveness rather than a real
+		// branch.** The two checks above refuse every submission there is: an
+		// id no module names, or one that names a category — and no category is
+		// mutable. Nothing here reaches a write, which is why this action no
+		// longer resolves the actor or touches
+		// `server/notification-preferences.ts`. A `throw` rather than a
+		// fall-through: if a category ever becomes mutable again, this is where
+		// the direction and the actor have to be read, and an action that
+		// quietly returned success without writing would be the worse failure.
+		throw new Error(
+			'notifications: a mute submission passed every refusal, but no category is mutable'
 		);
-
-		return {
-			category: MUTABLE_NOTIFICATION_CATEGORY,
-			slotReleaseMuted: preferences.slotReleaseMuted,
-			// Worded in the core, printed here — the page never re-words it.
-			notice: notificationMuteOutcomeDetail(preferences.slotReleaseMuted)
-		};
 	}
 };

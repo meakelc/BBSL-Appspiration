@@ -1,6 +1,6 @@
 /**
- * Which mention categories exist, which single one a Manager may mute, and the
- * refusal for a request to mute any other. Story 5.4, FR-27, AD-18.
+ * Which mention categories exist, and the refusal for a request to mute any of
+ * them. Story 5.4, FR-27, AD-18.
  *
  * **Pure.** No I/O, no clock, relative `.ts` imports only (AD-2) — and today,
  * no imports at all. `adapters/discord/mention.ts` reaches this to name the
@@ -9,29 +9,34 @@
  * read one definition, so a category that becomes mutable becomes mutable in
  * exactly one place.
  *
- * **Exactly one category is mutable, and it is `slot_release`.** FR-27 names
- * three candidates; only this one both has a trigger of its own and is
- * genuinely optional. The unbid-Nomination 24-hour warning was removed from
- * scope by user decision (2026-09-04). "Closes for Auctions their Team did not
- * lead or contend in" has no population: `server/close.ts`'s
- * `affectedTeamsForClose` addresses the leader and the nominator and nobody
- * else, so a Team that neither led nor contended is never mentioned on a close
- * at all, and the category reduces to a strict subset of `slot_release`.
+ * **NO CATEGORY IS MUTABLE, and one used to be.** Story 5.4 shipped
+ * `slot_release` as the single mutable category: a close freed the NOMINATING
+ * Team's Nomination Slot, which was a notice of its own, addressed to somebody
+ * who had not necessarily won anything, and genuinely optional. FR-9 was then
+ * amended — a Slot is released by WINNING a Player, never by the nominated
+ * Player's Auction closing — and that notice had nobody left to send to. The
+ * Slot release is now half a sentence on the WINNER's close line
+ * (`adapters/discord/mention.ts`), and the other half of that line reports a
+ * Contract the Team is bound by, which was never mutable and is not now.
  *
- * **Muting suppresses ONE MANAGER'S MENTION, never the post and never the
- * Team's line.** The preference is keyed on `managers.id`, so it is a fact
- * about the person and not about their Team: the broadcast notice still posts,
- * still names the Team and still states what happened, and a co-Manager of the
- * same Team who has not muted is still mentioned on the very same line. Every
- * sentence below has the READER as its subject for that reason — wording it as
- * "your Team is not mentioned" would be false in exactly the co-managed case
- * the story's matrix singles out, and a control that read as "turn this notice
- * off" would be describing something else again.
+ * FR-27's other two candidates are still unavailable for the reasons they
+ * always were. The unbid-Nomination 24-hour warning was removed from scope by
+ * user decision (2026-09-04). "Closes for Auctions their Team did not lead or
+ * contend in" has no population at all: `server/close.ts`'s
+ * `affectedTeamsForClose` addresses the winner and nobody else, so a Team that
+ * neither won nor contended is never mentioned on a close.
  *
- * **The unmutable categories carry their REASON, not merely an absence.** A
- * page that simply omitted a control would leave a Manager to guess whether
- * the setting is missing or refused. Each reason is stated once, here, and the
- * page prints it.
+ * So the settings page has no control, and says so rather than looking broken.
+ *
+ * **Every category carries its REASON, not merely an absence.** A page that
+ * simply omitted a control would leave a Manager to guess whether the setting
+ * is missing or refused. Each reason is stated once, here, and the page prints
+ * it.
+ *
+ * **The sentences still have the READER as their subject**, which is what they
+ * had while the mute existed and is worth keeping: a notice mentions Managers
+ * individually even though it names one Team, and a co-managed Team's line
+ * carries two `<@id>`.
  *
  * Product voice, `core/rules/eligibility.ts`'s verbatim: state the fact, then
  * the arithmetic. No apology, no exclamation mark, no advice.
@@ -40,45 +45,37 @@
 /**
  * Every category a mention can belong to.
  *
- * These are not event types: `AuctionClosed` produces two of them depending on
- * whether the addressed Team led the Auction or merely had its Nomination Slot
- * released by the close, which is the distinction the whole story turns on.
+ * These are not event types, and they no longer map one-to-one onto them
+ * either: `AuctionClosed` is `led_at_close` for the Team that won it and
+ * belongs to no category for anybody else, because it addresses nobody else.
+ * It used to produce a second category, `slot_release`, for the nominator —
+ * see the header for why that one is gone.
  */
 export type NotificationCategory =
 	| 'outbid'
 	| 'led_at_close'
-	| 'slot_release'
 	| 'contender'
 	| 'contract_assignment';
 
 /**
- * The one category a Manager may mute.
+ * Every category that cannot be muted — which is every category.
  *
- * A single value rather than a set, deliberately: a set invites a second entry
- * without the argument that earned the first one. See the header.
+ * Kept as its own name rather than collapsed into `NotificationCategory`, so
+ * that the refusal below keeps saying what it is about, and so that a league
+ * which ever makes one mutable again narrows this with `Exclude` in one edit
+ * instead of re-threading the refusal's type.
  */
-export const MUTABLE_NOTIFICATION_CATEGORY = 'slot_release' as const;
-
-/** The type of the one mutable category, so a caller cannot widen it silently. */
-export type MutableNotificationCategory = typeof MUTABLE_NOTIFICATION_CATEGORY;
+export type UnmutableNotificationCategory = NotificationCategory;
 
 /**
- * Every category that is NOT mutable, derived rather than listed.
- *
- * The refusal for "that category cannot be muted" takes this rather than
- * `NotificationCategory`, so `{ kind: 'unmutable_category', category:
- * 'slot_release' }` is UNCONSTRUCTIBLE instead of merely unreached — as the
- * wider type it would have rendered a sentence claiming the mutable category
- * cannot be muted, with an empty reason clause where the reason belongs.
- * Derived with `Exclude` so adding a second mutable category removes it from
- * here in the same edit.
+ * Every category a Manager may mute. EMPTY, and empty as data rather than as a
+ * deleted function: the gate below reads this list, so a league that ever
+ * makes one mutable again adds one entry here and the refusal, the route and
+ * the page all follow.
  */
-export type UnmutableNotificationCategory = Exclude<
-	NotificationCategory,
-	MutableNotificationCategory
->;
+export const MUTABLE_NOTIFICATION_CATEGORIES: readonly NotificationCategory[] = [];
 
-/** What one category is called, what its notice says, and whether it is mutable. */
+/** What one category is called, what its notice says, and why it has no control. */
 export type NotificationCategoryCopy = {
 	readonly id: NotificationCategory;
 	/** The category's name, as the settings page heads it. */
@@ -86,26 +83,36 @@ export type NotificationCategoryCopy = {
 	/** What the notice tells the reader — one sentence, no urgency framing. */
 	readonly statement: string;
 	/**
-	 * Why this category carries no control, or `null` for the mutable one.
+	 * Why this category carries no control.
 	 *
-	 * Stated rather than implied: the page lists every unmutable category with
-	 * this sentence beside it, so the absence of a control is legible as a
-	 * decision instead of an omission.
+	 * Stated rather than implied, and no longer nullable: every category is
+	 * unmutable, so a `null` here would be a category the page could say
+	 * nothing about. The page lists each one with this sentence beside it, so
+	 * the absence of a control is legible as a decision instead of an
+	 * omission.
 	 */
-	readonly unmutableReason: string | null;
+	readonly unmutableReason: string;
 };
 
 /**
- * Every category, in the order the page lists them: the mutable one first,
- * then the four that are not. The order is not a sort and no control changes
- * it.
+ * Every category, in the order the page lists them. The order is not a sort
+ * and no control changes it.
+ *
+ * `led_at_close` leads, because it is the one that reports an outcome a Team
+ * is bound by — and, since FR-9's amendment, the one that also reports a
+ * Nomination Slot coming back. The retired `slot_release` entry used to sit
+ * above it.
  */
 export const NOTIFICATION_CATEGORIES: readonly NotificationCategoryCopy[] = [
 	{
-		id: 'slot_release',
-		label: 'Nomination Slot released',
-		statement: 'A close released the Nomination Slot your Team was holding.',
-		unmutableReason: null
+		id: 'led_at_close',
+		label: 'Led an Auction at its close',
+		statement:
+			'Your Team led an Auction at the moment it closed. When your Team was holding a ' +
+			'Nomination Slot, the same notice states that winning has freed it.',
+		unmutableReason:
+			'The close is where a Contract is decided. This is the notice that reports an ' +
+			'outcome your Team is bound by, and there is no later surface that announces it.'
 	},
 	{
 		id: 'outbid',
@@ -118,14 +125,6 @@ export const NOTIFICATION_CATEGORIES: readonly NotificationCategoryCopy[] = [
 		// itself.
 		unmutableReason:
 			'Muting an outbid notice would undermine the fairness premise of a 24/7 clock.'
-	},
-	{
-		id: 'led_at_close',
-		label: 'Led an Auction at its close',
-		statement: 'Your Team led an Auction at the moment it closed.',
-		unmutableReason:
-			'The close is where a Contract is decided. This is the notice that reports an ' +
-			'outcome your Team is bound by, and there is no later surface that announces it.'
 	},
 	{
 		id: 'contender',
@@ -156,42 +155,30 @@ export function isNotificationCategory(value: unknown): value is NotificationCat
 }
 
 /**
- * Whether `value` names the one category a Manager may mute.
+ * Whether `value` names a category a Manager may mute — which nothing does.
  *
- * The server-side gate. A posted request that fails this is REFUSED with the
- * wording below, never silently ignored — "the control was absent from the
- * page" is not a check.
+ * **Kept as a function, and kept as the gate, although its answer is now
+ * constant.** A posted request is still REFUSED with the wording below rather
+ * than silently ignored, and "the control was absent from the page" was never
+ * the check. Deleting this would have meant the route deciding for itself what
+ * to do with a submission, which is the one thing this module exists to
+ * prevent.
  */
-export function isMutableNotificationCategory(
-	value: unknown
-): value is MutableNotificationCategory {
-	return value === MUTABLE_NOTIFICATION_CATEGORY;
+export function isMutableNotificationCategory(value: unknown): boolean {
+	return MUTABLE_NOTIFICATION_CATEGORIES.some((category) => category === value);
 }
 
 /**
- * What muting the one mutable category does, in words.
+ * What the settings page says instead of offering a control.
  *
- * Two sentences and never one: the first says what stops, the second says what
- * does not, because the whole design of this story is that the second half
- * survives the mute. A bare toggle would state neither.
+ * It states the fact first and the consequence second, in the product voice
+ * every other sentence here uses. It does not apologise for the absence and
+ * does not describe a setting that used to exist: a Manager reading this page
+ * wants to know what reaches them, not what the league changed its mind about.
  */
-export const MUTABLE_CATEGORY_MUTE_EFFECT =
-	'Muting this withholds your own mention: you are no longer pinged when a close ' +
-	'releases the Nomination Slot your Team was holding.';
-
-export const MUTABLE_CATEGORY_MUTE_LIMIT =
-	'The notice still posts in the league channel, still names your Team and still states ' +
-	'that the Slot was released. A co-Manager of your Team who has not muted this is still ' +
-	'mentioned on it. Muting withholds your mention, never the post.';
-
-/** The two states of the one control, worded so neither reads as the default. */
-export const MUTABLE_CATEGORY_MUTED_STATEMENT =
-	'This category is muted. The notice posts and names your Team; you are not mentioned ' +
-	'on it.';
-
-export const MUTABLE_CATEGORY_UNMUTED_STATEMENT =
-	'This category is not muted. You are mentioned on the notice, which is the default ' +
-	'for a Manager who has set nothing.';
+export const NO_MUTABLE_CATEGORY_STATEMENT =
+	'Every category below is sent to your Team, and none of them can be muted. Each one ' +
+	'states why.';
 
 /**
  * Why a request to change a mute was refused.
@@ -242,12 +229,17 @@ function echoed(requested: string): string {
 	return `"${clamped.replace(/"/g, '\\"')}"`;
 }
 
-/** The label of the one mutable category, for a sentence that names the way through. */
-function mutableLabel(): string {
-	return (
-		notificationCategoryCopy(MUTABLE_NOTIFICATION_CATEGORY)?.label ?? MUTABLE_NOTIFICATION_CATEGORY
-	);
-}
+/**
+ * The clause that says where a Manager stands after the refusal.
+ *
+ * It used to name the one category they could mute instead. There is none, so
+ * it states that rather than pointing at a way through that does not exist —
+ * a refusal whose second sentence sends somebody somewhere is worse than one
+ * that ends the matter.
+ */
+const NO_WAY_THROUGH =
+	'This league allows no notification category to be muted, so there is no category ' +
+	'this would have worked for.';
 
 /**
  * The one refusal sentence for each case.
@@ -258,24 +250,24 @@ function mutableLabel(): string {
 export function notificationMuteRefusalDetail(refusal: NotificationMuteRefusal): string {
 	switch (refusal.kind) {
 		case 'unmutable_category': {
-			// The reason is present for every category this variant can name —
-			// `UnmutableNotificationCategory` excludes the one entry whose
-			// `unmutableReason` is `null`. The fallbacks below are the lookup's,
-			// not the wording's: `notificationCategoryCopy` answers `null` for
-			// an id no module names, which the type already rules out here.
+			// Every category carries a reason now — `unmutableReason` is no
+			// longer nullable — so the sentence always has one to print. The
+			// fallbacks below are the LOOKUP's, not the wording's:
+			// `notificationCategoryCopy` answers `null` for an id no module
+			// names, which the type already rules out here.
 			const copy = notificationCategoryCopy(refusal.category);
 			const reason = copy?.unmutableReason ?? null;
 			return (
 				`The change was refused: ${copy?.label ?? refusal.category} cannot be muted. ` +
 				`${reason === null ? '' : `${reason} `}` +
-				`${mutableLabel()} is the one category this league allows a Manager to mute. ` +
+				`${NO_WAY_THROUGH} ` +
 				'Nothing was written.'
 			);
 		}
 		case 'unknown_category':
 			return (
 				`The change was refused: no notification category is named ${echoed(refusal.requested)}. ` +
-				`${mutableLabel()} is the one category this league allows a Manager to mute. ` +
+				`${NO_WAY_THROUGH} ` +
 				'Nothing was written.'
 			);
 		case 'unstated_target':
@@ -290,31 +282,4 @@ export function notificationMuteRefusalDetail(refusal: NotificationMuteRefusal):
 				'nobody for a preference to belong to. Nothing was written.'
 			);
 	}
-}
-
-/**
- * The state the control is in, as a sentence.
- *
- * The page prints this beside the control rather than relying on the control's
- * own affordance, so the state reads as words and never as a tick mark alone —
- * a greyscale screenshot of this page states which state it is in.
- */
-export function notificationMuteStateDetail(muted: boolean): string {
-	return muted ? MUTABLE_CATEGORY_MUTED_STATEMENT : MUTABLE_CATEGORY_UNMUTED_STATEMENT;
-}
-
-/**
- * The sentence a Manager reads when a change landed.
- *
- * Distinct from `notificationMuteStateDetail` on purpose: one says what the
- * setting IS, the other says that a submission was accepted. Printing the same
- * sentence for both would leave a Manager unable to tell a page they merely
- * loaded from one they just changed.
- */
-export function notificationMuteOutcomeDetail(muted: boolean): string {
-	return muted
-		? 'The change was accepted: this category is muted. The notice still posts and still ' +
-				'names your Team; you are no longer mentioned on it.'
-		: 'The change was accepted: this category is not muted. You are mentioned on the ' +
-				'notice, which is the default.';
 }

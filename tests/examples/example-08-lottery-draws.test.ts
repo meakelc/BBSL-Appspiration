@@ -195,6 +195,7 @@ function theDraw() {
 	const state: CloseState = {
 		auction,
 		nomination: nominationForPlayer(nominations, 'p-1'),
+		winnerHoldsNominationSlot: false,
 		playerIsMinorLeagueEligible: false,
 		minorLeagueOccupied: 0,
 		// **Story 10.3's cascade inputs.** `auctions` is empty here, so the
@@ -375,6 +376,7 @@ describe('§10 example 8 — the lottery draws', () => {
 		const state: CloseState = {
 			auction,
 			nomination: null,
+			winnerHoldsNominationSlot: false,
 			playerIsMinorLeagueEligible: false,
 			minorLeagueOccupied: 0,
 			// **Story 10.3's cascade inputs.** `auctions` is empty here, so the

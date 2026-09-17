@@ -347,6 +347,7 @@ const CLOSE_STATE: CloseState = {
 		holdsSlot: true,
 		occurredAt: '2026-08-24T08:00:00.000Z'
 	},
+	winnerHoldsNominationSlot: false,
 	// "Minor League Eligible players" — every one of the three.
 	playerIsMinorLeagueEligible: true,
 	minorLeagueOccupied: MINOR_LEAGUE_SLOTS - 1,

@@ -35,25 +35,21 @@
  * urgency framing, no "ending soon", no suggested action. A mention states what
  * happened to the reader and stops.
  *
- * **SUPPRESSION IS COMPOSITION'S** (Story 5.4). A Manager who has muted the one
- * mutable category (`core/notification-categories.ts`'s `slot_release`) has
- * their snowflake withheld HERE, before the grouping loop — so a Team whose
- * every addressee has muted emits no line at all, and a co-managed Team with
- * one muted Manager emits one `<@id>` rather than two. It is withheld at
- * composition and not at enqueue on purpose: the enqueue receives a flat list
- * of Team ids with no role attached, so filtering there would mean editing
- * every auction write site and putting a settings decision inside the
- * transaction that closes an Auction. Here the category is already known —
- * `categoryFor` derives leader-vs-nominator from the payload — and the mute
- * costs one left join on a read that happens once per pass.
+ * **NOTHING IS SUPPRESSED HERE, and something used to be.** Story 5.4 withheld
+ * the snowflake of a Manager who had muted `slot_release`, the one category
+ * this league let anybody mute. That category was retired when FR-9 was
+ * amended: the Slot release stopped being a notice of its own addressed to the
+ * nominator and became half a sentence on the winner's close line, which is a
+ * notice about a Contract and was never mutable. No category is mutable now,
+ * so this module renders every addressee it is handed, and `LeagueDirectory`
+ * no longer carries a mute set for it to consult.
  *
  * **`allowed_mentions` follows from `addressees`, UNCHANGED.** `server/outbox.ts`
  * filters the wire recipients through `mentionsPresentIn` against the body this
- * module actually rendered, so a withheld snowflake drops out of
- * `allowed_mentions.users` by construction rather than by a second filter
- * somebody has to remember to apply. Nothing about the wire narrowing was
- * touched for 5.4, and that is the point: suppression flows THROUGH it, never
- * around it.
+ * module actually rendered, so a snowflake this module declines to name drops
+ * out of `allowed_mentions.users` by construction rather than by a second
+ * filter somebody has to remember to apply. That was true while the mute
+ * existed and is true without it.
  *
  * **Deno-loadable** (AD-2): relative `.ts` imports only, no `$lib`, no `$env`,
  * no Node builtin — `server/outbox.ts` reaches this and the tick reaches
@@ -61,7 +57,6 @@
  */
 
 import { auctionPathFor } from '../../core/auction-link.ts';
-import { MUTABLE_NOTIFICATION_CATEGORY } from '../../core/notification-categories.ts';
 import type { NotificationCategory } from '../../core/notification-categories.ts';
 import { formatTeamManagers } from '../../core/team-identity.ts';
 import type { BroadcastEvent, LeagueDirectory } from './broadcast.ts';
@@ -84,8 +79,29 @@ const EM_DASH = '—';
  */
 const OUTBID_CLAUSE = 'were outbid.';
 const LED_AT_CLOSE_CLAUSE = 'led this Auction at its close.';
-const SLOT_RELEASED_CLAUSE = 'no longer hold this Nomination Slot.';
 const CONTENDER_CLAUSE = 'were a Contender in this draw.';
+
+/**
+ * The close clause when this close ALSO freed the winner's Nomination Slot
+ * (FR-9, amended).
+ *
+ * **Two facts on one line, because they are one event and one Team.** A close
+ * mentions the winner and nobody else, so a second line addressed to the same
+ * Team would be the same ping twice; and a Manager who has just won a Player
+ * wants to know in the same breath that they may nominate again.
+ *
+ * **Chosen by `releasedNominationSlot` and never assumed.** A winner who held
+ * no Slot — one whose earlier win already paid it back, or who never nominated
+ * — gets `LED_AT_CLOSE_CLAUSE` instead, because "free again" would claim a
+ * release that did not happen.
+ *
+ * This is the clause that used to be addressed to the NOMINATOR, saying they
+ * no longer held the Slot. Under the amended rule that was false for exactly
+ * the Manager it was sent to: nominating and losing keeps the Slot held, and
+ * winning is what frees it.
+ */
+const LED_AT_CLOSE_SLOT_FREED_CLAUSE =
+	'led this Auction at its close, and your Nomination Slot is free again.';
 
 /**
  * The Contract Assignment clause. Rendered FLAT — every addressee on one line
@@ -189,23 +205,38 @@ function auctionLink(event: BroadcastEvent, origin: string | null): string | nul
 const CLAUSE_FOR_CATEGORY: Readonly<Record<NotificationCategory, string>> = {
 	outbid: OUTBID_CLAUSE,
 	led_at_close: LED_AT_CLOSE_CLAUSE,
-	slot_release: SLOT_RELEASED_CLAUSE,
 	contender: CONTENDER_CLAUSE,
 	contract_assignment: CONTRACT_ASSIGNMENT_CLAUSE
 };
 
 /**
+ * Whether this close's payload says it released the winner's Nomination Slot.
+ *
+ * Read defensively and defaulting to `false`, which is this module's posture
+ * everywhere: an `AuctionClosed` written before the field existed, or one
+ * whose payload is some other shape, gets the shorter clause rather than a
+ * sentence claiming a release nobody recorded. Only the literal `true` says a
+ * Slot came back.
+ */
+function releasedNominationSlot(payload: Record<string, unknown>): boolean {
+	return payload['releasedNominationSlot'] === true;
+}
+
+/**
  * Which category one addressed Team's mention on one event belongs to, or
  * `null` when this event type carries no mention copy.
  *
- * **The whole reason 5.4 needs no write-site change.** `AuctionClosed` is the
- * only one that branches, and it branches on a fact the PAYLOAD already
- * carries: the winner is named on it, so the Team that led the Auction at its
- * close is the one whose id matches, and any other addressed Team is there
- * because its Nomination Slot was released by that same close. Nothing is
- * re-derived about who was affected — the write site decided that
- * (`server/close.ts`); this only chooses which of two categories fits, which is
- * also what decides whether a mute applies.
+ * **`AuctionClosed` addresses one Team, and the payload names it.** The winner
+ * is on the payload, and since FR-9's amendment the winner is the only Team a
+ * close is about: they led the Auction into it and their Nomination Slot is
+ * what it released. `server/close.ts` addresses nobody else, so an addressed
+ * Team whose id does not match is a targeting bug rather than a second
+ * category — it gets no clause and degrades to the plain factual line, which
+ * is what this module does with every fact it cannot vouch for.
+ *
+ * It used to answer `slot_release` for that non-matching Team, on the old rule
+ * that a close freed the NOMINATOR's Slot. It does not any more, and nothing
+ * is mentioned under that category, because it no longer exists.
  */
 function categoryFor(event: BroadcastEvent, teamId: string | null): NotificationCategory | null {
 	const payload = fields(event.payload);
@@ -213,9 +244,7 @@ function categoryFor(event: BroadcastEvent, teamId: string | null): Notification
 		case 'BidPlaced':
 			return 'outbid';
 		case 'AuctionClosed':
-			return teamId !== null && teamId === text(payload, 'teamId')
-				? 'led_at_close'
-				: 'slot_release';
+			return teamId !== null && teamId === text(payload, 'teamId') ? 'led_at_close' : null;
 		case 'ContentionDrawn':
 			return 'contender';
 		case 'ContractAssignmentOpened':
@@ -249,54 +278,17 @@ function clauseFor(event: BroadcastEvent, teamId: string | null): string | null 
 	const override = CLAUSE_FOR_EVENT_TYPE[event.eventType];
 	if (override !== undefined) return override;
 	const category = categoryFor(event, teamId);
-	return category === null ? null : CLAUSE_FOR_CATEGORY[category];
-}
-
-/**
- * Whether this snowflake's Manager has muted the category THIS event would
- * mention them under.
- *
- * Per CATEGORY and never per Manager: the same Manager who has muted
- * `slot_release` is mentioned as normal when they are outbid, because the mute
- * is a fact about one notice and not about the person. A snowflake the
- * directory cannot resolve to a Manager is never muted — absence reads as not
- * muted here for the same reason it does in the SQL.
- */
-function isMuted(
-	event: BroadcastEvent,
-	discordUserId: string,
-	directory: LeagueDirectory
-): boolean {
-	// Total, and it answers "not muted" on a directory it cannot read — the
-	// module's stated priority, unchanged: "a mention that renders no `<@id>`
-	// is a silence and this module's whole job is not to produce one". A mute
-	// that could be turned into a silence by an unreadable registry snapshot
-	// would be a worse failure than a ping somebody had asked to stop.
-	try {
-		const managerId = directory.managerIdsByDiscordUserId.get(discordUserId);
-		if (managerId === undefined) return false;
-		if (!directory.mutedSlotReleaseManagerIds.has(managerId)) return false;
-		const teamId = directory.teamOfManager.get(managerId) ?? null;
-		return categoryFor(event, teamId) === MUTABLE_NOTIFICATION_CATEGORY;
-	} catch {
-		return false;
+	if (category === null) return null;
+	// The one clause chosen by a payload FACT rather than by the category
+	// alone. `led_at_close` covers both closes; which sentence it renders turns
+	// on whether this close also freed the winner's Slot. A second category
+	// would have been the wrong shape: it is the same notice, to the same
+	// Team, about the same event, and splitting it would have made one of the
+	// two halves separately addressable when neither ever is.
+	if (category === 'led_at_close' && releasedNominationSlot(fields(event.payload))) {
+		return LED_AT_CLOSE_SLOT_FREED_CLAUSE;
 	}
-}
-
-/**
- * `discordUserIds` without anybody who muted this event's category for them.
- *
- * One definition, reached from both of this module's exits — the composition
- * and the fallback line it degrades to. A mute that survived only the happy
- * path would ping a Manager who asked not to be pinged at exactly the moment
- * something unexpected happened, which is not a degradation anybody chose.
- */
-function withoutMuted(
-	event: BroadcastEvent,
-	discordUserIds: readonly string[],
-	directory: LeagueDirectory
-): readonly string[] {
-	return discordUserIds.filter((discordUserId) => !isMuted(event, discordUserId, directory));
+	return CLAUSE_FOR_CATEGORY[category];
 }
 
 /** The Team one snowflake acts for, through the directory, or `null`. */
@@ -356,11 +348,7 @@ export function mentionSuffixFor(
 	// that may be what threw.
 	let discordUserIds: readonly string[] = [];
 	try {
-		// Normalised and then narrowed by the mutes, in ONE guard: what the
-		// fallback below may name is exactly what the composition may name, so
-		// a Manager who muted this category cannot be pinged by the
-		// degradation path either.
-		discordUserIds = withoutMuted(event, addressees(recipients), directory);
+		discordUserIds = addressees(recipients);
 	} catch {
 		// The recipient list itself is unreadable, so there is nobody this
 		// module can honestly name. `''` posts the notice alone, which is the
@@ -396,23 +384,7 @@ function composed(
 	directory: LeagueDirectory,
 	origin: string | null
 ): string {
-	if (discordUserIds.length === 0) return '';
-
-	// **Suppression, before the grouping loop and before every early return.**
-	// Filtering here rather than inside the loop is what makes a Team whose
-	// every addressee has muted emit NO line: the group never exists, so there
-	// is no empty subject to render around. `''` is then the honest answer for
-	// an event on which every recipient has muted — the broadcast notice posts
-	// alone, exactly as it does for an event that affected nobody.
-	//
-	// **Normally a no-op, and deliberately kept anyway.** The only caller,
-	// `mentionSuffixFor`, has already run `withoutMuted` in its own guard so
-	// that the fallback line honours the mute too — so on every real call this
-	// list arrives filtered and this pass removes nothing. It is the SAME
-	// filter and not a second one: `withoutMuted` is total and idempotent, and
-	// keeping the call here is what makes the suppression a property of
-	// composition rather than of one caller remembering to do it first.
-	const addressed = withoutMuted(event, discordUserIds, directory);
+	const addressed = discordUserIds;
 	if (addressed.length === 0) return '';
 
 	// The phase trigger addresses the whole league, so it is flat by design —

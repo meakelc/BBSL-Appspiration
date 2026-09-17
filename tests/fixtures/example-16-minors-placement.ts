@@ -119,6 +119,7 @@ export function appendedClose(seq: number, event: EventEnvelope): AppendedEvent 
 export const STATE_16: CloseState = {
 	auction: auctionWonAt('p-stash', 4_000_000),
 	nomination: nominationOf('p-stash', 'Ausar Bright'),
+	winnerHoldsNominationSlot: false,
 	// "a Minor League Eligible player"
 	playerIsMinorLeagueEligible: true,
 	// "Team M holds two players in Minor League Slots"

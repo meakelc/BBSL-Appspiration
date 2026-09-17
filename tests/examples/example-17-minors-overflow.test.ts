@@ -73,6 +73,7 @@ const ROWS_AFTER_16: readonly CapHitRow[] = [
 const STATE: CloseState = {
 	auction: auctionWonAt('p-second', 3_000_000),
 	nomination: nominationOf('p-second', 'Malik Rowe'),
+	winnerHoldsNominationSlot: false,
 	// "a second Minor League Eligible player"
 	playerIsMinorLeagueEligible: true,
 	// DERIVED from example 16's committed effect, never written as a literal.

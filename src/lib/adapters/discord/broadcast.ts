@@ -146,31 +146,6 @@ export type LeagueDirectory = {
 	 * addressees of one event by the Team the notice is about.
 	 */
 	readonly teamOfManager: ReadonlyMap<string, string>;
-	/**
-	 * Every `managers.id` that has muted the one mutable mention category —
-	 * `slot_release`, `core/notification-categories.ts`'s
-	 * `MUTABLE_NOTIFICATION_CATEGORY` (Story 5.4).
-	 *
-	 * **A SET of Manager ids, and absence is the default.** A Manager with no
-	 * preference row is simply not in here; `server/outbox.ts` left-joins the
-	 * preferences table so an absent row and an explicit `false` arrive as the
-	 * same thing, which is what makes "a Manager who has set nothing is not
-	 * muted" true by construction rather than by a backfill.
-	 *
-	 * Keyed on the Manager id rather than the snowflake, because the snowflake
-	 * is an ADDRESS and the preference is a fact about the person — the same
-	 * separation `managerNames` and `managerIdsByDiscordUserId` already keep.
-	 * `mention.ts` resolves one to the other through
-	 * `managerIdsByDiscordUserId` and asks here.
-	 *
-	 * Nothing in this module reads it: the broadcast copy is addressed to the
-	 * channel and mentions nobody, and MUTING NEVER SUPPRESSES THE POST — only
-	 * the `<@id>`. It lives on the directory rather than beside `mention.ts`
-	 * for `managerIdsByDiscordUserId`'s reason, restated: ONE read, ONE
-	 * snapshot per pass, so one message cannot carry two spellings of the
-	 * league. A mute landing mid-pass takes effect on the next one.
-	 */
-	readonly mutedSlotReleaseManagerIds: ReadonlySet<string>;
 };
 
 /** An empty directory. Every notice it cannot name degrades rather than throws. */
@@ -179,8 +154,7 @@ export const EMPTY_LEAGUE_DIRECTORY: LeagueDirectory = {
 	managerNames: new Map(),
 	managersOfTeam: new Map(),
 	managerIdsByDiscordUserId: new Map(),
-	teamOfManager: new Map(),
-	mutedSlotReleaseManagerIds: new Set()
+	teamOfManager: new Map()
 };
 
 // --- Rendering primitives -------------------------------------------------

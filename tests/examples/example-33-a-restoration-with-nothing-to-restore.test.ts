@@ -118,6 +118,7 @@ function auctionsOf(entries: readonly Auction[]): OpenAuctions {
 const CLOSE_STATE: CloseState = {
 	auction: BROOKS,
 	nomination: nominationOf('p-brooks'),
+	winnerHoldsNominationSlot: false,
 	playerIsMinorLeagueEligible: false,
 	minorLeagueOccupied: 0,
 	auctions: auctionsOf([BROOKS, CARTER]),

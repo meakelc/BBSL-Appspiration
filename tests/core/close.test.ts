@@ -119,6 +119,7 @@ function stateOf(overrides: Partial<CloseState> = {}): CloseState {
 	return {
 		auction: auctionOf(),
 		nomination: NOMINATION,
+		winnerHoldsNominationSlot: false,
 		playerIsMinorLeagueEligible: false,
 		minorLeagueOccupied: 0,
 		// **Story 10.3's cascade inputs.** `auctions` is empty here, so the
@@ -399,8 +400,26 @@ describe('decideClose — exactly one AuctionClosed, carrying the whole outcome'
 			placement: 'minor_league',
 			contention: 'standard',
 			contractYears: null,
-			closedAt: CLOSES_AT
+			closedAt: CLOSES_AT,
+			releasedNominationSlot: false
 		});
+	});
+
+	it('states the Slot release when the WINNER was holding one', () => {
+		// FR-9, amended. The fact is RECORDED on the close because this event
+		// is what releases the Slot: every later reader folds a log in which it
+		// is already gone, so nothing downstream could derive it.
+		const held = payloadOf(stateOf({ winnerHoldsNominationSlot: true })).payload as {
+			releasedNominationSlot: boolean;
+		};
+		expect(held.releasedNominationSlot).toBe(true);
+
+		// And it is the WINNER's Slot, never the nominated Player's. `stateOf`
+		// carries a nomination by Team N throughout; the winner is Team M.
+		const free = payloadOf(stateOf({ winnerHoldsNominationSlot: false })).payload as {
+			releasedNominationSlot: boolean;
+		};
+		expect(free.releasedNominationSlot).toBe(false);
 	});
 
 	it('records an Active/Bench placement at the full amount', () => {

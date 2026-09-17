@@ -321,30 +321,49 @@ function acceptedPayload(harness: ReturnType<typeof fakeGateway>): AuctionClosed
 const SEALED_SEED = '4d81f0b6a72c395e4d81f0b6a72c395e4d81f0b6a72c395e4d81f0b6a72c395e';
 
 describe('closeAuction — the mention intents it owes (Story 5.3, AC1)', () => {
-	it('mentions the leader and the NOMINATING Team on the close', async () => {
-		// Two matrix rows on one event: “An Auction the Team led closes” and
-		// “The Nomination Slot is released”. `t-m` led and won; `t-n` nominated
-		// and gets its Slot back. `AuctionClosedPayload` names the winner and
-		// could never answer the second, which is why the nominations fold does.
+	it('mentions the WINNER on the close, and not the Team that nominated', async () => {
+		// FR-9, amended. `t-m` led and won; `t-n` nominated and was outbid, and
+		// KEEPS its Slot held — so the close is about `t-m` twice over (they
+		// won, and their Slot is what it releases) and about `t-n` not at all.
+		// Addressing `t-n` here is what the old rule did, and the clause it got
+		// said their Slot had been released, which is now false for exactly the
+		// Manager it was sent to.
 		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 8_500_000)] });
 
 		await closeAuction(harness.gateway, 'p-1');
 
 		expect(harness.outboxIntents).toEqual([
 			{ eventSeq: expect.any(String), recipient: '#channel' },
-			{ eventSeq: expect.any(String), recipient: 'discord-t-m' },
-			{ eventSeq: expect.any(String), recipient: 'discord-t-n' }
+			{ eventSeq: expect.any(String), recipient: 'discord-t-m' }
 		]);
 	});
 
+	it('records on the close whether the WINNER was holding a Slot', async () => {
+		// The fact the mention turns on, and the close is the last moment
+		// anything knows it — this event is what releases the Slot, so every
+		// later reader folds a log in which it is already gone.
+		//
+		// `t-m` won here and nominated nothing, so no Slot came back.
+		const outbid = fakeGateway({ events: [nominated(), bidLogged(2, 8_500_000)] });
+		await closeAuction(outbid.gateway, 'p-1');
+		expect(acceptedPayload(outbid).releasedNominationSlot).toBe(false);
+
+		// `t-n` nominated and then won the very Player it nominated, so this
+		// close both awards the Contract and pays the Slot back.
+		const won = fakeGateway({
+			events: [nominated(), bidLogged(2, 8_500_000, 'p-1', 't-n', 'm-n')]
+		});
+		await closeAuction(won.gateway, 'p-1');
+		expect(acceptedPayload(won).releasedNominationSlot).toBe(true);
+	});
+
 	it('files ONE intent when the winner IS the nominating Team', async () => {
-		// A Team that nominated a Player and then won them holds BOTH roles on the
-		// one `AuctionClosed`, so `affectedTeamsForClose` names it twice. One
-		// Manager must still get one ping: two intents on the same
-		// `(event_seq, channel, recipient)` are the same intent, and the outbox key
-		// would absorb the second with `on conflict do nothing` — but the enqueue
-		// should not be leaning on the constraint to be correct, and the composer
-		// would otherwise be handed the same snowflake twice.
+		// A Team that nominated a Player and then won them used to hold BOTH
+		// roles on the one `AuctionClosed`, and `affectedTeamsForClose` named it
+		// twice. It now names the winner once and that is the whole list — but
+		// one ping is still the assertion, and it is the one this suite has
+		// always made, so it stays as the guard against a second addressee
+		// creeping back in.
 		const harness = fakeGateway({
 			// `nominated()` nominates for `t-n`; this Bid wins it for `t-n` too.
 			events: [nominated(), bidLogged(2, 8_500_000, 'p-1', 't-n', 'm-n')]
@@ -358,11 +377,17 @@ describe('closeAuction — the mention intents it owes (Story 5.3, AC1)', () => 
 		]);
 	});
 
-	it('mentions every Contender on the DRAW, and the nominator on the close', async () => {
+	it('mentions every Contender on the DRAW, and the drawn WINNER on the close', async () => {
 		// The matrix's “A contention closes” row. The draw is the event that can
 		// tell a Contender how the lottery went; the close beside it addresses
-		// the nominator alone, because a lottery has no Leading Bidder — the one
-		// `auctionsReducer` reports is a fold artifact (`evaluateSelfBid`'s note).
+		// the Team that won it.
+		//
+		// **A lottery is why the close reads the appended row rather than the
+		// fold.** `auctionsReducer` reports a leading Bid because some Bid has
+		// to be the highest, but a Minimum-Bid Contention has no Leading Bidder
+		// (`evaluateSelfBid`'s note), so the old code nulled it here — which,
+		// with the nominator no longer addressed, would have left this close
+		// mentioning nobody at all.
 		const harness = fakeGateway({
 			events: [
 				nominated(),
@@ -383,7 +408,19 @@ describe('closeAuction — the mention intents it owes (Story 5.3, AC1)', () => 
 			.map((intent) => intent.recipient);
 
 		expect(onDraw).toEqual(['#channel', 'discord-t-e', 'discord-t-f']);
-		expect(onClose).toEqual(['#channel', 'discord-t-n']);
+		// The drawn winner, whichever of the two Contenders the seed selected —
+		// asserted against the close's own payload rather than against a Team
+		// named here, so this stays a statement about the ADDRESSING and never
+		// an accidental re-test of the draw.
+		// `acceptedPayload` is not reachable here: a lottery appends the draw
+		// AND the close, and that helper asserts a single event on purpose.
+		const closeEvent = harness.appendedEvents.find(
+			(row) => row['event_type'] === AUCTION_CLOSED_EVENT
+		);
+		const winner = (closeEvent?.['payload'] as AuctionClosedPayload | undefined)?.teamId;
+		expect(onClose).toEqual(['#channel', `discord-${winner ?? 'none'}`]);
+		// And never the nominator, who neither bid nor won.
+		expect(onClose).not.toContain('discord-t-n');
 	});
 });
 

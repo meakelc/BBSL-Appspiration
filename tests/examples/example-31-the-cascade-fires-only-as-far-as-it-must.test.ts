@@ -160,6 +160,7 @@ function closeOf(
 	return {
 		auction,
 		nomination: nominationOf(auction.fantraxPlayerId),
+		winnerHoldsNominationSlot: false,
 		playerIsMinorLeagueEligible: false,
 		// "no minor-league involvement" — every one of these is non-eligible.
 		minorLeagueOccupied: 0,

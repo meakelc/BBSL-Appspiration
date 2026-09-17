@@ -82,6 +82,7 @@ import {
 	AUCTION_TERMINATED_EVENT,
 	INITIAL_NOMINATIONS,
 	nominationForPlayer,
+	nominationForTeam,
 	nominationsReducer
 } from '../core/projection/nominations.ts';
 import { closedWinnerFor, decideClose } from '../core/rules/close.ts';
@@ -213,6 +214,17 @@ export async function loadCloseState(
 	return {
 		auction,
 		nomination: nominationForPlayer(nominations, fantraxPlayerId),
+		// **Asked of the WINNER, not of the Player being closed** (FR-9,
+		// amended). The Slot this close releases belongs to whoever won, and
+		// `byTeam` indexes only Slot-spending nominations — so a Commissioner's
+		// nomination is absent from it and a Team that never nominated was
+		// never in it, and both answer `false` here without a rule of their
+		// own. Read on THIS transaction's fold, above the append, because the
+		// very event about to be written is what empties the entry.
+		//
+		// `null` winner is the undrawn lottery: nobody won, so no Slot moves.
+		winnerHoldsNominationSlot:
+			winner !== null && nominationForTeam(nominations, winner.teamId) !== null,
 		// **The whole fold, INCLUDING the Auction being closed** (Story 10.3).
 		// `decideClose` drops the won Player itself, because the post-close
 		// picture is the core's to derive and a shell that pre-filtered it
@@ -311,16 +323,29 @@ function restoredTeamId(payload: unknown): string | null {
  *    mention, and a Manager must not be able to miss the notice telling them
  *    they lost a Player through no act of their own. The mention has no copy
  *    of its own until Story 10.6 and falls back to the plain factual line.
- *  - `AuctionClosed` mentions the Team that LED the Auction into its close —
- *    the winner, for every Standard close — and the Team whose Nomination Slot
- *    the close released, which is the nominator and is frequently somebody
- *    else. The Slot release is not an event of its own (`nominationsReducer`
- *    simply drops the key), so this close is where it is stated.
+ *  - `AuctionClosed` mentions the WINNER, and nobody else. They are the Team
+ *    the close is about twice over: they led the Auction into it, and — since
+ *    FR-9 was amended — they are the Team whose Nomination Slot it releases.
+ *    The Slot release is not an event of its own (`nominationsReducer` simply
+ *    drops the key), so this close is where it is stated, on the winner's own
+ *    line and conditioned on `releasedNominationSlot`.
  *
- * The leader is nulled inside a Minimum-Bid Contention for `server/bidding.ts`'s
- * reason: `auctionsReducer` reports one because some Bid has to be the highest,
- * but a lottery has no Leading Bidder. The Contenders already have their
- * mention on the draw, and the drawn winner is one of them.
+ * **The NOMINATOR is deliberately not addressed here, and used to be.** Under
+ * the old rule a close freed the nominating Team's Slot however it closed, so
+ * the nominator was a party to every close of a Player they put up. They are
+ * not any more: a Manager who nominates and is outbid keeps the Slot held, so
+ * a mention addressed to them on this event could only say something the rule
+ * no longer makes true. Nothing happened to them that this close is about, and
+ * the broadcast notice still states the close in the league channel.
+ *
+ * The winner is taken off the APPENDED EVENT'S OWN `team_id` rather than off
+ * the fold's leading Bid, and that is what makes a lottery close mention
+ * anybody at all: `auctionsReducer` reports a leader because some Bid has to
+ * be the highest, but a Minimum-Bid Contention has no Leading Bidder and the
+ * old code nulled it for that reason — leaving the drawn winner with no close
+ * mention once the nominator stopped being addressed. The envelope names the
+ * winning Team for every close, drawn or Standard, because `decideClose`
+ * writes the winner onto it.
  *
  * A `null` state is the pre-`load` window the enqueue cannot observe; empty is
  * the safe answer there.
@@ -350,6 +375,19 @@ function affectedTeamsForClose(
 		if (restored === null || cancelled.includes(restored)) return cancelled;
 		return [...cancelled, restored];
 	}
+	// **Answered before the `null` guard for the same reason, and it did not
+	// used to be.** Addressing the winner alone made this case a question
+	// about the appended row rather than about the fold, so the pre-`load`
+	// window no longer costs the winning Team its mention.
+	if (eventType === AUCTION_CLOSED_EVENT) {
+		// **The winner, and only the winner** — off the appended row, exactly
+		// as the cancellation above reads its Team. `decideClose` writes the
+		// winning Manager and Team onto this envelope because "the Team that
+		// now owns the contract" is the honest answer to who the event belongs
+		// to, and that is the same Team this mention is for. It is correct for
+		// a drawn lottery close, which the fold's leading Bid never was.
+		return event.teamId === null ? [] : [event.teamId];
+	}
 	if (state === null) return [];
 	const auction = state.auction;
 
@@ -364,32 +402,15 @@ function affectedTeamsForClose(
 	if (eventType === AUCTION_TERMINATED_EVENT) {
 		// **The nominating Team, and only them** (Story 10.5). Nobody won, so
 		// there is no winner to congratulate and no leader to console; the one
-		// party to this event is the Manager whose Nomination Slot has just
-		// come back and whose Player is in the pool again. The Team is off the
-		// nominations fold, exactly as the close case reads it — the payload
-		// names it too, but one derivation is what keeps the two from drifting.
+		// party to this event is the Manager whose Player is in the pool
+		// again. Their Nomination Slot is NOT among the things that came back
+		// — a termination has no winner and only a win pays a Slot back (FR-9,
+		// amended) — so this addresses the Manager whose nomination it ended,
+		// and nothing here says anything about a Slot.
 		const terminatedNominator = state.nomination?.teamId ?? null;
 		return terminatedNominator === null ? [] : [terminatedNominator];
 	}
-	if (eventType !== AUCTION_CLOSED_EVENT) return [];
-
-	const teams: string[] = [];
-	// Optional-chained exactly as `server/bidding.ts`'s `displacedTeamsFor` is,
-	// and for a sharper reason: `enqueue` runs INSIDE the write transaction, so
-	// a `TypeError` here would roll back an otherwise valid close over a notice.
-	// Unreachable today — `decideClose` throws before this if nobody ever bid —
-	// but "a Discord outage costs a notification and never a bid" has to hold
-	// for the outbox's own targeting too.
-	const leader =
-		auction === null || auction.contention === 'minimum_bid'
-			? null
-			: (auction.leadingBid?.teamId ?? null);
-	if (leader !== null) teams.push(leader);
-	// The nominating Team, off the nominations fold — `AuctionClosedPayload`
-	// names the winner and could never answer this.
-	const nominator = state.nomination?.teamId ?? null;
-	if (nominator !== null) teams.push(nominator);
-	return teams;
+	return [];
 }
 
 /**

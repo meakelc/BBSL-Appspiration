@@ -359,6 +359,7 @@ const CLOSE_STATE: CloseState = {
 		holdsSlot: true,
 		occurredAt: '2026-08-24T08:00:00.000Z'
 	},
+	winnerHoldsNominationSlot: false,
 	// "non-eligible players" throughout — the minors branch never applies.
 	playerIsMinorLeagueEligible: false,
 	minorLeagueOccupied: MINOR_LEAGUE_SLOTS,

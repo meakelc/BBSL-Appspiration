@@ -1,15 +1,20 @@
 /**
- * One Manager's notification preferences: the read the settings page renders
- * from, and the one upsert that changes it. Server-only (Story 5.4, FR-27).
+ * One Manager's notification preferences: the read a settings page rendered
+ * from, and the one upsert that changed it. Server-only (Story 5.4, FR-27).
  *
- * **This is the SvelteKit half, and the Deno half must never import it.** The
- * drain reads the same rows, but it reads them as a LEFT JOIN inside
- * `server/outbox.ts`'s own registry read (`MANAGER_NAMES_SQL`) — one read, one
- * snapshot per pass, which is the property that stops one Discord message
- * carrying two spellings of the league. This module answers a different
- * question for a different caller (what does THIS Manager currently have set?),
- * so it is a separate statement rather than a shared helper, and nothing
- * reachable from `supabase/functions/tick/` may reach it.
+ * **NOTHING CALLS THIS ANY MORE, and the rows are kept anyway.** Story 5.4's
+ * one mutable category, `slot_release`, was retired when FR-9 was amended —
+ * `core/notification-categories.ts` carries that argument — so no category can
+ * be muted, `/notifications` has no control to render and reads nothing here,
+ * and `server/outbox.ts` dropped the LEFT JOIN that used to read the same rows
+ * beside its registry read. The table, its migration and this module are left
+ * standing: a Manager's stored preference is not deleted because the league
+ * stopped asking, and a category that ever becomes mutable again finds both
+ * the storage and the statements already here.
+ *
+ * **This is the SvelteKit half, and the Deno half must never import it.** That
+ * held while the drain read these rows and holds now that it does not: nothing
+ * reachable from `supabase/functions/tick/` may reach this module.
  *
  * **Absence is the default, not an error.** A Manager with no row reads as not
  * muted here exactly as it does in the drain's `coalesce`. `loadPreferences`

@@ -64,11 +64,7 @@ const DIRECTORY: LeagueDirectory = {
 	teamOfManager: new Map([
 		[MEAKEL, LAKERS],
 		[ARI, BULLS]
-	]),
-	// Story 5.4's mute set. Empty here on purpose: a mute withholds a MENTION
-	// and this module composes the broadcast, which mentions nobody — so no
-	// value of this field can change a single character of what it produces.
-	mutedSlotReleaseManagerIds: new Set<string>()
+	])
 };
 
 function event(
