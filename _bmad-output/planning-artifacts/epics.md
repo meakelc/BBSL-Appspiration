@@ -1,7 +1,8 @@
 ---
 stepsCompleted: [1, 2, 3]
-updated: 2026-09-12
+updated: 2026-09-16
 amendments:
+  - '2026-09-16 — **Epic 11 (Take it back — ninety seconds to undo a bid) appended**, and **Story 7.12 appended to Epic 7**, after PRD FR-15 was REVERSED from a prohibition to a rule (commit c49898e) and the architecture spine, the PRD again, and SPEC.md were all brought current for it the same day. Requirements inventory amended in place: **FR-15 rewritten** — it read "no voluntary bid retraction" from 2026-08-16, and the 2026-09-08 narrowing existed specifically to keep the Team locked out while FR-40 let the system act; **FR-43 exception STRUCK**, deleted upstream 2026-09-16; **AR-45 … AR-48 added**; **UX-DR42 … UX-DR44 added**; **four stale ranges corrected** — the FR inventory header (FR-40 to FR-44), the Coverage Map header (FR-43 to FR-44), and NFR1 and AR-25 (examples 1–28 to 1–57). Epics 1–6 and 8–10 are untouched, as are Stories 7.1–7.11, which are NOT renumbered. **Story 7.6 is annotated rather than rewritten**: it shipped 2026-09-10, and its rookie-scale acceptance criterion is struck through with a superseding note instead of being edited away, because it is the record its code was verified against — the same treatment Story 7.10 gave Story 7.9. **Story 7.12 RECORDS work already in the code** (commit 5222c13) rather than scheduling it, because a deleted rule is the dangerous direction of staleness: it leaves an artifact confidently describing behaviour that no longer exists, and nothing fails. PRD §10 example 12 is deliberately left OUT of Epic 11 — it is the unbid-nomination case and belongs with Epic 2''s nomination stories. Amend this file in place, as every entry here did; bmad-create-epics-and-stories has no update path and its step-01 would overwrite the file.'
   - '2026-09-12 — Stories 7.10 and 7.11 appended to Epic 7 after the approved Sprint Change Proposal 2026-09-12 (the Roster Trade rename, and the within-Team Roster Move). Requirements inventory amended in place: **FR-41 renamed** *Record a Roster Move* -> *Record a Roster Trade* with no change of substance, **FR-44 added**, **AR-44 added**, **UX-DR41 added**; FR-42 given an explicit placement clause; SM-2 and SM-7 extended. Epics 1-6 and 8-10 untouched, as are Stories 7.1-7.9, which are NOT renumbered. The persisted event type `RosterMoveRecorded` is deliberately **not** renamed -- AD-4 forbids mutating the log. The 2026-09-10 entry below keeps its original wording: it names a proposal that was titled "Roster Moves" on the day, and falsifying it would lose the provenance of the rename. Amend this file in place, as every entry here did; `bmad-create-epics-and-stories` has no update path and its step-01 would overwrite the file.'
   - '2026-09-10 — Stories 7.6 … 7.9 appended to Epic 7 after the approved Sprint Change Proposal 2026-09-10 (Roster Moves, Drops, Dead Money). Requirements inventory amended in place: FR-41, FR-42, FR-43 added, AR-41 … AR-43 added, UX-DR39 … UX-DR40 added. Epics 1–6 and 8–10 and their stories are untouched, as are Stories 7.1–7.5, which are NOT renumbered. Note for whoever runs this next: `bmad-create-epics-and-stories` has no update path — its step-01 instructs a full template overwrite and re-extraction, which would destroy this file. Amend in place, as this entry and the 2026-09-08 one both did.'
   - '2026-09-08 — Epic 10 (the Outstanding Bid Allowance) appended after the approved Sprint Change Proposal 2026-09-07. Requirements inventory amended in place: FR-15 narrowed, FR-37 rewritten, FR-40 added, AR-36 … AR-40 added, UX-DR32 … UX-DR38 added. Epics 1–9 and their stories are untouched; the shipped ones remain the record their code was verified against.'
@@ -27,7 +28,7 @@ This document provides the complete epic and story breakdown for BBSL-Appspirati
 
 ### Functional Requirements
 
-*Extracted from PRD §4 (FR-1 – FR-40). Numbering is the PRD's own and is non-contiguous by feature because FR-35 – FR-40 were appended as they arrived; each is grouped under the feature it belongs to.*
+*Extracted from PRD §4 (FR-1 – FR-44). Numbering is the PRD's own and is non-contiguous by feature because FR-35 – FR-44 were appended as they arrived; each is grouped under the feature it belongs to.*
 
 **§4.1 League Setup and Fantrax Import**
 
@@ -55,7 +56,7 @@ FR-11: A Manager can bid on any Auction their Team is not leading; a Bid must be
 FR-12: The system continuously computes and displays each Team's Maximum Bid **per open Auction** — `Available Cap Space − Roster Reserve` for a non-eligible Player, unbounded in words for an eligible Player a Free Minor League Slot can absorb — with components broken out, recomputed within one second of any Bid, Close or override, and controls disabled with a stated reason where the figure is below the minimum legal Bid.
 FR-13: The system refuses any Bid exceeding the bidding Team's Maximum Bid before it enters the Auction, showing the full arithmetic; validation is server-side against committed state at submission, so a Bid valid when composed but stale on arrival is refused with current figures.
 FR-14: The system holds a Team's leading money against its cap for the life of an Auction — leading amounts on non-eligible Auctions, $1,000,000 per Contender position in a non-eligible Minimum-Bid Contention, and Minors Exposure for eligible ones — releasing the instant the Team stops leading or loses a draw, and converting to a Cap Hit at Close.
-FR-15: A Bid, once accepted, cannot be withdrawn **by the Team that placed it** — no user-facing control to cancel, edit or lower one exists; a Commissioner override can void it, and the system itself can cancel it under FR-40. *(Retitled and narrowed 2026-09-08.)*
+FR-15: A Team can **retract its own most recent Bid within ninety seconds** of placing it, free, while that Bid still stands and while the Team it displaced is **no harder to restore than when it was displaced** — tested over four figures (Cap Space, Committed Bids, Roster Count, Minor League occupancy), never over a list of acts. A retraction takes the **void's** treatment, not the cancellation's: the Bid is erased from the Auction's standing, the Auction Clock is restored, and the Bid's League Clock reset is removed. There is still **no control to edit or lower** a Bid. The Bid that **dissolves** a Minimum-Bid Contention cannot be retracted at all. *(Retitled and narrowed 2026-09-08; **REVERSED 2026-09-16** — it read "no voluntary bid retraction" from 2026-08-16 and the 2026-09-08 narrowing existed specifically to keep the Team locked out while FR-40 let the system act. The requirement id is kept because it is the same question answered differently.)*
 FR-35: A Team may bid without cap limit on a Minor League Eligible Player its Free Minor League Slots can absorb, constrained only by Minors Exposure — the sum of the Overflow Count largest Eligible Leading Bids; exposure recomputes on every bid so a later cheap eligible bid can be refused for exposing an earlier expensive one, naming the Auction that causes it, and an accepted Bid is never retroactively invalidated.
 FR-37: A Team has exactly 12 Active/Bench Slots, and a Bid is refused unless `Projected Active/Bench Additions = 0` **or** the Team holds at least one Free Active/Bench Slot and `Projected Active/Bench Additions ≤ Free Active/Bench Slots + 1` — the **Outstanding Bid Allowance**, which lets a Manager chase one more Player than they have room for. A second refusal ground independent of Maximum Bid, with no carve-out for eligible overflow, carrying its own arithmetic (roster count, projected additions, free slots *and* the allowance), and disabling controls across the board (not only at submission). Minimum-Bid Contention entries are exempt entirely. *(Rewritten 2026-09-08; the ceiling of 12 is unchanged and the allowance is never a thirteenth Slot — FR-40 takes the surplus back.)*
 
@@ -77,7 +78,7 @@ FR-24: Any Manager can open a single Auction and see its complete history — fu
 FR-25: Any Manager can view any Team's roster, cap position and auction activity — every Team's Cap Space, Committed Bids, Available Cap Space, Roster Count by Slot kind, Free Active/Bench Slots, Free Minor League Slots, Minors Exposure and Nomination Slot status visible to all Managers, with Maximum Bid alone remaining the viewer's-own-Team figure; won Players appear on the roster at Close before length is assigned.
 FR-41: The Commissioner can record that Contracts have changed hands between two Teams — **both directions in one act**, either side possibly empty, Existing and Auction Contracts alike, each travelling unchanged in value and years. Slot Placement is re-evaluated against the receiving Team's occupancy and **Cap Hit follows placement**, so a stashed Player can arrive charging his full amount. Committed Bids, contention entries, Nomination Slots and Cap Space never move. Both Teams are evaluated **once, after the whole Trade**, against the money and slots gates; either failing **refuses all of it** — and the refusal can be caused by the **sending** Team, since a freed Slot costs $1,000,000 of Roster Reserve. It **never cancels a Bid**. Moving an assigned Auction Contract clears its length, returns the year to the sender's allotment and re-blocks the export. Mandatory reason, one Audit Log entry with before/after for both Teams, **not broadcast to Discord**, one transaction under the global lock. *(New 2026-09-10.)*
 FR-42: The system reads Team membership from Fantrax **at most hourly** and raises any difference as a proposed Roster Trade or Drop — **membership being the only fact taken**, since the endpoint carries no salary and the app already holds every Cap Hit. The comparison excludes Players won in this auction. Paired differences propose a Trade, unpaired departures propose a Drop, and unknown arrivals are reported as an **error**. **A read never writes.** Failure never blocks an auction action, and repeated failure renders as *stopped*, never as *no divergences*. **Contingent** on an endpoint never exercised against this league; if it does not answer usably, FR-42 is dropped and FR-41 stands alone. **A placement difference is not a divergence** — from FR-44 the app *decides* placement and Fantrax *receives* it through the export, so a Slot difference before that export is the expected state and raising it would train the Commissioner to dismiss the detector. *(New 2026-09-10; placement clause added 2026-09-12.)*
-FR-43: The Commissioner can record a Drop, and the system **converts the Player's *charged* Cap Hit into Dead Money at the same amount** — full from Active/Bench (Roster Count falls, so Maximum Bid *drops* by the $1,000,000 reserve on the freed hole), full from Injury Reserve (nothing else moves), and **nothing at all** from a Minor League Slot (he charged $0, so the row is removed and Maximum Bid *rises* via Minors Exposure). The one exception is a second-round rookie Contract of the current draft class — `2RK` plus a full unelapsed term, invariably 5 years — which is removed and releases its Cap Hit. Dead Money charges the Cap, occupies no Slot, counts toward no ceiling, is shown labelled and separate from the roster, is not importable in v1, and is excluded from both exports. Refused on the same gate terms as FR-41. *(New 2026-09-10.)*
+FR-43: The Commissioner can record a Drop, and the system **converts the Player's *charged* Cap Hit into Dead Money at the same amount** — full from Active/Bench (Roster Count falls, so Maximum Bid *drops* by the $1,000,000 reserve on the freed hole), full from Injury Reserve (nothing else moves), and **nothing at all** from a Minor League Slot (he charged $0, so the row is removed and Maximum Bid *rises* via Minors Exposure). **There is no exception, and the absence is a rule.** *(This requirement carried a carve-out for a second-round rookie Contract of the current draft class — `2RK` plus a full unelapsed term — which was removed rather than reclassified and released its Cap Hit. **DELETED 2026-09-16**: the League waives Dead Money only in an amnesty period before the auction opens. While it stood it fired once in production and released $1,000,000 a Team should have kept charging. The way back is a **new rule**, never a designation test reintroduced into the one expression that decides the amount — see Story 7.12.)* Dead Money charges the Cap, occupies no Slot, counts toward no ceiling, is shown labelled and separate from the roster, is not importable in v1, and is excluded from both exports. Refused on the same gate terms as FR-41. *(New 2026-09-10.)*
 FR-44: A **Manager** can move their **own** Team's Contracts between an Active/Bench Slot and a Minor League Slot as **one act with one evaluation at the end**, and the **Commissioner** can do the same on any Team's behalf. Only a Minor League Eligible Contract may occupy a Minor League Slot, and **eligibility is remembered** — the pool's flag **union** every Contract the app has ever observed in a Minor League Slot — so a demotion is reversible. Injury Reserve is not rearrangeable and Dead Money is not a Slot. **Cap Hit follows placement**, so a Move is a deliberate cap decision that moves Maximum Bid in **both** directions: demoting a stash can *raise* it by reducing Minors Exposure while *lowering* Cap Space. No assigned length is cleared. Both gates once, over post-Move state, through the existing derivations; either failing **refuses all of it**, and it **never cancels a Bid**. A Manager's act needs a confirmation sheet and **no reason**; the Commissioner's needs the reason sheet. Refused while paused, and in Setup and Archived. One transaction under the global lock, one event carrying the whole delta, in the Audit Log, **not broadcast to Discord**. *(New 2026-09-12.)*
 
 FR-39: Any Manager can see all 30 Teams in one index with remaining roster slots and cap position — never paginated, own Team marked but not moved, IR shown visibly outside the twelve, one *median* line (never *average*) taking the lower of the two middle values, no Team coloured/badged/ranked against it, sortable with a Team-name default, columns shifting by phase, computed from the same source as FR-25 so the two cannot disagree, carrying the age of its figures rather than disabling a control it does not have, single-column at 375px and a real table on desktop.
@@ -108,7 +109,7 @@ FR-34: Commissioner can pause and resume the entire auction — every Clock stop
 
 *Extracted from PRD §5. Numbered here for story traceability; the PRD carries them as prose bullets.*
 
-NFR1: **Rule correctness is the product.** Every bid-validity, clock and cap computation is deterministic and covered by automated tests, with PRD §10 examples 1–28 as executable cases. A rules bug is a worse failure than an outage.
+NFR1: **Rule correctness is the product.** Every bid-validity, clock and cap computation is deterministic and covered by automated tests, with PRD §10 examples 1–57 as executable cases. A rules bug is a worse failure than an outage.
 NFR2: **Concurrency safety — global serialization.** State mutation is serialized globally, not per Auction. Two Bids arriving in the same instant produce one winner and one clear rejection, never two accepted Bids, a lost Bid, or a double-counted Committed Bids figure. Per-Auction serialization is explicitly insufficient: the Team is raced, not the Auction.
 NFR3: **Server-authoritative time.** All clock arithmetic derives from server time; a client with a skewed clock must not see a different close time or be able to bid after expiry.
 NFR4: **Timer reliability.** Auction Close fires within 60 seconds of nominal expiry with no user present and survives process restarts.
@@ -150,7 +151,7 @@ NFR11: **Measurability.** Every Bid, Nomination, Close and notification dispatch
 - **AR-22 — The League Clock is a fold with one origin and exactly two reset event types (AD-22).** Its **origin** is `AuctionOpened` — an origin, not a third reset, because the open can never be unwound. Reset by a Nomination and an accepted Bid (lottery join included) and nothing else; new event types default to not resetting it. Derived as 48 hours from the later of the origin and the latest surviving reset event, so a `BidVoided` compensating event removes that reset and the clock recomputes shorter — prospectively only, and never back past the origin. The fold must treat a voided Bid as a non-reset rather than expecting the original event to be gone.
 - **AR-23 — Winning amount and Cap Hit are distinct persisted fields (AD-23).** A Minor League placement yields a Cap Hit of `$0` while the winning amount stands unchanged. No code path derives one from the other by assuming equality; both exports emit both.
 - **AR-24 — Fantrax knowledge is confined to one adapter (AD-24).** CSV column names, header shapes and Fantrax quirks appear in exactly one module; nothing outside it knows Fantrax exists. Rows join on the **stable Fantrax player ID, never on name**. The import is **thirty-one files** with two refusal altitudes (a *file* refused by name; a *row* refused by row) and Teams outstanding **named, never counted**. Minor League Eligible is never derived, inferred, or failed on. Exports emit exact integer dollars.
-- **AR-25 — The §10 examples are the executable specification (AD-25).** Each of examples 1–28 exists as a named test calling the core directly — no database, no HTTP, no clock mocking, no fixtures beyond a state literal. A rule change altering any example's outcome changes the PRD in the same commit. The suite is green before any production deploy.
+- **AR-25 — The §10 examples are the executable specification (AD-25).** Each of examples 1–57 exists as a named test calling the core directly — no database, no HTTP, no clock mocking, no fixtures beyond a state literal. A rule change altering any example's outcome changes the PRD in the same commit. The suite is green before any production deploy.
 - **AR-26 — Schema changes are migrations in the repository (AD-26).** Every change is a migration file committed to the repo and applied dev-first. Nothing is typed into the Supabase dashboard. A migration applied while the tick is running must be safe against a concurrent sweep, or the tick is paused for it.
 - **AR-27 — The import is staged, then promoted in one transaction (AD-28).** Parsed rows land in staging keyed by Team (the pool as its own distinguished source), never straight into live reference tables. Per-file parse status **persists between requests** so the import survives a refresh, a closed tab, or being resumed an hour later. Re-supplying one Team's file replaces only that Team's staged rows. Promotion is one all-or-nothing transaction across all thirty-one sources.
 - **AR-28 — Read freshness is explicit, and stale money disables (AD-29).** Every projection read carries a **single global watermark** — the highest event `seq` folded, read from one source, never a per-table stamp. The client derives exactly one of Live / Reconnecting / Stale from connection status **and** a positive periodic liveness check; `FRESHNESS_WINDOW` and `STALE_WINDOW` are named constants in `core/constants.ts`. **A stalled watermark must never imply staleness** — the question is "can I still reach the server?", never "has anything changed?". Countdowns are exempt.
@@ -171,6 +172,10 @@ NFR11: **Measurability.** Every Bid, Nomination, Close and notification dispatch
 - **AR-43 — Dead Money is a fourth `RosterSlotKind`, and it needs a migration (AD-32, AD-26).** It charges in full and counts toward no ceiling — Injury Reserve without the ceiling of 2 — so `chargedCapHit` returns the right value by falling through and `SLOT_CEILINGS` gains an unbounded entry. `team_rosters_roster_slot_kind_check` enumerates exactly three kinds (`20260824020000_live_reference_tables.sql:61-62`), so a fourth **is** a schema change: a migration applied dev-first, never a dashboard edit. Contrast `BidCancelled`, which needed none. Separately, `CONTRACT_END_YEAR` in `adapters/fantrax/roster-file.ts` matches the `NRK` rookie prefix in a **non-capturing** group and discards it, so FR-43's exception is unimplementable until that is corrected.
 - **AR-44 — A Roster Move is the fourth command type and the third caller of the shared evaluator (AD-32, AD-1).** `RearrangeRoster` is declared in `core/types.ts` with its own gate set, per AD-1's per-command-type discipline. It calls `core/rules/roster-act.ts` — the module Story 7.8 extracted for exactly this — and writes **no** arithmetic of its own: no affordability check, no second Roster Reserve, no second Minors Exposure (AR-42). One difference from a Trade's arrival must be explicit or the two will be confused: **placement is taken from the command, not derived by `slotPlacementFor`.** FR-21's automatic rule is what a *close* and a *Trade arrival* apply; a Move is the Manager deliberately overriding it, and a Move that re-derived placement would silently undo itself. **Eligibility is a fold, not a column** — the pool flag union every Minor League occupancy the log has ever carried, reconstructed from the reference-data snapshot exactly as AD-32 already specifies for rebuild, restore and replay. That is what makes the act reversible, and it is why FR-44 needs **no migration**: `roster_slot_kind` already admits all four values and `auction_events.event_type` is generic `text`.
 - **AR-40 — Two overflow figures, not one (PRD §3).** `Overflow Count` (money side) counts lottery entries and feeds Minors Exposure; `Active/Bench Overflow` (slots side) excludes them and is the only overflow reaching Projected Active/Bench Additions. They were one figure until 2026-09-08 and are one subtraction apart, so compute-once-use-twice is now wrong in a way no single test announces.
+- **AR-45 — `RetractBid` is the fifth command type, and declares neither `cap` nor `slots` (AD-2).** `PlaceBid` was the first, `RestoreLeadingBid` the second, a Roster Trade the third, a Roster Move the fourth. A retraction's gates are **ownership-and-standing**, **window**, **cut-short** and **phase**. Reusing `PlaceBid`'s gate set — the obvious shortcut, since the command is bid-shaped — refuses retractions on **cap** grounds, which is nonsense: a retraction *releases* the retracting Team's capital and can breach nothing it holds. The restored Team's money and capacity gates are `RestoreLeadingBid`'s and are already declared there.
+- **AR-46 — The Retraction Window is a derived, pause-adjusted fold, never a stored countdown (AD-13, AD-12).** Ninety seconds from the retracted Bid's own `occurredAt`, **minus every paused interval intersecting that span** — and an **open** pause is an interval running to `now`, or the window drains through the whole outage and arrives at resume already expired. **Half-open:** open below ninety seconds, closed at exactly `90.000`, one convention serving both the window and AR-48's suppression. There is nothing to schedule and nothing for the close sweep to do. An Auction past its close instant refuses a retraction whatever the window says, measured against the close instant **as it stands when the retraction arrives** — never against the instant the retraction would restore, which is frequently already past.
+- **AR-47 — The restorer takes a third caller, not a fourth axis, and its payload carries three named outcomes (AD-31).** A retraction passes the void's existing triple unchanged — `erase`, `restore`, `remove`. **The cut-short baseline is recorded on the displacing `BidPlaced`, never reconstructed by folding back to its `seq`**, because the control renders as a live countdown and a reconstruction depends on reference-data replay the spine records as unresolved; a baseline in an immutable event is a historical snapshot and authorises nothing, so AD-7 is not breached. `BidRetracted` and `BidCancelled` each carry **one of three discriminated outcomes** — `Restored`, `Exhausted`, `ContentionContinues` — and the third must **never** be inferred from a null restoration, or a fold clears the Clock and returns a **contested** Player to Awaiting Opening Bid, dissolving a live lottery. No migration: `event_type` is generic `text`.
+- **AR-48 — The League Clock suppression lives in the clock fold, is anchored to the retraction, and is not a rate limit (AD-22).** A retraction **removes** its Bid's reset — the void's treatment, not the cancellation's. A Bid placed by a Team within ninety seconds of **that same Team's own retraction** earns **no** reset, measured from the **retraction** and not from the retracted Bid: anchored to the Bid instead, a Team retracts at `T+89s` and re-bids at `T+91s` for a fresh reset every cycle, and the stall returns. It belongs in `core/projection/league-clock.ts` beside the `BidVoided` case and is the first rule where an event **suppresses a different, later event's reset** rather than removing its own. Built as a throttle it will be tuned away by the first reader who takes it for anti-spam.
 
 ### UX Design Requirements
 
@@ -231,11 +236,15 @@ UX-DR39: **The reason sheet grows a two-Team variant.** Story 7.1's sheet shows 
 UX-DR40: **Say the counterintuitive direction out loud, before commit.** A Drop from Active/Bench *lowers* the Team's Maximum Bid — the freed hole costs $1,000,000 of Roster Reserve while the Cap Hit persists as Dead Money — and every manager's intuition says the opposite. The sheet states it plainly rather than leaving it to be inferred from two figures. Dead Money itself renders on the Team view and Teams index **labelled and separate from the roster**, because an unexplained gap between a Team's players and its Cap Space is the arithmetic-doubt this product exists to remove.
 UX-DR41: **One sheet shape, two controls, and they must never be one control with a conditional field.** A Roster Move's sheet shows before → after for **one** Team — Cap Space, Roster Count and all three Slot occupancies — with every moved Contract named between them, both placements, both Cap Hits, and **the direction Maximum Bid actually moved stated in words** with an `attention` note. §10 example 45 is why: the Team spends Cap Space and *gains* $10,000,000 of Maximum Bid, and no pair of figures says that out loud. A **Manager** acting on their own Team gets a solid Manager commit control and **no reason field**; the **Commissioner** acting on any Team gets Story 7.1's sheet — dashed, recessed, *"Commissioner · visible only to you"*, mandatory free text. DESIGN.md's four independent differences exist so the referee control and the player control are never confusable by muscle memory at 4am, and a single component that grows a reason field when `isCommissioner` is true is precisely the collapse that rule forbids.
 
+UX-DR42: **The retract control appears only while the viewer's Team may actually use it, and it counts down.** It shows the time remaining, disappears the instant the window closes — by expiry **or** by the displaced Team's figures moving — and is **never shown disabled**: a control that sits there and fails on submit is worse than no control, because it is offered at the one moment a Manager has already made an expensive mistake. Under a stale read it therefore **hides** where every other control disables, and **its countdown is the one in this product that must not keep running through a disconnect**, because the window can end early for a reason only the server knows. On the Bid that dissolves a contention the control is **absent**, not refused.
+UX-DR43: **A close time within ninety seconds of the leading Bid is shown as provisional, and says so.** A retraction restores the Clock the Bid displaced and can move the close **backwards by up to 24 hours**, so the Auction shows that the leading Bid is still inside its window rather than presenting a close time that may not survive the next minute.
+UX-DR44: **A retraction reads as a correction, not a dispute.** It carries **no reason field**, where a void carries one — demanding a justification for a typo turns a correction into an argument the Audit Log preserves forever. It is broadcast **league-wide** rather than to the two Teams alone, which is what keeps it a correction rather than a private instrument for probing an Auction, and the restored Manager is told they **lead again** having been told minutes earlier they were outbid. Both the reason-field absence and the broadcast scope are inferences pending UX confirmation (PRD §12).
+
 UX-DR38: **The cancelled Bid stays in the visible Auction history**, struck through and labelled *cancelled*, with the causing win named — never deleted, hidden or reordered. Copy must distinguish it from a void: a void says someone decided the Bid should not have stood; a cancellation says nothing of the kind. An Auction where nothing survived renders as an unbid nomination, not a new "restarted" state.
 
 ### FR Coverage Map
 
-*Every FR-1 … FR-43 appears exactly once **as an owning epic**. Order follows the PRD's own numbering, not epic order, so a gap is visible at a glance. Rows marked **amended by Epic 10** keep their original owner — the shipped stories under it are the record their code was verified against — and Epic 10 supersedes named clauses within them rather than taking ownership.*
+*Every FR-1 … FR-44 appears exactly once **as an owning epic**. Order follows the PRD's own numbering, not epic order, so a gap is visible at a glance. Rows marked **amended by Epic 10** keep their original owner — the shipped stories under it are the record their code was verified against — and Epic 10 supersedes named clauses within them rather than taking ownership.*
 
 | FR | Epic | Coverage |
 | --- | --- | --- |
@@ -254,7 +263,7 @@ UX-DR38: **The cancelled Bid stays in the visible Auction history**, struck thro
 | FR-12 | Epic 2 | Compute and display Maximum Bid per Auction with components broken out |
 | FR-13 | Epic 2 | Reject over-cap Bids at submission with the full arithmetic |
 | FR-14 | Epic 2 | Commit and release capital, including Minors Exposure · **amended by Epic 10** (release on cancellation, re-commit on restoration) |
-| FR-15 | Epic 2 | No *voluntary* bid retraction — the control is absent, not disabled · **narrowed by Epic 10** (the system may cancel; the Team still may not) |
+| FR-15 | Epic 2 | **Bid retraction inside a ninety-second window** — the control exists and is present rather than absent · **narrowed by Epic 10** (the system may cancel) · **reversed by Epic 11** (the Team may now retract its own Bid inside the window; Epic 10's cancellation is untouched and is still not a retraction) |
 | FR-16 | Epic 2 | Standard Contention clock set to 24h by each valid Bid |
 | FR-24 | Epic 2 | The Auction detail page — bid control, refusal panel, full history. *One clause carries over: its live Contender list and non-resetting-clock wording have no subject until Minimum-Bid Contention exists, and are completed by Story 3.2.* |
 | FR-35 | Epic 2 | Unbounded eligible bidding bounded by Overflow and Minors Exposure |
@@ -280,7 +289,7 @@ UX-DR38: **The cancelled Bid stays in the visible Auction history**, struck thro
 | FR-34 | Epic 7 | Pause and resume the entire auction |
 | FR-41 | Epic 7 | Record a Roster Trade — both directions, one act, one evaluation; refused, never cancelled (Story 7.7) |
 | FR-42 | Epic 7 | Detect a Roster Divergence from Fantrax — **contingent**, proposes and never writes (Story 7.9) |
-| FR-43 | Epic 7 | Record a Drop and carry Dead Money — the charged-Cap-Hit rule, and the 2RK exception (Stories 7.6, 7.8) |
+| FR-43 | Epic 7 | Record a Drop and carry Dead Money — the charged-Cap-Hit rule, with **no exception** (Stories 7.6, 7.8; the `2RK` carve-out that Story 7.6 shipped was deleted 2026-09-16 by Story 7.12) |
 | FR-44 | Epic 7 | Rearrange a Roster's Slot Placements — one Team, one act, one evaluation; Cap Hit follows placement (Story 7.11) |
 | FR-40 | **Epic 10** | Cancel a surplus commitment at Close and restore the Auction to its next-highest bidder |
 
@@ -419,6 +428,20 @@ A Manager can hold one more outstanding Bid than they have room for, and enter a
 **Standalone:** it builds on Epics 2 and 3 and requires nothing after it. Story 7.2 (void a Bid) will *consume* the restorer this epic builds, but Epic 10 does not depend on Epic 7 in either direction — 7.2 gets cheaper, not enabled.
 
 **Sequencing:** must land **before** Story 9.7 (moderator pilot) and 9.8 (prod setup day). AD-20 fail-stops `core/` changes during a live Auction Phase, and the pilot exists to measure exactly the property this rule targets — auction speed. Piloting the old rules would be piloting rules the league will not play under.
+
+### Epic 11: Take it back — ninety seconds to undo a bid
+
+A Manager who fat-fingers a six-figure Bid on a phone can take it back, for ninety seconds, free — and nobody else's position is worse for it. Under the old rule their only remedy was a Commissioner override, which means the Commissioner adjudicating typos and an Audit Log that cannot tell a slip from a change of heart.
+
+**FRs covered:** FR-15 (**reversed**, not new — it read *"no voluntary bid retraction"* from 2026-08-16 until 2026-09-16). Touches named clauses in FR-18, FR-20, FR-21, FR-22, FR-24, FR-26, FR-27, FR-32, FR-33 and FR-34 — see the Coverage Map.
+
+**Also carries:** AR-45 … AR-48 and UX-DR42 … UX-DR44; PRD §10 examples **47–57** as eleven new tests. **No existing example is invalidated**, because FR-15 reversed a *prohibition* and a prohibition had no worked examples to invalidate — the one thing making this cheaper than Epic 10, and it will not hold if the retraction rules are later narrowed.
+
+**Why an epic and not stories on Epic 10.** Epic 10 owns the shared restorer (Story 10.4) and a retraction is its **third caller**, so the dependency is real and one-directional. But every Epic 10 story is **shipped**, and appending unshipped work to a complete epic would make "shipped" mean two things in one place. This is also a **Manager-facing** capability with its own control and its own countdown, where Epic 10 is machinery the league never sees.
+
+**Depends on:** Epics 2, 3 and 10 (all shipped) **and Story 7.4 — pause and resume the auction — which is NOT yet built.** Story 11.2's window arithmetic is specified over pause semantics, so it cannot be completed or tested until 7.4 ships. *(Corrected 2026-09-16: this entry previously said "builds on Epics 2, 3 and 10" and implied every dependency was shipped. It was written in the same pass as Story 11.2's pause criteria and did not account for them.)* **Nothing in Epic 10 changes** — its cancellation is untouched, is still triggered only by a Close, and is still not a retraction.
+
+**Sequencing:** was written to land **before** Story 9.7 (moderator pilot) and 9.8 (prod setup day), for Epic 10's reason — AD-20 fail-stops `core/` changes during a live Auction Phase. **Both are now done, so that ordering can no longer be honoured** *(recorded 2026-09-16)*. Epic 11 is entirely `core/` work arriving after prod setup, so shipping it requires a **pause under AD-13**, the §10 suite green, and a recorded reason — AD-20's own conditions. Settle that before the first story starts, not at deploy time.
 
 ---
 
@@ -2042,7 +2065,7 @@ The Commissioner can void a Bid, adjust Cap Space, terminate an Auction, release
 
 | Build | Story | Depends on | Note |
 | --- | --- | --- | --- |
-| **parallel, start now** | **7.6** Dead Money and the rookie-scale designation | **nothing** | The only story here with no dependency on 7.1. Pure core, adapter, migration and a display change; also fixes a latent import defect on its own merits |
+| **parallel, start now** | **7.6** Dead Money and the rookie-scale designation *(its `2RK` clause since deleted — Story 7.12)* | **nothing** | The only story here with no dependency on 7.1. Pure core, adapter, migration and a display change; also fixes a latent import defect on its own merits |
 | **1** | **7.1** The Commissioner control class and the reason sheet | — | **Smaller than it reads.** `src/lib/styles/commissioner.css` and `src/lib/server/commissioner-guard.ts` shipped in Epic 1; what remains is the reason sheet, which nothing in `src/` implements yet |
 | **2** | **7.7** Record a Roster Trade | 7.1 | **Trades work from here.** Two stories to a usable tool |
 | **3** | **7.5** The league-visible Audit Log | Story 1.5 only | On the critical path — see coupling A |
@@ -2268,6 +2291,8 @@ So that verifiable fairness is something I can check rather than something I am 
 
 ### Story 7.6: Dead Money and the rookie-scale designation
 
+*(Shipped 2026-09-10. **Its second acceptance criterion — the `2RK` carve-out — was SUPERSEDED 2026-09-16 by Story 7.12**, which deleted the exception. The criterion is left standing below rather than rewritten, because it is the record this story's code was verified against on the day; read it as history, not as law. Everything else in this story stands unchanged, including the parse work that keeps `2RK31` and `2031` distinguishable, which is still required and is now the only thing that assertion pins. Note the criterion cites §10 example 41, which is **retired** — it keeps its number and its file and now asserts the surviving rule.)*
+
 As the Commissioner,
 I want a released contract to keep charging the cap the way league rules say it does,
 So that a drop cannot silently hand a team money it never got back.
@@ -2390,10 +2415,12 @@ So that they get the roster spot back and keep the cap hit, exactly as the leagu
 **And** Roster Count is untouched, `M` rises, and **Minors Exposure recomputes** across every eligible Auction the Team leads, *raising* its Maximum Bid (§10 example 43)
 **And** examples 40 and 43 move Maximum Bid in **opposite directions**, which is the test that stops this being implemented as a flat rule
 
-**Given** a dropped Contract carrying `2RK` **and a full unelapsed term** (5 years, invariant)
-**When** the Drop commits
-**Then** the Contract is **removed rather than reclassified** and its Cap Hit is released to Cap Space (§10 example 41)
-**And** every other Contract, `1RK` and rookie-scale alike, becomes Dead Money
+~~**Given** a dropped Contract carrying `2RK` **and a full unelapsed term** (5 years, invariant)~~
+~~**When** the Drop commits~~
+~~**Then** the Contract is **removed rather than reclassified** and its Cap Hit is released to Cap Space (§10 example 41)~~
+~~**And** every other Contract, `1RK` and rookie-scale alike, becomes Dead Money~~
+
+> **SUPERSEDED 2026-09-16 by Story 7.12.** There is no exception: **every** dropped Contract carries Dead Money at its **charged** Cap Hit, and row removal is *derived* from that charge having been `$0` — never decided by a designation. Struck through rather than deleted because it is what this story's shipped code was verified against.
 
 **Given** a Drop leaving the Team failing either gate
 **Then** it is refused on the same terms as a Trade, naming the Auction
@@ -2589,6 +2616,42 @@ So that a trade does not leave me paying full price for a player I meant to stas
 **When** they run
 **Then** they pass as `tests/examples/` files
 **And** **45 is the one that stops this being built as a flat rule**: a demotion that *lowers* Cap Space and *raises* Maximum Bid by $10,000,000 is the case a naive implementation gets backwards
+
+---
+
+### Story 7.12: Delete the rookie-scale exception from Dead Money
+
+*(New 2026-09-16. **This story records work already done in the code** — commit `5222c13`, *"a released Contract carries what it was charging, always"* — rather than scheduling it. It exists because the League deleted the rule on 2026-09-16 and this document went on asserting it in five places: FR-43's text, the Coverage Map, the sequencing table, Story 7.6's title and Story 7.6's acceptance criteria. A removed rule is the **dangerous** direction of staleness: an arriving rule leaves a test red, while a removed one leaves an artifact confidently describing behaviour that no longer exists, and nothing fails.)*
+
+As the Commissioner,
+I want a dropped contract to carry Dead Money at whatever it was charging, with no special cases,
+So that no designation on a contract can quietly hand a team money the League says it still owes.
+
+**Depends on:** Story 7.6, shipped. **Supersedes** that story's second acceptance criterion.
+
+**Acceptance Criteria:**
+
+**Given** a dropped Contract of any kind — `2RK`, `1RK`, rookie-scale, veteran, any remaining term
+**When** the Drop commits
+**Then** the Dead Money carried is **`chargedCapHit` over the row, in one expression**
+**And** nothing branches on `RosterSlotKind`, on the rookie round, or on the remaining term
+**And** **row removal is *derived*** — the charge was `$0` — **never decided**
+
+**Given** a dropped Contract carrying `2RK` and a full unelapsed term
+**When** the Drop commits
+**Then** it carries Dead Money **at its charged Cap Hit like any other Contract**, and is **not** removed unless that charge was `$0`
+
+**Given** the parse work Story 7.6 shipped
+**Then** `rookieScaleRound` is **still parsed, still persisted, and still carried in the `DropRecorded` payload**, and **decides nothing**
+**And** its retention is correct rather than drift: AD-4 makes the log immutable and events already written carry it, and §10 example 41 pins that `2RK31` and `2031` stay distinguishable through the import
+**And** a later pass must **not** read it as an unused field to clean up
+
+**Given** §10 example 41, retired
+**Then** it keeps its number, its file and its place in the suite, and asserts the outcome the surviving rules now produce
+**And** examples **40 and 43** now move Maximum Bid in the **same** direction, which is the regression a reintroduced exception fails against — a stronger claim than the old pair, which merely checked that two inputs differed
+
+**Given** a future League vote to waive Dead Money again
+**Then** the way back is a **new rule**, never a designation test reintroduced into the one expression that decides the amount
 
 ---
 
@@ -3254,5 +3317,221 @@ So that losing it is a trade I chose rather than something the app did to me.
 **Given** Your Positions
 **When** a Manager opens it after a cancellation
 **Then** the won Player appears in the won group, the cancelled Auction has left the leading group, and the released capital is reflected in Available Cap Space — with nothing for the Manager to reconcile by hand
+
+---
+
+## Epic 11: Take it back — ninety seconds to undo a bid
+
+**Goal:** a Team can retract its own most recent Bid inside ninety seconds, free, and the Auction returns to exactly where it was.
+
+**Depends on:** Epic 2 (the bid path and its gates), Epic 3 (both Clocks and the contention lottery), Epic 10 (the shared restorer, Story 10.4) — and **Story 7.4 (pause and resume), which is backlog**. **Nothing in Epic 10 is modified** — this epic adds a caller.
+
+**Sequencing:** 11.1 first (the command and its gates), then 11.2 and 11.3 in either order, then 11.4, then 11.5. 11.6 can start as soon as 11.1 lands and should finish with the epic.
+
+---
+
+### Story 11.1: The RetractBid command and its four gates
+
+As a Manager,
+I want to take back a Bid I just mistyped,
+So that a slip costs me a correction rather than a Commissioner's intervention.
+
+**Depends on:** Epic 2's bid path. **Blocks** every other story here.
+
+**Acceptance Criteria:**
+
+**Given** `core/types.ts`
+**When** `RetractBid` is declared
+**Then** it is the **fifth** command type and its gate set is **ownership-and-standing, window, cut-short and phase** (AR-45)
+**And** it declares **neither `cap` nor `slots`** — a retraction releases capital and can breach nothing the retracting Team holds
+**And** a synthetic `PlaceBid` carrying force-passed gates is a **defect**, for the reason AR-45 gives
+
+**Given** a Team's own most recent Bid on an Auction, still standing
+**When** it retracts inside the window
+**Then** the retraction is **accepted**, at no cost, with no fee and no cooldown
+**And** the Team may immediately re-bid **any legal amount, including one below what it just retracted** — no floor (§10 example 47)
+
+**Given** a Team that has since been outbid
+**When** it attempts to retract
+**Then** it is refused **on the ground that it holds nothing to take back**, not on the window — the two refusals are distinct and say so
+
+**Given** a Bid that is not the Team's most recent on that Auction
+**When** it attempts to retract
+**Then** it is refused
+
+**Given** the Contract Assignment Phase, or an archived auction
+**When** a retraction is attempted
+**Then** it is refused on phase, and a Phase ending inside an open window **ends** the window
+
+---
+
+### Story 11.2: The window — derived, pause-adjusted, half-open
+
+As a Manager,
+I want my ninety seconds to mean ninety seconds I could actually use,
+So that an outage the Commissioner declared does not spend my remedy for me.
+
+**Depends on:** Story 11.1 **and Story 7.4 (pause and resume the auction), which is not yet built.** The pause criteria below have no subject until 7.4 exists — there are no `Paused`/`Resumed` events to fold. **This story cannot be closed before 7.4 ships**; the half-open boundary and the derived-not-stored criteria can be built and tested against it first, but the pause criteria cannot.
+
+**Acceptance Criteria:**
+
+**Given** a Bid at `T`
+**When** the window is evaluated at any later instant
+**Then** it is **derived** from that Bid's own `occurredAt` and **never stored**, with nothing scheduled and nothing for the close sweep to do (AR-46)
+**And** a Bid **restored** to leadership gets **no fresh window** — its ninety seconds still run from when *it* was placed (§10 example 52)
+
+**Given** an auction paused at `T+30s` and resumed later
+**When** the window is evaluated after resume
+**Then** elapsed time is `now − T` **minus every paused interval intersecting that span**, so the window holds exactly the sixty seconds it held at pause (§10 example 56)
+**And** an **open** pause — no `Resumed` event yet — counts as an interval running to `now`
+**And** a retraction attempted **while paused** is **refused**, worded as the pause and distinctly from every rules refusal
+
+**Given** the boundary
+**When** a retraction arrives at exactly `90.000` after its Bid
+**Then** it is **refused**; at `89.999` it is **accepted** (§10 example 57)
+**And** the same half-open convention governs Story 11.4's suppression — **one convention, no second definition to drift**
+
+**Given** an Auction already past its close instant
+**When** a retraction arrives inside the window
+**Then** it is refused **on expiry**, measured against the close instant **as it stands when the retraction arrives**
+**And** this is reachable only in a Minimum-Bid Contention, where a join does not reset the Clock, and the **draw closes the window** whether that Team won or lost (§10 example 53)
+**And** a retraction whose **restored** Clock instant is already past is **still accepted** — the Auction then closes at the next sweep, late rather than wrong (§10 example 48)
+
+---
+
+### Story 11.3: The cut-short, over four figures and not a list of acts
+
+As a Team that was outbid,
+I want the window to close the moment taking the Auction back would go wrong for me,
+So that nobody is handed a position they cannot carry.
+
+**Depends on:** Story 11.1.
+
+**Acceptance Criteria:**
+
+**Given** the Bid that displaced a Team
+**When** it is recorded
+**Then** it **carries that Team's four restoration figures** — Cap Space, Committed Bids, Roster Count, Minor League occupancy — as at the instant of displacement, on **post-acceptance** state (AR-47)
+**And** the baseline is **read back**, never reconstructed by folding to that `seq`
+**And** an **Opening Bid** and a contention **join** displace nobody, carry **no** baseline, and run the full ninety seconds with no cut-short subject
+
+**Given** a displaced Team whose figures have moved **adversely**
+**When** a retraction is attempted
+**Then** it is **refused, naming what moved** (§10 example 49a)
+
+**Given** a displaced Team whose figures have moved only **favourably** — outbid elsewhere, or a losing lottery drawn
+**When** a retraction is attempted
+**Then** it **succeeds**: the test is **directional**, not "has anything changed" (§10 example 49b)
+
+**Given** a **Drop** recorded against the displaced Team
+**When** a retraction is attempted
+**Then** it is **refused** — the Drop *freed* a Roster Slot and still **lowered** Maximum Bid by $1,000,000 of Roster Reserve, so the Team became harder to restore by an act that looks like relief (§10 example 50)
+
+**Given** the implementation
+**Then** the test is written over the **four figures** and **never** as an enumeration of acts — that list was found incomplete **three times** before any code existed, and survives only as a reader's checklist
+**And** a Bid of the displaced Team's being **cancelled** under FR-40 is **not** a cut-short: a cancellation *releases* capital. What is adverse is the **Close that caused it**, which is already on the list in its own right
+
+---
+
+### Story 11.4: The void's treatment — three axes, one restorer, and the clock rules
+
+As the league,
+I want a retracted Bid to leave no trace on the standings,
+So that a Bid we agreed never counted did not buy anybody an extra day.
+
+**Depends on:** Stories 11.1, 11.2, 11.3, and Story 10.4's restorer.
+
+**Acceptance Criteria:**
+
+**Given** an accepted retraction
+**When** it commits
+**Then** it calls **Story 10.4's restorer as a third caller**, passing the **void's existing triple** — `withdrawnBid: 'erase'`, `auctionClock: 'restore'`, `leagueClockReset: 'remove'` (AR-47)
+**And** there is **no fourth axis and no second selector**; an implementation reaching for one has mis-read the requirement
+**And** the Bid is **erased from the Auction's standing** but **remains in the Audit Log** as placed and retracted, and no restoration walk can land on it
+**And** the retracting Team's capital is **released** (FR-14)
+
+**Given** the Auction handed onward
+**Then** it goes to the **next-highest surviving Bid** by the same selector under the same skip rule, and **the skip is still evaluated** even though the directional cut-short means the displaced Team is always restorable
+**And** a retraction reaching a Team **other** than the one it displaced is a **defect to investigate**, not an outcome to accept
+**And** a retraction **never triggers a cancellation**: FR-40's trigger is still an Auction Close and nothing else
+
+**Given** the `BidRetracted` event
+**Then** it carries the retracted Bid's `seq` and **one of three named outcomes** — `Restored`, `Exhausted`, `ContentionContinues` — never a bare null (AR-47)
+**And** the projection **reads the recorded restoration** rather than re-deriving it
+**And** no migration is needed: `event_type` is generic `text`
+
+**Given** the League Clock
+**When** a Bid is retracted
+**Then** that Bid's **reset is removed** and the Auction Phase recomputes **shorter**, prospectively only (AR-48)
+**And** a Bid placed by a Team **within ninety seconds of that same Team's own retraction** earns **no reset**, measured from the **retraction** (§10 examples 54, 55)
+**And** that rule lives in `core/projection/league-clock.ts` beside the `BidVoided` case and is **not** implemented as a rate limit, cooldown, or per-minute cap
+
+---
+
+### Story 11.5: Retraction inside a Minimum-Bid Contention
+
+As a Manager who joined the wrong lottery,
+I want to leave it inside my ninety seconds,
+So that a mis-tap does not commit me to a Player I never wanted.
+
+**Depends on:** Story 11.4, and Epic 3's lottery.
+
+**Acceptance Criteria:**
+
+**Given** a Contender retracting while others remain
+**When** it commits
+**Then** the Team **leaves the Contender list**, its $1,000,000 is **released**, there is **no restoration**, and **no seed is revealed** — a shrinking list is not a dissolution
+**And** the **Auction Clock is untouched**, whoever retracts, **the Opening Bid's Team included**: once others have joined the Clock belongs to the contention (§10 example 51)
+
+**Given** a list reduced to **one** Contender by retraction
+**Then** it is **not** a special case — FR-20 already resolves a single-Contender lottery to that Contender
+
+**Given** a list **emptied** by retraction
+**Then** the Auction returns to **Awaiting Opening Bid with its Clock cleared**, the Player stays on the Board and the Nomination Slot stays held
+**And** this is **deliberately not** what a **cancellation**-emptied list does, which keeps its Clock and closes at expiry with no winner
+**And** the **emptying act decides** — a contention opened by a Team that later retracts and is *then* emptied by a cancellation **keeps its Clock**
+
+**Given** the Bid that **dissolves** a contention — $1,500,000 or more
+**When** the Manager views it
+**Then** the retract control is **absent**, not disabled or refused: dissolution released every Contender's $1,000,000 irreversibly, so a converting Bid is **final on submission** and a Commissioner void is the only remedy
+
+**Given** a Team that has retracted its entry
+**Then** it is no longer a Contender and **may rejoin**, which costs the lottery nothing — the list and the $1,000,000 are identical either way and both acts are in the Audit Log
+
+---
+
+### Story 11.6: The control, the countdown, and the record
+
+As a Manager,
+I want the retract control to be there exactly when I can use it,
+So that I never reach for a remedy that fails on submit.
+
+**Depends on:** Story 11.1 for the gate; finishes with the epic.
+
+**Acceptance Criteria:**
+
+**Given** the Auction page
+**Then** the retract control **appears only while the viewer's Team may actually use it** and **counts down**, disappearing the instant the window closes — by expiry **or** by the displaced Team's figures moving — and is **never shown disabled** (UX-DR42)
+**And** it renders from the **same derivation** that authorises the command, so the control and the refusal cannot disagree
+**And** it is **never cached**
+
+**Given** a stale read (AD-29)
+**Then** the control **hides** rather than disabling, and the freshness state says why
+**And** its countdown **does not keep running through a disconnect**, unlike an Auction countdown — the window can end early for a reason only the server knows
+
+**Given** an Auction whose leading Bid is less than ninety seconds old
+**Then** the close time is shown as **provisional**, because a retraction can move it **backwards by up to 24 hours** (UX-DR43)
+
+**Given** a committed retraction
+**Then** it is written to the **Audit Log** and **broadcast league-wide**, naming the retracting Team, the amount withdrawn, and where the Auction went — the Team restored, or that it returned to Awaiting Opening Bid (UX-DR44)
+**And** the **restored** Manager is mentioned that they **lead again**, carried by the existing `outbid` category with **no fourth category added**
+**And** a retraction carries **no reason field**, where a void carries one
+**And** the three withdrawals stay **distinguishable** in the Audit Log
+
+**Given** PRD §10 examples 47–57
+**Then** each exists as a **named test calling the core directly** — eleven files, one per example (AR-25)
+**And** example **55** is the one that pins the suppression **anchor**, which example 54 cannot discriminate
+**And** examples **49 and 50** are load-bearing as a **pair**: 49 moves the displaced Team's figures by a **Bid**, 50 by a **Drop that gives that Team a Slot**, and a test asserting 49 alone passes while the cut-short is implemented as the rejected enumeration
+**And** §10 example **12**'s missing test is **not** this epic's — it is the unbid-nomination case and belongs with Epic 2's nomination stories
 
 ---
