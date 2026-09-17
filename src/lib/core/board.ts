@@ -25,11 +25,14 @@
  * name, for the reason `overdueAuctions`' `byCloseThenPlayer` already gives —
  * several Auctions legitimately share a close instant or a price, and a
  * comparator that returns 0 leaves `Array.prototype.sort` free to reorder
- * them between renders.
+ * them between renders. A sort carries a DIRECTION, which turns the chosen
+ * key over and leaves those tie-breaks alone; the filter is a single switch
+ * that hides the closed cards.
  *
  * **Every string the board prints is here.** The state labels, the icons that
- * ride beside them, the sort and filter labels, the empty screen, the filtered
- * notice and the unbid phrase — so `routes/board/+page.svelte` states nothing
+ * ride beside them, the sort labels and their two directions, the switch's own
+ * name, the empty screen, the two count sentences and the unbid phrase — so
+ * `routes/board/+page.svelte` states nothing
  * of its own and a synonym cannot appear in markup. Where a word already
  * exists in the core it is IMPORTED rather than respelled:
  * `MINIMUM_LOTTERY_LABEL` is the contention's card name and this module
@@ -37,8 +40,8 @@
  * glossary term.
  *
  * **No urgency device of any kind.** No "ending soon", no ranking of what is
- * worth bidding on, no suggested amount. The three sorts are orderings a
- * Manager asked for; none of them is advice.
+ * worth bidding on, no suggested amount. The three sorts, in either direction,
+ * are orderings a Manager asked for; none of them is advice.
  *
  * This module is part of the PURE core: no I/O, no clock, no randomness,
  * stdlib only, relative .ts imports only so Deno can load it (AD-2).
@@ -99,34 +102,57 @@ export type BoardCardState = ContentionState | 'closed';
 export type BoardSort = 'closing' | 'price' | 'name';
 
 /**
- * The five views the board offers. `all` hides nothing.
- *
- * `open` and `closed` narrow on the CARD's own state and the other two on the
- * viewer's, which is why they are one control rather than two: a Manager
- * asking "what can I still bid on" and a Manager asking "what am I leading"
- * are both asking the board to show them fewer cards, and two independent
- * controls would let them be combined into views nobody asked for and the
- * filtered notice could not word.
+ * Which way an ordering runs. Every sort has both directions and no sort has
+ * a third state: a Manager who has chosen a key has exactly one thing left to
+ * say about it, which is which end of it they want to read first.
  */
-export type BoardFilter = 'all' | 'open' | 'closed' | 'leading' | 'contending';
+export type BoardSortDirection = 'ascending' | 'descending';
 
 /** The sorts, in the order the control offers them. */
 export const SORT_KEYS: readonly BoardSort[] = Object.freeze(['closing', 'price', 'name'] as const);
 
-/** The filters, in the order the control offers them. `all` is the default. */
-export const FILTER_KEYS: readonly BoardFilter[] = Object.freeze([
-	'all',
-	'open',
-	'closed',
-	'leading',
-	'contending'
-] as const);
-
 /** The default ordering: what closes first, first. */
 export const DEFAULT_SORT: BoardSort = 'closing';
 
-/** The default view: the whole board, unfiltered. */
-export const DEFAULT_FILTER: BoardFilter = 'all';
+/**
+ * Which direction each key STARTS in when it is first chosen.
+ *
+ * Not one shared default, because "ascending" means something different in
+ * each: the soonest close, the largest price and the first name alphabetically
+ * are the three answers a Manager is asking for when they pick each key, and
+ * only one of those three is the small end. A key therefore opens in the
+ * direction that makes it worth choosing, and the second tap is what says
+ * otherwise.
+ */
+export const DEFAULT_SORT_DIRECTION: Readonly<Record<BoardSort, BoardSortDirection>> = Object.freeze(
+	{
+		closing: 'ascending',
+		price: 'descending',
+		name: 'ascending'
+	}
+);
+
+/** The other direction. The whole of what a second tap on a chosen key does. */
+export function flipDirection(direction: BoardSortDirection): BoardSortDirection {
+	return direction === 'ascending' ? 'descending' : 'ascending';
+}
+
+/**
+ * The board's ONE filter: whether the closed cards are hidden.
+ *
+ * It replaced a five-way view control. That control could express "leading",
+ * "contending", "open" and "closed", and four of those five views were ways
+ * of asking the board to be a different list than the board — the two viewer
+ * views duplicate Your Positions, which groups the same cards and is where a
+ * Manager already goes for them, and the `closed` view is a board with no
+ * Auction anybody can bid on. What was left, and what Managers actually
+ * reached for, is the one narrowing that makes the live board live again.
+ *
+ * A switch rather than a radio pair, because it is one question with a yes and
+ * a no, and it STICKS across navigation: a Manager who hid the closed cards
+ * meant it for the session, not for one visit to one page.
+ */
+export const DEFAULT_HIDE_CLOSED = false;
 
 /**
  * The Player reference fields the board renders beside a name.
@@ -323,21 +349,51 @@ export const SORT_LABELS: Readonly<Record<BoardSort, string>> = Object.freeze({
 	name: 'Player name'
 });
 
-/** What each view is called on the control that chooses it. */
-export const FILTER_LABELS: Readonly<Record<BoardFilter, string>> = Object.freeze({
-	all: 'All Auctions',
-	open: 'Open Auctions',
-	closed: 'Closed Auctions',
-	// The same word the chip and the Positions heading use: one state, one
-	// name, on every surface a Manager moves between.
-	leading: 'Leading',
-	contending: 'Contending'
+/**
+ * What each DIRECTION is called, per key.
+ *
+ * Per key rather than one pair of words, because "ascending" is not a thing a
+ * Manager is asking for — "closing first", "highest first" and "A to Z" are,
+ * and each names the end of a different scale. One shared pair would leave the
+ * control saying `Price — Ascending`, which a reader has to translate before
+ * it answers anything.
+ */
+export const SORT_DIRECTION_LABELS: Readonly<
+	Record<BoardSort, Readonly<Record<BoardSortDirection, string>>>
+> = Object.freeze({
+	closing: Object.freeze({ ascending: 'Closing first', descending: 'Closing last' }),
+	price: Object.freeze({ ascending: 'Lowest first', descending: 'Highest first' }),
+	name: Object.freeze({ ascending: 'A to Z', descending: 'Z to A' })
 });
 
-/** The board's own furniture: the title, the two control legends, the labels. */
+/**
+ * The mark that rides beside a direction — never the carrier of it. The WORD
+ * above is what states the direction; this arrow is the same fact drawn, and a
+ * greyscale screenshot reads identically without it.
+ */
+export const SORT_DIRECTION_ICONS: Readonly<Record<BoardSortDirection, string>> = Object.freeze({
+	ascending: '↑',
+	descending: '↓'
+});
+
+/**
+ * The ordering in force, as one phrase — the key and the end of it being read.
+ * What the closed control row states, so a Manager who opens nothing still
+ * knows which board they are looking at.
+ */
+export function sortSummary(key: BoardSort, direction: BoardSortDirection): string {
+	return `${SORT_LABELS[key]} — ${SORT_DIRECTION_LABELS[key][direction]}`;
+}
+
+/** The board's own furniture: the title, the control legends, the labels. */
 export const BOARD_TITLE = 'Bid Board';
 export const BOARD_SORT_LEGEND = 'Sort';
-export const BOARD_FILTER_LEGEND = 'Filter';
+/**
+ * The board's one filter, worded as the thing it DOES rather than as the view
+ * it leaves behind: a switch says what turning it on will do, and "Closed
+ * Auctions" alone would be a heading that could as easily mean the opposite.
+ */
+export const BOARD_HIDE_CLOSED_LABEL = 'Hide Closed Auctions';
 export const BOARD_PRICE_LABEL = 'Price';
 export const BOARD_LEADING_LABEL = 'Leading Bidder';
 export const BOARD_NOMINATED_LABEL = 'Nominated by';
@@ -365,21 +421,27 @@ export const BOARD_WON_BY_LABEL = 'Won by';
 export const BOARD_CLOSED_AT_LABEL = 'Closed';
 
 /**
- * The heading over the count and the two controls.
+ * The heading over the CARDS.
  *
  * It read `Open Auctions` until the board gained its Closed cards, and that
  * word became false the moment the list below it could hold one — a heading
  * naming only half of what it covers is worse than none, because a Manager
  * who reads it and then sees a closed card has been told the screen is
- * something it is not. `Auctions` is what the panel is now over: every
- * Auction the board holds, open and closed together, with the count sentence
- * beneath it saying how many of them are still open.
+ * something it is not. `Auctions` covers every Auction the board holds, open
+ * and closed together.
+ *
+ * **It moved out of the control panel and down onto the list.** Inside the
+ * panel it titled a block of controls, which a Manager does not need named —
+ * a sort and a switch say what they are — and it left the count sentence
+ * indented under a word instead of leading the panel. Over the cards it does
+ * the job the Positions groups' own headings do: it says what the list
+ * beneath it is, at the point the list starts.
  *
  * Worded here rather than in the markup for `BOARD_TITLE`'s reason — this
  * heading was the one string on this page a `.svelte` file still spelled
  * itself, which is exactly how it survived a change that falsified it.
  */
-export const BOARD_PANEL_HEADING = 'Auctions';
+export const BOARD_CARDS_HEADING = 'Auctions';
 
 /**
  * What a card says where a price would be, before any Bid.
@@ -417,32 +479,52 @@ export const ARCHIVED_EMPTY_BOARD_STATEMENT =
 	'Nominating has closed with it.';
 
 /**
- * What a filter is hiding, as a finished sentence — or `null` for the
- * unfiltered view, which hides nothing and therefore has nothing to state.
+ * How many Auctions have CLOSED, as a finished sentence — or `null` when none
+ * has, because a board with nothing closed has nothing to add.
  *
- * A filtered view must be VISIBLY filtered: a Manager who left a filter on
- * and came back to a short board must be able to tell it from a quiet league.
- * The counts are the two the caller already holds — how many are shown and
- * how many exist — so no figure is invented and nothing on a card changes
- * with the filter.
+ * It stands beside `boardCountSentence` on one line, and the pair is the whole
+ * account the board gives of itself: what can still be bid on, and what is
+ * over. Two figures rather than one, because they answer opposite questions
+ * and a single total would answer neither.
  *
- * The singular is written out because "1 Auctions are hidden" is the kind of
+ * **`hideClosed` is what discharges the visibly-filtered obligation.** A
+ * filtered view must never be mistakable for a quiet league, and that duty got
+ * HEAVIER when the switch learned to persist — the setting outlives the visit
+ * that made it, so a Manager can meet a short board with no memory of having
+ * narrowed it. The sentence therefore names the state of the switch in the
+ * same breath as the figure it applies to: the cards are not merely closed,
+ * they are closed AND HIDDEN, and the count says how many.
+ *
+ * This replaced a separate notice line that led with the switch's own name.
+ * Two lines said one thing twice — the count of what is closed IS the count of
+ * what is hidden — and the notice's "N of M shown" restated a figure the line
+ * above it already carried. One sentence, on the line the board's own count is
+ * already on.
+ *
+ * The singular is written out because "1 Auctions are closed" is the kind of
  * sentence that tells a Manager at 4am that nobody proof-read the thing they
  * are being asked to trust.
  */
-export function filteredNoticeSentence(
-	filter: BoardFilter,
-	shown: number,
-	total: number
-): string | null {
-	if (filter === 'all') return null;
-	const hidden = total - shown > 0 ? total - shown : 0;
-	const view = `Filtered to ${FILTER_LABELS[filter]}.`;
-	if (hidden === 0) return `${view} Nothing on the board is hidden by it.`;
-	if (hidden === 1) {
-		return `${view} ${String(shown)} of ${String(total)} shown; one Auction is hidden.`;
-	}
-	return `${view} ${String(shown)} of ${String(total)} shown; ${String(hidden)} Auctions are hidden.`;
+export function closedCountSentence(count: number, hideClosed: boolean): string | null {
+	if (count <= 0) return null;
+	const ending = hideClosed ? 'closed and hidden' : 'closed';
+	if (count === 1) return `One Auction is ${ending}.`;
+	return `${String(count)} Auctions are ${ending}.`;
+}
+
+/**
+ * How many of these cards are CLOSED — `closedCountSentence`'s one input, and
+ * the exact complement of `openCardCount`.
+ *
+ * Derived rather than taken as `total - open`, for the reason the counts are
+ * two functions at all: a subtraction at the call site would be a third place
+ * that decides what "closed" means, and the one place it is decided is the
+ * card's own `state`.
+ */
+export function closedCardCount<T extends { readonly state: BoardCardState }>(
+	cards: readonly T[]
+): number {
+	return cards.filter((card) => card.state === 'closed').length;
 }
 
 /**
@@ -816,19 +898,26 @@ type Sortable = {
  * re-derives while a Manager is reading it, that is a list that visibly
  * shuffles. The Player id is unique by construction and ends every chain.
  *
- * `closing` is ascending time REMAINING as of `now`, which for a fixed `now`
- * is the same order as ascending close instant — stated in the terms the
- * control offers rather than in the fold's, so the label and the arithmetic
- * agree. A card with no clock (Awaiting an Opening Bid) sorts LAST in that
- * view: it has no time remaining rather than none left, and burying the
- * running Auctions beneath it would be the opposite of what was asked for.
+ * `closing` measures time REMAINING as of `now`, which for a fixed `now` runs
+ * in the same order as the close instant — stated in the terms the control
+ * offers rather than in the fold's, so the label and the arithmetic agree.
  *
- * `price` is DESCENDING, and a card with no price sorts last for the same
- * reason: a Manager asking to order by price is asking which Auctions are
- * large, and every unbid nomination sharing one absent price would otherwise
- * fill the top of the list. This is an ordering the viewer chose and not a
- * ranking of what is worth bidding on — nothing here says an Auction is worth
- * more attention than another, and no figure on any card moves with it.
+ * `direction` is the Manager's, and it turns the chosen key over and NOTHING
+ * else. The tie-breaks below stay ascending in both directions: they exist to
+ * make the comparator total, not to express a preference, and a board whose
+ * equal-priced cards also reversed would shuffle a second list underneath the
+ * one that was asked to turn over.
+ *
+ * **An absent key sorts LAST in both directions.** A card with no clock
+ * (Awaiting an Opening Bid) has no time remaining rather than none left, and
+ * every unbid nomination shares one absent price — so direction is applied to
+ * the cards that HAVE the key, and the ones that do not sit beneath them
+ * whichever way it runs. Reversing them with it would fill the top of the list
+ * with the cards the key says nothing about.
+ *
+ * This is an ordering the viewer chose and not a ranking of what is worth
+ * bidding on — nothing here says an Auction deserves more attention than
+ * another, and no figure on any card moves with it.
  *
  * An unreadable instant sorts as though it had no clock, which is the same
  * direction `hasExpired` takes: an Auction whose close cannot be read is not
@@ -837,7 +926,8 @@ type Sortable = {
 export function sortBoard<T extends Sortable>(
 	cards: readonly T[],
 	key: BoardSort,
-	now: string
+	now: string,
+	direction: BoardSortDirection = DEFAULT_SORT_DIRECTION[key]
 ): readonly T[] {
 	const current = parseInstant(now);
 	const remaining = (card: Sortable): number | null => {
@@ -859,16 +949,21 @@ export function sortBoard<T extends Sortable>(
 		const tier = tierOf(left) - tierOf(right);
 		if (tier !== 0) return tier;
 		if (key === 'closing') {
-			const order = compareNullsLast(remaining(left), remaining(right), 'ascending');
+			const order = compareNullsLast(remaining(left), remaining(right), direction);
 			if (order !== 0) return order;
 		} else if (key === 'price') {
-			const order = compareNullsLast(left.price, right.price, 'descending');
+			const order = compareNullsLast(left.price, right.price, direction);
 			if (order !== 0) return order;
 		}
-		// `name` reaches here directly; the other two reach it as the tie-break
-		// that makes them total. One expression, so the fallback cannot differ
-		// between the sort that is the Player name and the sorts that end in it.
-		const byName = compareText(left.playerName, right.playerName);
+		// `name` reaches here as the KEY and takes the direction with it; the
+		// other two reach it as the tie-break that makes them total, and a
+		// tie-break is never reversed. One expression either way, so the ordering
+		// of two identically-named cards cannot differ between the sort that is
+		// the Player name and the sorts that end in it.
+		const byName =
+			key === 'name' && direction === 'descending'
+				? compareText(right.playerName, left.playerName)
+				: compareText(left.playerName, right.playerName);
 		if (byName !== 0) return byName;
 		// Two DIFFERENT Players can share a name — the league has had them —
 		// and a comparator returning 0 there would hand the pair back to
@@ -898,7 +993,7 @@ function tierOf(card: Sortable): number {
 function compareNullsLast(
 	left: number | null,
 	right: number | null,
-	direction: 'ascending' | 'descending'
+	direction: BoardSortDirection
 ): number {
 	if (left === null && right === null) return 0;
 	if (left === null) return 1;
@@ -908,41 +1003,27 @@ function compareNullsLast(
 	return direction === 'ascending' ? ascending : -ascending;
 }
 
-/** The fields a filter reads. Structural, for `Sortable`'s reason. */
+/** The one field the filter reads. Structural, for `Sortable`'s reason. */
 type Filterable = {
-	readonly viewerState: BoardViewerState;
 	readonly state: BoardCardState;
 };
 
 /**
- * The board narrowed to one view, as a NEW array.
+ * The board with the closed cards dropped, as a NEW array — or the board
+ * itself when the switch is off.
  *
- * `all` returns the whole board — not a copy that happens to match, the whole
- * board — because the unfiltered view is the board and hides nothing.
+ * Off returns the caller's own list, not a copy that happens to match: the
+ * unfiltered view IS the board and hides nothing, and a fresh array there
+ * would be a new identity on every re-derivation for no reader's benefit.
  *
- * `leading` and `contending` each name exactly one viewer state. Outbid is
- * deliberately NOT folded into `contending`: being outbid is a fact about an
- * Auction a Manager has left, and a view that mixed the two would answer
- * neither question. `epics.md` gives the board those filters and Your
- * Positions the grouping that separates them.
- *
- * `open` and `closed` are the two that narrow on the card's own state, added
- * when closed cards arrived on this board: a Manager scanning for somewhere to
- * bid and a Manager looking for a draw to check are asking opposite questions
- * of one list, and neither wants the other's cards in the way.
+ * On hides closed cards ENTIRELY. It is what a Manager turns on to get back
+ * the board they had before anything closed, and a "mostly open" board would
+ * not be that.
  */
 export function filterBoard<T extends Filterable>(
 	cards: readonly T[],
-	filter: BoardFilter
+	hideClosed: boolean
 ): readonly T[] {
-	if (filter === 'all') return cards;
-	// The two views that narrow on the CARD's state rather than the viewer's.
-	// `open` hides closed cards ENTIRELY — it is what a Manager selects to get
-	// back the board they had before anything closed, and a "mostly open" view
-	// would not be that. `closed` is its complement, which is where a losing
-	// Manager goes to find the draw they want to check.
-	if (filter === 'open') return cards.filter((card) => card.state !== 'closed');
-	if (filter === 'closed') return cards.filter((card) => card.state === 'closed');
-	const wanted: BoardViewerState = filter === 'leading' ? 'you_lead' : 'contender';
-	return cards.filter((card) => card.viewerState === wanted);
+	if (!hideClosed) return cards;
+	return cards.filter((card) => card.state !== 'closed');
 }

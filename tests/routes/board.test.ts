@@ -18,7 +18,6 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { FILTER_KEYS } from '../../src/lib/core/board.ts';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { isHttpError } from '@sveltejs/kit';
@@ -26,6 +25,8 @@ import { isHttpError } from '@sveltejs/kit';
 import {
 	AUCTION_STATE_ICONS,
 	AUCTION_STATE_LABELS,
+	BOARD_HIDE_CLOSED_LABEL,
+	SORT_KEYS,
 	VIEWER_STATE_ICONS,
 	VIEWER_STATE_LABELS
 } from '../../src/lib/core/board.ts';
@@ -251,12 +252,15 @@ describe('the board page — what it renders', () => {
 		for (const symbol of [
 			'BOARD_TITLE',
 			'SORT_LABELS',
-			'FILTER_LABELS',
+			'SORT_DIRECTION_LABELS',
+			'SORT_DIRECTION_ICONS',
+			'BOARD_HIDE_CLOSED_LABEL',
+			'sortSummary',
 			'EMPTY_BOARD_HEADING',
 			'EMPTY_BOARD_STATEMENT',
 			'EMPTY_BOARD_ACTION',
 			'boardCountSentence',
-			'filteredNoticeSentence',
+			'closedCountSentence',
 			'unbidPhrase'
 		]) {
 			expect(PAGE, symbol).toContain(symbol);
@@ -269,6 +273,11 @@ describe('the board page — what it renders', () => {
 		expect(PAGE_CODE).not.toMatch(/'Unbid'|Minimum-Bid Contention/);
 		expect(PAGE_CODE).not.toMatch(/No opening bid/);
 		expect(PAGE_CODE).not.toMatch(/Auctions are (open|hidden)/);
+		// The switch's own name and both direction words are the core's too —
+		// the page prints `BOARD_HIDE_CLOSED_LABEL`, never the sentence in it.
+		expect(PAGE_CODE).not.toContain(BOARD_HIDE_CLOSED_LABEL);
+		expect(PAGE_CODE).not.toMatch(/Highest first|Lowest first|Closing first|A to Z/);
+		expect(PAGE_CODE).not.toMatch(/Ascending|Descending/);
 		expect(PAGE_CODE).not.toMatch(/h unbid|unbid for/);
 	});
 
@@ -435,10 +444,14 @@ describe('the board page — what it renders', () => {
 	});
 
 	it('sorts and filters through the core, in the browser, over the transported list', () => {
-		expect(PAGE).toMatch(/sortBoard\(filterBoard\(board\.cards, filter\), sort, nowIso\)/);
+		expect(PAGE).toMatch(
+			/sortBoard\(filterBoard\(board\.cards, boardView\.hideClosed\), sort, nowIso, direction\)/
+		);
 		// Neither control posts anything or reloads anything.
 		expect(PAGE).toMatch(/let sort = \$state<BoardSort>\(DEFAULT_SORT\)/);
-		expect(PAGE).toMatch(/let filter = \$state<BoardFilter>\(DEFAULT_FILTER\)/);
+		expect(PAGE).toMatch(
+			/let direction = \$state<BoardSortDirection>\(DEFAULT_SORT_DIRECTION\[DEFAULT_SORT\]\)/
+		);
 		expect(PAGE_CODE).not.toMatch(/invalidate|goto\(|fetch\(/);
 		// No comparator or predicate of its own — the ordering rules are the
 		// core's, so a re-derived list cannot reshuffle differently here.
@@ -453,8 +466,23 @@ describe('the board page — what it renders', () => {
 		// into it would make the one figure on the page false the moment an
 		// Auction closes. The filtered notice still measures the whole board.
 		expect(PAGE).toMatch(/boardCountSentence\(openCardCount\(board\.cards\)\)/);
-		expect(PAGE).toMatch(/filteredNoticeSentence\(filter, shown\.length, board\.cards\.length\)/);
-		expect(PAGE).toContain('id="board-filtered-notice"');
+		// And the closed count beside it, on the SAME line: the board's two
+		// figures are one account of itself and a Manager reads them together.
+		expect(PAGE).toMatch(
+			/closedCountSentence\(closedCardCount\(board\.cards\), boardView\.hideClosed\)/
+		);
+		const countLine = PAGE.slice(
+			PAGE.indexOf('id="board-count"'),
+			PAGE.indexOf('</p>', PAGE.indexOf('id="board-count"'))
+		);
+		expect(countLine).toContain('{countSentence}');
+		expect(countLine).toContain('{closedSentence}');
+		// The separate notice line is GONE: it led with the switch's own name
+		// and then restated, one row lower, the figure the count line already
+		// carried. The `and hidden` half of the closed sentence is what says
+		// the switch is on now.
+		expect(PAGE).not.toContain('filteredNoticeSentence');
+		expect(PAGE).not.toContain('board-filtered-notice');
 	});
 
 	it('renders the designed empty screen and points it at Nominate', () => {
@@ -611,12 +639,142 @@ describe('the board page — the Closed card', () => {
 		expect(prose.toLowerCase()).not.toMatch(/congratulat|trophy|celebrat/);
 	});
 
-	it('offers the two state filters as radios, from the core’s own key list', () => {
-		// `FILTER_KEYS` is what the control iterates, so adding `open` and
-		// `closed` to the core added the radios — the surface chooses nothing.
-		expect(PAGE).toMatch(/\{#each FILTER_KEYS as key \(key\)\}/);
-		expect(PAGE).toContain('FILTER_LABELS[key]');
-		expect([...FILTER_KEYS]).toContain('open');
-		expect([...FILTER_KEYS]).toContain('closed');
+	it('prints the viewer’s own state BESIDE the amount, not beneath it', () => {
+		// The state prints on some closed cards and not others, so stacked it
+		// gave a won card an extra line and left a column of closed cards with
+		// two heights. On one row every closed card sets the same height, which
+		// is what lets the final amounts line up down the board.
+		//
+		// Asserted as ORDER inside the figure, because containment alone would
+		// pass with the two in either arrangement: the state's arm opens before
+		// the amount's paragraph.
+		const figure = CLOSED_ARM.slice(
+			CLOSED_ARM.indexOf('card-closed-figure'),
+			CLOSED_ARM.indexOf('{BOARD_FINAL_LABEL}')
+		);
+		expect(figure).toContain('card.viewerStateLabel');
+		// And the row is a row: a column here is what stacked them.
+		expect(PAGE).toMatch(/\.card-closed-figure \{[^}]*display: flex;/);
+		expect(PAGE).not.toMatch(/\.card-closed-figure \{[^}]*flex-direction: column;/);
+	});
+});
+
+describe('the two view controls', () => {
+	it('heads the CARDS, outside the control panel, as `/positions` does', () => {
+		// The `Auctions` heading titled a block of controls, which needs no
+		// titling — a sort and a switch say what they are — and it kept the
+		// count sentence from leading the panel. It now names the list it is
+		// actually over, at the point that list starts, on `/positions`' own
+		// group shape.
+		expect(PAGE).toContain('{BOARD_CARDS_HEADING}');
+		expect(PAGE).not.toContain('BOARD_PANEL_HEADING');
+		// Outside the panel: the heading appears AFTER the panel closes and
+		// before the first card.
+		expect(PAGE.indexOf('id="board-cards-heading"')).toBeGreaterThan(
+			PAGE.indexOf('<div class="panel-top">')
+		);
+		expect(PAGE.indexOf('id="board-cards-heading"')).toBeLessThan(
+			PAGE.indexOf('id="board-cards"')
+		);
+		// The Positions groups' own treatment, from `global.css`'s own class
+		// rather than a size or a face respelled here: one heading style for
+		// one kind of thing, across the two surfaces a Manager moves between.
+		expect(PAGE).toMatch(/<h2 class="section-label" id="board-cards-heading">/);
+		// `display` was tried here and does not hold — this page already spends
+		// the serif on the masthead above and every Player name below, and a
+		// third serif line between them reads as neither title nor furniture.
+		expect(PAGE).not.toContain('board-heading');
+		// And a card-gap above the first card, not the page's section gap — a
+		// heading separated by the gap that divides BLOCKS reads as detached
+		// from the list it names.
+		expect(PAGE).toMatch(/\.group \{[\s\S]*?gap: var\(--space-card-gap\);[\s\S]*?\n\t\}/);
+	});
+
+	it('offers every ordering as a radio, from the core’s own key list', () => {
+		expect(PAGE).toMatch(/\{#each SORT_KEYS as key \(key\)\}/);
+		expect(PAGE).toContain('SORT_LABELS[key]');
+		expect([...SORT_KEYS]).toEqual(['closing', 'price', 'name']);
+	});
+
+	it('flips the direction when the ordering already in force is tapped again', () => {
+		// `onclick`, not `onchange`: a radio already selected fires no `change`
+		// event, so the flip — which is by definition a tap on the selected one —
+		// would never reach the page. This is the assertion that fails if anybody
+		// "tidies" it back to `bind:group`.
+		expect(PAGE).toMatch(/onclick=\{\(\) => chooseSort\(key\)\}/);
+		expect(PAGE).toMatch(/checked=\{sort === key\}/);
+		expect(PAGE_CODE).not.toContain('bind:group={sort}');
+		// And the decision itself is one function: same key flips, different key
+		// chooses and opens at that key's own default end.
+		expect(PAGE).toMatch(/if \(key === sort\) \{\s*direction = flipDirection\(direction\);/);
+		expect(PAGE).toMatch(/direction = DEFAULT_SORT_DIRECTION\[key\];/);
+	});
+
+	it('states the direction in WORDS beside its arrow, never the arrow alone', () => {
+		// The greyscale rule every state on a card follows, applied to the
+		// control: an arrow carrying the direction by itself is a shape with no
+		// word, and this page has none of those.
+		expect(PAGE).toContain('SORT_DIRECTION_LABELS[key][direction]');
+		expect(PAGE).toMatch(/\{SORT_DIRECTION_ICONS\[direction\]\}/);
+		expect(PAGE).toMatch(/aria-hidden="true">\{SORT_DIRECTION_ICONS\[direction\]\}/);
+		// The closed row states both halves too, so a Manager who opens nothing
+		// still knows which board they are looking at.
+		expect(PAGE).toContain('{sortSummary(sort, direction)}');
+	});
+
+	it('is ONE switch for the filter, and it persists across navigation', () => {
+		// Five radios in a disclosure became one switch. It is a native checkbox
+		// with `role="switch"`, so it announces as on or off and keeps the
+		// browser's own label, focus ring and Space key.
+		expect(PAGE).toContain('id="board-hide-closed"');
+		expect(PAGE).toMatch(/type="checkbox"\s*\n\s*role="switch"/);
+		expect(PAGE).toContain('{BOARD_HIDE_CLOSED_LABEL}');
+		// The box follows its label — the reverse of the sort radios, and the
+		// trailing edge's doing: the control is pushed right, so the box last
+		// is the box at the panel's own margin.
+		const switchMarkup = PAGE.slice(
+			PAGE.indexOf('<label class="switch"'),
+			PAGE.indexOf('</label>', PAGE.indexOf('<label class="switch"'))
+		);
+		expect(switchMarkup.indexOf('{BOARD_HIDE_CLOSED_LABEL}')).toBeLessThan(
+			switchMarkup.indexOf('id="board-hide-closed"')
+		);
+		// The old control is gone entirely — not hidden, gone.
+		expect(PAGE).not.toContain('FILTER_KEYS');
+		expect(PAGE).not.toContain('name="board-filter"');
+		expect(PAGE).not.toContain('board-filter-');
+		// It sticks because it is held OUTSIDE the component: a `$state` in this
+		// file is destroyed with the page, so the setting would last one screen.
+		expect(PAGE).toContain("from '$lib/client/board-view.svelte.ts'");
+		expect(PAGE).toMatch(/checked=\{boardView\.hideClosed\}/);
+		expect(PAGE).toMatch(/boardView\.set\(event\.currentTarget\.checked\)/);
+		// And it sits at the TOP of the panel, at the trailing edge — on the
+		// COUNT's own row, pushed there by the free space rather than by a
+		// width. The two are halves of one fact: the count says how many
+		// Auctions are closed and the switch decides whether those are on
+		// screen, so the setting and its consequence are read together.
+		const panelTop = PAGE.slice(
+			PAGE.indexOf('<div class="panel-top">'),
+			PAGE.indexOf('</div>', PAGE.indexOf('<div class="panel-top">'))
+		);
+		expect(panelTop).toContain('id="board-count"');
+		expect(panelTop).toContain('id="board-hide-closed"');
+		expect(PAGE).toMatch(/\.switch \{[\s\S]*?margin-left: auto;[\s\S]*?\n\t\}/);
+		// It carries its tap area as padding it then CANCELS, rather than as a
+		// touch floor. The heading beside it is a `--size-10` label with no
+		// height of its own, so a 44px box on the switch became the height of
+		// the whole row and the heading floated in a band of empty panel. This
+		// is `/nominate`'s explainer-mark idiom: the hit area grows, the row
+		// does not.
+		const switchRule = PAGE.slice(PAGE.indexOf('.switch {'), PAGE.indexOf('.switch input'));
+		expect(switchRule).toContain('padding: var(--space-row-gap);');
+		expect(switchRule).toContain('margin: calc(-1 * var(--space-row-gap));');
+		expect(switchRule).not.toContain('--touch-min');
+		// And the floor is untouched everywhere it belongs — on the controls
+		// that spend something. The sort radios still carry it.
+		expect(PAGE).toMatch(/\.choice \{[\s\S]*?min-height: var\(--touch-min\);[\s\S]*?\n\t\}/);
+		// And it is READ in an `$effect`, so storage is never touched during SSR
+		// and the server-rendered HTML agrees with the first client paint.
+		expect(PAGE).toMatch(/\$effect\(\(\) => \{\s*boardView\.load\(\);\s*\}\);/);
 	});
 });
