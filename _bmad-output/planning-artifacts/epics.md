@@ -1585,9 +1585,20 @@ So that I can pick a target on a phone without opening a laptop.
 
 **Given** the board
 **When** a Manager organises it
-**Then** it is sortable by time remaining, price and Player name
-**And** filterable to Auctions the viewer's Team is leading or contending in
-**And** a filtered view is visibly filtered, so it can never be mistaken for the whole board
+**Then** it is sortable by time remaining, price and Player name, **each in either direction** — tapping the ordering already in force turns the board over, and the direction is stated in words beside the key it belongs to
+**And** filterable by a single **Hide Closed Auctions** switch, which **persists across navigation** so a Manager who hid them does not have to hide them again on every visit
+**And** a filtered view is visibly filtered, so it can never be mistaken for the whole board — an obligation that grew heavier when the switch learned to persist, since the Manager meeting a short board may not remember having narrowed it
+
+> **Superseded 2026-09-17.** This criterion read "filterable to Auctions the
+> viewer's Team is leading or contending in", and the board shipped a five-way
+> view control (`All` / `Open` / `Closed` / `Leading` / `Contending`). Four of
+> those five asked the board to be a different list than the board: the two
+> viewer views duplicate **Your Positions**, which groups exactly those cards
+> and is where UX-DR20 already sends a Manager for them, and `Closed` is a
+> board with nothing anybody can bid on. What was left, and what Managers
+> reached for, is the one narrowing that makes the live board live again — so
+> the control is now one switch, and the sort gained the direction the five-way
+> control's bulk had been crowding out.
 
 **Given** countdown timers
 **When** they render

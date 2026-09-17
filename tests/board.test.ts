@@ -22,27 +22,32 @@ import {
 	AUCTION_STATE_ICONS,
 	AUCTION_STATE_LABELS,
 	AUCTION_STATE_LABELS_NARROW,
-	DEFAULT_FILTER,
+	BOARD_HIDE_CLOSED_LABEL,
+	DEFAULT_HIDE_CLOSED,
 	DEFAULT_SORT,
+	DEFAULT_SORT_DIRECTION,
 	EMPTY_BOARD_ACTION,
 	EMPTY_BOARD_HEADING,
 	EMPTY_BOARD_STATEMENT,
-	FILTER_KEYS,
-	FILTER_LABELS,
 	NO_LEADING_BIDDER,
 	NO_OPENING_BID,
+	SORT_DIRECTION_ICONS,
+	SORT_DIRECTION_LABELS,
 	SORT_KEYS,
 	SORT_LABELS,
 	VIEWER_STATE_ICONS,
 	VIEWER_STATE_LABELS,
 	boardCardsFor,
 	boardCountSentence,
+	closedCardCount,
+	closedCountSentence,
 	filterBoard,
-	filteredNoticeSentence,
+	flipDirection,
 	metadataLine,
 	openCardCount,
 	priceLabel,
 	sortBoard,
+	sortSummary,
 	unbidPhrase,
 	viewerStateFor
 } from '../src/lib/core/board.ts';
@@ -480,10 +485,11 @@ describe('every state carries a word AND a shape', () => {
 			'you_lead'
 		]);
 		// Named without a pronoun: the chip reaches only the Manager it is
-		// about, so `Leading` reads identically as a chip, as the Positions
-		// heading and as the board's own filter.
+		// about, so `Leading` reads identically as a chip and as the Positions
+		// heading. The board's five-way view control is gone — one switch
+		// stands where it did — so `Leading` is no longer also a filter name,
+		// and Your Positions is the surface that groups by it.
 		expect(VIEWER_STATE_LABELS.you_lead).toBe('Leading');
-		expect(FILTER_LABELS.leading).toBe(VIEWER_STATE_LABELS.you_lead);
 		expect(VIEWER_STATE_LABELS.outbid).toBe('Outbid');
 		expect(VIEWER_STATE_LABELS.contender).toBe('Contender');
 		expect(VIEWER_STATE_LABELS.not_involved).toBe('Not involved');
@@ -555,6 +561,57 @@ describe('sorting — view state, total, and always tie-broken on the Player nam
 		for (const key of SORT_KEYS) expect(SORT_LABELS[key]).not.toBe('');
 	});
 
+	it('gives every key both directions, each with its own word and a mark', () => {
+		// Per-key wording, because "ascending" is not what a Manager is asking
+		// for — the soonest close, the largest price and the first name are, and
+		// only one of those three is the small end of its own scale.
+		for (const key of SORT_KEYS) {
+			expect(SORT_DIRECTION_LABELS[key].ascending).not.toBe('');
+			expect(SORT_DIRECTION_LABELS[key].descending).not.toBe('');
+			expect(SORT_DIRECTION_LABELS[key].ascending).not.toBe(
+				SORT_DIRECTION_LABELS[key].descending
+			);
+			// And a direction is never the SHARED word of two keys: `Price —
+			// Highest first` and `Time remaining — Highest first` would be one
+			// phrase meaning two things.
+			expect(DEFAULT_SORT_DIRECTION[key]).toBeDefined();
+		}
+		// Each key opens at the end that makes it worth choosing.
+		expect(DEFAULT_SORT_DIRECTION.closing).toBe('ascending');
+		expect(DEFAULT_SORT_DIRECTION.price).toBe('descending');
+		expect(DEFAULT_SORT_DIRECTION.name).toBe('ascending');
+		// The arrow rides beside the word, never instead of it — the greyscale
+		// rule every state on a card already follows — so the two marks differ
+		// and neither is empty.
+		expect(SORT_DIRECTION_ICONS.ascending).not.toBe('');
+		expect(SORT_DIRECTION_ICONS.descending).not.toBe('');
+		expect(SORT_DIRECTION_ICONS.ascending).not.toBe(SORT_DIRECTION_ICONS.descending);
+	});
+
+	it('flips a direction and only a direction', () => {
+		expect(flipDirection('ascending')).toBe('descending');
+		expect(flipDirection('descending')).toBe('ascending');
+		// Twice is where it started, which is what makes a second tap on the
+		// chosen key a thing a Manager can undo by tapping it again.
+		for (const direction of ['ascending', 'descending'] as const) {
+			expect(flipDirection(flipDirection(direction))).toBe(direction);
+		}
+	});
+
+	it('states the ordering in force as one phrase — the key and its end', () => {
+		const summary = sortSummary('price', 'descending');
+		expect(summary).toContain(SORT_LABELS.price);
+		expect(summary).toContain(SORT_DIRECTION_LABELS.price.descending);
+		// Both halves, in every combination: the closed control row is the only
+		// place a Manager who opens nothing learns which board they have.
+		for (const key of SORT_KEYS) {
+			for (const direction of ['ascending', 'descending'] as const) {
+				expect(sortSummary(key, direction)).toContain(SORT_LABELS[key]);
+				expect(sortSummary(key, direction)).toContain(SORT_DIRECTION_LABELS[key][direction]);
+			}
+		}
+	});
+
 	it('closing — soonest first, unclocked cards last, ties broken on the name', () => {
 		expect(names(sortBoard(rows, 'closing', NOW))).toEqual(['Bob', 'Alice', 'Charlie', 'Dana']);
 	});
@@ -565,6 +622,82 @@ describe('sorting — view state, total, and always tie-broken on the Player nam
 
 	it('name — the tie-break standing alone', () => {
 		expect(names(sortBoard(rows, 'name', NOW))).toEqual(['Alice', 'Bob', 'Charlie', 'Dana']);
+	});
+
+	it('defaults each key to its own direction when none is given', () => {
+		// The three assertions above pass no direction, so the omitted argument
+		// has to resolve to the same order the explicit one does — otherwise the
+		// default lives in two places and they can drift.
+		for (const key of SORT_KEYS) {
+			expect(names(sortBoard(rows, key, NOW))).toEqual(
+				names(sortBoard(rows, key, NOW, DEFAULT_SORT_DIRECTION[key]))
+			);
+		}
+	});
+
+	it('turns the chosen key over, and leaves the absent keys at the bottom', () => {
+		// `closing` reversed is the LATEST close first — and Dana, who has no
+		// clock at all, is still last. Reversing her with the rest would fill the
+		// top of the board with the cards the key says nothing about.
+		expect(names(sortBoard(rows, 'closing', NOW, 'descending'))).toEqual([
+			'Alice',
+			'Charlie',
+			'Bob',
+			'Dana'
+		]);
+		// `price` reversed is the smallest first, and the priceless card stays
+		// beneath it for the same reason.
+		expect(names(sortBoard(rows, 'price', NOW, 'ascending'))).toEqual([
+			'Bob',
+			'Alice',
+			'Charlie',
+			'Dana'
+		]);
+		// `name` reversed is Z to A, and there is no absent name to strand.
+		expect(names(sortBoard(rows, 'name', NOW, 'descending'))).toEqual([
+			'Dana',
+			'Charlie',
+			'Bob',
+			'Alice'
+		]);
+	});
+
+	it('never reverses the TIE-BREAK with the key', () => {
+		// Alice and Charlie share a close instant and a price. The tie-break
+		// exists to make the comparator total, not to express a preference, so
+		// the pair stays in name order whichever way the key runs — a board whose
+		// equal-priced cards also turned over would shuffle a second list
+		// underneath the one that was asked to turn.
+		for (const key of ['closing', 'price'] as const) {
+			const reversed = sortBoard(rows, key, NOW, flipDirection(DEFAULT_SORT_DIRECTION[key]));
+			const tied = reversed.filter((row) => row.playerName === 'Alice' || row.playerName === 'Charlie');
+			expect(names(tied)).toEqual(['Alice', 'Charlie']);
+		}
+	});
+
+	it('is total in BOTH directions', () => {
+		// Totality is not a property of one direction: a comparator that returns
+		// 0 descending is the same reshuffle as one that returns 0 ascending.
+		const reversedInput = [...rows].reverse();
+		for (const key of SORT_KEYS) {
+			for (const direction of ['ascending', 'descending'] as const) {
+				expect(names(sortBoard(rows, key, NOW, direction))).toEqual(
+					names(sortBoard(reversedInput, key, NOW, direction))
+				);
+			}
+		}
+	});
+
+	it('changes no figure on any card in either direction', () => {
+		// The acceptance criterion the direction inherits: turning the board over
+		// reorders it and does nothing else.
+		for (const key of SORT_KEYS) {
+			for (const direction of ['ascending', 'descending'] as const) {
+				const sorted = sortBoard(rows, key, NOW, direction);
+				expect(sorted).toHaveLength(rows.length);
+				for (const row of rows) expect(sorted).toContain(row);
+			}
+		}
 	});
 
 	it('is stable across the input order — the list cannot reshuffle between renders', () => {
@@ -660,51 +793,71 @@ describe('filtering — view state, visibly stated', () => {
 		{ playerName: 'Eve', viewerState: 'won', state: 'closed' }
 	];
 
-	it('offers exactly five views, each with a word, defaulting to the whole board', () => {
-		expect([...FILTER_KEYS]).toEqual(['all', 'open', 'closed', 'leading', 'contending']);
-		expect(DEFAULT_FILTER).toBe('all');
-		for (const key of FILTER_KEYS) expect(FILTER_LABELS[key]).not.toBe('');
+	it('is ONE switch, named for what it does, and starts off', () => {
+		// It replaced a five-way view control. Four of those five views were ways
+		// of asking the board to be a different list than the board — the two
+		// viewer views duplicate Your Positions, and `closed` is a board with
+		// nothing to bid on. What is left is the one narrowing that makes the
+		// live board live again.
+		expect(DEFAULT_HIDE_CLOSED).toBe(false);
+		// Worded as the ACT, not as the view left behind: `Closed Auctions`
+		// alone is a heading that could as easily mean the opposite.
+		expect(BOARD_HIDE_CLOSED_LABEL).toBe('Hide Closed Auctions');
 	});
 
-	it('open hides every closed card ENTIRELY, and closed is its complement', () => {
-		// The acceptance criterion, stated: a Manager who selects `open` is
-		// asking for the board they had before anything closed, and a "mostly
-		// open" view would not be that.
-		expect(filterBoard(rows, 'open').map((r) => r.playerName)).toEqual([
+	it('on, it hides every closed card ENTIRELY', () => {
+		// The acceptance criterion, stated: a Manager who turns this on is asking
+		// for the board they had before anything closed, and a "mostly open"
+		// board would not be that.
+		expect(filterBoard(rows, true).map((r) => r.playerName)).toEqual([
 			'Alice',
 			'Bob',
 			'Carla',
 			'Dana'
 		]);
-		expect(filterBoard(rows, 'closed').map((r) => r.playerName)).toEqual(['Eve']);
-		// Together they are the whole board and they overlap in nothing.
-		expect(filterBoard(rows, 'open').length + filterBoard(rows, 'closed').length).toBe(rows.length);
+		// And it narrows on the CARD's state alone — the reader's own relation
+		// to an Auction never decides whether they can see it.
+		expect(filterBoard(rows, true).every((r) => r.state !== 'closed')).toBe(true);
 	});
 
-	it('all hides nothing', () => {
-		expect(filterBoard(rows, 'all')).toEqual(rows);
-		expect(filteredNoticeSentence('all', rows.length, rows.length)).toBeNull();
+	it('off, it hides nothing — and hands back the caller’s own list', () => {
+		expect(filterBoard(rows, false)).toBe(rows);
 	});
 
-	it('leading and contending each name one viewer state, and Outbid is neither', () => {
-		expect(filterBoard(rows, 'leading').map((r) => r.playerName)).toEqual(['Alice']);
-		expect(filterBoard(rows, 'contending').map((r) => r.playerName)).toEqual(['Carla']);
+	it('counts the closed cards, and says so beside the open count', () => {
+		// The board's whole account of itself is two figures on one line: what
+		// can still be bid on, and what is over. They are separate counts because
+		// they answer opposite questions and a single total would answer neither.
+		expect(closedCardCount(rows)).toBe(1);
+		expect(closedCountSentence(3, false)).toBe('3 Auctions are closed.');
+		// The exact complement of `openCardCount`, derived off the card's own
+		// state rather than subtracted from a length — so "closed" is decided in
+		// one place.
+		expect(closedCardCount(rows) + openCardCount(rows)).toBe(rows.length);
 	});
 
-	it('states what a filtered view is hiding, with its own count', () => {
-		const notice = filteredNoticeSentence('leading', 1, 4);
-		expect(notice).not.toBeNull();
-		expect(notice).toContain(FILTER_LABELS.leading);
-		expect(notice).toContain('1 of 4');
-		expect(notice).toContain('3 Auctions are hidden');
+	it('says the closed cards are HIDDEN when the switch is on', () => {
+		// This is what discharges the visibly-filtered obligation, and it matters
+		// MORE now that the switch persists: a Manager can meet a board narrowed
+		// by a tap they made yesterday, so the line has to say so unprompted.
+		expect(closedCountSentence(3, true)).toBe('3 Auctions are closed and hidden.');
+		// And the two readings are genuinely different sentences — a closed card
+		// that is hidden is not the same fact as one that is merely closed.
+		expect(closedCountSentence(3, true)).not.toBe(closedCountSentence(3, false));
 	});
 
 	it('writes the singular out rather than printing “1 Auctions”', () => {
-		expect(filteredNoticeSentence('contending', 1, 2)).toContain('one Auction is hidden');
+		expect(closedCountSentence(1, false)).toBe('One Auction is closed.');
+		expect(closedCountSentence(1, true)).toBe('One Auction is closed and hidden.');
 	});
 
-	it('says so plainly when a filter happens to hide nothing', () => {
-		expect(filteredNoticeSentence('leading', 3, 3)).toContain('Nothing on the board is hidden');
+	it('says nothing at all when nothing has closed', () => {
+		// A zero here would print "0 Auctions are closed" on every screen of the
+		// phase's first week — a sentence about nothing, beside a figure that is
+		// about something. It is omitted, in both switch positions: with nothing
+		// closed the switch hides nothing, and its own box states its position.
+		expect(closedCountSentence(0, false)).toBeNull();
+		expect(closedCountSentence(0, true)).toBeNull();
 	});
 });
 
