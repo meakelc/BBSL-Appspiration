@@ -418,6 +418,7 @@
 				     reader leads. -->
 				<li
 					class="card"
+					class:closed={card.state === 'closed'}
 					class:leading={card.viewerState === 'you_lead'}
 					class:lottery={card.state === 'minimum_bid'}
 				>
@@ -459,58 +460,19 @@
 						</p>
 					</div>
 
-					<!-- ROW 2 — the price, with the viewer's own state opposite it.
-					     The four `section-label` rows this card used to carry are gone:
-					     DESIGN.md's Board card names no labels, and the price figure, a
-					     spelled-out Team and a countdown identify themselves by
-					     typography and position. The WORDS are not gone — each is still
-					     the core's own constant, rendered for a screen reader, so a
-					     value is never announced without its name.
-
-					     The CHIP is reserved for the two states DESIGN.md:194 gives one
-					     to: filled `attention` for Outbid, filled `leading` for
-					     Leading. Contender is ambient — a plain `text-secondary` label,
-					     no chip. `not_involved` prints NOTHING at all: it is the state
-					     of most cards on most boards, and a marker on every one of them
-					     is a row of noise saying the reader has nothing to do here,
-					     which the absence of a marker already says. -->
-					<div class="card-figure">
-						<!-- One figure, two words. `Price` is what an Auction is
-						     asking; `Final amount` is what it went for, and the same
-						     number under the same word would leave a Manager scanning
-						     a mixed board unable to tell which they were reading.
-						     Both constants are the core's. -->
-						<p class="card-price" class:card-price-absent={card.price === null}>
-							<span class="visually-hidden"
-								>{card.state === 'closed' ? BOARD_FINAL_LABEL : BOARD_PRICE_LABEL}</span
-							>
-							{card.priceLabel}
-						</p>
-						{#if card.viewerState !== 'not_involved'}
-							<p
-								class="state"
-								class:chip={card.viewerState === 'you_lead' || card.viewerState === 'outbid'}
-								class:chip-lead={card.viewerState === 'you_lead'}
-								class:chip-outbid={card.viewerState === 'outbid'}
-								class:state-ambient={card.viewerState !== 'you_lead' &&
-									card.viewerState !== 'outbid'}
-							>
-								<span class="chip-icon" aria-hidden="true">{card.viewerStateIcon}</span>
-								<span class="chip-word">{card.viewerStateLabel}</span>
-							</p>
-						{/if}
-					</div>
-
-					{#if card.state === 'minimum_bid'}
-						<!-- The Contender count, the fold's own sentence. -->
-						<p class="prose">{contenderCountSentence(card.contenderCount)}</p>
-					{/if}
-
 					{#if card.state === 'closed'}
-						<!-- ROW 3, CLOSED — who won, and where the Player landed.
-						     `EXPERIENCE.md:168` asks a Closed state for the winner, the
-						     final amount and the Slot placement; the figure above and
-						     these two lines are the whole card.
+						<!-- THE CLOSED CARD — one row, two columns. `EXPERIENCE.md:168`
+						     asks a Closed state for the winner, the final amount and the
+						     Slot placement, and this row carries all three: the two
+						     labelled lines stacked at the leading edge, the final amount
+						     opposite them at the trailing edge.
+
+						     The figure moves to the RIGHT rather than sitting above,
+						     because a closed Auction is read as a record and not as a
+						     price to act on — and because the two lines it now sits
+						     beside rise into the space it vacated, which is what takes
+						     three rows down to one. A board mixing open and closed cards
+						     is then legible by SHAPE before any word on it is read.
 
 						     There is NO countdown and no clock: the Auction is over, and
 						     a timer on it would be an urgency device pointed at nothing.
@@ -518,25 +480,88 @@
 						     deletes the nomination at the close, so the nominating Team
 						     is not durable and must not be invented. And nothing here
 						     congratulates: a win is stated. -->
-						<div class="card-line">
-							<p class="card-leader">
-								<span class="section-label">{BOARD_WON_BY_LABEL}</span>
-								{card.wonBy}
-							</p>
-						</div>
-						<!-- ROW 4, CLOSED — the closed instant in the viewer's own
-						     timezone, on the footnote row the open card gives its own
-						     absolute stamp. Labelled, because a bare date on a card
-						     carrying no clock names nothing. -->
-						<div class="card-line card-footnote">
-							<p class="card-when">
-								{#if closedAtAbsolute[card.fantraxPlayerId] !== undefined}
-									<span class="section-label">{BOARD_CLOSED_AT_LABEL}</span>
-									{closedAtAbsolute[card.fantraxPlayerId]}
+						<div class="card-closed">
+							<div class="card-closed-facts">
+								<p class="card-leader">
+									<span class="section-label">{BOARD_WON_BY_LABEL}</span>
+									{card.wonBy}
+								</p>
+								<!-- The closed instant in the viewer's own timezone.
+								     Labelled, because a bare date on a card carrying no
+								     clock names nothing. -->
+								<p class="card-when">
+									{#if closedAtAbsolute[card.fantraxPlayerId] !== undefined}
+										<span class="section-label">{BOARD_CLOSED_AT_LABEL}</span>
+										{closedAtAbsolute[card.fantraxPlayerId]}
+									{/if}
+								</p>
+							</div>
+							<!-- The figure and, under it, the viewer's own relation to the
+							     close. `won` and `not_involved` are the only two a closed
+							     card can carry, and neither earns a chip: the one that
+							     prints is ambient, the other prints nothing. -->
+							<div class="card-closed-figure">
+								<!-- No absent treatment here: a closed Auction's price is the
+								     Contract's own winning amount, which is never null. The
+								     unbid nomination below is the ONE place a null price is
+								     drawn. -->
+								<p class="card-price">
+									<span class="visually-hidden">{BOARD_FINAL_LABEL}</span>
+									{card.priceLabel}
+								</p>
+								{#if card.viewerState !== 'not_involved'}
+									<p class="state state-ambient">
+										<span class="chip-icon" aria-hidden="true">{card.viewerStateIcon}</span>
+										<span class="chip-word">{card.viewerStateLabel}</span>
+									</p>
 								{/if}
-							</p>
+							</div>
 						</div>
 					{:else}
+						<!-- ROW 2 — the price, with the viewer's own state opposite it.
+						     The four `section-label` rows this card used to carry are gone:
+						     DESIGN.md's Board card names no labels, and the price figure, a
+						     spelled-out Team and a countdown identify themselves by
+						     typography and position. The WORDS are not gone — each is still
+						     the core's own constant, rendered for a screen reader, so a
+						     value is never announced without its name.
+
+						     The CHIP is reserved for the two states DESIGN.md:194 gives one
+						     to: filled `attention` for Outbid, filled `leading` for
+						     Leading. Contender is ambient — a plain `text-secondary` label,
+						     no chip. `not_involved` prints NOTHING at all: it is the state
+						     of most cards on most boards, and a marker on every one of them
+						     is a row of noise saying the reader has nothing to do here,
+						     which the absence of a marker already says. -->
+						<div class="card-figure">
+							<!-- One figure, two words. `Price` is what an Auction is
+							     asking; `Final amount` is what it went for, and the same
+							     number under the same word would leave a Manager scanning
+							     a mixed board unable to tell which they were reading.
+							     Both constants are the core's. -->
+							<p class="card-price" class:card-price-absent={card.price === null}>
+								<span class="visually-hidden">{BOARD_PRICE_LABEL}</span>
+								{card.priceLabel}
+							</p>
+							{#if card.viewerState !== 'not_involved'}
+								<p
+									class="state"
+									class:chip={card.viewerState === 'you_lead' || card.viewerState === 'outbid'}
+									class:chip-lead={card.viewerState === 'you_lead'}
+									class:chip-outbid={card.viewerState === 'outbid'}
+									class:state-ambient={card.viewerState !== 'you_lead' &&
+										card.viewerState !== 'outbid'}
+								>
+									<span class="chip-icon" aria-hidden="true">{card.viewerStateIcon}</span>
+									<span class="chip-word">{card.viewerStateLabel}</span>
+								</p>
+							{/if}
+						</div>
+
+						{#if card.state === 'minimum_bid'}
+							<!-- The Contender count, the fold's own sentence. -->
+							<p class="prose">{contenderCountSentence(card.contenderCount)}</p>
+						{/if}
 						<!-- ROW 3 — who leads, and how long is left. One row, because they
 						     are the two halves of the same question and a Manager reads
 						     them together. -->
@@ -760,6 +785,21 @@
 	}
 
 	/*
+	 * The Closed edge: the same 2px rule the Leading edge uses, in the grey
+	 * that already carries secondary text and labels everywhere else. A closed
+	 * Auction is a RECORD, so its accent is the quietest ink on the surface —
+	 * it marks the card as a different kind of thing without claiming any of
+	 * the attention the two live edges below are for.
+	 *
+	 * Declared FIRST so those two always win, though neither can actually
+	 * collide with it: `minimum_bid` is not `closed`, and a closed card's
+	 * viewer state is only ever `won` or `not_involved`.
+	 */
+	.card.closed {
+		border-left: var(--leading-edge-width) solid var(--color-text-secondary);
+	}
+
+	/*
 	 * The Leading edge: a 2px pale green rule on an Auction the reader leads.
 	 * Deliberately NOT the 3px lottery bar below — that device is exclusive to
 	 * Minimum-Bid Contention — and declared FIRST so that a card which is both
@@ -851,6 +891,61 @@
 		align-items: center;
 		justify-content: space-between;
 		gap: var(--space-row-gap);
+	}
+
+	/*
+	 * The closed card's one body row: the two labelled lines at the leading
+	 * edge, the final amount at the trailing one.
+	 *
+	 * `align-items: center` rather than baseline, for the same reason
+	 * `.card-figure` gives: a `--size-26` figure baselined against two small
+	 * lines would hang below both of them. The facts column takes the free
+	 * space with `flex: 1`, so the figure sits hard against the trailing edge
+	 * at every width, and the whole row WRAPS — at 375px a long Team name
+	 * pushes the figure onto its own line instead of colliding with it.
+	 */
+	.card-closed {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-row-gap);
+	}
+
+	.card-closed-facts {
+		display: flex;
+		flex-direction: column;
+		gap: calc(var(--space-row-gap) / 2);
+		flex: 1 1 auto;
+		min-width: 0;
+	}
+
+	/*
+	 * The closed instant stays the quietest line on the card — the `--size-11`
+	 * the footnote row gives a timestamp — even though it no longer sits on a
+	 * footnote row of its own.
+	 */
+	.card-closed-facts .card-when {
+		font-size: var(--size-11);
+	}
+
+	/* Both labels ride inline with their values, not above them. */
+	.card-closed-facts .section-label {
+		margin-right: 0.4em;
+	}
+
+	/*
+	 * The figure column: the amount, and under it the viewer's own relation to
+	 * the close. Right-aligned so the figure and the word beneath it share one
+	 * edge with the card, which is what lets a reader scan a column of final
+	 * amounts down the board.
+	 */
+	.card-closed-figure {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-end;
+		gap: calc(var(--space-row-gap) / 2);
+		text-align: right;
 	}
 
 	/*

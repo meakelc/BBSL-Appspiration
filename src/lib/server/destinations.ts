@@ -125,6 +125,19 @@ const CATALOG: Readonly<Record<LeaguePhase, readonly Destination[]>> = Object.fr
 		// URL alone, which is deliberate while the nomination-slot category's future
 		// is open. Restore the row by dropping the trailing `false`.
 		destination('notification-settings', 'Notification settings', '/notifications', false, false),
+		// FR-44 correction path: live in the Auction and Contract Assignment
+		// lists as well as Setup, Commissioner-only in all three. The surface
+		// lists only ROSTERED Contracts outside Setup and says why, because
+		// that is the only half `refuseEligibilityChange` accepts there — a
+		// pooled Player's flag is an FR-35 input to an open Auction's cap
+		// arithmetic, and a rostered Contract's cannot be, since
+		// `teamMoneyStateFor` partitions `auctions.byPlayer` alone.
+		destination(
+			'minor-league-eligibility',
+			'Minor League Eligibility',
+			'/minor-league-eligibility',
+			true
+		),
 		// The three roster acts, all Commissioner-only, all live in the two
 		// phases FR-41 and FR-44 permit — this list and the Contract Assignment
 		// one below — and all deliberately absent from `Archived`, where
@@ -154,6 +167,19 @@ const CATALOG: Readonly<Record<LeaguePhase, readonly Destination[]>> = Object.fr
 		destination('contract-assignment', 'Contract Assignment', '/contract-assignment', false),
 		destination('teams', 'Teams', '/teams', false),
 		destination('audit-log', 'Audit Log', '/audit-log', false),
+		// FR-44 correction path: live in the Auction and Contract Assignment
+		// lists as well as Setup, Commissioner-only in all three. The surface
+		// lists only ROSTERED Contracts outside Setup and says why, because
+		// that is the only half `refuseEligibilityChange` accepts there — a
+		// pooled Player's flag is an FR-35 input to an open Auction's cap
+		// arithmetic, and a rostered Contract's cannot be, since
+		// `teamMoneyStateFor` partitions `auctions.byPlayer` alone.
+		destination(
+			'minor-league-eligibility',
+			'Minor League Eligibility',
+			'/minor-league-eligibility',
+			true
+		),
 		// The same three acts, on the same terms as the Auction list above —
 		// including the Move's operator-decision Commissioner flag.
 		destination('roster-move', 'Roster Move', '/roster-move', true),

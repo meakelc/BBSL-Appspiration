@@ -96,11 +96,24 @@ const EXPECTED: Record<
 		// Story 7.9 adds `divergence` — the surface that says one of the three
 		// acts above is NEEDED. It is live in exactly the two phases they are, and
 		// absent from Setup and Archived for the same reason.
-		commissionerOnly: ['roster-move', 'roster-trade', 'roster-drop', 'divergence']
+		// Story FR-44 correction path (2026-09-16): Minor League Eligibility is
+		// live in the Auction and Contract Assignment lists as well as Setup.
+		// The phase no longer gates the FLAG — it gates POOLED Players, whose
+		// eligibility is an FR-35 input to an open Auction's cap arithmetic. A
+		// rostered Contract has no open Auction, so the surface lists the
+		// rostered half here and `refuseEligibilityChange` accepts it.
+		commissionerOnly: [
+			'minor-league-eligibility',
+			'roster-move',
+			'roster-trade',
+			'roster-drop',
+			'divergence'
+		]
 	},
 	'Contract Assignment': {
 		manager: ['contract-assignment', 'teams', 'audit-log'],
 		commissionerOnly: [
+			'minor-league-eligibility',
 			'roster-move',
 			'roster-trade',
 			'roster-drop',

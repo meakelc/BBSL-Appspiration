@@ -1,12 +1,21 @@
 /**
  * The Commissioner-only `/minor-league-eligibility` route: a gated `load`
- * listing every pooled Player, and one `set` action that sets or unsets the
- * flag for the Players submitted (Story 1.10).
+ * listing everything the flag can be set on, and one `set` action that sets or
+ * unsets it for the Players submitted (Story 1.10).
  *
  * Two server-side gates, in order — `requireCommissioner` (a Commissioner
  * only, whichever session kind) and `requireLiveDestination` (this
- * destination is live for Setup and this role) — on `load` AND on the
- * action, exactly as `/import` does. Hiding a form is never the check.
+ * destination is live for Setup, Auction and Contract Assignment, and for
+ * this role) — on `load` AND on the action, exactly as `/import` does. Hiding
+ * a form is never the check.
+ *
+ * **The destination is live in three phases, and the PLAYERS it offers differ
+ * by phase.** FR-44 put rostered Contracts on this surface, and a rostered
+ * Contract's flag is not an input to any open Auction's cap arithmetic — only
+ * a pooled Player's is (FR-35). So outside Setup the pool half is not listed
+ * and `poolWithheld` says so, while every rostered Contract stays changeable.
+ * Neither of those is the gate: `refuseEligibilityChange` re-derives the same
+ * rule from the folded log inside the transaction.
  *
  * **Nothing this file decides is a rules gate.** Three refusals are raised
  * here because none of them has anything to decide about inside a
@@ -61,14 +70,19 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requireCommissioner(locals.session);
 	requireLiveDestination(locals.session, locals.phase.name, ELIGIBILITY_DESTINATION_ID);
 
-	const pool = await loadEligibilityPool();
+	// The phase decides which half of the list is offered: outside Setup the
+	// transaction accepts only rostered Contracts, so only those are listed and
+	// `poolWithheld` states why. The real gate is re-derived in the transaction.
+	const pool = await loadEligibilityPool({ phase: locals.phase.name });
 
 	return {
 		phase: locals.phase,
 		// Each row arrives with its consequence sentence already worded by the
 		// pure core (`eligibilityRowSentence`) — the surface prints it and never
 		// re-words it.
-		players: pool.players
+		players: pool.players,
+		// Worded by the core too, and null in Setup where the pool IS listed.
+		poolWithheld: pool.poolWithheld
 	};
 };
 

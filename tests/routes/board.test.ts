@@ -504,10 +504,18 @@ describe('the board gains no state for a leaderless Auction (Story 10.6)', () =>
 });
 
 describe('the board page — the Closed card', () => {
-	/** The `{#if card.state === 'closed'}` arm, and only that arm. */
+	/**
+	 * The `{#if card.state === 'closed'}` arm, and only that arm.
+	 *
+	 * Bounded by its own `{:else}` rather than by a comment in the branch after
+	 * it: the Closed arm is now the FIRST of the two — it draws its whole body
+	 * itself, the open card's price row included in the else — so a slice that
+	 * ran to some later landmark would sweep the open card's markup in with it
+	 * and every negative assertion below would be testing nothing.
+	 */
 	const CLOSED_ARM = PAGE.slice(
 		PAGE.indexOf("{#if card.state === 'closed'}"),
-		PAGE.indexOf('<!-- ROW 3 — who leads')
+		PAGE.indexOf('					{:else}')
 	);
 
 	it('renders a Closed arm at all, keyed on the card’s own state literal', () => {
@@ -527,10 +535,15 @@ describe('the board page — the Closed card', () => {
 		);
 		// No placement line: removed as redundant beside the final amount.
 		expect(CLOSED_ARM).not.toContain('placementSentence');
-		// The figure shares the price row, under a different WORD, because a
-		// price and a final amount are not the same claim about a number.
-		expect(PAGE).toContain('BOARD_FINAL_LABEL');
-		expect(PAGE).toMatch(/card\.state === 'closed' \? BOARD_FINAL_LABEL : BOARD_PRICE_LABEL/);
+		// The figure carries a different WORD here, because a price and a final
+		// amount are not the same claim about a number. The Closed arm now draws
+		// its own figure rather than sharing the open card's price row — it sits
+		// at the card's trailing edge, beside the two lines above — so the word
+		// is asserted INSIDE the arm, and the open card's word outside it.
+		expect(CLOSED_ARM).toContain('{BOARD_FINAL_LABEL}');
+		expect(CLOSED_ARM).not.toContain('BOARD_PRICE_LABEL');
+		expect(CLOSED_ARM).toMatch(/\{card\.priceLabel\}/);
+		expect(PAGE).toContain('{BOARD_PRICE_LABEL}');
 	});
 
 	it('carries NO countdown, NO unbid phrase and NO nominated-by', () => {

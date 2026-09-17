@@ -72,16 +72,24 @@ function fakeGateway(options: {
 				// duplicate id and the name ordering are testable here.
 				expect(sql).toMatch(/free_agent_players/);
 				expect(sql).toMatch(/team_rosters/);
-				const byId = new Map<string, PoolPlayer>();
-				for (const player of [...pool, ...rosters]) {
-					if (!byId.has(player.id)) byId.set(player.id, player);
+				const byId = new Map<string, PoolPlayer & { source: number }>();
+				// `source` 0 is the pool and 1 a Roster, pool first — so a duplicate
+				// id resolves to the POOL, exactly as the real `distinct on` does.
+				// The phase gate reads this, so the fake must carry it or every
+				// candidate would read as rostered and the gate would never fire.
+				for (const player of pool) {
+					if (!byId.has(player.id)) byId.set(player.id, { ...player, source: 0 });
+				}
+				for (const player of rosters) {
+					if (!byId.has(player.id)) byId.set(player.id, { ...player, source: 1 });
 				}
 				return {
 					rows: [...byId.values()]
 						.sort((left, right) => left.name.localeCompare(right.name))
 						.map((player) => ({
 							fantrax_player_id: player.id,
-							player_name: player.name
+							player_name: player.name,
+							source: player.source
 						}))
 				};
 			}
@@ -106,7 +114,16 @@ function fakeGateway(options: {
 			}
 			if (/^update free_agent_players/i.test(sql)) {
 				order.push('apply-projection');
-				uncommitted = new Set((params[0] ?? []) as string[]);
+				// The real statement is
+				//   set minor_league_eligible = (fantrax_player_id = any($1))
+				// which touches POOL ROWS ONLY. Intersecting with the pool here is
+				// what makes that true of the fake as well: the fold handed in can
+				// name a rostered Contract, and such an id matches no row and must
+				// leave no trace in the column. Without the intersection the fake
+				// would report the fold back as if it were the column, and
+				// "a rostered flag lives only in the log" would be untestable.
+				const folded = new Set((params[0] ?? []) as string[]);
+				uncommitted = new Set(pool.map((player) => player.id).filter((id) => folded.has(id)));
 				return { rows: [] };
 			}
 			if (/^commit/i.test(sql)) {
@@ -373,9 +390,13 @@ describe('setEligibility — a rostered Contract is a candidate too', () => {
 
 		// The projection statement still ran and still received the whole fold —
 		// the rostered id simply matches no row. The fold is the authority; the
-		// column is the pooled subset of it.
+		// column is the pooled subset of it, so the column stays EMPTY here.
+		// (This assertion read `['p-rostered']` until the fake was taught to
+		// intersect with the pool, which is what the real `= any($1)` does. It
+		// was reporting the fold back as the column and contradicting the name
+		// of its own test.)
 		expect(harness.order).toContain('apply-projection');
-		expect(harness.state.column).toEqual(['p-rostered']);
+		expect(harness.state.column).toEqual([]);
 	});
 
 	it('sets pooled and rostered Players in ONE transaction, one event each', async () => {
@@ -495,30 +516,146 @@ describe('setEligibility — the refusals, re-derived inside the transaction', (
 		expect(harness.state.column).toEqual([]);
 	});
 
-	it('refuses once the phase folds to Auction, naming the phase and the override', async () => {
+	it('refuses once the phase folds to Auction, naming the phase and the pooled Player', () => {
 		// The pure gate, driven directly, so the WORDING is asserted
 		// independently of a log that can reach it.
 		const refusal = refuseEligibilityChange(
-			{ phase: 'Auction', candidates: [], eligible: new Set<string>() },
+			{
+				phase: 'Auction',
+				candidates: [
+					{ fantraxPlayerId: 'p-00', playerName: 'Pooled', eligible: false, pooled: true }
+				],
+				eligible: new Set<string>()
+			},
 			['p-00'],
-			{ changes: [], unchanged: [], unknownIds: ['p-00'] }
+			{ changes: [], unchanged: [], unknownIds: [] }
 		);
 		expect(refusal?.kind).toBe('phase');
 		if (refusal?.kind !== 'phase') return;
 		expect(refusal.phase).toBe('Auction');
+		expect(refusal.fantraxPlayerIds).toEqual(['p-00']);
 		const detail = eligibilityRefusalDetail(refusal);
 		expect(detail).toContain('Auction');
 		expect(detail).toContain('FR-35');
-		expect(detail).toContain('override');
+		expect(detail).toContain('p-00');
 	});
 
-	it('refuses on the phase before it complains about an unknown id', () => {
+	// --- The FR-44 narrowing: the phase gates POOLED Players, not the flag ---
+
+	it('accepts a rostered Contract outside Setup — it has no open Auction to restate', () => {
+		const refusal = refuseEligibilityChange(
+			{
+				phase: 'Auction',
+				candidates: [
+					{ fantraxPlayerId: 'r-00', playerName: 'Rostered', eligible: false, pooled: false }
+				],
+				eligible: new Set<string>()
+			},
+			['r-00'],
+			{ changes: [], unchanged: [], unknownIds: [] }
+		);
+		expect(refusal).toBeNull();
+	});
+
+	it('gates a rostered Contract in NO phase, and a pooled Player in every phase but Setup', () => {
+		const candidates = [
+			{ fantraxPlayerId: 'p-00', playerName: 'Pooled', eligible: false, pooled: true },
+			{ fantraxPlayerId: 'r-00', playerName: 'Rostered', eligible: false, pooled: false }
+		];
+		const plan = { changes: [], unchanged: [], unknownIds: [] };
+		for (const phase of ['Setup', 'Auction', 'Contract Assignment', 'Archived']) {
+			const state = { phase, candidates, eligible: new Set<string>() };
+			// The rostered half is never gated by the phase, in any phase.
+			expect(refuseEligibilityChange(state, ['r-00'], plan)).toBeNull();
+			// The pooled half is gated in every phase except Setup.
+			const pooled = refuseEligibilityChange(state, ['p-00'], plan);
+			if (phase === 'Setup') expect(pooled).toBeNull();
+			else expect(pooled?.kind).toBe('phase');
+		}
+	});
+
+	it('refuses a MIXED submission, naming only the pooled Player as the cause', () => {
+		const refusal = refuseEligibilityChange(
+			{
+				phase: 'Auction',
+				candidates: [
+					{ fantraxPlayerId: 'p-00', playerName: 'Pooled', eligible: false, pooled: true },
+					{ fantraxPlayerId: 'r-00', playerName: 'Rostered', eligible: false, pooled: false }
+				],
+				eligible: new Set<string>()
+			},
+			['p-00', 'r-00'],
+			{ changes: [], unchanged: [], unknownIds: [] }
+		);
+		expect(refusal?.kind).toBe('phase');
+		if (refusal?.kind !== 'phase') return;
+		// The rostered Contract is not named: it is not why this was refused,
+		// and naming it would tell the Commissioner to drop a Player they could
+		// have kept.
+		expect(refusal.fantraxPlayerIds).toEqual(['p-00']);
+		expect(eligibilityRefusalDetail(refusal)).not.toContain('r-00');
+	});
+
+	it('resolves an unknown id BEFORE the phase, so a ghost cannot slip past it', () => {
+		// A ghost is neither pooled nor rostered, so the phase gate has nothing
+		// to classify it as. Were the phase asked first, an unknown id would be
+		// reported as a phase problem and survive a resubmission in Setup.
+		const refusal = refuseEligibilityChange(
+			{ phase: 'Auction', candidates: [], eligible: new Set<string>() },
+			['ghost'],
+			{ changes: [], unchanged: [], unknownIds: ['ghost'] }
+		);
+		expect(refusal?.kind).toBe('unknown_players');
+	});
+
+	it('refuses an empty selection ahead of both', () => {
 		const refusal = refuseEligibilityChange(
 			{ phase: 'Auction', candidates: [], eligible: new Set<string>() },
 			[],
 			{ changes: [], unchanged: [], unknownIds: ['ghost'] }
 		);
-		expect(refusal?.kind).toBe('phase');
+		expect(refusal?.kind).toBe('empty_selection');
+	});
+
+	it('accepts a rostered Contract end to end with an AuctionOpened in the log', async () => {
+		// The whole point of the narrowing, through the real transaction: the
+		// event is appended and the pool column is rewritten without the
+		// rostered id, which owns no row in it.
+		const harness = fakeGateway({
+			pool: poolOf(2),
+			rosters: [{ id: 'r-00', name: 'Rostered Contract' }],
+			events: [
+				{
+					seq: 1,
+					occurred_at: new Date('2026-08-25T08:00:00.000Z'),
+					schema_version: 1,
+					core_version: 1,
+					manager_id: 'm-1',
+					team_id: 't-commissioner',
+					event_type: 'AuctionOpened',
+					payload: { teams: [] }
+				}
+			]
+		});
+
+		const result = await setEligibility(harness.gateway, ACTOR, ['r-00'], true);
+
+		expect(result.outcome.kind).toBe('accepted');
+		if (result.outcome.kind !== 'accepted') return;
+		expect(result.outcome.events).toHaveLength(1);
+		expect(result.outcome.events[0]?.payload as MinorLeagueEligibilitySetPayload).toEqual({
+			fantraxPlayerId: 'r-00',
+			playerName: 'Rostered Contract',
+			before: false,
+			after: true
+		});
+		expect(harness.order).toContain('append-event');
+		expect(harness.order).toContain('commit');
+		// The projection still runs and still writes the WHOLE pool from the
+		// fold. `r-00` is in the fold and matches no pool row, so the column is
+		// unchanged — the flag lives only in the log for a rostered Contract.
+		expect(harness.order).toContain('apply-projection');
+		expect(harness.state.column).toEqual([]);
 	});
 });
 
@@ -623,7 +760,7 @@ describe('loadEligibilityPool', () => {
 			}
 		]);
 
-		const pool = await loadEligibilityPool(client);
+		const pool = await loadEligibilityPool({ phase: 'Setup', client });
 
 		expect(from).toHaveBeenCalledWith('free_agent_players');
 		expect(select).toHaveBeenCalled();
@@ -641,12 +778,12 @@ describe('loadEligibilityPool', () => {
 
 	it('returns an empty pool as an empty list, not an error — nothing is promoted yet', async () => {
 		const { client } = fakeClient([]);
-		expect((await loadEligibilityPool(client)).players).toEqual([]);
+		expect((await loadEligibilityPool({ phase: 'Setup', client })).players).toEqual([]);
 	});
 
 	it('throws a descriptive error on a read failure', async () => {
 		const { client } = fakeClient(null, { message: 'permission denied' });
-		await expect(loadEligibilityPool(client)).rejects.toThrow(/permission denied/);
+		await expect(loadEligibilityPool({ phase: 'Setup', client })).rejects.toThrow(/permission denied/);
 	});
 
 	it('lists rostered Contracts alongside the pool, filed by name', async () => {
@@ -674,7 +811,7 @@ describe('loadEligibilityPool', () => {
 			}
 		);
 
-		const pool = await loadEligibilityPool(client);
+		const pool = await loadEligibilityPool({ phase: 'Setup', client });
 
 		// One merged list in name order, not the pool followed by a roster block.
 		expect(pool.players.map((player) => player.playerName)).toEqual(['Alice', 'Bob']);
@@ -709,7 +846,7 @@ describe('loadEligibilityPool', () => {
 			]
 		});
 
-		const pool = await loadEligibilityPool(client);
+		const pool = await loadEligibilityPool({ phase: 'Setup', client });
 
 		// `team_rosters` has no `minor_league_eligible` column to read, so this
 		// can only have come from the fold.
@@ -743,7 +880,7 @@ describe('loadEligibilityPool', () => {
 			}
 		);
 
-		const pool = await loadEligibilityPool(client);
+		const pool = await loadEligibilityPool({ phase: 'Setup', client });
 
 		expect(pool.players).toHaveLength(1);
 		expect(pool.players[0]?.heldBy).toBe('Free Agent pool · LAL');
@@ -762,7 +899,7 @@ describe('loadEligibilityPool', () => {
 		}));
 		const { client } = fakeClient(many);
 
-		const pool = await loadEligibilityPool(client);
+		const pool = await loadEligibilityPool({ phase: 'Setup', client });
 
 		expect(pool.players).toHaveLength(1467);
 		expect(pool.players.at(-1)?.playerName).toBe('Player 1466');
@@ -770,6 +907,6 @@ describe('loadEligibilityPool', () => {
 
 	it('throws a descriptive error when the Roster read fails', async () => {
 		const { client } = fakeClient([], null, { rosterError: { message: 'roster denied' } });
-		await expect(loadEligibilityPool(client)).rejects.toThrow(/team_rosters read failed/);
+		await expect(loadEligibilityPool({ phase: 'Setup', client })).rejects.toThrow(/team_rosters read failed/);
 	});
 });

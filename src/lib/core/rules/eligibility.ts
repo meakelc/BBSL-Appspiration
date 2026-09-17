@@ -34,13 +34,28 @@
  * `mayOccupyMinorLeague` (`rules/roster-rearrange.ts`) is the union of this
  * flag and the observation fold, so a rostered Player who has never been
  * observed in a Minor League Slot has no other way for the app to be told he
- * may occupy one. This type is deliberately indifferent to which of the two a
- * candidate is, and nothing downstream of here branches on it.
+ * may occupy one.
+ *
+ * **`pooled` is the ONE thing downstream branches on, and only the phase gate
+ * does.** This type was written indifferent to which of the two a candidate
+ * is, and every rule that reads the FLAG still is — `planEligibilityChanges`
+ * below never looks at this field. It exists because the phase gate is not a
+ * rule about the flag, it is a rule about cap arithmetic: FR-35 binds the
+ * flag to the Committed Bids of an OPEN AUCTION, and only a pooled Player can
+ * have one. `teamMoneyStateFor` (`rules/bidding.ts`) partitions
+ * `auctions.byPlayer` and nothing else, so a rostered Contract's flag cannot
+ * reach any Team's Minors Exposure, Available Cap Space or Maximum Bid. The
+ * gate therefore asks which kind a candidate is; nothing else may.
  */
 export type EligibilityCandidate = {
 	readonly fantraxPlayerId: string;
 	readonly playerName: string;
 	readonly eligible: boolean;
+	/**
+	 * Whether this candidate is a Player in the Free Agent pool, as opposed to
+	 * a Contract on a Roster. Read by the phase gate alone.
+	 */
+	readonly pooled: boolean;
 };
 
 /** One Player whose flag actually changes, with both values named. */
@@ -158,6 +173,55 @@ export function planEligibilityChanges(
 	return { changes, unchanged, unknownIds };
 }
 
+/**
+ * Which of the submitted ids name a POOLED Player, in the candidates' order.
+ *
+ * The phase gate's one input, split out so "what makes the phase bite" has a
+ * single expression the tests can drive directly. An id naming a rostered
+ * Contract is absent, and so is an id naming nothing at all — an unknown id
+ * is the `unknown_players` refusal's business, and answering "is this pooled?"
+ * with `false` for a Player who does not exist would let a ghost slip past
+ * this gate on its way to that one. Both refusals are reached in
+ * `refuseEligibilityChange`, in an order that file states.
+ */
+export function pooledAmong(
+	candidates: readonly EligibilityCandidate[],
+	ids: readonly string[]
+): readonly string[] {
+	const submitted = new Set(ids);
+	const pooled: string[] = [];
+	const seen = new Set<string>();
+	for (const candidate of candidates) {
+		if (!candidate.pooled) continue;
+		if (!submitted.has(candidate.fantraxPlayerId)) continue;
+		if (seen.has(candidate.fantraxPlayerId)) continue;
+		seen.add(candidate.fantraxPlayerId);
+		pooled.push(candidate.fantraxPlayerId);
+	}
+	return pooled;
+}
+
+/**
+ * Why the Free Agent pool is not listed on the surface outside Setup.
+ *
+ * The page hides what it knows the transaction would refuse, and then SAYS
+ * it does — a list that silently shrank from 1,467 rows to 306 between two
+ * phases would read as data loss. EXPERIENCE.md's voice rule cuts both ways:
+ * where a control has a non-obvious rules consequence, say it; where a
+ * control is ABSENT for a rules reason, say that too.
+ */
+export function eligibilityPoolWithheldSentence(phase: string, pooledCount: number): string {
+	return (
+		`The phase is ${phase}, not Setup, so the Free Agent pool is not listed: ` +
+		`${pooledCount === 1 ? 'its one Player has' : `its ${pooledCount} Players have`} ` +
+		'Minor League Eligibility bound to cap arithmetic under FR-35 by every open ' +
+		'Auction, and changing it now would restate bids already placed. Every rostered ' +
+		'Contract is listed and can still be changed: a Contract on a Roster has no open ' +
+		'Auction, so no Team’s Committed Bids, Minors Exposure, Available Cap Space or ' +
+		'Maximum Bid moves when its flag does.'
+	);
+}
+
 // --- The four refusals ------------------------------------------------------
 
 /**
@@ -173,7 +237,12 @@ export function planEligibilityChanges(
  * route never words a refusal itself.
  */
 export type EligibilityRefusal =
-	| { readonly kind: 'phase'; readonly phase: string }
+	| {
+			readonly kind: 'phase';
+			readonly phase: string;
+			/** The POOLED Players that caused it, by id. Never the whole submission. */
+			readonly fantraxPlayerIds: readonly string[];
+	  }
 	| { readonly kind: 'unknown_players'; readonly fantraxPlayerIds: readonly string[] }
 	| { readonly kind: 'empty_selection' }
 	| { readonly kind: 'unstated_direction' }
@@ -185,24 +254,28 @@ export type EligibilityRefusal =
  * Product voice: state the fact, then the arithmetic. No apology, no
  * exclamation mark, no advice.
  *
- * The `phase` sentence carries three facts because all three are load-
- * bearing: the phase that was folded, WHY the change cannot be made after
- * open (FR-35 — the flag is an input to cap arithmetic on every open Auction
- * for that Player), and that the way through is a Commissioner override
- * which this surface does not offer. The override path is Epic 7 and is
- * deliberately not built here; saying so is not a promise that it exists
- * elsewhere today.
+ * The `phase` sentence carries four facts because all four are load-bearing:
+ * the phase that was folded, WHICH Players it refused and that they are
+ * refused *because they are in the pool*, WHY a pooled Player cannot be
+ * changed after open (FR-35 — the flag is an input to cap arithmetic on every
+ * open Auction for that Player), and that the same submission WOULD be
+ * accepted for a rostered Contract. That last clause is the whole reason the
+ * gate narrowed: a Commissioner refused here can act on the rostered half
+ * immediately, and telling them so is the difference between a gate and a
+ * dead end.
  */
 export function eligibilityRefusalDetail(refusal: EligibilityRefusal): string {
 	switch (refusal.kind) {
 		case 'phase':
 			return (
-				`The change was refused: the phase is ${refusal.phase}, not Setup. ` +
-				'Minor League Eligibility is an input to cap arithmetic under FR-35 for every ' +
-				'open Auction on that Player, so changing it after the auction opens would ' +
-				'restate bids already placed. A Commissioner override is required, and this ' +
-				'surface does not offer one. The phase was folded from the event log inside ' +
-				'this transaction.'
+				`The change was refused: the phase is ${refusal.phase}, not Setup, and ` +
+				`${refusal.fantraxPlayerIds.length === 1 ? 'this Player is' : 'these Players are'} ` +
+				`in the Free Agent pool: ${refusal.fantraxPlayerIds.join(', ')}. Minor League ` +
+				'Eligibility is an input to cap arithmetic under FR-35 for every open Auction ' +
+				'on a pooled Player, so changing it after the auction opens would restate bids ' +
+				'already placed. A rostered Contract has no open Auction and no such input, and ' +
+				'the same submission is accepted for one in any phase. The phase was folded ' +
+				'from the event log inside this transaction.'
 			);
 		case 'unknown_players':
 			return (

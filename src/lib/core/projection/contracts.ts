@@ -521,24 +521,30 @@ export const DROP_RECORDED_EVENT = 'DropRecorded';
  * One Contract's release, as the record states it.
  *
  * **`deadMoney` and `removed` are ONE decision stated twice, not two.**
- * `rules/roster-drop.ts` computes `deadMoney = releases2RK ? $0 : chargedCapHit(row)`
- * and removes the row if and only if that amount is `$0`; both fields are
- * written from that one expression, and nothing re-derives either from the
- * Slot kind. A Minor League row was charging `$0` and so leaves nothing
- * behind; a full-term second-round rookie deal is released to `$0` by FR-43's
- * exception; everything else is reclassified at the amount it was already
- * charging.
+ * `rules/roster-drop.ts` computes `deadMoney = chargedCapHit(row)` and removes
+ * the row if and only if that amount is `$0`; both fields are written from
+ * that one expression, and nothing re-derives either from the Slot kind. A
+ * Minor League row was charging `$0` and so leaves nothing behind; everything
+ * else is reclassified at the amount it was already charging. There is no
+ * third case (AD-32).
  *
  * `chargedCapHit` is what the row took off Cap Space the day before, and
  * `value` stands unchanged beside it (AD-23) — a Minor League release reads
  * `$0` against a `value` of whatever Fantrax stated, and the pair is readable
  * off the record without anybody deriving one from the other.
  *
- * `contractYearsRemaining` and `rookieScaleRound` are the two facts FR-43's
- * exception turned on, recorded so a later reading can see WHY a Contract was
- * released to nothing rather than take it on trust. The remaining years also
- * travel with Dead Money for the FR-30/31 export's sake; **within this
- * auction the term computes nothing.**
+ * **A reading of this record trusts what it says** (AD-32). Rows written
+ * before 2026-09-16 were decided under FR-43's since-removed rookie-scale
+ * exception and can carry `removed: true` against a non-`$0` `chargedCapHit`
+ * — an outcome no current rule produces. That is history, not corruption, and
+ * re-deriving `deadMoney` from today's `chargeOf` would silently rewrite it.
+ *
+ * `contractYearsRemaining` and `rookieScaleRound` are the two facts that
+ * exception turned on. They are still recorded — the events already in the
+ * log carry them, and they remain facts about the Contract — but **nothing
+ * reads either to decide anything.** The remaining years also travel with
+ * Dead Money for the FR-30/31 export's sake; **within this auction the term
+ * computes nothing.**
  */
 export type DroppedContract = {
 	readonly fantraxPlayerId: string;

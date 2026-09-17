@@ -36,6 +36,8 @@
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	const players = $derived((data.players as readonly PoolRow[]) ?? []);
+	/** Why the pool is not listed, or undefined in Setup where it is. */
+	const poolWithheld = $derived((data.poolWithheld as string | null | undefined) ?? undefined);
 	const setForm = $derived(form as SetForm | undefined);
 	const notice = $derived(setForm?.notice);
 	const appended = $derived(setForm?.appended ?? []);
@@ -86,7 +88,8 @@
 				Minor League Eligibility is set here by hand: it is not in the Fantrax export, and
 				the default is not eligible. Tick the Players to change, then state the direction.
 				A Player already at the value you ask for is reported as unchanged and records no
-				event. Once the auction opens, this is refused.
+				event. Once the auction opens, a Player in the Free Agent pool is refused; a
+				rostered Contract is not.
 			</p>
 			<p class="prose">
 				Rostered Contracts are listed alongside the Free Agent pool, because the flag asks
@@ -94,6 +97,15 @@
 				Contract the league has already placed in one needs nothing set here — the app has
 				observed it there, and that is enough on its own.
 			</p>
+
+			<!-- Worded by the pure core (`eligibilityPoolWithheldSentence`) and
+			     printed verbatim, never re-worded here. Present only outside
+			     Setup, where the pool half of the list is deliberately absent:
+			     a list that silently shrank between two phases would read as
+			     data loss, so the absence states its own reason. -->
+			{#if poolWithheld}
+				<p class="prose" id="pool-withheld">{poolWithheld}</p>
+			{/if}
 
 			<!-- A disabled control ALWAYS states its reason, and the reason is
 			     always in the DOM carrying this id, so the `aria-describedby`
