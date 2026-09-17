@@ -495,6 +495,16 @@ describe('the board page — what it renders', () => {
 		expect(PAGE_CODE).not.toMatch(/maximumBid|capSpace|evaluate\(/i);
 	});
 
+	it('underlines the Player name, because the name is the card’s one control', () => {
+		// A link identifiable only by its cursor is not identifiable on a phone.
+		// Thickness and offset come from `global.css`'s own `a` rule; the colour
+		// stays `text`, so the name reads as the card's identity and not as a
+		// call to act.
+		const style = PAGE_CODE.slice(PAGE_CODE.indexOf('<style>'));
+		expect(style).toMatch(/\.card-link \{[^}]*text-decoration: underline;/);
+		expect(style).not.toMatch(/\.card-link \{[^}]*text-decoration: none;/);
+	});
+
 	it('links each card to its own Auction, through the core’s one shape', () => {
 		// The literal `/auction/${...}` template that stood here is gone: the
 		// deep-link shape is written once in `core/auction-link.ts`, so
