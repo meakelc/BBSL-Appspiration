@@ -573,10 +573,17 @@ describe('the board page — the Closed card', () => {
 	 * ran to some later landmark would sweep the open card's markup in with it
 	 * and every negative assertion below would be testing nothing.
 	 */
-	const CLOSED_ARM = PAGE.slice(
-		PAGE.indexOf("{#if card.state === 'closed'}"),
-		PAGE.indexOf('					{:else}')
-	);
+	const CLOSED_ARM = (() => {
+		const opens = "{#if card.state === 'closed'}";
+		const from = PAGE.indexOf(opens);
+		// Bounded by the `{:else}` at the arm's OWN indentation, found from the
+		// arm itself rather than written as a tab count here: the card markup
+		// moved a level when it became a snippet, and a hard-coded depth turned
+		// this slice into the empty string while every negative assertion below
+		// went on passing.
+		const depth = PAGE.slice(0, from).split('\n').pop() ?? '';
+		return PAGE.slice(from, PAGE.indexOf(`\n${depth}{:else}`, from));
+	})();
 
 	it('renders a Closed arm at all, keyed on the card’s own state literal', () => {
 		expect(CLOSED_ARM.length).toBeGreaterThan(0);
@@ -676,34 +683,71 @@ describe('the board page — the Closed card', () => {
 });
 
 describe('the two view controls', () => {
-	it('heads the CARDS, outside the control panel, as `/positions` does', () => {
-		// The `Auctions` heading titled a block of controls, which needs no
-		// titling — a sort and a switch say what they are — and it kept the
-		// count sentence from leading the panel. It now names the list it is
-		// actually over, at the point that list starts, on `/positions`' own
-		// group shape.
-		expect(PAGE).toContain('{BOARD_CARDS_HEADING}');
-		expect(PAGE).not.toContain('BOARD_PANEL_HEADING');
-		// Outside the panel: the heading appears AFTER the panel closes and
-		// before the first card.
-		expect(PAGE.indexOf('id="board-cards-heading"')).toBeGreaterThan(
+	it('labels the panel in the singular, and each half where its list starts', () => {
+		// `Auction`, singular, is the EVENT — the one this league is running,
+		// not one of the Auctions counted inside it. A plural here would have
+		// been a third label in a column that already says `Open` and `Closed`
+		// at the point each list starts, naming lists that do not begin until
+		// after the second.
+		expect(PAGE).toContain('{BOARD_PANEL_HEADING}');
+		expect(PAGE).not.toContain('BOARD_CARDS_HEADING');
+		expect(PAGE).toContain('{BOARD_OPEN_HEADING}');
+		expect(PAGE).toContain('{BOARD_CLOSED_HEADING}');
+		expect(PAGE.indexOf('id="board-panel-heading"')).toBeLessThan(
 			PAGE.indexOf('<div class="panel-top">')
 		);
-		expect(PAGE.indexOf('id="board-cards-heading"')).toBeLessThan(
-			PAGE.indexOf('id="board-cards"')
+		expect(PAGE.indexOf('id="board-open-heading"')).toBeGreaterThan(
+			PAGE.indexOf('<div class="panel-top">')
 		);
-		// The Positions groups' own treatment, from `global.css`'s own class
-		// rather than a size or a face respelled here: one heading style for
-		// one kind of thing, across the two surfaces a Manager moves between.
-		expect(PAGE).toMatch(/<h2 class="section-label" id="board-cards-heading">/);
-		// `display` was tried here and does not hold — this page already spends
-		// the serif on the masthead above and every Player name below, and a
-		// third serif line between them reads as neither title nor furniture.
-		expect(PAGE).not.toContain('board-heading');
-		// And a card-gap above the first card, not the page's section gap — a
-		// heading separated by the gap that divides BLOCKS reads as detached
-		// from the list it names.
-		expect(PAGE).toMatch(/\.group \{[\s\S]*?gap: var\(--space-card-gap\);[\s\S]*?\n\t\}/);
+		expect(PAGE.indexOf('id="board-open-heading"')).toBeLessThan(
+			PAGE.indexOf('id="board-closed-heading"')
+		);
+		// All three take the Positions groups' own treatment, from
+		// `global.css`'s own class rather than a size or a face respelled here:
+		// one heading style for one kind of thing, across the two surfaces a
+		// Manager moves between.
+		// An `h2`, like the two below it and like `/positions`' own groups.
+		// `.section-label` sets no font-weight, so the element decides one: a
+		// `<p>` here rendered a shade lighter than the `OPEN` and `CLOSED` it
+		// is meant to match, which is what this assertion forecloses.
+		expect(PAGE).toMatch(/<h2 class="section-label" id="board-panel-heading">/);
+		// And it is wrapped WITH its panel in the shared `group`, so it sits a
+		// card gap above it rather than the section gap that divides the blocks
+		// of a page — the same closeness `OPEN` and `CLOSED` have to their lists.
+		expect(PAGE).toMatch(
+			/<section class="group">\s*<h2 class="section-label" id="board-panel-heading">/
+		);
+		expect(PAGE).toMatch(/<h2 class="section-label" id="board-open-heading">/);
+		expect(PAGE).toMatch(/<h2 class="section-label" id="board-closed-heading">/);
+		// `display` was tried and does not hold — this page already spends the
+		// serif on the masthead above and every Player name below, and a third
+		// serif line between them reads as neither title nor furniture.
+		expect(PAGE).not.toContain('board-heading"');
+		// The `group` shape is `global.css`'s now, shared with `/positions`
+		// rather than copied into each page.
+		expect(PAGE).not.toMatch(/\n\t\.group \{/);
+	});
+
+	it('renders each group only when it HAS cards, and the card once', () => {
+		// An empty `CLOSED` on the first morning of the phase would be a label
+		// over nothing, and `OPEN` alone over a settled board would be the
+		// same. The page's own empty screen covers no cards at all.
+		expect(PAGE).toMatch(/\{#if openCards\.length > 0\}/);
+		expect(PAGE).toMatch(/\{#if closedCards\.length > 0\}/);
+		// Both groups are windows onto the ONE sorted list, partitioned on the
+		// card's own state — so the ordering a Manager chose is applied once.
+		expect(PAGE).toMatch(
+			/const openCards = \$derived\(shown\.filter\(\(card\) => card\.state !== 'closed'\)\)/
+		);
+		expect(PAGE).toMatch(
+			/const closedCards = \$derived\(shown\.filter\(\(card\) => card\.state === 'closed'\)\)/
+		);
+		// And the card markup exists ONCE, as a snippet both groups render.
+		// Two copies of two hundred lines is two places for a chip to be added
+		// to one of them.
+		expect(PAGE).toContain('{#snippet boardCard(card: BoardCardView)}');
+		expect([...PAGE.matchAll(/\{@render boardCard\(card\)\}/g)]).toHaveLength(2);
+		expect([...PAGE.matchAll(/\{#if card\.state === 'closed'\}/g)]).toHaveLength(1);
 	});
 
 	it('offers every ordering as a radio, from the core’s own key list', () => {

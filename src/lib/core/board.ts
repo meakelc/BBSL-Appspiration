@@ -421,27 +421,52 @@ export const BOARD_WON_BY_LABEL = 'Won by';
 export const BOARD_CLOSED_AT_LABEL = 'Closed';
 
 /**
- * The heading over the CARDS.
+ * The label over the panel that states the count and holds the controls.
  *
- * It read `Open Auctions` until the board gained its Closed cards, and that
- * word became false the moment the list below it could hold one — a heading
- * naming only half of what it covers is worse than none, because a Manager
- * who reads it and then sees a closed card has been told the screen is
- * something it is not. `Auctions` covers every Auction the board holds, open
- * and closed together.
+ * **Singular, and the singular is the whole point.** This is `the Auction` —
+ * the event the league is running, the one the Auction Phase is named for —
+ * and NOT one of the Auctions counted beneath it. The plural read as a
+ * heading over the cards, which is what it briefly was; back over the panel it
+ * would have been a third label in a column that already says `Open` and
+ * `Closed` at the point each list starts, and the top one would have been
+ * naming lists that do not begin until after the second.
  *
- * **It moved out of the control panel and down onto the list.** Inside the
- * panel it titled a block of controls, which a Manager does not need named —
- * a sort and a switch say what they are — and it left the count sentence
- * indented under a word instead of leading the panel. Over the cards it does
- * the job the Positions groups' own headings do: it says what the list
- * beneath it is, at the point the list starts.
+ * So it labels the block it sits on: the count of what is open, the switch
+ * that hides what is closed, and the ordering. Every one of those is a fact
+ * about the Auction rather than about any Auction.
  *
  * Worded here rather than in the markup for `BOARD_TITLE`'s reason — this
- * heading was the one string on this page a `.svelte` file still spelled
- * itself, which is exactly how it survived a change that falsified it.
+ * label was the one string on this page a `.svelte` file still spelled
+ * itself, which is exactly how it survived a change that falsified it. It read
+ * `Open Auctions` until the board gained its Closed cards, and that word was
+ * false the moment the screen could hold one.
  */
-export const BOARD_CARDS_HEADING = 'Auctions';
+export const BOARD_PANEL_HEADING = 'Auction';
+
+/**
+ * The two GROUP headings under it: the live Auctions, then the settled ones.
+ *
+ * The board is one list divided in two, on `/positions`' own shape — a Manager
+ * scanning for somewhere to bid and a Manager looking for a draw to check are
+ * asking opposite questions of one screen, and a heading at the point each
+ * list starts is what lets the first stop reading at the second. This is the
+ * same division the `Hide Closed Auctions` switch makes; the switch removes
+ * the second group, and these headings name it when it is there.
+ *
+ * `BOARD_CLOSED_HEADING` is `CLOSED_LABEL` itself, imported rather than
+ * respelled: the group holds exactly the cards whose state word is that, so a
+ * second spelling would be one state under two names on one screen.
+ *
+ * `BOARD_OPEN_HEADING` is deliberately NOT `AUCTION_STATE_LABELS.standard`,
+ * which is also the word `Open`. That label names ONE contention state; this
+ * heading covers three — `standard`, `minimum_bid` and `awaiting_opening_bid`
+ * — because the group is everything that has not closed. The words coincide
+ * and the meanings do not, so tying them together would make a card in a
+ * Minimum-Bid Contention sit under a heading claiming it was `standard` the
+ * moment either string changed.
+ */
+export const BOARD_OPEN_HEADING = 'Open';
+export const BOARD_CLOSED_HEADING = CLOSED_LABEL;
 
 /**
  * What a card says where a price would be, before any Bid.

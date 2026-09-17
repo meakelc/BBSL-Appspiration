@@ -714,17 +714,6 @@
 		color: var(--color-text);
 	}
 
-	/*
-	 * One column at every width. `EXPERIENCE.md` requires every Manager
-	 * surface to be single-column at 375px with no lateral scrolling.
-	 */
-	.group {
-		display: flex;
-		flex-direction: column;
-		gap: var(--space-card-gap);
-		width: 100%;
-	}
-
 	.cards {
 		display: flex;
 		flex-direction: column;
