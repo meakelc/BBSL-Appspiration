@@ -2,12 +2,14 @@
  * The `/notifications` handlers, executed (Story 5.4).
  *
  * The REAL `requireLiveDestination` drives both `load` and the action —
- * nothing about it is mocked — so this proves the route actually calls it, and
- * calls it BEFORE any read. A source-text check could say the call is present;
- * it could not say it runs first, because `toContain` is not position-aware and
- * would stay green if the read were hoisted above the guard. The stubbed
- * preferences module counts its calls precisely so "was it reached at all?" is
- * answerable.
+ * nothing about it is mocked — so this proves the route actually calls it.
+ *
+ * **No category is mutable, so every submission is refused and nothing is ever
+ * written.** Story 5.4's one mutable category, `slot_release`, was retired when
+ * FR-9 was amended. The preferences module is still stubbed here, and it now
+ * proves an ABSENCE: neither `load` nor the action reaches it at all, on any
+ * path, so a stored preference cannot be read back, or overwritten, by a route
+ * that no longer has a control.
  *
  * The SURFACE assertions are source-text ones, `tests/routes/positions.test.ts`'s
  * idiom for its stated reason: `vite.config.ts` runs tests under
@@ -23,9 +25,7 @@ import { join } from 'node:path';
 import { isHttpError } from '@sveltejs/kit';
 
 import {
-	MUTABLE_NOTIFICATION_CATEGORY,
 	NOTIFICATION_CATEGORIES,
-	notificationMuteOutcomeDetail,
 	notificationMuteRefusalDetail
 } from '../../src/lib/core/notification-categories.ts';
 import { LIVE_DESTINATION_REFUSAL_STATUS } from '../../src/lib/server/destinations.ts';
@@ -145,27 +145,23 @@ describe('load — gated on the destination, before any read', () => {
 		expect(stub.reads).toEqual([]);
 	});
 
-	it('reads THIS Manager’s preference, resolved from the session', async () => {
+	it('reads no preference at all, because nothing on the page varies by Manager', async () => {
 		stub.stored = true;
 		const result = (await route.load({ locals: locals(REGISTERED) } as never)) as {
-			slotReleaseMuted: boolean;
+			phase: ResolvedPhase;
+			slotReleaseMuted?: boolean;
 		};
 
-		expect(result.slotReleaseMuted).toBe(true);
-		// The actor comes from the session and from nowhere else (AD-4/AD-15).
-		expect(stub.reads).toEqual([MANAGER.id]);
-	});
-
-	it('reads a Manager with no preference row as NOT muted', async () => {
-		const result = (await route.load({ locals: locals(REGISTERED) } as never)) as {
-			slotReleaseMuted: boolean;
-		};
-
-		expect(result.slotReleaseMuted).toBe(false);
+		// The page is a list of categories and their reasons. A stored
+		// preference is left in the table, unread — not deleted, and not
+		// rendered as a control that no longer exists.
+		expect(stub.reads).toEqual([]);
+		expect(result.slotReleaseMuted).toBeUndefined();
+		expect(result.phase).toBe(AUCTION_PHASE);
 	});
 });
 
-describe('the mute action — the one mutable category, and only it', () => {
+describe('the mute action — every submission refused, nothing written', () => {
 	/** The action, as `minor-league-eligibility.test.ts` reaches its own. */
 	const muteAction = route.actions.mute as unknown as (event: unknown) => unknown;
 
@@ -173,7 +169,7 @@ describe('the mute action — the one mutable category, and only it', () => {
 		await expectRefusal(
 			() =>
 				muteAction({
-					...post({ category: MUTABLE_NOTIFICATION_CATEGORY, muted: 'yes' }),
+					...post({ category: 'led_at_close', muted: 'yes' }),
 					locals: locals(REGISTERED, SETUP_PHASE)
 				} as never),
 			LIVE_DESTINATION_REFUSAL_STATUS
@@ -181,37 +177,27 @@ describe('the mute action — the one mutable category, and only it', () => {
 		expect(stub.writes).toEqual([]);
 	});
 
-	it('accepts a mute of the one mutable category and states the outcome', async () => {
-		const result = (await muteAction({
-			...post({ category: MUTABLE_NOTIFICATION_CATEGORY, muted: 'yes' }),
-			locals: locals(REGISTERED)
-		} as never)) as { notice: string; slotReleaseMuted: boolean };
+	/** Every category — which is every category that cannot be muted. */
+	const UNMUTABLE = NOTIFICATION_CATEGORIES.map((category) => category.id);
 
-		expect(stub.writes).toEqual([{ managerId: MANAGER.id, muted: true }]);
-		expect(result.slotReleaseMuted).toBe(true);
-		// Worded in the pure core, printed by the route — never re-worded here.
-		expect(result.notice).toBe(notificationMuteOutcomeDetail(true));
+	it('names all four categories, so this suite cannot silently shrink', () => {
+		expect(UNMUTABLE).toEqual(['led_at_close', 'outbid', 'contender', 'contract_assignment']);
 	});
 
-	it('accepts an unmute the same way', async () => {
-		stub.stored = true;
+	it('refuses the RETIRED id as one no module names, not as an unmutable category', async () => {
+		// `slot_release` was a real category until FR-9 was amended. A page
+		// somebody had open can still post it, and the honest answer is that no
+		// such category exists — not that this one cannot be muted.
 		const result = (await muteAction({
-			...post({ category: MUTABLE_NOTIFICATION_CATEGORY, muted: 'no' }),
+			...post({ category: 'slot_release', muted: 'yes' }),
 			locals: locals(REGISTERED)
-		} as never)) as { notice: string; slotReleaseMuted: boolean };
+		} as never)) as { status: number; data: { notice: string } };
 
-		expect(stub.writes).toEqual([{ managerId: MANAGER.id, muted: false }]);
-		expect(result.slotReleaseMuted).toBe(false);
-		expect(result.notice).toBe(notificationMuteOutcomeDetail(false));
-	});
-
-	/** Every category the story refuses to make mutable, by id. */
-	const UNMUTABLE = NOTIFICATION_CATEGORIES.filter(
-		(category) => category.unmutableReason !== null
-	).map((category) => category.id);
-
-	it('names all four unmutable categories, so this suite cannot silently shrink', () => {
-		expect(UNMUTABLE).toEqual(['outbid', 'led_at_close', 'contender', 'contract_assignment']);
+		expect(result.status).toBe(400);
+		expect(result.data.notice).toBe(
+			notificationMuteRefusalDetail({ kind: 'unknown_category', requested: 'slot_release' })
+		);
+		expect(stub.writes).toEqual([]);
 	});
 
 	it.each(UNMUTABLE)(
@@ -261,31 +247,34 @@ describe('the mute action — the one mutable category, and only it', () => {
 		expect(stub.writes).toEqual([]);
 	});
 
-	it('refuses a submission that states neither direction', async () => {
-		// `muted=toString` specifically: a lookup object would have resolved it
-		// to an inherited `Object.prototype` member and passed an "is this a
-		// known direction?" check with a Function bound as the value.
-		for (const muted of ['', 'maybe', 'toString', 'true']) {
+	it('refuses on the CATEGORY whatever direction was stated, or none', async () => {
+		// The direction decides nothing now: both refusals are about the
+		// category, so a submission is refused the same way whichever way it
+		// asked — and the sentence names the real cause rather than answering
+		// the wrong half of the request.
+		for (const muted of ['yes', 'no', '', 'maybe', 'toString']) {
 			const result = (await muteAction({
-				...post({ category: MUTABLE_NOTIFICATION_CATEGORY, muted }),
+				...post({ category: 'outbid', muted }),
 				locals: locals(REGISTERED)
 			} as never)) as { status: number; data: { notice: string } };
 
 			expect(result.status).toBe(400);
-			expect(result.data.notice).toBe(
-				notificationMuteRefusalDetail({ kind: 'unstated_target' })
-			);
+			expect(result.data.notice).toContain('cannot be muted');
 		}
-		expect(stub.writes).toEqual([]);
-	});
-
-	it('refuses the unmutable category BEFORE the direction, so the sentence names the real cause', async () => {
-		const result = (await muteAction({
+		// And with no direction field at all.
+		const bare = (await muteAction({
 			...post({ category: 'outbid' }),
 			locals: locals(REGISTERED)
 		} as never)) as { data: { notice: string } };
+		expect(bare.data.notice).toContain('cannot be muted');
+		expect(stub.writes).toEqual([]);
+	});
 
-		expect(result.data.notice).toContain('cannot be muted');
+	it('never reaches the preferences module, on any path', async () => {
+		// The absence this suite exists to prove: no submission writes, and no
+		// submission reads either.
+		expect(stub.reads).toEqual([]);
+		expect(stub.writes).toEqual([]);
 	});
 });
 
@@ -304,7 +293,7 @@ describe('the surface', () => {
 		// its to word, exactly as `/minor-league-eligibility`'s is.
 		expect(PAGE_CODE).not.toContain('fairness premise');
 		expect(PAGE_CODE).not.toContain('Nomination Slot your Team was holding');
-		expect(PAGE_CODE).not.toContain('Muting withholds your mention, never the post');
+		expect(PAGE_CODE).not.toContain('none of them can be muted');
 		expect(PAGE_CODE).not.toContain('a Contract is decided');
 	});
 
@@ -320,9 +309,14 @@ describe('the surface', () => {
 		expect(PAGE_CODE).toContain('unmutable-categories');
 	});
 
-	it('states the direction in the form rather than inferring it', () => {
-		expect(PAGE_CODE).toContain('name="category"');
-		expect(PAGE_CODE).toContain('name="muted"');
+	it('offers no control, because no category is mutable', () => {
+		// The form is gone with the category it drove. The ACTION is not —
+		// `+page.server.ts` still answers a post with a stated refusal — but the
+		// page must not present a control that can only ever be refused.
+		expect(PAGE_CODE).not.toContain('name="category"');
+		expect(PAGE_CODE).not.toContain('name="muted"');
+		expect(PAGE_CODE).not.toContain('<form');
+		expect(PAGE_CODE).toContain('NO_MUTABLE_CATEGORY_STATEMENT');
 	});
 
 	it('spells no tokenised value as a literal, and declares no second layout', () => {

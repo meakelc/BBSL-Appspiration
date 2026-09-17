@@ -223,6 +223,10 @@ const BID_CANCELLED: BidCancelledPayload = {
 };
 
 const AUCTION_CLOSED: AuctionClosedPayload = {
+	// The audit log does not read this field and has no line for it — the Slot
+	// release is a Discord mention's fact, not a logged act (FR-9, amended).
+	// It is stated here because the payload type requires it.
+	releasedNominationSlot: false,
 	fantraxPlayerId: PLAYER_ONE,
 	playerName: 'Jalen Green',
 	teamId: TEAM_A,

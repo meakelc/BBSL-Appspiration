@@ -7,33 +7,28 @@
  * for their copy, including the `not.toContain('!')` voice check this file
  * repeats over the whole exported surface.
  *
- * **The per-Manager wording is asserted, not assumed.** The preference is keyed
- * on `managers.id`, so a sentence saying "your Team is not mentioned" would be
- * false for a co-managed Team with one Manager muted — the exact case
- * `tests/adapters/discord-mention.test.ts` proves still renders the other
- * Manager's `<@id>` on a line that still names the Team. The rows below pin the
- * subject of each sentence so it cannot regress to the Team.
+ * **NO CATEGORY IS MUTABLE, and the rows below are what hold that.** Story 5.4
+ * shipped `slot_release` as the one mutable category; FR-9's amendment retired
+ * it, because a close no longer frees the NOMINATING Team's Slot and the
+ * release became half a sentence on the winner's close line. So the table is
+ * four categories, every one of them carrying a reason, and every refusal says
+ * there is no category a mute would have worked for.
  */
 
 import { describe, expect, it } from 'vitest';
 
 import {
-	MUTABLE_CATEGORY_MUTED_STATEMENT,
-	MUTABLE_CATEGORY_MUTE_EFFECT,
-	MUTABLE_CATEGORY_MUTE_LIMIT,
-	MUTABLE_CATEGORY_UNMUTED_STATEMENT,
-	MUTABLE_NOTIFICATION_CATEGORY,
+	MUTABLE_NOTIFICATION_CATEGORIES,
 	NOTIFICATION_CATEGORIES,
+	NO_MUTABLE_CATEGORY_STATEMENT,
 	isMutableNotificationCategory,
 	isNotificationCategory,
 	notificationCategoryCopy,
-	notificationMuteOutcomeDetail,
-	notificationMuteRefusalDetail,
-	notificationMuteStateDetail
+	notificationMuteRefusalDetail
 } from '../../src/lib/core/notification-categories.ts';
 import type { UnmutableNotificationCategory } from '../../src/lib/core/notification-categories.ts';
 
-/** The four categories no Manager may mute. */
+/** Every category — which is every category no Manager may mute. */
 const UNMUTABLE: readonly UnmutableNotificationCategory[] = [
 	'outbid',
 	'led_at_close',
@@ -43,19 +38,12 @@ const UNMUTABLE: readonly UnmutableNotificationCategory[] = [
 
 /** Every sentence this module can produce, over its whole surface. */
 const EVERY_SENTENCE: readonly string[] = [
-	MUTABLE_CATEGORY_MUTE_EFFECT,
-	MUTABLE_CATEGORY_MUTE_LIMIT,
-	MUTABLE_CATEGORY_MUTED_STATEMENT,
-	MUTABLE_CATEGORY_UNMUTED_STATEMENT,
-	...NOTIFICATION_CATEGORIES.flatMap((category) =>
-		[category.label, category.statement, category.unmutableReason].filter(
-			(sentence): sentence is string => sentence !== null
-		)
-	),
-	notificationMuteStateDetail(true),
-	notificationMuteStateDetail(false),
-	notificationMuteOutcomeDetail(true),
-	notificationMuteOutcomeDetail(false),
+	NO_MUTABLE_CATEGORY_STATEMENT,
+	...NOTIFICATION_CATEGORIES.flatMap((category) => [
+		category.label,
+		category.statement,
+		category.unmutableReason
+	]),
 	...UNMUTABLE.map((category) =>
 		notificationMuteRefusalDetail({ kind: 'unmutable_category', category })
 	),
@@ -65,27 +53,19 @@ const EVERY_SENTENCE: readonly string[] = [
 ];
 
 describe('the category table', () => {
-	it('names exactly five categories, each once, in the order the page lists them', () => {
+	it('names exactly four categories, each once, in the order the page lists them', () => {
+		// `slot_release` used to head this list. It was retired with FR-9's
+		// amendment; nothing is mentioned under it, so nothing names it.
 		const ids = NOTIFICATION_CATEGORIES.map((category) => category.id);
-		expect(ids).toEqual([
-			'slot_release',
-			'outbid',
-			'led_at_close',
-			'contender',
-			'contract_assignment'
-		]);
+		expect(ids).toEqual(['led_at_close', 'outbid', 'contender', 'contract_assignment']);
 		expect(new Set(ids).size).toBe(ids.length);
+		expect(ids).not.toContain('slot_release');
 	});
 
-	it('gives the ONE mutable category no reason, because it has a control', () => {
-		expect(notificationCategoryCopy(MUTABLE_NOTIFICATION_CATEGORY)?.unmutableReason).toBeNull();
-	});
-
-	it('gives every other category a non-empty reason, so no control is a bare absence', () => {
-		for (const id of UNMUTABLE) {
-			const reason = notificationCategoryCopy(id)?.unmutableReason;
-			expect(reason, `${id} states no reason`).not.toBeNull();
-			expect((reason ?? '').trim().length).toBeGreaterThan(0);
+	it('gives EVERY category a non-empty reason, so no control is a bare absence', () => {
+		for (const category of NOTIFICATION_CATEGORIES) {
+			expect(category.unmutableReason.trim().length, `${category.id} states no reason`)
+				.toBeGreaterThan(0);
 		}
 	});
 
@@ -99,10 +79,14 @@ describe('the category table', () => {
 		expect(reason).not.toMatch(/asleep|sleep|hurry|act now|still open/i);
 	});
 
-	it('states the Slot release as a fact and suggests nothing', () => {
-		const statement = notificationCategoryCopy('slot_release')?.statement ?? '';
-		expect(statement).toBe('A close released the Nomination Slot your Team was holding.');
-		expect(statement).not.toMatch(/again|you can|nominate with/i);
+	it('folds the Slot release into the close, where winning it now happens', () => {
+		// FR-9, amended: a Slot frees when the Team WINS. The close is the only
+		// notice that can report it, so `led_at_close` says both things and no
+		// category of its own remains.
+		const statement = notificationCategoryCopy('led_at_close')?.statement ?? '';
+		expect(statement).toContain('led an Auction at the moment it closed');
+		expect(statement).toContain('Nomination Slot');
+		expect(statement).not.toMatch(/nominated|outbid/i);
 	});
 
 	it('recognises every id it names, and nothing else', () => {
@@ -116,64 +100,34 @@ describe('the category table', () => {
 		}
 	});
 
-	it('holds exactly one category mutable', () => {
-		const mutable = NOTIFICATION_CATEGORIES.filter((category) =>
-			isMutableNotificationCategory(category.id)
-		);
-		expect(mutable.map((category) => category.id)).toEqual([MUTABLE_NOTIFICATION_CATEGORY]);
-		expect(isMutableNotificationCategory('outbid')).toBe(false);
+	it('holds NO category mutable', () => {
+		expect(MUTABLE_NOTIFICATION_CATEGORIES).toEqual([]);
+		for (const category of NOTIFICATION_CATEGORIES) {
+			expect(isMutableNotificationCategory(category.id), category.id).toBe(false);
+		}
+		// Including the retired id, which is no longer a category at all.
+		expect(isMutableNotificationCategory('slot_release')).toBe(false);
 		expect(isMutableNotificationCategory(undefined)).toBe(false);
 	});
 });
 
-describe('the mute copy has the READER as its subject, never their Team', () => {
-	/**
-	 * The wording that would be false for a co-managed Team with one Manager
-	 * muted: the line still exists, still names the Team, and still carries the
-	 * other Manager's `<@id>`.
-	 */
-	const TEAM_SUBJECT = [
-		'your team is no longer pinged',
-		'your team is not mentioned',
-		'your team is mentioned',
-		'your team is no longer mentioned'
-	];
-
-	it.each([
-		['the mute effect', MUTABLE_CATEGORY_MUTE_EFFECT],
-		['the mute limit', MUTABLE_CATEGORY_MUTE_LIMIT],
-		['the muted state', MUTABLE_CATEGORY_MUTED_STATEMENT],
-		['the unmuted state', MUTABLE_CATEGORY_UNMUTED_STATEMENT],
-		['the accepted mute', notificationMuteOutcomeDetail(true)],
-		['the accepted unmute', notificationMuteOutcomeDetail(false)]
-	])(
-		'%s never claims the TEAM is what stops being mentioned',
-		(_label: string, sentence: string) => {
-			for (const claim of TEAM_SUBJECT) {
-				expect(sentence.toLowerCase(), sentence).not.toContain(claim);
-			}
-		}
-	);
-
-	it('says what stops, what does not, and that a co-Manager still gets theirs', () => {
-		expect(MUTABLE_CATEGORY_MUTE_EFFECT).toContain('withholds your own mention');
-		expect(MUTABLE_CATEGORY_MUTE_LIMIT).toContain('still posts');
-		expect(MUTABLE_CATEGORY_MUTE_LIMIT).toContain('still names your Team');
-		expect(MUTABLE_CATEGORY_MUTE_LIMIT).toContain('co-Manager');
+describe('the page says there is no control, rather than showing none', () => {
+	it('states the fact and that each category says why', () => {
+		expect(NO_MUTABLE_CATEGORY_STATEMENT).toContain('none of them can be muted');
+		expect(NO_MUTABLE_CATEGORY_STATEMENT).toContain('states why');
 	});
 
-	it('distinguishes the STATE from an accepted CHANGE', () => {
-		// Otherwise a Manager could not tell a page they merely loaded from one
-		// they just changed.
-		expect(notificationMuteStateDetail(true)).not.toBe(notificationMuteOutcomeDetail(true));
-		expect(notificationMuteOutcomeDetail(true)).toContain('The change was accepted');
-		expect(notificationMuteStateDetail(true)).toBe(MUTABLE_CATEGORY_MUTED_STATEMENT);
-		expect(notificationMuteStateDetail(false)).toBe(MUTABLE_CATEGORY_UNMUTED_STATEMENT);
+	it('does not describe a setting that used to exist', () => {
+		// A Manager reading this page wants to know what reaches them, not what
+		// the league changed its mind about.
+		expect(NO_MUTABLE_CATEGORY_STATEMENT.toLowerCase()).not.toMatch(
+			/no longer|used to|previously|removed|retired/
+		);
 	});
 });
 
 describe('each refusal names its own cause, and states that nothing was written', () => {
-	it.each(UNMUTABLE)('names %s, carries its reason, and names the way through', (category) => {
+	it.each(UNMUTABLE)('names %s, carries its reason, and states there is no way through', (category) => {
 		const detail = notificationMuteRefusalDetail({ kind: 'unmutable_category', category });
 		const copy = notificationCategoryCopy(category);
 
@@ -183,16 +137,18 @@ describe('each refusal names its own cause, and states that nothing was written'
 		// the action gets the same explanation the page prints beside the
 		// missing control.
 		expect(detail).toContain(copy?.unmutableReason ?? '');
-		expect(detail).toContain('Nomination Slot released is the one category');
+		expect(detail).toContain('allows no notification category to be muted');
 		expect(detail).toContain('Nothing was written.');
 	});
 
-	it('never renders an empty reason clause — the mutable category cannot reach this refusal', () => {
-		// `UnmutableNotificationCategory` excludes it at the type level; this
-		// asserts the sentence that would result if it ever stopped doing so.
+	it('points at no way through, because there is none', () => {
+		// The refusal used to name the one category a mute would have worked
+		// for. Naming one now would send a Manager somewhere that does not
+		// exist, which is worse than ending the matter.
 		for (const category of UNMUTABLE) {
 			const detail = notificationMuteRefusalDetail({ kind: 'unmutable_category', category });
-			expect(detail).not.toContain('cannot be muted. Nomination Slot released is');
+			expect(detail).not.toMatch(/is the one category/);
+			expect(detail).not.toContain('Nomination Slot released');
 		}
 	});
 
