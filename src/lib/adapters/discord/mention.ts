@@ -291,6 +291,55 @@ function clauseFor(event: BroadcastEvent, teamId: string | null): string | null 
 	return CLAUSE_FOR_CATEGORY[category];
 }
 
+/**
+ * `discordUserIds` without anybody THIS EVENT CANNOT BE ABOUT.
+ *
+ * **One rule, and it exists because the recipient list is frozen at enqueue
+ * time.** `server/outbox.ts` writes an intent row per recipient inside the
+ * transaction that appends the event, and the drain reads the recipients back
+ * off those rows — so an intent filed by a WRITE SITE THAT HAS SINCE BEEN
+ * FIXED keeps its original addressee forever. Every `AuctionClosed` enqueued
+ * before `server/close.ts` stopped addressing the nominator (FR-9, amended)
+ * still carries a row for a Team the close is not about, and those rows drain
+ * whenever the drain next runs — on a build that may be days newer than the
+ * build that filed them.
+ *
+ * Without this filter those stale rows do not vanish; they degrade. The
+ * nominator's group gets no clause (`categoryFor` answers `null` for a
+ * non-winner), falls to the plain factual line, and pings a Manager with
+ * `A AuctionClosed was recorded (event #123).` — which is worse than the
+ * wrong sentence it replaced, because it is a ping with no fact attached at
+ * all.
+ *
+ * **So the targeting rule is enforced at BOTH seams rather than only at the
+ * write site.** A Close is about the winner; the payload names them; a Team
+ * that is not them is not an addressee, whoever filed the row and whenever.
+ *
+ * **A snowflake the directory cannot place on a Team is KEPT**, and that is
+ * the module's usual posture rather than an oversight: this function drops the
+ * addressees it can prove wrong, never the ones it merely cannot verify. An
+ * unresolvable recipient still degrades to the plain factual line, exactly as
+ * it did before, because "a mention that renders no `<@id>` is a silence" and
+ * an unreadable directory must not manufacture one.
+ *
+ * Total, and it narrows nothing on any other event type.
+ */
+function withoutMistargeted(
+	event: BroadcastEvent,
+	discordUserIds: readonly string[],
+	directory: LeagueDirectory
+): readonly string[] {
+	if (event.eventType !== 'AuctionClosed') return discordUserIds;
+	const winnerTeamId = text(fields(event.payload), 'teamId');
+	// A close whose payload names no winner is not one this filter can judge.
+	// It is already malformed and every addressee degrades to the plain line.
+	if (winnerTeamId === null) return discordUserIds;
+	return discordUserIds.filter((discordUserId) => {
+		const teamId = teamOf(discordUserId, directory);
+		return teamId === null || teamId === winnerTeamId;
+	});
+}
+
 /** The Team one snowflake acts for, through the directory, or `null`. */
 function teamOf(discordUserId: string, directory: LeagueDirectory): string | null {
 	const managerId = directory.managerIdsByDiscordUserId.get(discordUserId);
@@ -348,7 +397,12 @@ export function mentionSuffixFor(
 	// that may be what threw.
 	let discordUserIds: readonly string[] = [];
 	try {
-		discordUserIds = addressees(recipients);
+		// Normalised and then narrowed to the Teams this event can be about, in
+		// ONE guard: what the fallback below may name is exactly what the
+		// composition may name, so a stale intent cannot be pinged by the
+		// degradation path either. That is the property the suppression filter
+		// held in this same position before it was retired.
+		discordUserIds = withoutMistargeted(event, addressees(recipients), directory);
 	} catch {
 		// The recipient list itself is unreadable, so there is nobody this
 		// module can honestly name. `''` posts the notice alone, which is the
@@ -384,7 +438,14 @@ function composed(
 	directory: LeagueDirectory,
 	origin: string | null
 ): string {
-	const addressed = discordUserIds;
+	// **Normally a no-op, and deliberately kept anyway.** The only caller,
+	// `mentionSuffixFor`, has already run this in its own guard so that the
+	// fallback line honours it too — so on every real call this list arrives
+	// filtered and this pass removes nothing. It is the SAME filter and not a
+	// second one: `withoutMistargeted` is total and idempotent, and keeping the
+	// call here is what makes the targeting rule a property of composition
+	// rather than of one caller remembering to apply it first.
+	const addressed = withoutMistargeted(event, discordUserIds, directory);
 	if (addressed.length === 0) return '';
 
 	// The phase trigger addresses the whole league, so it is flat by design —
