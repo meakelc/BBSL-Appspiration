@@ -167,7 +167,9 @@ function fakeGateway(
 				// gate reads the folded phase, and a log with no `AuctionOpened`
 				// folds to Setup, where no Bid is accepted at all. Served by the
 				// fake rather than repeated in thirty `events:` arrays.
-				return { rows: [auctionOpened(), ...(options.events ?? []), ...appendedEvents] };
+				return {
+					rows: [auctionOpened(), ...(options.events ?? []), ...appendedEvents]
+				};
 			}
 			// Matched on the TABLE rather than on the column list: Story 4.5
 			// widened this select to carry the Player id and name the Team
@@ -184,7 +186,9 @@ function fakeGateway(
 				// decision" is observable rather than assumed.
 				order.push('read-seed');
 				params.push([...queryParams]);
-				return { rows: options.sealedSeed === undefined ? [] : [{ seed: options.sealedSeed }] };
+				return {
+					rows: options.sealedSeed === undefined ? [] : [{ seed: options.sealedSeed }]
+				};
 			}
 			if (/^insert into auction_contention_seeds/i.test(sql)) {
 				order.push('append-seed');
@@ -240,12 +244,24 @@ function fakeGateway(
 			// act for each AFFECTED Team — the Team the write site named, never
 			// the event's own. One synthetic snowflake per Team, so a test can
 			// read the affected set straight off the intents it filed.
-			if (/^select coalesce\(.+\)\s+as discord_user_id\s+from managers\s+where team_id = \$1/i.test(sql)) {
-				return { rows: [{ discord_user_id: `discord-${String(queryParams[0])}` }] };
-			}
-			if (/^select coalesce\(.+\)\s+as discord_user_id\s+from managers\s+where team_id is not null/i.test(sql)) {
+			if (
+				/^select coalesce\(.+\)\s+as discord_user_id\s+from managers\s+where team_id = \$1/i.test(
+					sql
+				)
+			) {
 				return {
-					rows: EVERY_LEAGUE_TEAM.map((teamId) => ({ discord_user_id: `discord-${teamId}` }))
+					rows: [{ discord_user_id: `discord-${String(queryParams[0])}` }]
+				};
+			}
+			if (
+				/^select coalesce\(.+\)\s+as discord_user_id\s+from managers\s+where team_id is not null/i.test(
+					sql
+				)
+			) {
+				return {
+					rows: EVERY_LEAGUE_TEAM.map((teamId) => ({
+						discord_user_id: `discord-${teamId}`
+					}))
 				};
 			}
 			if (/^insert into notification_outbox/i.test(sql)) {
@@ -402,7 +418,9 @@ describe('placeBid — the mention intents it owes (Story 5.3, AC1)', () => {
 		// The matrix's “A Manager is outbid” row. `t-1` held the leading Bid;
 		// `ACTOR` bids from `t-2` and takes it. The event's own `team_id` is the
 		// bidder's, which is exactly why the affected Team cannot be read off it.
-		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 8_000_000)] });
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, 8_000_000)]
+		});
 
 		await placeBid(harness.gateway, ACTOR, 'p-1', parseMoney(8_500_000), DEVICE_CLASS);
 
@@ -428,7 +446,9 @@ describe('placeBid — the mention intents it owes (Story 5.3, AC1)', () => {
 		// `enqueue` runs inside the transaction and after the append, so a
 		// rejected write never reaches it — and a rolled-back one would take
 		// the intents with it either way (AD-17).
-		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 8_000_000)] });
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, 8_000_000)]
+		});
 
 		await placeBid(harness.gateway, ACTOR, 'p-1', parseMoney(8_000_000), DEVICE_CLASS);
 
@@ -441,7 +461,9 @@ describe('placeBid — the mention intents it owes (Story 5.3, AC1)', () => {
 		// no `placeBid` call can ever reach the enqueue in this state, and an
 		// end-to-end case would prove the gate rather than the silence.
 		// The state is a real one, folded from a real log, not a literal.
-		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 8_000_000)] });
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, 8_000_000)]
+		});
 		await harness.client.query('begin');
 		const loaded = await loadBidState(harness.client, 'p-1', 't-2');
 
@@ -479,7 +501,9 @@ describe('placeBid — the mention intents it owes (Story 5.3, AC1)', () => {
 
 describe('placeBid — the gate holds (AC4)', () => {
 	it('appends exactly one BidPlaced, stamped by the database clock and naming the actor', async () => {
-		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 8_000_000)] });
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, 8_000_000)]
+		});
 
 		const outcome = await placeBid(
 			harness.gateway,
@@ -505,7 +529,9 @@ describe('placeBid — the gate holds (AC4)', () => {
 	});
 
 	it('carries the device class on the ENVELOPE, never in the payload', async () => {
-		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 8_000_000)] });
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, 8_000_000)]
+		});
 
 		const outcome = await placeBid(
 			harness.gateway,
@@ -523,7 +549,9 @@ describe('placeBid — the gate holds (AC4)', () => {
 	});
 
 	it('names Team, acting Manager, amount and the absolute close instant in the payload', async () => {
-		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 8_000_000)] });
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, 8_000_000)]
+		});
 
 		const outcome = await placeBid(
 			harness.gateway,
@@ -545,7 +573,9 @@ describe('placeBid — the gate holds (AC4)', () => {
 	});
 
 	it('sets the close to exactly AUCTION_CLOCK after the event’s OWN occurredAt', async () => {
-		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 8_000_000)] });
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, 8_000_000)]
+		});
 
 		const outcome = await placeBid(
 			harness.gateway,
@@ -564,7 +594,9 @@ describe('placeBid — the gate holds (AC4)', () => {
 	});
 
 	it('runs lock -> load -> decide -> persist -> commit, and locks before it reads', async () => {
-		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 8_000_000)] });
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, 8_000_000)]
+		});
 
 		await placeBid(harness.gateway, ACTOR, 'p-1', parseMoney(8_500_000), DEVICE_CLASS);
 
@@ -585,7 +617,9 @@ describe('placeBid — the gate holds (AC4)', () => {
 		// The fake throws on any statement it does not recognise, and it
 		// recognises only begin/lock/read/insert-event/commit/rollback. A
 		// `projections` hook of any kind would fail this test outright.
-		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 8_000_000)] });
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, 8_000_000)]
+		});
 
 		await placeBid(harness.gateway, ACTOR, 'p-1', parseMoney(8_500_000), DEVICE_CLASS);
 
@@ -619,7 +653,9 @@ describe('placeBid — the gate holds (AC4)', () => {
 
 describe('placeBid — the gate refuses (AC1, AC2, AC3)', () => {
 	it('refuses a Bid below the current high plus the increment, and appends nothing', async () => {
-		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 8_000_000)] });
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, 8_000_000)]
+		});
 
 		const outcome = await placeBid(
 			harness.gateway,
@@ -638,7 +674,9 @@ describe('placeBid — the gate refuses (AC1, AC2, AC3)', () => {
 	});
 
 	it('carries the FULL gate set back, passed gates and all', async () => {
-		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 8_000_000)] });
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, 8_000_000)]
+		});
 
 		const outcome = await placeBid(
 			harness.gateway,
@@ -806,7 +844,9 @@ describe('placeBid — the co-manager race, serialised by the lock (§10 example
 		// ONE gateway, so the second call loads a log that already contains the
 		// first call's committed event — which is what the global advisory lock
 		// guarantees in production (AD-6).
-		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 8_000_000, 't-1', 'm-1')] });
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, 8_000_000, 't-1', 'm-1')]
+		});
 
 		const first = await placeBid(
 			harness.gateway,
@@ -839,7 +879,9 @@ describe('placeBid — the co-manager race, serialised by the lock (§10 example
 
 describe('loadBidState — three folds over ONE read of the log, plus one roster read', () => {
 	it('reads the log exactly once and the roster exactly once', async () => {
-		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 8_000_000)] });
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, 8_000_000)]
+		});
 		await harness.client.query('begin');
 
 		const loaded = await loadBidState(harness.client, 'p-1', 't-2');
@@ -931,7 +973,9 @@ describe('loadBidState — three folds over ONE read of the log, plus one roster
 		// A corrupt log rather than anything this codebase can write. A join
 		// is unaffected; a DISSOLUTION throws out of `decide()` rather than
 		// releasing every Contender with the commitment still sealed.
-		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 1_000_000)] });
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, 1_000_000)]
+		});
 		await harness.client.query('begin');
 
 		const loaded = await loadBidState(harness.client, 'p-1', 't-2');
@@ -942,7 +986,9 @@ describe('loadBidState — three folds over ONE read of the log, plus one roster
 	});
 
 	it('keys the roster read on the ACTING Team, never on the leading one', async () => {
-		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 8_000_000)] });
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, 8_000_000)]
+		});
 		await harness.client.query('begin');
 
 		await loadBidState(harness.client, 'p-1', 't-2');
@@ -998,7 +1044,7 @@ describe('loadBidState — three folds over ONE read of the log, plus one roster
 
 // --- Story 2.8: an overflow refusal under the lock -------------------------
 
-describe('placeBid — Minors Exposure refuses under the lock, and writes nothing', () => {
+describe('placeBid — a committed lead refuses under the lock, and writes nothing', () => {
 	/**
 	 * A roster of nine $1.0M Active/Bench contracts PLUS two Minor League
 	 * rows, so `minorLeagueOccupied` is 2 and `M = 3 − 2 = 1`.
@@ -1061,26 +1107,35 @@ describe('placeBid — Minors Exposure refuses under the lock, and writes nothin
 		)
 	];
 
-	it('folds the eligible lead and the roster occupancy from the same locked read', async () => {
+	it('folds the lead and the roster occupancy from the same locked read', async () => {
 		const harness = fakeGateway({ events: OVERFLOWING, roster: TWO_STASHED });
 		await harness.client.query('begin');
 
 		const loaded = await loadBidState(harness.client, 'p-second', 't-2');
 
-		// The eligible lead is PARTITIONED, not dropped: it is out of
-		// `leading` and into `eligibleLeading`, carrying the name a refusal
-		// will use.
-		expect(loaded.bid.team?.leading).toEqual([]);
-		expect(loaded.bid.team?.eligibleLeading).toEqual([
-			{ fantraxPlayerId: 'p-stash', playerName: 'Ausar Bright', amount: 30_000_000, isContentionEntry: false }
+		// **No partition** (corrected 2026-09-18). The Player is Minor League
+		// Eligible by fold, and the lead is an ordinary commitment all the
+		// same: a Team cannot win a Free Agent straight into its minors, so
+		// nothing routes to `eligibleLeading` and the $30.0M charges in full.
+		expect(loaded.bid.team?.leading).toEqual([
+			{
+				fantraxPlayerId: 'p-stash',
+				playerName: 'Ausar Bright',
+				amount: 30_000_000,
+				isContentionEntry: false
+			}
 		]);
+		expect(loaded.bid.team?.eligibleLeading).toEqual([]);
 		// Occupancy from `team_rosters`; Cap Space and Roster Count unmoved by
 		// the two Minor League contracts.
 		expect(loaded.bid.team?.minorLeagueOccupied).toBe(2);
 		expect(loaded.bid.team?.capSpace).toBe(CAP_SPACE);
 		expect(loaded.bid.team?.rosterCount).toBe(11);
-		// The Auction's own eligibility, from the same fold.
-		expect(loaded.bid.playerIsMinorLeagueEligible).toBe(true);
+		// The Auction's own eligibility no longer crosses into the gate state
+		// at all: `bidStateFor` accepts no such argument and holds the field
+		// at `false`, so the locked path cannot reach a figure the read path
+		// could not.
+		expect(loaded.bid.playerIsMinorLeagueEligible).toBe(false);
 		// Still ONE log read and ONE roster read, both after the lock.
 		expect(harness.order).toEqual(['begin', 'read-log', 'read-roster']);
 	});
@@ -1102,20 +1157,28 @@ describe('placeBid — Minors Exposure refuses under the lock, and writes nothin
 		// instant the lock held them — not the ones some page rendered.
 		expect(rejection.at).toBe(NOW.toISOString());
 		expect(rejection.gates).not.toBeNull();
-		expect(rejection.gates?.cap.overflowCount).toBe(1);
+		// The exposure terms are inert, and the commitment is what refuses.
+		expect(rejection.gates?.cap.overflowCount).toBe(0);
 		expect(rejection.gates?.cap.freeMinorLeagueSlots).toBe(1);
-		expect(rejection.gates?.cap.eligibleLeadingBids).toBe(2);
-		expect(rejection.gates?.cap.minorsExposure).toBe(30_000_000);
+		expect(rejection.gates?.cap.eligibleLeadingBids).toBe(0);
+		expect(rejection.gates?.cap.minorsExposure).toBe(0);
+		expect(rejection.gates?.cap.committedBids).toBe(30_000_000);
 		expect(rejection.gates?.cap.maximumBid).toBe(CAP_SPACE - 30_000_000);
 		expect(rejection.gates?.cap.passed).toBe(false);
-		// Capacity is NOT the ground — 11 + 1 = 12 — which is what isolates
-		// Minors Exposure, and is reported beside the refusal rather than
-		// left for a reader to wonder about.
+		// Capacity is NOT the ground — two projected additions against one
+		// Free Active/Bench Slot is exactly the Outstanding Bid Allowance —
+		// which is what isolates the money, and is reported beside the
+		// refusal rather than left for a reader to wonder about.
 		expect(rejection.gates?.slots.passed).toBe(true);
-		expect(rejection.gates?.slots.activeBenchOverflow).toBe(1);
-		// The sentence names the earlier Auction by Player and amount.
-		expect(rejection.detail).toContain('Ausar Bright');
-		expect(rejection.detail).toContain('$30.0M');
+		expect(rejection.gates?.slots.projectedAdditions).toBe(2);
+		expect(rejection.gates?.slots.allowance).toBe(2);
+		expect(rejection.gates?.slots.activeBenchOverflow).toBe(0);
+		// **The sentence no longer names the earlier Auction.** That naming
+		// was the exposure refusal's, and there is no exposure; Committed Bids
+		// has no equivalent itemisation yet. Pinned as what a Manager actually
+		// reads, with the follow-up recorded in example 19's retirement.
+		expect(rejection.detail).toContain('Maximum Bid');
+		expect(rejection.detail).not.toContain('Ausar Bright');
 
 		// The roster and the folds were read AFTER the lock, and nothing was
 		// appended: the log holds only what it held before.
@@ -1132,12 +1195,18 @@ describe('placeBid — Minors Exposure refuses under the lock, and writes nothin
 
 		// An accepted Bid is never retroactively invalidated: only the new one
 		// is refused. Re-loading proves the $30.0M lead is untouched, and that
-		// it is still exactly what the exposure was computed from.
+		// it is still exactly what Committed Bids was computed from.
 		await harness.client.query('begin');
 		const loaded = await loadBidState(harness.client, 'p-second', 't-2');
-		expect(loaded.bid.team?.eligibleLeading).toEqual([
-			{ fantraxPlayerId: 'p-stash', playerName: 'Ausar Bright', amount: 30_000_000, isContentionEntry: false }
+		expect(loaded.bid.team?.leading).toEqual([
+			{
+				fantraxPlayerId: 'p-stash',
+				playerName: 'Ausar Bright',
+				amount: 30_000_000,
+				isContentionEntry: false
+			}
 		]);
+		expect(loaded.bid.team?.eligibleLeading).toEqual([]);
 	});
 });
 
@@ -1291,9 +1360,7 @@ describe('placeBid — an expired Auction is refused under the lock (AC7)', () =
 		// reason: prose ABOUT a thing is not that thing, and this file's
 		// header explains expiry-as-authority at length precisely because the
 		// code below it does not implement any of it.
-		const code = source
-			.replace(/\/\*[\s\S]*?\*\//g, '')
-			.replace(/(^|[^:])\/\/.*$/gm, '$1');
+		const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
 
 		expect(code).toContain('decide(state.bid, command, now.toISOString(), contentionSeed)');
 		expect(code).toContain('bidStateFor(');
@@ -1433,7 +1500,9 @@ describe('placeBid — the lottery seed (AC5, AD-14)', () => {
 		// A Bid in the dead zone: refused on `contention` and `granularity`,
 		// so `decide()` never reaches the payload and the projection never
 		// runs.
-		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 1_000_000)] });
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, 1_000_000)]
+		});
 
 		const outcome = await placeBid(
 			harness.gateway,
@@ -1477,9 +1546,7 @@ describe('placeBid — the lottery seed (AC5, AD-14)', () => {
 		expect(harness.order.filter((step) => step === 'append-event')).toHaveLength(2);
 		expect(harness.order.filter((step) => step === 'commit')).toHaveLength(1);
 		// The seed was READ under the lock, before anything was appended.
-		expect(harness.order.indexOf('read-seed')).toBeLessThan(
-			harness.order.indexOf('append-event')
-		);
+		expect(harness.order.indexOf('read-seed')).toBeLessThan(harness.order.indexOf('append-event'));
 
 		// No second seed row: the converting `BidPlaced` publishes no
 		// commitment, which is the only thing `recordContentionSeed` fires on.
@@ -1531,7 +1598,9 @@ describe('placeBid — the lottery seed (AC5, AD-14)', () => {
 		// 09:00 on the 26th and closes at 09:00 on the 27th; this join is
 		// decided at the fake's clock of 12:00 on the 26th, and a fresh
 		// 24-hour clock would have said 12:00 on the 27th.
-		const harness = fakeGateway({ events: [nominated(), bidLogged(2, 1_000_000)] });
+		const harness = fakeGateway({
+			events: [nominated(), bidLogged(2, 1_000_000)]
+		});
 
 		const outcome = await placeBid(
 			harness.gateway,
@@ -1544,9 +1613,7 @@ describe('placeBid — the lottery seed (AC5, AD-14)', () => {
 
 		const payload = outcome.events[0]?.payload as BidPlacedPayload;
 		expect(payload.closesAt).toBe('2026-08-27T09:00:00.000Z');
-		expect(payload.closesAt).not.toBe(
-			new Date(NOW.getTime() + AUCTION_CLOCK).toISOString()
-		);
+		expect(payload.closesAt).not.toBe(new Date(NOW.getTime() + AUCTION_CLOCK).toISOString());
 	});
 
 	it('computes a FRESH close for an opening and a raise, as it always has', async () => {
@@ -1757,7 +1824,7 @@ describe('loadBidState — a won contract is in the three figures (AC4)', () => 
 		expect(loaded?.bid.team?.rosterCount).toBe(9);
 	});
 
-	it('drops the won Auction out of the eligible leads it was exposure for (§10 ex 20)', async () => {
+	it('drops the won Auction out of the leads it was committed for (§10 ex 20)', async () => {
 		// Nothing sweeps: the close removes the Auction from
 		// `auctionsReducer`'s fold, so the amount simply stops appearing.
 		const stashEvents: QueryResultRow[] = [
@@ -1787,17 +1854,28 @@ describe('loadBidState — a won contract is in the three figures (AC4)', () => 
 		];
 
 		const open = await bidStateWith(stashEvents);
-		expect(open.loaded?.bid.team?.eligibleLeading).toEqual([
-			{ fantraxPlayerId: 'p-stash', playerName: 'Ausar Bright', amount: 30_000_000, isContentionEntry: false }
+		// An ORDINARY lead, eligible Player or not.
+		expect(open.loaded?.bid.team?.leading).toEqual([
+			{
+				fantraxPlayerId: 'p-stash',
+				playerName: 'Ausar Bright',
+				amount: 30_000_000,
+				isContentionEntry: false
+			}
 		]);
+		expect(open.loaded?.bid.team?.eligibleLeading).toEqual([]);
 
+		// The close places him in ACTIVE/BENCH at the full Cap Hit now, so the
+		// won event carries that rather than a minors stash at $0.
 		const closed = await bidStateWith([
 			...stashEvents,
-			won(6, 'p-stash', ACTOR.teamId, 30_000_000, 0, 'minor_league')
+			won(6, 'p-stash', ACTOR.teamId, 30_000_000, 30_000_000, 'active_bench')
 		]);
+		expect(closed.loaded?.bid.team?.leading).toEqual([]);
 		expect(closed.loaded?.bid.team?.eligibleLeading).toEqual([]);
-		// ...and the Slot it took is now occupied, which is the other half of
-		// example 20: the exposure went away because the Player is placed.
-		expect(closed.loaded?.bid.team?.minorLeagueOccupied).toBe(1);
+		// ...and no Minor League Slot was taken, which is the other half of
+		// example 20's retirement: the commitment went away because the
+		// Player is placed, and he was placed on the active roster.
+		expect(closed.loaded?.bid.team?.minorLeagueOccupied).toBe(0);
 	});
 });

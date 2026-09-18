@@ -221,8 +221,6 @@ export type CloseState = {
 	 * to ask about, and terminating frees no Slot (Story 10.5).
 	 */
 	readonly winnerHoldsNominationSlot: boolean;
-	/** The eligibility FOLD's answer, never `free_agent_players`' column. */
-	readonly playerIsMinorLeagueEligible: boolean;
 	/** The WINNING Team's occupied Minor League Slots at this close. Raw. */
 	readonly minorLeagueOccupied: number;
 	/**
@@ -246,13 +244,6 @@ export type CloseState = {
 	 * close's placement. `decideClose` adds the placement itself.
 	 */
 	readonly rosterCount: number;
-	/**
-	 * Whether a Player is Minor League Eligible, as the eligibility FOLD
-	 * answers it — `teamMoneyStateFor`'s own callback, handed through so the
-	 * re-test partitions the winner's other commitments exactly as a Bid
-	 * would have.
-	 */
-	readonly isMinorLeagueEligible: (fantraxPlayerId: string) => boolean;
 	/**
 	 * What a Player is called, off the nominations fold —
 	 * `teamMoneyStateFor`'s second callback. A cancellation names the Player
@@ -845,7 +836,6 @@ type CascadeBasis = {
 	readonly capSpace: Money;
 	readonly rosterCount: number;
 	readonly minorLeagueOccupied: number;
-	readonly isMinorLeagueEligible: (fantraxPlayerId: string) => boolean;
 	readonly playerNameFor: (fantraxPlayerId: string) => string;
 	/** The Auction's own nominal expiry — `evaluate`'s `now`, unread by `slots`. */
 	readonly now: string;
@@ -911,13 +901,11 @@ function commitmentStands(
 		rosterCount: basis.rosterCount,
 		minorLeagueOccupied: basis.minorLeagueOccupied,
 		auctions: scoped,
-		isMinorLeagueEligible: basis.isMinorLeagueEligible,
 		playerNameFor: basis.playerNameFor
 	});
 	const state = bidStateFor(
 		auctionForPlayer(scoped, commitment.fantraxPlayerId),
 		team,
-		basis.isMinorLeagueEligible(commitment.fantraxPlayerId),
 		// A close happens inside the Auction Phase by construction — the sweep
 		// runs nowhere else — and the phase gate is not one this re-test reads.
 		'Auction'
@@ -1022,7 +1010,6 @@ function cascadeFor(
 		capSpace: subtractMoney(state.capSpace, capHit),
 		rosterCount: rosterCountAfter,
 		minorLeagueOccupied: minorLeagueOccupiedAfter,
-		isMinorLeagueEligible: state.isMinorLeagueEligible,
 		playerNameFor: state.playerNameFor,
 		now: closesAt
 	};
@@ -1134,7 +1121,6 @@ function cascadeFor(
 				// the second candidacy has to see the first.
 				auctions: withdrawn,
 				rosterFiguresFor,
-				isMinorLeagueEligible: basis.isMinorLeagueEligible,
 				playerNameFor: basis.playerNameFor,
 				now: basis.now
 			},
@@ -1454,7 +1440,27 @@ export function decideClose(
 		);
 	}
 
-	const placement = slotPlacementFor(state.playerIsMinorLeagueEligible, state.minorLeagueOccupied);
+	// **An Auction win ALWAYS lands in Active/Bench, whatever the Player's
+	// eligibility and whatever the Team's minors look like** (corrected
+	// 2026-09-18).
+	//
+	// A Team cannot win a Free Agent straight into its minors: it must be able
+	// to fit him on its active roster first, and only then may it move him down
+	// under FR-44 — which is what reopens the Active/Bench Slot. The old rule
+	// here called `slotPlacementFor` and sent an eligible winner to a free
+	// Minor League Slot at a $0 Cap Hit, which let a Team acquire a Player it
+	// had no room for and never charged the cap for the arrival.
+	//
+	// `slotPlacementFor` still exists and is still correct for the act it now
+	// serves alone: a Roster Trade re-evaluates placement against the receiving
+	// Team's occupancy (FR-41), because a Contract arriving by trade is already
+	// settled and is not being won into a roster. That rule is unchanged.
+	//
+	// This is what makes Minor League Eligibility irrelevant to every
+	// bidding-time rule — see `teamMoneyStateFor` and `bidStateFor`, which no
+	// longer accept it at all. Eligibility survives in exactly one place, FR-44,
+	// deciding who MAY occupy a Minor League Slot once they are on the roster.
+	const placement: SlotPlacement = 'active_bench';
 	// Computed from the placement and the winning amount SEPARATELY, and never
 	// by assuming the two money figures are equal (AD-23).
 	const capHit = capHitFor(placement, party.winningAmount);
@@ -1496,15 +1502,7 @@ export function decideClose(
 	// after it — the cascade is conditional, not a reflex. It is derived here,
 	// above both returns, so a lottery close and a Standard close cannot end up
 	// running two different cascades.
-	const cancellations = cascadeFor(
-		state,
-		auction,
-		party,
-		placement,
-		capHit,
-		closesAt,
-		playerName
-	);
+	const cancellations = cascadeFor(state, auction, party, placement, capHit, closesAt, playerName);
 
 	if (winner === null) {
 		const accepted: Accepted<readonly EventEnvelope[]> = {

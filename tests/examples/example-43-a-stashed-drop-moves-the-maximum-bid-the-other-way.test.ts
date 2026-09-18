@@ -1,31 +1,38 @@
 /**
- * PRD §10 example 43 — **A stashed Drop moves the Maximum Bid the other way**
- * (FR-43).
+ * PRD §10 example 43 — **A stashed Drop moves the Maximum Bid NOWHERE**
+ * (FR-43), rewritten on 2026-09-18.
+ *
+ * The example used to read:
  *
  * > Team L occupies one Minor League Slot (`M` = 1), has Roster Count 10 and
  * > Cap Space $20,000,000, and leads two eligible Auctions at $12,000,000 and
  * > $4,000,000 — so Minors Exposure is the largest of them that `M` cannot
- * > absorb, $12,000,000. It drops the stashed Player. Afterwards: nothing is
- * > carried, because a Minor League row was charging $0; the row is
- * > **removed**; Cap Space is unchanged at $20,000,000; Roster Count is
- * > unchanged at 10, because a stash never counted against the twelve; `M`
- * > rises to 2, Overflow falls to 0, **Minors Exposure falls to $0** and
- * > Available Cap Space is the full $20,000,000.
+ * > absorb, $12,000,000. It drops the stashed Player. […] `M` rises to 2,
+ * > Overflow falls to 0, **Minors Exposure falls to $0** and Available Cap
+ * > Space is the full $20,000,000.
  *
- * **It is the opposite of example 40, from the same act, and that is the
- * test.** Example 40's Active/Bench Drop frees a Roster Slot that costs
- * $1,000,000 to reserve, so the Team ends POORER at the bidding table. This
- * Drop frees a Minor League Slot, which absorbs an eligible lead that was
- * being counted in full against the Cap — so the Team ends RICHER, by
- * $12,000,000, having released not one dollar. A flat "a Drop lowers the
- * Maximum Bid" rule computes this example wrongly, which is why the two
- * examples have to be run side by side.
+ * **The gain is gone, because the exposure it released never existed.** A
+ * Team cannot win a Free Agent straight into its minors, so both of Team L's
+ * leads commit their full amounts from the moment they are placed and a Free
+ * Minor League Slot absorbs nothing. Freeing one by dropping the stash moves
+ * no money at all.
  *
- * **Minors Exposure recomputes by derivation, not by writing.**
- * `teamMoneyStateFor` derives it on every evaluation from the post-Drop
- * occupancy; nothing is recalculated, stored or invalidated anywhere, and
- * this file asserts the figure that falls out rather than a figure anybody
- * set.
+ * **The example's REAL point survives, and is now sharper.** It exists beside
+ * example 40 to show that "a Drop lowers the Maximum Bid" is not a rule. It
+ * still is not: example 40's Active/Bench Drop frees a Roster Slot that costs
+ * $1,000,000 to reserve and leaves the Team POORER at the bidding table, while
+ * this Drop leaves it exactly where it was. Two Drops, two different answers,
+ * and neither of them the flat rule — which is what the pair is for.
+ *
+ * So what this file pins now is a Drop that changes NOTHING: the row was
+ * charging $0, so nothing is released; Roster Count never counted it, so
+ * nothing is freed; and the Minor League Slot it gives back buys no bidding
+ * power. A figure that moved here would mean minors had re-entered the money.
+ *
+ * **Everything still derives rather than being written.** `teamMoneyStateFor`
+ * recomputes on every evaluation from the post-Drop occupancy; nothing is
+ * recalculated, stored or invalidated anywhere, and this file asserts the
+ * figures that fall out rather than figures anybody set.
  *
  * Driven through the `RecordDrop` command itself (Story 7.8) — `evaluateDrop`
  * applies the act and hands the resulting state to the same derivations the
@@ -39,7 +46,11 @@ import { MINOR_LEAGUE_SLOTS, SALARY_CAP } from '../../src/lib/core/constants.ts'
 import { parseMoney } from '../../src/lib/core/money.ts';
 import { INITIAL_NOMINATIONS } from '../../src/lib/core/projection/nominations.ts';
 import type { Auction, OpenAuctions } from '../../src/lib/core/projection/auctions.ts';
-import { teamMoneyStateFor, teamSolvencyFiguresFor, bidStateFor } from '../../src/lib/core/rules/bidding.ts';
+import {
+	teamMoneyStateFor,
+	teamSolvencyFiguresFor,
+	bidStateFor
+} from '../../src/lib/core/rules/bidding.ts';
 import { evaluateDrop } from '../../src/lib/core/rules/roster-drop.ts';
 import type { DroppablePlayer, RosterDropState } from '../../src/lib/core/rules/roster-drop.ts';
 import type { RecordDrop } from '../../src/lib/core/types.ts';
@@ -161,11 +172,10 @@ function figuresOf(rows: readonly DroppablePlayer[]) {
 		rosterCount: rows.filter((held) => held.rosterSlotKind === 'active_bench').length,
 		minorLeagueOccupied,
 		auctions: AUCTIONS,
-		isMinorLeagueEligible: (id) => id === 'p-big' || id === 'p-small',
-		playerNameFor: (id) => id
+		playerNameFor: (id: string) => id
 	});
 	const figures = teamSolvencyFiguresFor(
-		bidStateFor(null, money, false, 'Auction'),
+		bidStateFor(null, money, 'Auction'),
 		'',
 		parseMoney(0),
 		true
@@ -174,8 +184,8 @@ function figuresOf(rows: readonly DroppablePlayer[]) {
 	return figures;
 }
 
-describe('§10 example 43 — a stashed Drop moves the Maximum Bid the other way', () => {
-	it('starts Team L at M = 1, Roster Count 10, Cap Space $20,000,000, Minors Exposure $12,000,000', () => {
+describe('§10 example 43 — a stashed Drop moves the Maximum Bid nowhere', () => {
+	it('starts Team L at M = 1, Roster Count 10, Cap Space $20,000,000, nothing exposed', () => {
 		const before = figuresOf(ROWS);
 
 		// `M` is the FREE Minor League Slots: two of the three are occupied, so
@@ -184,10 +194,12 @@ describe('§10 example 43 — a stashed Drop moves the Maximum Bid the other way
 		expect(MINOR_LEAGUE_SLOTS - 2).toBe(1);
 		expect(before.rosterCount).toBe(10);
 		expect(before.capSpace).toBe(20_000_000);
-		// Two eligible leads and ONE free Minor League Slot: it absorbs one of
-		// them, and the largest that cannot be absorbed is the $12,000,000.
-		expect(before.minorsExposure).toBe(BIG_LEAD);
-		expect(before.availableCapSpace).toBe(20_000_000 - BIG_LEAD);
+		// Two leads and ONE free Minor League Slot: it absorbs neither, because
+		// no win lands in one. Both commit in full, so what Team L has already
+		// spent is the SUM rather than the largest that overflowed.
+		expect(before.minorsExposure).toBe(0);
+		expect(before.committedBids).toBe(BIG_LEAD + SMALL_LEAD);
+		expect(before.availableCapSpace).toBe(20_000_000 - (BIG_LEAD + SMALL_LEAD));
 	});
 
 	it('commits, carries nothing, and REMOVES the row', () => {
@@ -219,7 +231,7 @@ describe('§10 example 43 — a stashed Drop moves the Maximum Bid the other way
 		expect(outcome.delta.before.rosterCount).toBe(10);
 	});
 
-	it('raises M to 2, drops Overflow to 0 and Minors Exposure to $0', () => {
+	it('raises M to 2, and no money figure moves with it', () => {
 		const outcome = evaluateDrop(stateOf(ROWS), DROP);
 		if (outcome.kind !== 'permitted') throw new Error('refused');
 
@@ -228,41 +240,46 @@ describe('§10 example 43 — a stashed Drop moves the Maximum Bid the other way
 		// `M = MINOR_LEAGUE_SLOTS − occupied`, derived and never stored.
 		expect(MINOR_LEAGUE_SLOTS - outcome.delta.after.minorLeagueOccupied).toBe(2);
 
-		// **Overflow 0**, the figure the matrix pins beside `M`→2. It is the
-		// count of eligible leads the free Minor League Slots cannot absorb:
-		// one before the Drop (two leads, one free Slot) and none after it.
-		expect(figuresOf(ROWS).overflowCount).toBe(1);
+		// **Overflow 0 on BOTH sides**, which is the difference from the old
+		// example: it used to fall 1 → 0 and release $12,000,000 on the way.
+		// There is nothing to overflow, before or after.
+		expect(figuresOf(ROWS).overflowCount).toBe(0);
 		expect(figuresOf(ROWS.filter((held) => held.fantraxPlayerId !== 'p-stash')).overflowCount).toBe(
 			0
 		);
 
 		const gate = outcome.gates.cap;
-		// Two free Minor League Slots absorb both eligible leads, so nothing is
-		// exposed at all.
+		// The freed Slot buys nothing: both leads were committed in full before
+		// the Drop and still are after it.
 		expect(gate.minorsExposure).toBe(0);
-		expect(gate.availableCapSpace).toBe(20_000_000);
+		expect(gate.committedBids).toBe(BIG_LEAD + SMALL_LEAD);
+		expect(gate.availableCapSpace).toBe(20_000_000 - (BIG_LEAD + SMALL_LEAD));
 	});
 
-	it('moves the Maximum Bid UP, which is the opposite of example 40', () => {
+	it('leaves the Maximum Bid UNMOVED, which is still not example 40', () => {
 		const before = figuresOf(ROWS);
 		const outcome = evaluateDrop(stateOf(ROWS), DROP);
 		if (outcome.kind !== 'permitted') throw new Error('refused');
 		const after = outcome.gates.cap;
 
-		// **The gain, stated as the arithmetic rather than as one literal.**
-		// $12,000,000 of Minors Exposure is released, because the freed Minor
-		// League Slot absorbs the lead that was being counted in full — and
-		// $1,000,000 goes back into Roster Reserve, because that lead had been
-		// projecting as an Active/Bench addition and no longer does. The Team
-		// ends $11,000,000 richer at the bidding table having released nothing.
-		expect(before.minorsExposure - after.minorsExposure).toBe(BIG_LEAD);
-		expect(after.rosterReserve - before.rosterReserve).toBe(1_000_000);
-		expect(after.maximumBid - before.maximumBid).toBe(BIG_LEAD - 1_000_000);
-		expect(after.maximumBid).toBeGreaterThan(before.maximumBid);
-		// Not one dollar was released, and Roster Count did not move — so
-		// neither the Cap nor the Slot arithmetic explains the gain. The Minor
-		// League Slot does.
+		// **Nothing moves, and that is the assertion.** The old example gained
+		// $11,000,000 here — $12,000,000 of released exposure less $1,000,000
+		// back into Roster Reserve. Neither term exists: the leads were always
+		// committed in full, and neither of them stopped projecting an
+		// Active/Bench addition, because they never did anything else.
+		expect(after.minorsExposure).toBe(before.minorsExposure);
+		expect(after.committedBids).toBe(before.committedBids);
+		expect(after.rosterReserve).toBe(before.rosterReserve);
+		expect(after.maximumBid).toBe(before.maximumBid);
+		// Not one dollar was released and Roster Count did not move, so there
+		// was never anything for a figure to move ON.
 		expect(after.capSpace).toBe(before.capSpace);
 		expect(after.rosterCount).toBe(before.rosterCount);
+
+		// **The pair with example 40 still holds**, which is the whole reason
+		// this file exists: that Drop leaves the Team POORER at the bidding
+		// table and this one leaves it exactly as it was, so "a Drop lowers the
+		// Maximum Bid" is still not a rule.
+		expect(after.maximumBid).not.toBeLessThan(before.maximumBid);
 	});
 });

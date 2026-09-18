@@ -125,7 +125,7 @@ function theLottery(): readonly AppendedEvent[] {
 		)
 	];
 
-	const decided = decide(bidStateFor(null, RICH, false, 'Auction'), OPENING, OPENED_AT, FRESH);
+	const decided = decide(bidStateFor(null, RICH, 'Auction'), OPENING, OPENED_AT, FRESH);
 	if (decided.kind !== 'accepted') throw new Error('example 11: Team E was refused');
 	log.push(
 		appended(2, OPENED_AT, BID_PLACED_EVENT, decided.events[0]?.payload, {
@@ -149,7 +149,6 @@ function theDraw() {
 		auction,
 		nomination: nominationForPlayer(fold(INITIAL_NOMINATIONS, log, nominationsReducer), 'p-1'),
 		winnerHoldsNominationSlot: false,
-		playerIsMinorLeagueEligible: false,
 		minorLeagueOccupied: 0,
 		// **Story 10.3's cascade inputs.** `auctions` is empty here, so the
 		// winning Team holds no other commitment and FR-40's cascade has
@@ -158,7 +157,6 @@ function theDraw() {
 		auctions: { byPlayer: {} },
 		capSpace: parseMoney(0),
 		rosterCount: 0,
-		isMinorLeagueEligible: () => false,
 		playerNameFor: (playerId: string) => playerId,
 		drawnWinner,
 		rosterFiguresFor: () => null

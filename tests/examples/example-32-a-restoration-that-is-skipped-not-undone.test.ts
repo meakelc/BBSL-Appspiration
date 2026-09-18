@@ -132,12 +132,10 @@ const CLOSE_STATE: CloseState = {
 	auction: BROOKS,
 	nomination: nominationOf('p-brooks'),
 	winnerHoldsNominationSlot: false,
-	playerIsMinorLeagueEligible: false,
 	minorLeagueOccupied: 0,
 	auctions: auctionsOf([BROOKS, CARTER]),
 	capSpace: CAP_SPACE,
 	rosterCount: 11,
-	isMinorLeagueEligible: () => false,
 	playerNameFor: (playerId: string) => PLAYER_NAMES[playerId] ?? playerId,
 	drawnWinner: null,
 	rosterFiguresFor: (teamId: string) => {
@@ -194,11 +192,10 @@ describe('§10 example 32 — a restoration that is skipped, not undone', () => 
 			rosterCount: 12,
 			minorLeagueOccupied: 0,
 			auctions: auctionsOf([CARTER]),
-			isMinorLeagueEligible: () => false,
 			playerNameFor: (playerId: string) => PLAYER_NAMES[playerId] ?? playerId
 		});
 		const gates = evaluateRestore(
-			bidStateFor(CARTER, team, false, 'Auction'),
+			bidStateFor(CARTER, team, 'Auction'),
 			{
 				kind: 'RestoreLeadingBid',
 				fantraxPlayerId: 'p-carter',
@@ -267,7 +264,6 @@ describe('§10 example 32 — a restoration that is skipped, not undone', () => 
 			rosterCount: 8,
 			minorLeagueOccupied: 0,
 			auctions: folded,
-			isMinorLeagueEligible: () => false,
 			playerNameFor: (playerId: string) => PLAYER_NAMES[playerId] ?? playerId
 		});
 		expect(w.leading.map((lead) => lead.amount)).toEqual([1_000_000]);
@@ -279,7 +275,6 @@ describe('§10 example 32 — a restoration that is skipped, not undone', () => 
 			rosterCount: 12,
 			minorLeagueOccupied: 0,
 			auctions: folded,
-			isMinorLeagueEligible: () => false,
 			playerNameFor: (playerId: string) => PLAYER_NAMES[playerId] ?? playerId
 		});
 		expect(v.leading).toEqual([]);

@@ -33,11 +33,6 @@ import { fold } from '../core/projection/fold.ts';
 import { INITIAL_AUCTIONS, auctionsReducer } from '../core/projection/auctions.ts';
 import { INITIAL_CONTRACTS, contractsReducer } from '../core/projection/contracts.ts';
 import {
-	INITIAL_ELIGIBILITY,
-	eligibilityReducer,
-	isEligible
-} from '../core/projection/eligibility.ts';
-import {
 	INITIAL_NOMINATIONS,
 	nominationForPlayer,
 	nominationForTeam,
@@ -158,7 +153,6 @@ export async function loadTeamsIndex(
 		// computation" a property of the assembly rather than a claim.
 		const events = await loadEventsViaClient(client);
 		const auctions = fold(INITIAL_AUCTIONS, events, auctionsReducer);
-		const eligibility = fold(INITIAL_ELIGIBILITY, events, eligibilityReducer);
 		const nominations = fold(INITIAL_NOMINATIONS, events, nominationsReducer);
 		const phase = fold(INITIAL_PHASE, events, phaseReducer);
 		const contracts = fold(INITIAL_CONTRACTS, events, contractsReducer);
@@ -197,7 +191,6 @@ export async function loadTeamsIndex(
 				rosterCount: roster.rosterCount,
 				minorLeagueOccupied: roster.minorLeagueOccupied,
 				auctions,
-				isMinorLeagueEligible: (playerId) => isEligible(eligibility, playerId),
 				playerNameFor: (playerId) =>
 					nominationForPlayer(nominations, playerId)?.playerName ?? playerId
 			});

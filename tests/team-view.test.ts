@@ -267,7 +267,7 @@ describe('the viewer’s own Team — Maximum Bid and the Auctions it holds capi
 		expect(new Set(labels).size).toBe(labels.length);
 	});
 
-	it('lists the Auctions this Team leads or contends in, from the two partitioned lists', () => {
+	it('lists the Auctions this Team leads or contends in', () => {
 		// Not a fourth traversal: `teamMoneyStateFor` already partitioned this
 		// set, and both halves land in the list.
 		const auctions = fold(
@@ -282,11 +282,16 @@ describe('the viewer’s own Team — Maximum Bid and the Auctions it holds capi
 			rosterCount: 9,
 			minorLeagueOccupied: 0,
 			auctions,
-			isMinorLeagueEligible: (playerId) => playerId === 'p-2',
 			playerNameFor: (playerId) => `Player ${playerId}`
 		});
-		expect(team.leading).toHaveLength(1);
-		expect(team.eligibleLeading).toHaveLength(1);
+		// There is no partition to assert any more (corrected 2026-09-18):
+		// an Auction win lands in Active/Bench whatever the Player's
+		// eligibility, so every lead commits its full amount and
+		// `eligibleLeading` is never written. Both leads below are in
+		// `leading`, and the listing is unchanged — it always concatenated
+		// the two halves.
+		expect(team.leading).toHaveLength(2);
+		expect(team.eligibleLeading).toHaveLength(0);
 
 		const view = viewFor({ team, viewerIsThisTeam: true });
 		expect(view.auctions?.map((entry) => entry.fantraxPlayerId)).toEqual(['p-1', 'p-2']);

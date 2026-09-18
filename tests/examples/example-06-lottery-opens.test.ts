@@ -76,7 +76,7 @@ const TEAM_E: TeamMoneyState = {
 };
 
 /** The Player is nominated by Team D and nobody has bid — no clock yet. */
-const AWAITING: BidState = bidStateFor(null, TEAM_E, false, 'Auction');
+const AWAITING: BidState = bidStateFor(null, TEAM_E, 'Auction');
 
 const OPENING: PlaceBid = {
 	kind: 'PlaceBid',
@@ -201,7 +201,6 @@ describe('§10 example 6 — the lottery opens', () => {
 			rosterCount: 9,
 			minorLeagueOccupied: 0,
 			auctions,
-			isMinorLeagueEligible: () => false,
 			playerNameFor: () => 'The Lottery Player'
 		});
 

@@ -120,8 +120,6 @@ export const STATE_16: CloseState = {
 	auction: auctionWonAt('p-stash', 4_000_000),
 	nomination: nominationOf('p-stash', 'Ausar Bright'),
 	winnerHoldsNominationSlot: false,
-	// "a Minor League Eligible player"
-	playerIsMinorLeagueEligible: true,
 	// "Team M holds two players in Minor League Slots"
 	minorLeagueOccupied: minorLeagueOccupiedIn(TEAM_M_IMPORTED),
 	// **Story 10.3's cascade inputs.** `auctions` is empty here, so Team M
@@ -130,7 +128,6 @@ export const STATE_16: CloseState = {
 	auctions: { byPlayer: {} },
 	capSpace: parseMoney(0),
 	rosterCount: 0,
-	isMinorLeagueEligible: () => false,
 	playerNameFor: (playerId: string) => playerId,
 	// A Standard Contention: no lottery, no draw, no winner to derive.
 	drawnWinner: null,

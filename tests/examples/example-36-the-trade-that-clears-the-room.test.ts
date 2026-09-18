@@ -112,7 +112,7 @@ function maximumBidFor(capSpace: number, rosterCount: number): number | null {
 		managerId: 'm-a',
 		amount: parseMoney(1_000_000)
 	};
-	return evaluate(bidStateFor(null, team, false, 'Auction'), bid, NOW).cap.maximumBid;
+	return evaluate(bidStateFor(null, team, 'Auction'), bid, NOW).cap.maximumBid;
 }
 
 describe('§10 example 36 — the trade that clears the room', () => {

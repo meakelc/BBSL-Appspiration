@@ -139,11 +139,6 @@ import type { ClosedAuction } from '../core/projection/closed.ts';
 import { INITIAL_CONTRACTS, contractsReducer } from '../core/projection/contracts.ts';
 import { INITIAL_DRAWS, drawsReducer } from '../core/projection/draws.ts';
 import {
-	INITIAL_ELIGIBILITY,
-	eligibilityReducer,
-	isEligible
-} from '../core/projection/eligibility.ts';
-import {
 	bidAmountField,
 	bidControlState,
 	bidStateFor,
@@ -304,7 +299,6 @@ export type AuctionPageBidControl = {
 	 * League Slots, Overflow Count, whether Maximum Bid binds at all — is
 	 * derived from it in the core on every evaluation.
 	 */
-	readonly playerIsMinorLeagueEligible: boolean;
 	/**
 	 * The viewer Team's money FACTS — Cap Space, Roster Count, the open
 	 * Auctions it leads (eligible and not, partitioned), and how many Minor
@@ -894,7 +888,6 @@ export async function loadAuctionPage(
 		// Commissioner is changing one.
 		const auctions = fold(INITIAL_AUCTIONS, events, auctionsReducer);
 		const auction = auctionForPlayer(auctions, fantraxPlayerId);
-		const eligibility = fold(INITIAL_ELIGIBILITY, events, eligibilityReducer);
 		// The fourth fold, over the same events array (Story 3.4): the Auction
 		// Contracts this log has produced. It reaches the page only through
 		// `loadTeamRoster` below, which counts a won Player exactly as it
@@ -919,7 +912,6 @@ export async function loadAuctionPage(
 						// reached the core with no third call site.
 						...(await loadTeamRoster(client, viewerTeamId, contracts)),
 						auctions,
-						isMinorLeagueEligible: (playerId) => isEligible(eligibility, playerId),
 						// The name an exposing Auction is refused by, from the fold
 						// that already holds it — the identical expression
 						// `server/bidding.ts` uses under the lock.
@@ -1021,7 +1013,6 @@ export async function loadAuctionPage(
 				viewerTeamId,
 				nomination.fantraxPlayerId,
 				figuresAt,
-				isEligible(eligibility, fantraxPlayerId),
 				phase
 			)
 		};
@@ -1068,12 +1059,10 @@ function readBidControl(
 	fantraxPlayerId: string,
 	/** When the roster and the folds were read — the caption's instant. */
 	figuresAt: string,
-	/** The eligibility fold's answer about THIS Player (Story 2.8). */
-	playerIsMinorLeagueEligible: boolean,
 	/** The folded League phase (Story 3.7) — the ninth gate's one input. */
 	phase: LeaguePhase
 ): AuctionPageBidControl {
-	const state: BidState = bidStateFor(auction, team, playerIsMinorLeagueEligible, phase);
+	const state: BidState = bidStateFor(auction, team, phase);
 	// **The pre-fill depends on who is asking, since Story 3.3.** Inside a
 	// live Minimum-Bid Contention a Team not yet in can join at $1,000,000
 	// and a Team already in cannot — the only amount left to them is the one
@@ -1109,7 +1098,6 @@ function readBidControl(
 		contention: state.contention,
 		contenderTeamIds: state.contenders,
 		viewerTeamId,
-		playerIsMinorLeagueEligible,
 		team,
 		// The database's instant, taken where the figures were actually read
 		// and handed to `evaluate()` above as its `now`. Serialised as the

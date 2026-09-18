@@ -43,11 +43,6 @@ import {
 import type { ContentionState } from '../core/projection/auctions.ts';
 import { INITIAL_CONTRACTS, contractsReducer } from '../core/projection/contracts.ts';
 import {
-	INITIAL_ELIGIBILITY,
-	eligibilityReducer,
-	isEligible
-} from '../core/projection/eligibility.ts';
-import {
 	INITIAL_NOMINATIONS,
 	nominationForPlayer,
 	nominationsReducer,
@@ -268,7 +263,6 @@ export async function loadPositions(
 		const events = await loadEventsViaClient(client);
 		const nominations = fold(INITIAL_NOMINATIONS, events, nominationsReducer);
 		const auctions = fold(INITIAL_AUCTIONS, events, auctionsReducer);
-		const eligibility = fold(INITIAL_ELIGIBILITY, events, eligibilityReducer);
 		const phase = fold(INITIAL_PHASE, events, phaseReducer);
 		const contracts = fold(INITIAL_CONTRACTS, events, contractsReducer);
 
@@ -321,11 +315,9 @@ export async function loadPositions(
 					rosterCount: roster.rosterCount,
 					minorLeagueOccupied: roster.minorLeagueOccupied,
 					auctions,
-					isMinorLeagueEligible: (playerId) => isEligible(eligibility, playerId),
 					playerNameFor: (playerId) =>
 						nominationForPlayer(nominations, playerId)?.playerName ?? playerId
 				}),
-				isEligible(eligibility, fantraxPlayerId),
 				phase
 			);
 			return reEntryFor({

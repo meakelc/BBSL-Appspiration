@@ -119,12 +119,10 @@ const CLOSE_STATE: CloseState = {
 	auction: BROOKS,
 	nomination: nominationOf('p-brooks'),
 	winnerHoldsNominationSlot: false,
-	playerIsMinorLeagueEligible: false,
 	minorLeagueOccupied: 0,
 	auctions: auctionsOf([BROOKS, CARTER]),
 	capSpace: CAP_SPACE,
 	rosterCount: 11,
-	isMinorLeagueEligible: () => false,
 	playerNameFor: (playerId: string) => PLAYER_NAMES[playerId] ?? playerId,
 	drawnWinner: null,
 	// Nobody else ever bid, so there is no candidate Team for the batched read
@@ -242,7 +240,6 @@ describe('§10 example 33 — a restoration with nothing to restore', () => {
 			rosterCount: 12,
 			minorLeagueOccupied: 0,
 			auctions: folded,
-			isMinorLeagueEligible: () => false,
 			playerNameFor: (playerId: string) => PLAYER_NAMES[playerId] ?? playerId
 		});
 

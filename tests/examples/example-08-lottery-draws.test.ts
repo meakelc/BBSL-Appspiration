@@ -159,7 +159,7 @@ function theLottery(): readonly AppendedEvent[] {
 	for (const [index, [teamId, teamName, at]] of CONTENDERS.entries()) {
 		const auction = auctionForPlayer(fold(INITIAL_AUCTIONS, log, auctionsReducer), 'p-1');
 		const decided = decide(
-			bidStateFor(auction, RICH, false, 'Auction'),
+			bidStateFor(auction, RICH, 'Auction'),
 			bidCommand(teamId, teamName, MINIMUM_BID),
 			at,
 			// The opening commits to a fresh seed; each join is handed the
@@ -196,7 +196,6 @@ function theDraw() {
 		auction,
 		nomination: nominationForPlayer(nominations, 'p-1'),
 		winnerHoldsNominationSlot: false,
-		playerIsMinorLeagueEligible: false,
 		minorLeagueOccupied: 0,
 		// **Story 10.3's cascade inputs.** `auctions` is empty here, so the
 		// winning Team holds no other commitment and FR-40's cascade has
@@ -205,7 +204,6 @@ function theDraw() {
 		auctions: { byPlayer: {} },
 		capSpace: parseMoney(0),
 		rosterCount: 0,
-		isMinorLeagueEligible: () => false,
 		playerNameFor: (playerId: string) => playerId,
 		drawnWinner,
 		rosterFiguresFor: () => null
@@ -308,7 +306,6 @@ describe('§10 example 8 — the lottery draws', () => {
 				rosterCount: 9,
 				minorLeagueOccupied: 0,
 				auctions: fold(INITIAL_AUCTIONS, log, auctionsReducer),
-				isMinorLeagueEligible: () => false,
 				playerNameFor: () => 'Jalen Green'
 			}).leading;
 
@@ -377,7 +374,6 @@ describe('§10 example 8 — the lottery draws', () => {
 			auction,
 			nomination: null,
 			winnerHoldsNominationSlot: false,
-			playerIsMinorLeagueEligible: false,
 			minorLeagueOccupied: 0,
 			// **Story 10.3's cascade inputs.** `auctions` is empty here, so the
 			// winning Team holds no other commitment and FR-40's cascade has
@@ -386,7 +382,6 @@ describe('§10 example 8 — the lottery draws', () => {
 			auctions: { byPlayer: {} },
 			capSpace: parseMoney(0),
 			rosterCount: 0,
-			isMinorLeagueEligible: () => false,
 			playerNameFor: (playerId: string) => playerId,
 			drawnWinner,
 			rosterFiguresFor: () => null

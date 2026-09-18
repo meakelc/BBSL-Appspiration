@@ -77,7 +77,7 @@ const TEAM_R: TeamMoneyState = {
 };
 
 /** A nominated Player nobody has bid on, so `opening` is the live gate. */
-const STATE: BidState = bidStateFor(null, TEAM_R, false, 'Auction');
+const STATE: BidState = bidStateFor(null, TEAM_R, 'Auction');
 
 function bidOf(amount: number): PlaceBid {
 	return {
@@ -217,7 +217,7 @@ describe('§10 example 24 — a full roster ends non-eligible bidding', () => {
 		// none". The example picks $40.0M; the verdict is the same at any
 		// figure, which is what makes capacity a genuinely separate ground.
 		for (const capSpace of [0, 40_000_000, 400_000_000]) {
-			const state = bidStateFor(null, { ...TEAM_R, capSpace: parseMoney(capSpace) }, false, 'Auction');
+			const state = bidStateFor(null, { ...TEAM_R, capSpace: parseMoney(capSpace) }, 'Auction');
 			const slots = evaluate(state, bidOf(5_000_000), NOW).slots;
 			expect(slots.passed, String(capSpace)).toBe(false);
 			expect(slots.rosterCount, String(capSpace)).toBe(12);

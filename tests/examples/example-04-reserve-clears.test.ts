@@ -49,7 +49,7 @@ const TEAM_C: TeamMoneyState = {
 	minorLeagueOccupied: 0
 };
 
-const STATE: BidState = bidStateFor(null, TEAM_C, false, 'Auction');
+const STATE: BidState = bidStateFor(null, TEAM_C, 'Auction');
 
 function bidOf(amount: number): PlaceBid {
 	return {
@@ -95,7 +95,7 @@ describe('§10 example 4 — Reserve clears as commitments accumulate', () => {
 		// unclamped reserve would then go NEGATIVE and hand that Team extra
 		// spending power as a reward for the override.
 		const overridden: TeamMoneyState = { ...TEAM_C, rosterCount: 14 };
-		const gates = evaluate(bidStateFor(null, overridden, false, 'Auction'), bidOf(1_500_000), NOW);
+		const gates = evaluate(bidStateFor(null, overridden, 'Auction'), bidOf(1_500_000), NOW);
 
 		expect(gates.cap.rosterReserve).toBe(0);
 		expect(gates.cap.maximumBid).toBe(7_000_000);

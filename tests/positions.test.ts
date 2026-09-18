@@ -162,7 +162,7 @@ function metadataFor(entries: Record<string, BoardMetadata>): Map<string, BoardM
 
 /**
  * The re-entry answer, assembled exactly as `server/positions.ts` assembles it
- * — `bidStateFor(auction, teamMoneyStateFor({...}), eligible, phase)`, then
+ * — `bidStateFor(auction, teamMoneyStateFor({...}), phase)`, then
  * `reEntryFor`. The roster figures are the arguments a test varies; everything
  * else is the production narrowing.
  */
@@ -193,11 +193,9 @@ function answerer(
 						rosterCount: roster.rosterCount,
 						minorLeagueOccupied: roster.minorLeagueOccupied,
 						auctions: projections.auctions,
-						isMinorLeagueEligible: (playerId) => eligiblePlayers.includes(playerId),
 						playerNameFor: (playerId) =>
 							nominationForPlayer(projections.nominations, playerId)?.playerName ?? playerId
 					}),
-			eligiblePlayers.includes(fantraxPlayerId),
 			'Auction'
 		);
 		return reEntryFor({ state, fantraxPlayerId, viewerTeamId, now: NOW });

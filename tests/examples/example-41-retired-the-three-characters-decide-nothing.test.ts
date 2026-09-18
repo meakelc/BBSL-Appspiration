@@ -105,7 +105,7 @@ function bidOf(amount: number): PlaceBid {
 }
 
 function gatesFor(rows: readonly CapHitRow[]) {
-	return evaluate(bidStateFor(null, teamHolding(rows), false, 'Auction'), bidOf(1_000_000), NOW);
+	return evaluate(bidStateFor(null, teamHolding(rows), 'Auction'), bidOf(1_000_000), NOW);
 }
 
 describe('example 41, retired — the three characters that decide nothing', () => {

@@ -120,7 +120,6 @@ function stateOf(overrides: Partial<CloseState> = {}): CloseState {
 		auction: auctionOf(),
 		nomination: NOMINATION,
 		winnerHoldsNominationSlot: false,
-		playerIsMinorLeagueEligible: false,
 		minorLeagueOccupied: 0,
 		// **Story 10.3's cascade inputs.** `auctions` is empty here, so the
 		// winning Team holds no other commitment and FR-40's cascade has
@@ -129,7 +128,6 @@ function stateOf(overrides: Partial<CloseState> = {}): CloseState {
 		auctions: { byPlayer: {} },
 		capSpace: parseMoney(0),
 		rosterCount: 0,
-		isMinorLeagueEligible: () => false,
 		playerNameFor: (playerId: string) => playerId,
 		// The shell derives this through `rules/draw.ts` and passes it as
 		// `decideClose`'s third argument; a Standard close has none.
@@ -241,7 +239,12 @@ describe('capHitFor — the two money fields are distinct (AD-23)', () => {
 describe('closedWinnerFor — who won, and for how much', () => {
 	it('awards a Standard Contention to the Leading Bidder at their own amount', () => {
 		const auction = auctionOf({
-			leadingBid: bid({ teamId: 't-8', teamName: 'Team T', managerId: 'm-8', amount: parseMoney(8_500_000) })
+			leadingBid: bid({
+				teamId: 't-8',
+				teamName: 'Team T',
+				managerId: 'm-8',
+				amount: parseMoney(8_500_000)
+			})
 		});
 
 		expect(closedWinnerFor(auction, null)).toEqual({
@@ -259,7 +262,12 @@ describe('closedWinnerFor — who won, and for how much', () => {
 		// never `leadingBid.amount`, which agrees only by coincidence today.
 		const auction = auctionOf({
 			contention: 'minimum_bid',
-			leadingBid: bid({ teamId: 't-e', teamName: 'Team E', managerId: 'm-e', amount: parseMoney(MINIMUM_BID) }),
+			leadingBid: bid({
+				teamId: 't-e',
+				teamName: 'Team E',
+				managerId: 'm-e',
+				amount: parseMoney(MINIMUM_BID)
+			}),
 			contenders: [
 				{ seq: '2', teamId: 't-e', teamName: 'Team E', managerId: 'm-e' },
 				{ seq: '3', teamId: 't-f', teamName: 'Team F', managerId: 'm-f' }
@@ -366,7 +374,12 @@ describe('decideClose — exactly one AuctionClosed, carrying the whole outcome'
 	it('appends one event, acted by the WINNER', () => {
 		const state = stateOf({
 			auction: auctionOf({
-				leadingBid: bid({ teamId: 't-8', teamName: 'Team T', managerId: 'm-8', amount: parseMoney(8_500_000) })
+				leadingBid: bid({
+					teamId: 't-8',
+					teamName: 'Team T',
+					managerId: 'm-8',
+					amount: parseMoney(8_500_000)
+				})
 			})
 		});
 		const { event, payload } = payloadOf(state);
@@ -382,10 +395,16 @@ describe('decideClose — exactly one AuctionClosed, carrying the whole outcome'
 		expect(event.deviceClass).toBeUndefined();
 	});
 
-	it('records a Minor League placement at a $0 Cap Hit with the amount intact (§10 ex 16)', () => {
+	it('records an ACTIVE/BENCH placement at the full Cap Hit, minors free or not', () => {
+		// **Corrected 2026-09-18.** A Team cannot win a Free Agent straight
+		// into its minors, so the free third Slot below is left alone and the
+		// win charges its whole amount. AD-23 still holds — `winningAmount`
+		// and `capHit` are two persisted fields rather than one figure read
+		// twice — they simply agree on every close now.
 		const state = stateOf({
-			auction: auctionOf({ leadingBid: bid({ amount: parseMoney(4_000_000) }) }),
-			playerIsMinorLeagueEligible: true,
+			auction: auctionOf({
+				leadingBid: bid({ amount: parseMoney(4_000_000) })
+			}),
 			minorLeagueOccupied: 2
 		});
 
@@ -396,8 +415,8 @@ describe('decideClose — exactly one AuctionClosed, carrying the whole outcome'
 			teamName: 'Team M',
 			managerId: 'm-m',
 			winningAmount: 4_000_000,
-			capHit: 0,
-			placement: 'minor_league',
+			capHit: 4_000_000,
+			placement: 'active_bench',
 			contention: 'standard',
 			contractYears: null,
 			closedAt: CLOSES_AT,
@@ -424,8 +443,9 @@ describe('decideClose — exactly one AuctionClosed, carrying the whole outcome'
 
 	it('records an Active/Bench placement at the full amount', () => {
 		const state = stateOf({
-			auction: auctionOf({ leadingBid: bid({ amount: parseMoney(3_000_000) }) }),
-			playerIsMinorLeagueEligible: true,
+			auction: auctionOf({
+				leadingBid: bid({ amount: parseMoney(3_000_000) })
+			}),
 			minorLeagueOccupied: MINOR_LEAGUE_SLOTS
 		});
 		const { payload } = payloadOf(state);
@@ -454,7 +474,12 @@ describe('decideClose — exactly one AuctionClosed, carrying the whole outcome'
 		const state = stateOf({
 			auction: auctionOf({
 				contention: 'minimum_bid',
-				leadingBid: bid({ teamId: 't-e', teamName: 'Team E', managerId: 'm-e', amount: parseMoney(MINIMUM_BID) }),
+				leadingBid: bid({
+					teamId: 't-e',
+					teamName: 'Team E',
+					managerId: 'm-e',
+					amount: parseMoney(MINIMUM_BID)
+				}),
 				contenders: [
 					{ seq: '2', teamId: 't-e', teamName: 'Team E', managerId: 'm-e' },
 					{ seq: '3', teamId: 't-f', teamName: 'Team F', managerId: 'm-f' }
@@ -478,7 +503,6 @@ describe('decideClose — exactly one AuctionClosed, carrying the whole outcome'
 describe('decideClose — the outcome is invariant under `now` (AD-10)', () => {
 	it('produces byte-identical events on time and six hours late', () => {
 		const state = stateOf({
-			playerIsMinorLeagueEligible: true,
 			minorLeagueOccupied: 2
 		});
 
@@ -624,7 +648,11 @@ describe('decideClose — ContentionDrawn, then AuctionClosed (Story 3.6, AD-14)
 	});
 
 	it('throws when the winner is not on the list it was drawn from at all', () => {
-		const stranger: DrawnWinner = { ...DRAWN, teamId: 't-z', teamName: 'Team Z' };
+		const stranger: DrawnWinner = {
+			...DRAWN,
+			teamId: 't-z',
+			teamName: 'Team Z'
+		};
 
 		expect(() => decideClose(lotteryState(), AT_EXPIRY, stranger)).toThrow(/is not at position/);
 	});
@@ -756,7 +784,12 @@ describe('decideClose — the empty close: ContentionDrawn, then AuctionTerminat
 		// something to cancel if one ran. It must not.
 		const other = auctionOf({
 			fantraxPlayerId: 'p-other',
-			leadingBid: bid({ seq: '9', teamId: 't-e', teamName: 'Team E', managerId: 'm-e' })
+			leadingBid: bid({
+				seq: '9',
+				teamId: 't-e',
+				teamName: 'Team E',
+				managerId: 'm-e'
+			})
 		});
 		const state = stateOf({
 			auction: emptiedLotteryState().auction,
@@ -811,7 +844,10 @@ describe('decideClose — the empty close: ContentionDrawn, then AuctionTerminat
 	});
 
 	it('throws when there is no nomination to name the terminating Team', () => {
-		const state = stateOf({ auction: emptiedLotteryState().auction, nomination: null });
+		const state = stateOf({
+			auction: emptiedLotteryState().auction,
+			nomination: null
+		});
 
 		expect(() => decideClose(state, AT_EXPIRY, UNDRAWN)).toThrow(/NOMINATING Team/);
 	});
@@ -842,7 +878,6 @@ describe('closedWinnerFor — the winner it is handed is validated (Story 3.6)',
 		expect(partyOf(lottery(), DRAWN).teamId).toBe('t-f');
 	});
 });
-
 
 // --- The cancellation cascade (Story 10.3, FR-40) -------------------------
 
@@ -910,14 +945,16 @@ function cascadeState(input: {
 		// so through `candidates`.
 		rosterFiguresFor:
 			input.candidates ??
-			(() => ({ capSpace: parseMoney(50_000_000), rosterCount: 4, minorLeagueOccupied: 0 })),
+			(() => ({
+				capSpace: parseMoney(50_000_000),
+				rosterCount: 4,
+				minorLeagueOccupied: 0
+			})),
 		auction: won,
-		playerIsMinorLeagueEligible: input.wonIsEligible ?? false,
 		minorLeagueOccupied: input.minorLeagueOccupied ?? 0,
 		auctions: auctionsOf([won, ...input.holding]),
 		capSpace: parseMoney(50_000_000),
 		rosterCount: input.rosterCount,
-		isMinorLeagueEligible: input.eligible ?? (() => false),
 		playerNameFor: (playerId: string) => `Player ${playerId}`
 	});
 }
@@ -1033,21 +1070,31 @@ describe('the cancellation cascade — FR-40 (Story 10.3)', () => {
 			null
 		);
 
-		expect(cancellationsOf(decided.events).map((payload) => payload.cancelledSeq)).toEqual([
-			'230'
-		]);
+		expect(cancellationsOf(decided.events).map((payload) => payload.cancelledSeq)).toEqual(['230']);
 	});
 
-	it('fires on a MINOR LEAGUE placement that leaves Roster Count untouched', () => {
-		// The matrix row the trigger wording exists for, as a unit rather than
-		// only as §10 example 35. The won Player is eligible and one Minor
-		// League Slot is free, so the placement is `minor_league`: the Cap Hit
-		// is `$0`, Roster Count is 12 before and 12 after, and `F` is 0 on both
-		// sides. NOTHING on the Active/Bench side moved — the only figure that
-		// fell is `M`, from 1 to 0 — and the cascade fires on that alone.
+	it('fires on the ACTIVE/BENCH placement every close now produces', () => {
+		// The matrix row the trigger wording used to exist for. The won Player
+		// is eligible and one Minor League Slot is free — and the placement is
+		// `active_bench` anyway, charging its full amount and taking Roster
+		// Count from 12 to 13. The cascade fires, and the commitment the Team
+		// was holding has nowhere left to land.
+		//
+		// **What this row no longer demonstrates is the TRIGGER.** It was here
+		// to show a close that reduced a free Slot without touching Roster
+		// Count. Every close touches Roster Count now, so a trigger phrased as
+		// "increases Roster Count" would reach this case too. FR-40's wording
+		// should still not be narrowed — a Roster Move or a Trade can free or
+		// fill a Minor League Slot without touching the twelve — but a close
+		// can no longer tell the two phrasings apart.
 		const decided = decideClose(
 			cascadeState({
-				rosterCount: 12,
+				// **11, not 12.** The win takes the last Free Active/Bench Slot,
+				// so `F` genuinely falls 1 → 0 and the cascade has a reduction
+				// to fire on. At 12 the clamped free count is 0 on both sides
+				// and nothing moves — and a Team at 12 could not have placed
+				// the Bid in the first place.
+				rosterCount: 11,
 				minorLeagueOccupied: MINOR_LEAGUE_SLOTS - 1,
 				wonIsEligible: true,
 				holding: [leadOn('p-a', commitment('100', 3_000_000))]
@@ -1057,23 +1104,20 @@ describe('the cancellation cascade — FR-40 (Story 10.3)', () => {
 		);
 
 		const closed = decided.events[0]?.payload as AuctionClosedPayload;
-		expect(closed.placement).toBe('minor_league');
-		expect(closed.capHit).toBe(0);
-		expect(cancellationsOf(decided.events).map((payload) => payload.cancelledSeq)).toEqual([
-			'100'
-		]);
+		expect(closed.placement).toBe('active_bench');
+		expect(closed.capHit).toBe(closed.winningAmount);
+		expect(cancellationsOf(decided.events).map((payload) => payload.cancelledSeq)).toEqual(['100']);
 	});
 
-	it('does NOT fire on a minors placement while a Minor League Slot is still free', () => {
-		// The same close with two free minors Slots: `M` falls 2 → 1, which is
-		// still a reduction and still fires — so the pair below is what
-		// separates "a Slot was reduced" from "a Slot ran out". Here the
-		// commitment the Team holds is itself eligible and the remaining Slot
-		// absorbs it, so the cascade takes nothing. A trigger keyed on Roster
-		// Count would have reached neither case.
+	it('fires the same way with SPARE minors Slots — minors decide nothing', () => {
+		// The counterfactual, inverted. The same close with two free minors
+		// Slots used to place the winner there and leave the Team's own
+		// eligible commitment alone, because the remaining Slot absorbed it.
+		// Neither half survives: the win takes Active/Bench, the commitment
+		// has no minors branch to pass on, and the cascade takes it.
 		const decided = decideClose(
 			cascadeState({
-				rosterCount: 12,
+				rosterCount: 11,
 				minorLeagueOccupied: MINOR_LEAGUE_SLOTS - 2,
 				wonIsEligible: true,
 				holding: [leadOn('p-a', commitment('100', 3_000_000))],
@@ -1083,17 +1127,17 @@ describe('the cancellation cascade — FR-40 (Story 10.3)', () => {
 			null
 		);
 
-		expect((decided.events[0]?.payload as AuctionClosedPayload).placement).toBe('minor_league');
-		expect(decided.events.map((event) => event.type)).toEqual([AUCTION_CLOSED_EVENT]);
+		expect((decided.events[0]?.payload as AuctionClosedPayload).placement).toBe('active_bench');
+		expect(cancellationsOf(decided.events).map((payload) => payload.cancelledSeq)).toEqual(['100']);
 	});
 
-	it('walks past an eligible commitment a free Minor League Slot can absorb', () => {
-		// The carve-out that must not be restated as a second rule. `F` falls
-		// 1 → 0 and `M` stays 1. The eligible lead is the MOST RECENT
-		// commitment the Team holds, and it is left alone — an eligible win a
-		// minors Slot absorbs adds nothing to Projected Active/Bench
-		// Additions, so it passes the gate against its seniors. The older
-		// non-eligible commitment is what is over, and what goes.
+	it('walks past NO commitment — there is no eligible carve-out left', () => {
+		// The carve-out is gone. An eligible lead used to pass the gate
+		// against its seniors, because a minors Slot would absorb the win and
+		// it added nothing to Projected Active/Bench Additions. It adds one
+		// like everything else now, so the Team's commitments are judged in
+		// the one order FR-40 states — most recent first — with eligibility
+		// deciding nothing about which survives.
 		const decided = decideClose(
 			cascadeState({
 				rosterCount: 11,
@@ -1109,8 +1153,13 @@ describe('the cancellation cascade — FR-40 (Story 10.3)', () => {
 		);
 
 		const cancelled = cancellationsOf(decided.events);
-		expect(cancelled.map((payload) => payload.cancelledSeq)).toEqual(['100']);
-		expect(cancelled[0]?.fantraxPlayerId).toBe('p-plain');
+		// BOTH go, most recent first. The eligible lead used to be spared and
+		// the older non-eligible one carried the whole reduction alone; with
+		// no carve-out the Team is simply over by two and loses both, in the
+		// one order FR-40 states.
+		expect(cancelled.map((payload) => payload.cancelledSeq)).toEqual(['300', '100']);
+		expect(cancelled[0]?.fantraxPlayerId).toBe('p-prospect');
+		expect(cancelled[1]?.fantraxPlayerId).toBe('p-plain');
 	});
 
 	it('leaves an Auction leaderless — and clockless — when nothing survives on it', () => {
@@ -1124,9 +1173,7 @@ describe('the cancellation cascade — FR-40 (Story 10.3)', () => {
 			AT_EXPIRY,
 			null
 		);
-		expect(cancellationsOf(decided.events).map((payload) => payload.cancelledSeq)).toEqual([
-			'500'
-		]);
+		expect(cancellationsOf(decided.events).map((payload) => payload.cancelledSeq)).toEqual(['500']);
 		// **No restoration, and the reason matters** (Story 10.4). `p-solo`
 		// holds exactly ONE Bid — the cancelled one — so the selector has no
 		// candidate to walk to. It is not that a candidate was refused, and it
@@ -1158,7 +1205,14 @@ describe('the cancellation cascade — FR-40 (Story 10.3)', () => {
 		// re-validated, passes, and is seated: the price falls, the Auction
 		// Clock does not move, and the Restored Leading Bidder inherits
 		// whatever is left of it.
-		const rival = bid({ seq: '400', teamId: 't-z', teamName: 'Team Z', managerId: 'm-z', amount: parseMoney(1_000_000), closesAt: OTHER_CLOSES });
+		const rival = bid({
+			seq: '400',
+			teamId: 't-z',
+			teamName: 'Team Z',
+			managerId: 'm-z',
+			amount: parseMoney(1_000_000),
+			closesAt: OTHER_CLOSES
+		});
 		const contested = leadOn('p-contested', commitment('500', 2_000_000), [rival]);
 		const decided = decideClose(
 			cascadeState({
@@ -1166,7 +1220,11 @@ describe('the cancellation cascade — FR-40 (Story 10.3)', () => {
 				holding: [contested],
 				candidates: (teamId) =>
 					teamId === 't-z'
-						? { capSpace: parseMoney(50_000_000), rosterCount: 4, minorLeagueOccupied: 0 }
+						? {
+								capSpace: parseMoney(50_000_000),
+								rosterCount: 4,
+								minorLeagueOccupied: 0
+							}
 						: null
 			}),
 			AT_EXPIRY,
@@ -1201,7 +1259,14 @@ describe('the cancellation cascade — FR-40 (Story 10.3)', () => {
 		// history — and the Auction still goes leaderless, because the fold
 		// reads the recorded decision instead of promoting the highest
 		// survivor. Team Z is at the twelve here, so it is skipped.
-		const rival = bid({ seq: '400', teamId: 't-z', teamName: 'Team Z', managerId: 'm-z', amount: parseMoney(1_000_000), closesAt: OTHER_CLOSES });
+		const rival = bid({
+			seq: '400',
+			teamId: 't-z',
+			teamName: 'Team Z',
+			managerId: 'm-z',
+			amount: parseMoney(1_000_000),
+			closesAt: OTHER_CLOSES
+		});
 		const contested = leadOn('p-contested', commitment('500', 2_000_000), [rival]);
 		const decided = decideClose(
 			cascadeState({
@@ -1209,7 +1274,11 @@ describe('the cancellation cascade — FR-40 (Story 10.3)', () => {
 				holding: [contested],
 				candidates: (teamId) =>
 					teamId === 't-z'
-						? { capSpace: parseMoney(50_000_000), rosterCount: 12, minorLeagueOccupied: 0 }
+						? {
+								capSpace: parseMoney(50_000_000),
+								rosterCount: 12,
+								minorLeagueOccupied: 0
+							}
 						: null
 			}),
 			AT_EXPIRY,
@@ -1265,8 +1334,16 @@ describe('the cancellation cascade — FR-40 (Story 10.3)', () => {
 	 */
 	describe('a restored Bid is never cancelled by the same cascade (FR-40)', () => {
 		/** Team M's own older Bid, outbid on the same Auction it now leads. */
-		const M_OLD_E1 = bid({ seq: '100', amount: parseMoney(2_000_000), closesAt: OTHER_CLOSES });
-		const M_OLD_E2 = bid({ seq: '110', amount: parseMoney(1_500_000), closesAt: OTHER_CLOSES });
+		const M_OLD_E1 = bid({
+			seq: '100',
+			amount: parseMoney(2_000_000),
+			closesAt: OTHER_CLOSES
+		});
+		const M_OLD_E2 = bid({
+			seq: '110',
+			amount: parseMoney(1_500_000),
+			closesAt: OTHER_CLOSES
+		});
 		const rival = (seq: string, teamId: string, amount: number) =>
 			bid({
 				seq,
@@ -1287,14 +1364,23 @@ describe('the cancellation cascade — FR-40 (Story 10.3)', () => {
 		 * alone. Afterwards `F` is 0 and one minors Slot is still free — so
 		 * ONE eligible commitment is absorbed and the second overflows.
 		 */
-		const E1 = leadOn('p-e1', commitment('300', 3_000_000), [M_OLD_E1, rival('200', 't-r', 2_500_000)]);
-		const E2 = leadOn('p-e2', commitment('400', 3_500_000), [M_OLD_E2, rival('210', 't-s', 3_000_000)]);
+		const E1 = leadOn('p-e1', commitment('300', 3_000_000), [
+			M_OLD_E1,
+			rival('200', 't-r', 2_500_000)
+		]);
+		const E2 = leadOn('p-e2', commitment('400', 3_500_000), [
+			M_OLD_E2,
+			rival('210', 't-s', 3_000_000)
+		]);
 		const PLAIN = leadOn('p-plain', commitment('500', 1_000_000));
 
 		function cascade(candidates: (teamId: string) => CandidateRosterFigures | null) {
 			return decideClose(
 				cascadeState({
-					rosterCount: 12,
+					// 11, so the win takes the last Free Active/Bench Slot and
+					// `F` genuinely falls 1 → 0. At 12 the clamped free count
+					// does not move and no cascade fires at all.
+					rosterCount: 11,
 					minorLeagueOccupied: MINOR_LEAGUE_SLOTS - 2,
 					wonIsEligible: true,
 					holding: [E1, E2, PLAIN],
@@ -1321,24 +1407,37 @@ describe('the cancellation cascade — FR-40 (Story 10.3)', () => {
 			// somebody and the invariant has something to be about.
 			const decided = cascade((teamId) =>
 				teamId === 't-s'
-					? { capSpace: parseMoney(50_000_000), rosterCount: 5, minorLeagueOccupied: 0 }
+					? {
+							capSpace: parseMoney(50_000_000),
+							rosterCount: 5,
+							minorLeagueOccupied: 0
+						}
 					: null
 			);
 			const payloads = cancellationsOf(decided.events);
 
-			// The placement fired the cascade on the minors side alone.
-			expect((decided.events[0]?.payload as AuctionClosedPayload).placement).toBe(
-				'minor_league'
-			);
-			// Most recent first: the plain lead, then the overflowing eligible
-			// one. The absorbed eligible lead is walked past and never taken.
-			expect(payloads.map((payload) => payload.cancelledSeq)).toEqual(['500', '400']);
-			expect(payloads.map((payload) => payload.restoration?.seq ?? null)).toEqual([null, '210']);
+			// The placement is Active/Bench, and it is the Active/Bench Slot it
+			// took that fires the cascade.
+			expect((decided.events[0]?.payload as AuctionClosedPayload).placement).toBe('active_bench');
+			// Most recent first, and ALL THREE go: the plain lead, then both
+			// eligible ones. The eligible lead that used to be walked past —
+			// absorbed by a free Minor League Slot — has no such branch left,
+			// so the Team is over by three and loses three.
+			expect(payloads.map((payload) => payload.cancelledSeq)).toEqual(['500', '400', '300']);
+			expect(payloads.map((payload) => payload.restoration?.seq ?? null)).toEqual([
+				null,
+				'210',
+				null
+			]);
 
 			assertNoRestoredBidWasCancelled(payloads);
-			// ...and the cascade stopped rather than coming back for the Bid it
-			// had just handed to Team S.
-			expect(payloads.map((payload) => payload.fantraxPlayerId)).toEqual(['p-plain', 'p-e2']);
+			// ...and the cascade never came back for the Bid it had just handed
+			// to Team S, which is the invariant this case exists for.
+			expect(payloads.map((payload) => payload.fantraxPlayerId)).toEqual([
+				'p-plain',
+				'p-e2',
+				'p-e1'
+			]);
 
 			// Stated on the fold as well as on the events: Team S leads `p-e2`
 			// when the dust settles, and its Bid carries no cancellation mark.
@@ -1356,16 +1455,14 @@ describe('the cancellation cascade — FR-40 (Story 10.3)', () => {
 		it('holds when the winner’s OWN older Bid is the last candidate standing', () => {
 			// Nobody else is covered, so the walk reaches Team M's own outbid
 			// $1,500,000 on `p-e2` — the case the eligible carve-out could
-			// plausibly admit. It does not: the candidate is judged against
-			// Team M's WHOLE remaining commitment set, where its surviving
-			// eligible lead on `p-e1` already takes the one free Minor League
-			// Slot, so the prospective win overflows into an Active/Bench Slot
-			// that is not there.
+			// plausibly have admitted. There is no carve-out to admit it, and
+			// the candidate is still judged against Team M's WHOLE remaining
+			// commitment set, which has no Active/Bench room for a win.
 			const decided = cascade(() => null);
 			const payloads = cancellationsOf(decided.events);
 
-			expect(payloads.map((payload) => payload.cancelledSeq)).toEqual(['500', '400']);
-			expect(payloads.map((payload) => payload.restoration)).toEqual([null, null]);
+			expect(payloads.map((payload) => payload.cancelledSeq)).toEqual(['500', '400', '300']);
+			expect(payloads.map((payload) => payload.restoration)).toEqual([null, null, null]);
 			assertNoRestoredBidWasCancelled(payloads);
 			// The winner's own older Bid was CONSIDERED and refused, not
 			// excluded by name — it is still standing, uncancelled, in history.

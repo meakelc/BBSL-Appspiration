@@ -319,16 +319,18 @@ function probeFor(): PlaceBid {
  * The strip's Maximum Bid: `evaluate()`'s `cap.maximumBid` against a
  * no-Auction state.
  *
- * `bidStateFor(null, team, false, phase)` is the whole of the baseline's
+ * `bidStateFor(null, team, phase)` is the whole of the baseline's
  * definition, and each argument is a decision:
  *
  *  - `null` for the Auction, which is the no-Auction state `bidStateFor`
  *    already answers — no leading Bid, no clock, no contention. That is what
  *    makes this figure about the Team rather than about a screen.
- *  - `false` for `playerIsMinorLeagueEligible`, which is what makes the
- *    figure a single NUMBER rather than sometimes unbounded: a Free Minor
- *    League Slot absorbs an eligible Player at a $0 Cap Hit, and "no cap
- *    limit" is not a figure a strip can carry onto every screen.
+ *  - **no eligibility argument at all**, since 2026-09-18. There used to be a
+ *    `false` here, and a note explaining that it kept the figure a single
+ *    NUMBER rather than sometimes unbounded. The unbounded branch it was
+ *    steering around no longer has a way to arise: an Auction win always
+ *    lands in Active/Bench, so an eligible Player bounds like any other and
+ *    `bidStateFor` no longer accepts the flag from anyone.
  *  - the real `phase`, because the ninth gate reads it — even though this
  *    function ignores the verdict.
  *
@@ -347,7 +349,7 @@ export function baselineCapOutcome(
 	phase: LeaguePhase,
 	now: string
 ): CapGateOutcome {
-	const state = bidStateFor(null, team, false, phase);
+	const state = bidStateFor(null, team, phase);
 	return evaluate(state, probeFor(), now).cap;
 }
 

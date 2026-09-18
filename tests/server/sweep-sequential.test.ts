@@ -45,9 +45,17 @@ import type {
 const NOW = new Date('2026-08-27T12:00:00.000Z');
 
 /** The Auction that expires FIRST, whose id sorts LAST. */
-const FIRST = { id: 'p-9', closesAt: '2026-08-27T08:00:00.000Z', amount: 4_000_000 };
+const FIRST = {
+	id: 'p-9',
+	closesAt: '2026-08-27T08:00:00.000Z',
+	amount: 4_000_000
+};
 /** The Auction that expires SECOND, whose id sorts FIRST. */
-const SECOND = { id: 'p-2', closesAt: '2026-08-27T09:00:00.000Z', amount: 3_000_000 };
+const SECOND = {
+	id: 'p-2',
+	closesAt: '2026-08-27T09:00:00.000Z',
+	amount: 3_000_000
+};
 
 /**
  * Team M's imported roster: nine Active/Bench contracts and TWO occupied Minor
@@ -55,7 +63,37 @@ const SECOND = { id: 'p-2', closesAt: '2026-08-27T09:00:00.000Z', amount: 3_000_
  * what the two wins below compete for.
  */
 const ROSTER: QueryResultRow[] = [
-	...Array.from({ length: 9 }, () => ({ cap_hit: '1000000', roster_slot_kind: 'active_bench' })),
+	...Array.from({ length: 9 }, () => ({
+		cap_hit: '1000000',
+		roster_slot_kind: 'active_bench'
+	})),
+	{ cap_hit: '30000000', roster_slot_kind: 'minor_league' },
+	{ cap_hit: '20000000', roster_slot_kind: 'minor_league' }
+];
+
+/**
+ * Team M at the ACTIVE/BENCH boundary: eleven held, so exactly one Slot is
+ * free and the Outstanding Bid Allowance lets it hold the two Bids below.
+ *
+ * **This is the roster AD-11 is now visible on** (2026-09-18). It used to be
+ * visible on `ROSTER` above, because one free Minor League Slot was what the
+ * two wins competed for: the first stashed into it at a $0 Cap Hit and the
+ * second overflowed. No win lands in a Minor League Slot any more, so both
+ * closes place in Active/Bench whatever they are evaluated against, and the
+ * PAYLOADS no longer tell the two shapes apart.
+ *
+ * What still tells them apart is the Active/Bench Slot. Sequentially the
+ * first win takes the twelfth, FR-40's cascade fires on the free Slot it
+ * consumed, and Team M's remaining Bid is cancelled before its Auction can
+ * close. Batched, the second close is evaluated against a roster that never
+ * saw the first win, nothing is cancelled, and Team M finishes with thirteen
+ * Active/Bench Players — a ceiling FR-37 says it may never pass.
+ */
+const AT_CAPACITY: QueryResultRow[] = [
+	...Array.from({ length: 11 }, () => ({
+		cap_hit: '1000000',
+		roster_slot_kind: 'active_bench'
+	})),
 	{ cap_hit: '30000000', roster_slot_kind: 'minor_league' },
 	{ cap_hit: '20000000', roster_slot_kind: 'minor_league' }
 ];
@@ -224,12 +262,22 @@ function fakeGateway(seed: QueryResultRow[], roster: QueryResultRow[] = ROSTER) 
 			// act for each AFFECTED Team — the Team the write site named, never
 			// the event's own. One synthetic snowflake per Team, so a test can
 			// read the affected set straight off the intents it filed.
-			if (/^select coalesce\(.+\)\s+as discord_user_id\s+from managers\s+where team_id = \$1/i.test(sql)) {
+			if (
+				/^select coalesce\(.+\)\s+as discord_user_id\s+from managers\s+where team_id = \$1/i.test(
+					sql
+				)
+			) {
 				return { rows: [{ discord_user_id: `discord-${String(params[0])}` }] };
 			}
-			if (/^select coalesce\(.+\)\s+as discord_user_id\s+from managers\s+where team_id is not null/i.test(sql)) {
+			if (
+				/^select coalesce\(.+\)\s+as discord_user_id\s+from managers\s+where team_id is not null/i.test(
+					sql
+				)
+			) {
 				return {
-					rows: EVERY_LEAGUE_TEAM.map((teamId) => ({ discord_user_id: `discord-${teamId}` }))
+					rows: EVERY_LEAGUE_TEAM.map((teamId) => ({
+						discord_user_id: `discord-${teamId}`
+					}))
 				};
 			}
 			if (/^insert into notification_outbox/i.test(sql)) {
@@ -259,33 +307,43 @@ function closedPayloads(appended: QueryResultRow[]): AuctionClosedPayload[] {
 }
 
 describe('the sequential sweep — AD-11 through the real closeAuction', () => {
-	it('stashes the FIRST win in minors at $0 and overflows the SECOND into Active/Bench', async () => {
-		const harness = fakeGateway(startingLog());
+	it('closes the FIRST win into the twelfth Slot and CANCELS the second Bid', async () => {
+		const harness = fakeGateway(startingLog(), AT_CAPACITY);
 
 		const summary = await runTick({
 			gateway: harness.gateway,
 			closeOne: (fantraxPlayerId) => closeAuction(harness.gateway, fantraxPlayerId)
 		});
 
-		// The order is the CLOSE order, not the id order: `p-9` expires an hour
-		// before `p-2` and closes first despite sorting last.
-		expect(summary.closed).toEqual([FIRST.id, SECOND.id]);
+		// `p-9` expires an hour before `p-2` and closes first. `p-2` never
+		// closes at all: the first close's cascade cancelled the only Bid on
+		// it, which leaves it leaderless and CLOCKLESS, so the sweep has
+		// nothing to pick up (FR-40).
+		expect(summary.closed).toEqual([FIRST.id]);
 
 		const payloads = closedPayloads(harness.appendedEvents);
-		expect(payloads).toHaveLength(2);
+		expect(payloads).toHaveLength(1);
 
 		expect(payloads[0]?.fantraxPlayerId).toBe(FIRST.id);
-		expect(payloads[0]?.placement).toBe('minor_league');
+		// Active/Bench at the full amount — the Player is Minor League
+		// Eligible and a Minor League Slot is free, and neither matters.
+		expect(payloads[0]?.placement).toBe('active_bench');
 		expect(payloads[0]?.winningAmount).toBe(FIRST.amount);
-		// The stash costs nothing against the Cap (FR-35, §10 example 16).
-		expect(payloads[0]?.capHit).toBe(0);
+		expect(payloads[0]?.capHit).toBe(FIRST.amount);
 
-		expect(payloads[1]?.fantraxPlayerId).toBe(SECOND.id);
-		// The overflow, and it happens ONLY because the close above was
-		// committed before this one was evaluated (§10 example 17).
-		expect(payloads[1]?.placement).toBe('active_bench');
-		expect(payloads[1]?.winningAmount).toBe(SECOND.amount);
-		expect(payloads[1]?.capHit).toBe(SECOND.amount);
+		// The cascade, and it happens ONLY because this close was committed
+		// against a roster that had eleven Active/Bench Players in it.
+		const cancelled = harness.appendedEvents
+			.filter((row) => row['event_type'] === BID_CANCELLED_EVENT)
+			.map(
+				(row) =>
+					row['payload'] as {
+						fantraxPlayerId: string;
+						causeFantraxPlayerId: string;
+					}
+			);
+		expect(cancelled.map((payload) => payload.fantraxPlayerId)).toEqual([SECOND.id]);
+		expect(cancelled[0]?.causeFantraxPlayerId).toBe(FIRST.id);
 	});
 
 	it('runs each close in its OWN transaction, committed before the next begins', async () => {
@@ -387,26 +445,49 @@ describe('the BATCH shape — one snapshot, two decisions — gets it wrong', ()
 		// SAME pre-close log, then decide both. This is the shape the design
 		// forbids, written out so that reintroducing it fails a test rather
 		// than merely being discouraged in a comment.
-		const harness = fakeGateway(startingLog());
+		const harness = fakeGateway(startingLog(), AT_CAPACITY);
 		const client = harness.client;
 
 		const firstState = await loadCloseState(client, FIRST.id);
 		const secondState = await loadCloseState(client, SECOND.id);
 
-		// Both snapshots saw the same roster: two Minor League Slots occupied,
-		// one free. Neither can see the other's win, because neither happened.
-		expect(firstState.minorLeagueOccupied).toBe(2);
-		expect(secondState.minorLeagueOccupied).toBe(2);
+		// Both snapshots saw the same roster: eleven Active/Bench Players, one
+		// Slot free. Neither can see the other's win, because neither
+		// happened.
+		expect(firstState.rosterCount).toBe(11);
+		expect(secondState.rosterCount).toBe(11);
 
-		const batch = [
+		const decided = [
 			decideClose(firstState, FIRST.closesAt, null),
 			decideClose(secondState, SECOND.closesAt, null)
-		].map((accepted) => accepted.events[0]?.payload as AuctionClosedPayload);
+		];
+		const batch = decided.map((accepted) => accepted.events[0]?.payload as AuctionClosedPayload);
 
-		// The wrong answer: one free Slot, two Players stashed into it, and
-		// neither win charged against the Cap.
-		expect(batch.map((payload) => payload.placement)).toEqual(['minor_league', 'minor_league']);
-		expect(batch.map((payload) => payload.capHit)).toEqual([0, 0]);
+		// **The wrong answer, and it is no longer the placement.** Both wins
+		// land in Active/Bench either way; what the stale snapshot gets wrong
+		// is that the SECOND close cancels nothing, because it still sees a
+		// free Slot the first win has already taken.
+		expect(batch.map((payload) => payload.placement)).toEqual(['active_bench', 'active_bench']);
+		expect(batch.map((payload) => payload.capHit)).toEqual([FIRST.amount, SECOND.amount]);
+
+		// Two wins onto a roster of eleven: Team M finishes at THIRTEEN
+		// Active/Bench Players, which FR-37 says it may never reach.
+		expect(firstState.rosterCount + batch.length).toBe(13);
+
+		// **And the two decisions CONTRADICT each other**, which is sharper
+		// than either being wrong alone. Each close sees the eleven-Player
+		// roster, each believes its own win takes the twelfth Slot, and each
+		// fires a cascade that stands the OTHER one's Bid down — so the first
+		// decision awards `p-9` while the second cancels the Bid that won it.
+		// Applied together they are not merely over the ceiling; they are not
+		// a coherent state at all.
+		const cancelledBy = (index: number) =>
+			(decided[index]?.events ?? [])
+				.filter((event) => event.type === BID_CANCELLED_EVENT)
+				.map((event) => (event.payload as { fantraxPlayerId: string }).fantraxPlayerId);
+		expect(cancelledBy(0)).toEqual([SECOND.id]);
+		expect(cancelledBy(1)).toEqual([FIRST.id]);
+		expect(batch[0]?.fantraxPlayerId).toBe(FIRST.id);
 
 		// Nothing was appended: the batch above never went through a
 		// transaction. It is the arithmetic that is being proven wrong, not a
@@ -414,29 +495,34 @@ describe('the BATCH shape — one snapshot, two decisions — gets it wrong', ()
 		expect(harness.appendedEvents).toEqual([]);
 	});
 
-	it('disagrees with the sequential sweep about the SECOND win, which is the whole point', async () => {
-		const sequential = fakeGateway(startingLog());
+	it('disagrees with the sequential sweep about the SECOND Auction, which is the whole point', async () => {
+		const sequential = fakeGateway(startingLog(), AT_CAPACITY);
 		await runTick({
 			gateway: sequential.gateway,
 			closeOne: (fantraxPlayerId) => closeAuction(sequential.gateway, fantraxPlayerId)
 		});
-		const sequentialSecond = closedPayloads(sequential.appendedEvents)[1];
 
-		const batched = fakeGateway(startingLog());
+		// Sequentially there IS no second close: the first one's cascade stood
+		// the Bid down, so the Auction is leaderless and clockless.
+		expect(closedPayloads(sequential.appendedEvents)).toHaveLength(1);
+		expect(
+			sequential.appendedEvents.filter((row) => row['event_type'] === BID_CANCELLED_EVENT)
+		).toHaveLength(1);
+
+		const batched = fakeGateway(startingLog(), AT_CAPACITY);
 		const batchedSecondState = await loadCloseState(batched.client, SECOND.id);
 		const batchedSecond = decideClose(batchedSecondState, SECOND.closesAt, null).events[0]
 			?.payload as AuctionClosedPayload;
 
-		expect(sequentialSecond?.placement).toBe('active_bench');
-		expect(batchedSecond.placement).toBe('minor_league');
-		expect(sequentialSecond?.capHit).toBe(SECOND.amount);
-		expect(batchedSecond.capHit).toBe(0);
-		// The two shapes produce different contracts for the same Auction. Only
-		// one of them can be right, and AD-11 says which.
-		expect(sequentialSecond?.placement).not.toBe(batchedSecond.placement);
+		// Batched, the same Auction produces a CONTRACT — for a Player the
+		// Team has no Slot to put him in. One shape cancels a Bid and the
+		// other awards a thirteenth Player, for the same Auction at the same
+		// instant. Only one of them can be right, and AD-11 says which.
+		expect(batchedSecond.fantraxPlayerId).toBe(SECOND.id);
+		expect(batchedSecond.placement).toBe('active_bench');
+		expect(batchedSecond.capHit).toBe(SECOND.amount);
 	});
 });
-
 
 // --- AD-11 with a cascade in it (Story 10.3, FR-40) -----------------------
 
