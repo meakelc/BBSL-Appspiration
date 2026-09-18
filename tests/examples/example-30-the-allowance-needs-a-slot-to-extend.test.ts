@@ -70,7 +70,7 @@ const TEAM_T: TeamMoneyState = {
 };
 
 /** A nominated Player nobody has bid on, and not Minor League Eligible. */
-const STATE: BidState = bidStateFor(null, TEAM_T, false, 'Auction');
+const STATE: BidState = bidStateFor(null, TEAM_T, 'Auction');
 
 function bidOf(amount: number): PlaceBid {
 	return {
@@ -179,12 +179,12 @@ describe('§10 example 30 — the allowance needs a slot to extend', () => {
 		// ground rather than rewarded: `unfilledSlots`' clamp keeps `F` at 0
 		// instead of letting it go negative.
 		for (const capSpace of [0, 40_000_000, 400_000_000]) {
-			const state = bidStateFor(null, { ...TEAM_T, capSpace: parseMoney(capSpace) }, false, 'Auction');
+			const state = bidStateFor(null, { ...TEAM_T, capSpace: parseMoney(capSpace) }, 'Auction');
 			expect(evaluate(state, bidOf(5_000_000), NOW).slots.passed, String(capSpace)).toBe(false);
 		}
 
 		const overridden = evaluate(
-			bidStateFor(null, { ...TEAM_T, rosterCount: 13 }, false, 'Auction'),
+			bidStateFor(null, { ...TEAM_T, rosterCount: 13 }, 'Auction'),
 			bidOf(5_000_000),
 			NOW
 		);

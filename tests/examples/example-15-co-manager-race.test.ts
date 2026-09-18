@@ -118,7 +118,7 @@ function appendedFrom(payload: unknown, managerId: string): AppendedEvent {
 
 describe('§10 example 15 — Co-manager race', () => {
 	it('accepts exactly one of the two, and refuses the other because the price moved', () => {
-		const first = decide(bidStateFor(OPENING_AUCTION, RICH, false, 'Auction'), fromManager('m-l1'), SAME_SECOND, null);
+		const first = decide(bidStateFor(OPENING_AUCTION, RICH, 'Auction'), fromManager('m-l1'), SAME_SECOND, null);
 		expect(first.kind).toBe('accepted');
 		if (first.kind !== 'accepted') return;
 
@@ -129,7 +129,7 @@ describe('§10 example 15 — Co-manager race', () => {
 			[appendedFrom(first.events[0]?.payload, 'm-l1')],
 			auctionsReducer
 		);
-		const after: BidState = bidStateFor(auctionForPlayer(auctions, 'p-1'), RICH, false, 'Auction');
+		const after: BidState = bidStateFor(auctionForPlayer(auctions, 'p-1'), RICH, 'Auction');
 
 		const second = decide(after, fromManager('m-l2'), SAME_SECOND, null);
 		expect(second.kind).toBe('rejected');
@@ -153,7 +153,7 @@ describe('§10 example 15 — Co-manager race', () => {
 		// Manager of the leading Team is refused exactly as the first would be
 		// if they tried to raise their own Bid. Both grounds are reported, per
 		// AD-1; the price moving is the example's stated one.
-		const first = decide(bidStateFor(OPENING_AUCTION, RICH, false, 'Auction'), fromManager('m-l1'), SAME_SECOND, null);
+		const first = decide(bidStateFor(OPENING_AUCTION, RICH, 'Auction'), fromManager('m-l1'), SAME_SECOND, null);
 		if (first.kind !== 'accepted') throw new Error('the first Bid was refused');
 		const auctions = fold(
 			{ byPlayer: { 'p-1': OPENING_AUCTION } },
@@ -161,7 +161,7 @@ describe('§10 example 15 — Co-manager race', () => {
 			auctionsReducer
 		);
 		const gates = evaluate(
-			bidStateFor(auctionForPlayer(auctions, 'p-1'), RICH, false, 'Auction'),
+			bidStateFor(auctionForPlayer(auctions, 'p-1'), RICH, 'Auction'),
 			fromManager('m-l2'),
 			SAME_SECOND
 		);
@@ -173,7 +173,7 @@ describe('§10 example 15 — Co-manager race', () => {
 	});
 
 	it('names the Manager who placed the accepted Bid, on the event and in the payload', () => {
-		const first = decide(bidStateFor(OPENING_AUCTION, RICH, false, 'Auction'), fromManager('m-l1'), SAME_SECOND, null);
+		const first = decide(bidStateFor(OPENING_AUCTION, RICH, 'Auction'), fromManager('m-l1'), SAME_SECOND, null);
 		if (first.kind !== 'accepted') throw new Error('the first Bid was refused');
 		// The envelope the shell stamps `manager_id` from...
 		expect(first.events[0]?.managerId).toBe('m-l1');
@@ -192,7 +192,7 @@ describe('§10 example 15 — Co-manager race', () => {
 			['m-l2', 'm-l1']
 		]) {
 			const first = decide(
-				bidStateFor(OPENING_AUCTION, RICH, false, 'Auction'),
+				bidStateFor(OPENING_AUCTION, RICH, 'Auction'),
 				fromManager(winner ?? ''),
 				SAME_SECOND,
 				null
@@ -205,7 +205,7 @@ describe('§10 example 15 — Co-manager race', () => {
 				auctionsReducer
 			);
 			const second = decide(
-				bidStateFor(auctionForPlayer(auctions, 'p-1'), RICH, false, 'Auction'),
+				bidStateFor(auctionForPlayer(auctions, 'p-1'), RICH, 'Auction'),
 				fromManager(loser ?? ''),
 				SAME_SECOND,
 				null

@@ -114,7 +114,7 @@ function bidOf(amount: number): PlaceBid {
 
 /** The gates Team H would face on one new non-eligible Bid. */
 function gatesFor(rows: readonly CapHitRow[]) {
-	return evaluate(bidStateFor(null, teamHolding(rows), false, 'Auction'), bidOf(1_000_000), NOW);
+	return evaluate(bidStateFor(null, teamHolding(rows), 'Auction'), bidOf(1_000_000), NOW);
 }
 
 describe('§10 example 40 — a Drop lowers the Maximum Bid', () => {
@@ -311,7 +311,6 @@ describe('§10 example 40 — the same figures, derived through `RecordDrop`', (
 					eligibleLeading: [],
 					minorLeagueOccupied: outcome.delta.after.minorLeagueOccupied
 				},
-				false,
 				'Auction'
 			),
 			bidOf(1_000_000),

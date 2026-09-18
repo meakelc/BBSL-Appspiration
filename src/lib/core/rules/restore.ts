@@ -117,7 +117,6 @@ export type RestorationBasis = {
 	readonly auctions: OpenAuctions;
 	/** The three figures for one Team, or `null` for a Team not read. */
 	readonly rosterFiguresFor: (teamId: string) => CandidateRosterFigures | null;
-	readonly isMinorLeagueEligible: (fantraxPlayerId: string) => boolean;
 	readonly playerNameFor: (fantraxPlayerId: string) => string;
 	/** The closing instant — `evaluateRestore`'s `now`, which no gate reads. */
 	readonly now: string;
@@ -254,13 +253,11 @@ function candidateStands(
 		rosterCount: figures.rosterCount,
 		minorLeagueOccupied: figures.minorLeagueOccupied,
 		auctions: basis.auctions,
-		isMinorLeagueEligible: basis.isMinorLeagueEligible,
 		playerNameFor: basis.playerNameFor
 	});
 	const state = bidStateFor(
 		auctionForPlayer(basis.auctions, fantraxPlayerId),
 		team,
-		basis.isMinorLeagueEligible(fantraxPlayerId),
 		// A close happens inside the Auction Phase by construction — the sweep
 		// runs nowhere else — and `phase` is not one of the two gates this
 		// re-test reads anyway.

@@ -161,13 +161,11 @@ function closeOf(
 		auction,
 		nomination: nominationOf(auction.fantraxPlayerId),
 		winnerHoldsNominationSlot: false,
-		playerIsMinorLeagueEligible: false,
 		// "no minor-league involvement" — every one of these is non-eligible.
 		minorLeagueOccupied: 0,
 		auctions: auctionsOf([auction, ...survivors]),
 		capSpace: CAP_SPACE,
 		rosterCount,
-		isMinorLeagueEligible: () => false,
 		playerNameFor: (playerId: string) => PLAYER_NAMES[playerId] ?? playerId,
 		drawnWinner: null,
 		// **Story 10.4: the candidate's figures, from the shell's one batched
@@ -212,11 +210,10 @@ describe('§10 example 31 — the cascade fires, and only as far as it must', ()
 			rosterCount: 10,
 			minorLeagueOccupied: 0,
 			auctions: auctionsOf([ANDERSON, BROOKS, CARTER]),
-			isMinorLeagueEligible: () => false,
 			playerNameFor: (playerId: string) => PLAYER_NAMES[playerId] ?? playerId
 		});
 		const gates = evaluate(
-			bidStateFor(null, team, false, 'Auction'),
+			bidStateFor(null, team, 'Auction'),
 			{
 				kind: 'PlaceBid',
 				fantraxPlayerId: 'p-carter',
@@ -261,11 +258,10 @@ describe('§10 example 31 — the cascade fires, and only as far as it must', ()
 				rosterCount: 11,
 				minorLeagueOccupied: 0,
 				auctions: auctionsOf([BROOKS, CARTER]),
-				isMinorLeagueEligible: () => false,
 				playerNameFor: (playerId: string) => PLAYER_NAMES[playerId] ?? playerId
 			});
 			const gates = evaluate(
-				bidStateFor(CARTER, team, false, 'Auction'),
+				bidStateFor(CARTER, team, 'Auction'),
 				{
 					kind: 'PlaceBid',
 					fantraxPlayerId: 'p-carter',
@@ -345,7 +341,6 @@ describe('§10 example 31 — the cascade fires, and only as far as it must', ()
 				rosterCount: 12,
 				minorLeagueOccupied: 0,
 				auctions: auctionsOf([CARTER]),
-				isMinorLeagueEligible: () => false,
 				playerNameFor: (playerId: string) => PLAYER_NAMES[playerId] ?? playerId
 			});
 			expect(before.leading.map((lead) => lead.amount)).toEqual([2_000_000]);
@@ -362,7 +357,6 @@ describe('§10 example 31 — the cascade fires, and only as far as it must', ()
 				rosterCount: 12,
 				minorLeagueOccupied: 0,
 				auctions: folded,
-				isMinorLeagueEligible: () => false,
 				playerNameFor: (playerId: string) => PLAYER_NAMES[playerId] ?? playerId
 			});
 			expect(after.leading).toEqual([]);
@@ -383,7 +377,6 @@ describe('§10 example 31 — the cascade fires, and only as far as it must', ()
 				rosterCount: 8,
 				minorLeagueOccupied: 0,
 				auctions: auctionsOf([CARTER]),
-				isMinorLeagueEligible: () => false,
 				playerNameFor: (playerId: string) => PLAYER_NAMES[playerId] ?? playerId
 			});
 			expect(before.leading).toEqual([]);
@@ -400,7 +393,6 @@ describe('§10 example 31 — the cascade fires, and only as far as it must', ()
 				rosterCount: 8,
 				minorLeagueOccupied: 0,
 				auctions: folded,
-				isMinorLeagueEligible: () => false,
 				playerNameFor: (playerId: string) => PLAYER_NAMES[playerId] ?? playerId
 			});
 			expect(after.leading.map((lead) => lead.amount)).toEqual([1_500_000]);

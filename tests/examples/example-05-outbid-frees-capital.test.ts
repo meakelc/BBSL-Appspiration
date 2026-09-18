@@ -94,7 +94,6 @@ function moneyStateFrom(events: readonly AppendedEvent[]): TeamMoneyState {
 		// the fold moving a lead, and nothing else.
 		minorLeagueOccupied: 0,
 		auctions: fold(INITIAL_AUCTIONS, events, auctionsReducer),
-		isMinorLeagueEligible: NOTHING_IS_ELIGIBLE,
 		playerNameFor: (playerId) => playerId
 	});
 }
@@ -112,7 +111,7 @@ function bidOf(amount: number): PlaceBid {
 
 describe('§10 example 5 — Outbid frees capital immediately', () => {
 	it('holds $5.0M against the cap while Team C leads both Auctions', () => {
-		const gates = evaluate(bidStateFor(null, moneyStateFrom(LEADING_BOTH), false, 'Auction'), bidOf(1_500_000), NOW);
+		const gates = evaluate(bidStateFor(null, moneyStateFrom(LEADING_BOTH), 'Auction'), bidOf(1_500_000), NOW);
 
 		expect(gates.cap.committedBids).toBe(5_000_000);
 		expect(gates.cap.availableCapSpace).toBe(7_000_000);
@@ -120,7 +119,7 @@ describe('§10 example 5 — Outbid frees capital immediately', () => {
 	});
 
 	it('returns Available Cap Space to $10.0M the moment another Team leads', () => {
-		const gates = evaluate(bidStateFor(null, moneyStateFrom(OUTBID_ON_P_A), false, 'Auction'), bidOf(1_500_000), NOW);
+		const gates = evaluate(bidStateFor(null, moneyStateFrom(OUTBID_ON_P_A), 'Auction'), bidOf(1_500_000), NOW);
 
 		// The $3.0M is gone from Committed Bids because the fold no longer
 		// names Team C as the leader of p-a. No release ran.
@@ -129,7 +128,7 @@ describe('§10 example 5 — Outbid frees capital immediately', () => {
 	});
 
 	it('re-opens the roster hole that win would have filled, restoring $1.0M of reserve', () => {
-		const gates = evaluate(bidStateFor(null, moneyStateFrom(OUTBID_ON_P_A), false, 'Auction'), bidOf(1_500_000), NOW);
+		const gates = evaluate(bidStateFor(null, moneyStateFrom(OUTBID_ON_P_A), 'Auction'), bidOf(1_500_000), NOW);
 
 		// Projected Active/Bench Additions drops from 3 to 2 — one surviving
 		// lead plus the bid being placed.

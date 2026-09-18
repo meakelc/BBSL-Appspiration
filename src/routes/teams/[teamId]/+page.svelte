@@ -94,6 +94,8 @@
 		readonly minorLeagueHalves: SlotSentenceHalves;
 		readonly injuryReserveHalves: SlotSentenceHalves;
 		readonly deadMoneyHalves: SlotSentenceHalves | null;
+		readonly outstandingBidsHalves: SlotSentenceHalves | null;
+		readonly contentionEntriesHalves: SlotSentenceHalves | null;
 		readonly roster: readonly RosterGroup[];
 		readonly nominationSlot: NominationSlotStatus;
 		readonly maximumBidLabel?: string;
@@ -210,6 +212,33 @@
 				>{team.minorLeagueHalves.qualifier}</span
 			>
 		</p>
+		<!-- Outstanding Bids against the Outstanding Bid Allowance, and open
+		     lottery entries beneath it. BOTH come from the core's one
+		     derivation — the same `outstandingBidFiguresFor` the strip and the
+		     Teams index read, so the three surfaces cannot state different
+		     counts. The core decides absence: the bids figure goes outside the
+		     Auction Phase, when no Bid is accepted at any amount, and the
+		     entries figure also goes for a Team holding none, because entries
+		     have no ceiling and a zero there states nothing (UX-DR36). This
+		     file words neither sentence and never searches one for ` of `. -->
+		{#if team.outstandingBidsHalves !== null}
+			<p class="figure" id="team-outstanding-bids" aria-label={team.outstandingBidsHalves.full}>
+				<span>{team.outstandingBidsHalves.lead}</span><span class="figure-qualifier"
+					>{team.outstandingBidsHalves.qualifier}</span
+				>
+			</p>
+		{/if}
+		{#if team.contentionEntriesHalves !== null}
+			<p
+				class="figure"
+				id="team-contention-entries"
+				aria-label={team.contentionEntriesHalves.full}
+			>
+				<span>{team.contentionEntriesHalves.lead}</span><span class="figure-qualifier"
+					>{team.contentionEntriesHalves.qualifier}</span
+				>
+			</p>
+		{/if}
 		<p
 			class="figure-tertiary"
 			id="team-injury-reserve"

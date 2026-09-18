@@ -161,7 +161,7 @@ const LOTTERY: Auction = {
 
 /** Team X joining the next lottery while it already holds `held` others. */
 function joining(held: number): BidState {
-	return bidStateFor(LOTTERY, teamX(held), false, 'Auction');
+	return bidStateFor(LOTTERY, teamX(held), 'Auction');
 }
 
 const JOIN: PlaceBid = {
@@ -266,7 +266,7 @@ describe('§10 example 34 — unlimited lotteries, ended by cap space alone', ()
 		// to land and is refused on capacity, with the sentence saying so.
 		// This is the state Stories 10.3–10.5 reach by CLOSING one of the
 		// lotteries above; here it is stated directly.
-		const full = bidStateFor(LOTTERY, { ...teamX(5), rosterCount: 12 }, false, 'Auction');
+		const full = bidStateFor(LOTTERY, { ...teamX(5), rosterCount: 12 }, 'Auction');
 		const gates = evaluate(full, JOIN, NOW);
 
 		expect(gates.slots.freeActiveBenchSlots).toBe(0);
@@ -371,14 +371,11 @@ const CLOSE_STATE: CloseState = {
 		occurredAt: '2026-08-24T08:00:00.000Z'
 	},
 	winnerHoldsNominationSlot: false,
-	// "non-eligible players" throughout — the minors branch never applies.
-	playerIsMinorLeagueEligible: false,
 	minorLeagueOccupied: MINOR_LEAGUE_SLOTS,
 	auctions: auctionsOf(LOTTERIES),
 	capSpace: parseMoney(9_000_000),
 	// "Roster Count 11 (Free Active/Bench Slots 1)" — before this win.
 	rosterCount: 11,
-	isMinorLeagueEligible: () => false,
 	playerNameFor: (playerId: string) => `Lottery Player ${playerId.replace('p-lot-', '')}`,
 	drawnWinner: DRAWN,
 	rosterFiguresFor: () => null
@@ -464,7 +461,6 @@ describe('§10 example 34 — the one win that ends them', () => {
 			rosterCount: 12,
 			minorLeagueOccupied: MINOR_LEAGUE_SLOTS,
 			auctions: survivors,
-			isMinorLeagueEligible: () => false,
 			playerNameFor: (playerId: string) => playerId
 		});
 		expect(before.leading).toHaveLength(5);
@@ -481,7 +477,6 @@ describe('§10 example 34 — the one win that ends them', () => {
 			rosterCount: 12,
 			minorLeagueOccupied: MINOR_LEAGUE_SLOTS,
 			auctions: folded,
-			isMinorLeagueEligible: () => false,
 			playerNameFor: (playerId: string) => playerId
 		});
 		expect(after.leading).toEqual([]);

@@ -111,7 +111,6 @@ export type ContestState = {
 /** Everything `postActMoneyStateFor` needs that is not the Team's own figures. */
 export type ActMoneyInputs = {
 	readonly auctions: OpenAuctions;
-	readonly isMinorLeagueEligible: (fantraxPlayerId: string) => boolean;
 	readonly playerNameFor: (fantraxPlayerId: string) => string;
 };
 
@@ -209,7 +208,6 @@ export function postActMoneyStateFor(
 		rosterCount: after.rosterCount,
 		minorLeagueOccupied: after.minorLeagueOccupied,
 		auctions: state.auctions,
-		isMinorLeagueEligible: state.isMinorLeagueEligible,
 		playerNameFor: state.playerNameFor
 	});
 }
@@ -228,7 +226,7 @@ export function evaluateActCap(team: ActingTeam, money: TeamMoneyState): ActCapG
 		// No Auction, no prospective Player, and the phase is not a gate this
 		// evaluation reads — `requireOverridablePhase` and the destination
 		// catalog are what keep a roster act inside the phases that permit it.
-		bidStateFor(null, money, false, 'Auction'),
+		bidStateFor(null, money, 'Auction'),
 		'',
 		NO_MONEY,
 		// `noProspectiveBid`: there is no Bid here, so nothing is projected for
@@ -308,7 +306,7 @@ export function evaluateActSlots(
 	// The phase is not a gate this evaluation reads — `requireOverridablePhase`
 	// and the destination catalog keep a roster act inside the phases that
 	// permit it.
-	const capacity = slotCapacityFiguresFor(bidStateFor(null, money, false, 'Auction'), true);
+	const capacity = slotCapacityFiguresFor(bidStateFor(null, money, 'Auction'), true);
 	if (capacity === null) {
 		throw new Error('evaluateActSlots: the capacity figures came back with no Team');
 	}

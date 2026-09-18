@@ -175,7 +175,6 @@
 		readonly viewerTeamId: string | null;
 		// A fact about this Auction that the gates decide from, carried so the
 		// browser rebuilds exactly the state the locked transaction will.
-		readonly playerIsMinorLeagueEligible: boolean;
 		readonly team: TeamMoney | null;
 		readonly figuresAt: string;
 	};
@@ -508,7 +507,14 @@
 		seedHash: auction.seedHash,
 		contenders: control.contenderTeamIds,
 		team: teamMoney,
-		playerIsMinorLeagueEligible: control.playerIsMinorLeagueEligible
+		// **Always `false`, and no longer off the wire** (corrected
+		// 2026-09-18). An Auction win lands in Active/Bench whatever the
+		// Player's eligibility, so the browser's rebuild must reach the same
+		// bounded figure the server's gates do. `bidStateFor` stopped
+		// accepting the flag for the same reason; this literal is the one
+		// place the field is still written, and it is written to the value
+		// the core now holds it at everywhere.
+		playerIsMinorLeagueEligible: false
 	});
 
 	/**

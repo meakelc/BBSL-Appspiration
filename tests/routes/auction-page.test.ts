@@ -1428,7 +1428,7 @@ describe('the refusal panel — the only surface with a dedicated anatomy', () =
 					// Slots, so `N` is the bid alone and `M` is the full three.
 					eligibleLeading: [],
 					minorLeagueOccupied: 0
-				}, false, 'Auction'),
+				}, 'Auction'),
 				{
 					kind: 'PlaceBid',
 					fantraxPlayerId: 'p-1',
@@ -1726,7 +1726,6 @@ describe('the bid control names the allowance trade once, before the confirm ste
 					eligibleLeading: [],
 					minorLeagueOccupied: 0
 				},
-				false,
 				'Auction'
 			),
 			{

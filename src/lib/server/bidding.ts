@@ -95,11 +95,6 @@ import {
 	contractsReducer
 } from '../core/projection/contracts.ts';
 import {
-	INITIAL_ELIGIBILITY,
-	eligibilityReducer,
-	isEligible
-} from '../core/projection/eligibility.ts';
-import {
 	INITIAL_NOMINATIONS,
 	nominationForPlayer,
 	nominationsReducer
@@ -228,7 +223,6 @@ export async function loadBidState(
 	const events = await loadEventsViaClient(client);
 	const nominations = fold(INITIAL_NOMINATIONS, events, nominationsReducer);
 	const auctions = fold(INITIAL_AUCTIONS, events, auctionsReducer);
-	const eligibility = fold(INITIAL_ELIGIBILITY, events, eligibilityReducer);
 	// The FIFTH fold over the same events array (Story 3.7): the League phase,
 	// which the ninth gate refuses every Bid outside. It is folded here rather
 	// than read from `locals` or from a route, because a Bid must be judged
@@ -283,7 +277,6 @@ export async function loadBidState(
 				// occupancy `M` is derived from, never `M`.
 				minorLeagueOccupied: roster.minorLeagueOccupied,
 				auctions,
-				isMinorLeagueEligible: (playerId) => isEligible(eligibility, playerId),
 				// The Player's name for an exposing Auction, from the fold
 				// that already holds it. An Auction is open exactly when a
 				// nomination is (Epic 3 owns closing), so every Auction in
@@ -293,11 +286,6 @@ export async function loadBidState(
 				playerNameFor: (playerId) =>
 					nominationForPlayer(nominations, playerId)?.playerName ?? playerId
 			}),
-			// The eligibility FOLD's answer about the Player being bid on —
-			// the same fold `teamMoneyStateFor` partitions the leads with, so
-			// the Auction and the Team's leads cannot disagree about what
-			// "eligible" means inside one transaction.
-			isEligible(eligibility, fantraxPlayerId),
 			// The folded phase, from the same array (Story 3.7).
 			phase
 		),

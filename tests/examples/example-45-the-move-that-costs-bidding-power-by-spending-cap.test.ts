@@ -1,40 +1,41 @@
 /**
- * PRD §10 example 45 — **The Move that buys bidding power by spending cap**
- * (FR-44).
+ * PRD §10 example 45 — **The Move that costs bidding power by spending cap**
+ * (FR-44), rewritten on 2026-09-18.
  *
- * > Team L holds two of its three Minor League Slots (`M = 1`), has Roster
- * > Count 10 and Cap Space $20,000,000, and leads two **eligible** Auctions at
- * > $12,000,000 and $4,000,000. Today: `N = 2, M = 1`, Overflow Count 1,
- * > **Minors Exposure $12,000,000**, Available Cap Space $8,000,000; Projected
- * > Active/Bench Additions is `1` for the Bid being placed plus `1` of
- * > Active/Bench Overflow, so Roster Reserve is `$0` and **Maximum Bid is
- * > $8,000,000**. It now **demotes** one stash — full value $2,000,000 — to
- * > an Active/Bench Slot. Minor League occupancy falls to 1, so `M = 2`;
+ * The example used to read:
+ *
+ * > […] It now **demotes** one stash — full value $2,000,000 — to an
+ * > Active/Bench Slot. Minor League occupancy falls to 1, so `M = 2`;
  * > `N = 2 ≤ M = 2`, Overflow Count falls to **0** and **Minors Exposure falls
  * > to $0**. But the demoted Contract now charges, so **Cap Space falls to
- * > $18,000,000**. Roster Count rises to 11, so Roster Reserve becomes `$0`,
- * > and **Maximum Bid is $18,000,000**. The Team **spent $2,000,000 of Cap
- * > Space and gained $10,000,000 of Maximum Bid.**
+ * > $18,000,000**. […] The Team **spent $2,000,000 of Cap Space and gained
+ * > $10,000,000 of Maximum Bid.**
  *
- * *(Quoted as CORRECTED on 2026-09-12 by this story. The PRD's before figure
- * previously read $7,000,000 and its gain $11,000,000, omitting Active/Bench
- * Overflow from Projected Additions in the before state only. See the note on
- * the Roster Count assertion below.)*
+ * **The gain is gone, and the direction reverses.** A Team cannot win a Free
+ * Agent straight into its minors, so Team L's two leads commit their full
+ * $16,000,000 whatever its Minor League occupancy. Freeing a Slot releases
+ * nothing, and the demoted Contract still starts charging — so the Move costs
+ * $2,000,000 of Cap Space and $2,000,000 of Maximum Bid, which is what
+ * everyone's intuition said in the first place.
  *
- * **It is the mirror of example 40, and that is the test.** Every intuition
- * says putting a Player on the active roster costs you money; here it buys
- * bidding power, because an empty Minor League Slot is what Minors Exposure
- * reserves against. A sheet that asserted "a demotion costs you" would be
- * wrong for exactly this act — which is why `maximumBidDirectionSentence`
- * COMPUTES the direction from the figures run over the before state and again
- * over the after, and why the sentence is asserted here rather than taken on
- * trust.
+ * **What the example is FOR survives intact, and it is not the gain.** It
+ * exists so `maximumBidDirectionSentence` cannot be a constant: the direction
+ * has to be COMPUTED from the figures run over the before state and again over
+ * the after. The demotion now says FELL and the promotion back says ROSE, so
+ * the two acts still word it oppositely and a flat rule in either direction
+ * still fails here. Only the sign changed.
  *
- * **Nothing below is recomputed by this file.** `evaluateRearrange` runs the
- * shared derivations a Bid is judged by; the two `ActCapGateOutcome`s it
- * returns are what the assertions read.
+ * **And there is still a Move that buys bidding power — the other one.**
+ * Promoting a Contract INTO a Minor League Slot takes its Cap Hit to $0 under
+ * FR-44, which frees real money and raises the Maximum Bid. That is the mirror
+ * test at the foot of this file, and it is now the interesting half: stashing
+ * buys bidding power by NOT spending cap, rather than by releasing an exposure
+ * that never existed.
  *
- * Driven through the `RearrangeRoster` command itself.
+ * **The PRD's $7,000,000-vs-$8,000,000 correction is moot.** It turned on
+ * whether Active/Bench Overflow belonged in Projected Additions in the before
+ * state. There is no overflow in either state now, so both readings collapse
+ * onto one figure and the discrepancy has nothing left to be about.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -144,8 +145,8 @@ const DEMOTION: RearrangeRoster = {
 	reason: null
 };
 
-describe('§10 example 45 — the Move that buys bidding power by spending cap', () => {
-	it('starts Team L at M = 1, Roster Count 10, Cap Space $20,000,000 and Maximum Bid $7,000,000', () => {
+describe('§10 example 45 — the Move that costs bidding power by spending cap', () => {
+	it('starts Team L at M = 1, Roster Count 10, Cap Space $20,000,000 and Maximum Bid $4,000,000', () => {
 		const outcome = evaluateRearrange(STATE, DEMOTION);
 		if (outcome.kind !== 'permitted') throw new Error('refused');
 		const before = outcome.capBefore;
@@ -154,12 +155,15 @@ describe('§10 example 45 — the Move that buys bidding power by spending cap',
 		expect(MINOR_LEAGUE_SLOTS - 2).toBe(1);
 		expect(outcome.delta.before.rosterCount).toBe(10);
 		expect(outcome.delta.before.capSpace).toBe(20_000_000);
-		// Two eligible leads and ONE free Minor League Slot: it absorbs one of
-		// them, and the largest that cannot be absorbed is the $12,000,000.
-		expect(before.minorsExposure).toBe(BIG_LEAD);
-		expect(before.availableCapSpace).toBe(20_000_000 - BIG_LEAD);
-		expect(before.rosterReserve).toBe(1_000_000);
-		expect(before.maximumBid).toBe(7_000_000);
+		// Two leads and ONE free Minor League Slot: it absorbs neither, so
+		// both commit in full and nothing is exposed.
+		expect(before.minorsExposure).toBe(0);
+		expect(before.committedBids).toBe(BIG_LEAD + SMALL_LEAD);
+		expect(before.availableCapSpace).toBe(20_000_000 - (BIG_LEAD + SMALL_LEAD));
+		// Two leads project two additions against ten held, which reaches the
+		// ceiling exactly — so there is nothing left to reserve.
+		expect(before.rosterReserve).toBe(0);
+		expect(before.maximumBid).toBe(4_000_000);
 	});
 
 	it('spends $2,000,000 of Cap Space: the demoted Contract starts charging', () => {
@@ -175,16 +179,21 @@ describe('§10 example 45 — the Move that buys bidding power by spending cap',
 		expect(move?.value).toBe(STASH_VALUE);
 	});
 
-	it('frees a Minor League Slot, so Minors Exposure falls to $0', () => {
+	it('frees a Minor League Slot that buys nothing at all', () => {
 		const outcome = evaluateRearrange(STATE, DEMOTION);
 		if (outcome.kind !== 'permitted') throw new Error('refused');
 
 		expect(outcome.delta.after.minorLeagueOccupied).toBe(1);
-		// `M = MINOR_LEAGUE_SLOTS − occupied`, derived and never stored: two
-		// free Slots absorb both eligible leads.
+		// `M = MINOR_LEAGUE_SLOTS − occupied`, derived and never stored — and
+		// now decisive of nothing: two free Slots absorb no lead, because no
+		// win lands in one.
 		expect(MINOR_LEAGUE_SLOTS - outcome.delta.after.minorLeagueOccupied).toBe(2);
+		// Zero before and zero after, so the freed Slot released no money.
+		expect(outcome.capBefore.minorsExposure).toBe(0);
 		expect(outcome.gates.cap.minorsExposure).toBe(0);
-		expect(outcome.gates.cap.availableCapSpace).toBe(18_000_000);
+		expect(outcome.gates.cap.committedBids).toBe(BIG_LEAD + SMALL_LEAD);
+		// Available Cap Space fell by exactly what the Contract now charges.
+		expect(outcome.gates.cap.availableCapSpace).toBe(18_000_000 - (BIG_LEAD + SMALL_LEAD));
 	});
 
 	it('raises Roster Count to 11, and the Roster Reserve is the shared evaluator’s', () => {
@@ -193,83 +202,69 @@ describe('§10 example 45 — the Move that buys bidding power by spending cap',
 
 		expect(outcome.delta.after.rosterCount).toBe(11);
 
-		// **Two Maximum Bids, and the example is stated in the second one.**
+		// **Two Maximum Bids, and they now AGREE — which is itself the
+		// finding.**
 		//
 		// `evaluateActCap` calls `teamSolvencyFiguresFor` with
 		// `prospectiveBidIsExempt: true`, so it projects NO prospective Bid — a
 		// roster act places none, and `false` would refuse §10 example 39's
-		// Team F over an addition nobody asked for. What it DOES count is
-		// Active/Bench Overflow:
+		// Team F over an addition nobody asked for. `managerMaximumBidFor` asks
+		// the other question, counting the Bid being placed, which is what FR-12
+		// and the §3 glossary define and what the sheet quotes.
 		//
-		//   before: rosterCount 10 + overflow 1 = 11 → reserve $1,000,000
-		//   after:  rosterCount 11 + overflow 0 = 11 → reserve $1,000,000
-		//
-		// That is the right question for a GATE, whose verdict is only
-		// `maximumBid >= 0`, and it leaves a headroom of $17,000,000.
-		//
-		// It is NOT the figure a Manager knows as Maximum Bid. FR-12 and the §3
-		// glossary count the Bid being placed, which is `12 − 11` before and
-		// `12 − 12` after — the PRD's own model, reaching $18,000,000.
-		// `managerMaximumBidFor` asks for exactly that, and it is what the sheet
-		// quotes. The two coincide BEFORE the act and differ by one Slot's
-		// reserve after, which is precisely how a stale reading hides.
-		expect(outcome.gates.cap.rosterReserve).toBe(1_000_000);
-		expect(outcome.gates.cap.maximumBid).toBe(17_000_000);
-		expect(outcome.maximumBid.after).toBe(18_000_000);
+		// The two used to differ by one Slot's reserve after the act. Both
+		// reserves are $0 here — two committed leads against eleven held is
+		// already at the ceiling, with or without a prospective Bid — so the
+		// figures coincide. They are still two calls of two expressions, and
+		// the assertions below keep both named so a future divergence surfaces
+		// rather than hiding behind one number.
+		expect(outcome.gates.cap.rosterReserve).toBe(0);
+		expect(outcome.gates.cap.maximumBid).toBe(2_000_000);
+		expect(outcome.maximumBid.after).toBe(2_000_000);
 	});
 
-	it('spends Cap Space and RAISES the Maximum Bid — the direction is COMPUTED, in words', () => {
+	it('spends Cap Space and LOWERS the Maximum Bid — the direction is COMPUTED, in words', () => {
 		const outcome = evaluateRearrange(STATE, DEMOTION);
 		if (outcome.kind !== 'permitted') throw new Error('refused');
 		const { capBefore, gates, delta, maximumBid } = outcome;
 
-		// **The claim the example exists to make, and it holds exactly.** The
-		// Team spent $2,000,000 of Cap Space and ended RICHER at the bidding
-		// table, because an empty Minor League Slot is what Minors Exposure
-		// reserves against. Every intuition says the opposite.
+		// **The claim, inverted.** The Team spent $2,000,000 of Cap Space and
+		// ended POORER at the bidding table by exactly that — there is no
+		// exposure for an emptied Minor League Slot to release, so the only
+		// figure that moved is the Cap Hit the demoted Contract started
+		// charging.
 		expect(delta.before.capSpace - delta.after.capSpace).toBe(2_000_000);
-		expect(maximumBid.after).toBeGreaterThan(maximumBid.before);
+		expect(maximumBid.after).toBeLessThan(maximumBid.before);
 
-		// **$8,000,000 to $18,000,000 — and the PRD's $7,000,000 is a slip.**
-		//
-		// The PRD reaches its before figure with `12 − 11`, calling the 1
-		// "bidding once" — the prospective Bid, and NO Active/Bench Overflow
-		// term. But Team L holds two eligible leads against one free Minor
-		// League Slot, so one of them WILL land in Active/Bench: overflow is 1,
-		// and Story 2.8 made counting it the rule (§10 example 25). Projected
-		// Additions before the Move is therefore 2, not 1, the reserve is $0
-		// rather than $1,000,000, and Maximum Bid is $8,000,000.
-		//
-		// The PRD's AFTER figure omits nothing, because overflow is 0 once the
-		// second Slot frees — which is why only the before figure is wrong, and
-		// why its stated gain of $11,000,000 is a model mixed halfway through.
-		// Both self-consistent readings put the gain at $10,000,000: the gate's
-		// $7,000,000 → $17,000,000 and the Manager's $8,000,000 → $18,000,000.
-		expect(maximumBid.before).toBe(8_000_000);
-		expect(maximumBid.after).toBe(18_000_000);
+		expect(maximumBid.before).toBe(4_000_000);
+		expect(maximumBid.after).toBe(2_000_000);
 
-		// The gain, stated as arithmetic rather than as a literal: $12,000,000
-		// of Minors Exposure released against $2,000,000 of Cap Space spent.
-		expect(capBefore.minorsExposure - gates.cap.minorsExposure).toBe(BIG_LEAD);
-		expect(maximumBid.after - maximumBid.before).toBe(BIG_LEAD - 2_000_000);
+		// The loss, stated as arithmetic rather than as a literal: no exposure
+		// released, against $2,000,000 of Cap Space spent.
+		expect(capBefore.minorsExposure - gates.cap.minorsExposure).toBe(0);
+		expect(maximumBid.before - maximumBid.after).toBe(2_000_000);
 
-		// **The sentence FR-44 requires before commit.** It says ROSE, and it
+		// **The sentence FR-44 requires before commit.** It says FELL, and it
 		// says by how much — and it computed both from two calls of one
 		// expression rather than asserting a direction.
 		const sentence = maximumBidDirectionSentence(capBefore, gates.cap, maximumBid);
-		expect(sentence).toContain('ROSE');
-		expect(sentence).toContain('$10.0M');
-		expect(sentence).not.toContain('FELL');
-		// It states the Cap Space fall in the same breath, so nobody reads the
-		// rise as free money.
+		expect(sentence).toContain('FELL');
+		expect(sentence).toContain('$2.0M');
+		expect(sentence).not.toContain('ROSE');
+		// It states the Cap Space fall in the same breath.
 		expect(sentence).toContain('$20.0M');
 		expect(sentence).toContain('$18.0M');
 	});
 
-	it('states FELL for the mirror act, so the sentence is not a constant', () => {
+	it('states ROSE for the mirror act — stashing is what buys bidding power', () => {
 		// Promoting the demoted Contract back is the same act reversed, and the
 		// same computation must word it the other way. If the sentence were a
 		// flat rule, this is the case that would expose it.
+		//
+		// It is also the interesting half now: moving a Contract INTO a Minor
+		// League Slot takes its Cap Hit to $0 under FR-44, which frees real
+		// money rather than releasing an exposure. THAT is the Move that buys
+		// bidding power, and it buys it by not spending cap.
 		const demoted = evaluateRearrange(STATE, DEMOTION);
 		if (demoted.kind !== 'permitted') throw new Error('refused');
 
@@ -287,16 +282,20 @@ describe('§10 example 45 — the Move that buys bidding power by spending cap',
 				// 46's round trip is the same fact reached from the log.
 				hasEverOccupiedMinorLeague: (id) => id === 'p-stash'
 			},
-			{ ...DEMOTION, moves: [{ fantraxPlayerId: 'p-stash', toPlacement: 'minor_league' }] }
+			{
+				...DEMOTION,
+				moves: [{ fantraxPlayerId: 'p-stash', toPlacement: 'minor_league' }]
+			}
 		);
 		expect(back.kind).toBe('permitted');
 		if (back.kind !== 'permitted') return;
 
 		const sentence = maximumBidDirectionSentence(back.capBefore, back.gates.cap, back.maximumBid);
-		expect(sentence).toContain('FELL');
-		// The mirror of the demotion, to the dollar: the same $10,000,000 back.
-		expect(sentence).toContain('$10.0M');
-		expect(back.maximumBid.before - back.maximumBid.after).toBe(BIG_LEAD - 2_000_000);
+		expect(sentence).toContain('ROSE');
+		expect(sentence).not.toContain('FELL');
+		// The mirror of the demotion, to the dollar: the same $2,000,000 back.
+		expect(sentence).toContain('$2.0M');
+		expect(back.maximumBid.after - back.maximumBid.before).toBe(2_000_000);
 		// And the roster returns to exactly where it started.
 		expect(back.delta.after.capSpace).toBe(20_000_000);
 		expect(back.delta.after.rosterCount).toBe(10);

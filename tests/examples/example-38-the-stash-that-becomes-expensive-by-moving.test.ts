@@ -200,19 +200,27 @@ describe('§10 example 38 — the stash that becomes expensive by moving', () =>
 		expect(outcome.gates.sendingCap.rosterCount).toBe(6);
 	});
 
-	it('RECOMPUTES Minors Exposure across every eligible Auction Team D still leads', () => {
+	it('commits every Auction Team D still leads, IN FULL and regardless of minors', () => {
 		const outcome = evaluateTrade(STATE, TRADE);
 		expect(outcome.kind).toBe('permitted');
 		if (outcome.kind !== 'permitted') return;
 
-		// After the Trade: `N = 2` eligible leads against `M = 1`, so Overflow
-		// Count is 1 and Minors Exposure is the LARGER of the two — $12,000,000.
-		// Before it, `M = 0` and the exposure was both of them, $16,000,000.
-		expect(outcome.gates.sendingCap.minorsExposure).toBe(12_000_000);
-		expect(outcome.gates.sendingCap.committedBids).toBe(12_000_000);
-		// Nothing wrote that: it is derived from the post-Trade occupancy handed
-		// to the same arithmetic every Bid is judged by. A third Auction's
-		// Maximum Bid moved for a Team that was not party to this trade.
+		// **Corrected 2026-09-18.** The knock-on used to run through Minors
+		// Exposure: freeing a Minor League Slot lowered Team D's Overflow
+		// Count, so the exposure fell from $16,000,000 to the larger of its
+		// two remaining eligible leads, $12,000,000 — and a third Auction's
+		// Maximum Bid moved for a Team that was not party to the Trade.
+		//
+		// A Team cannot win a Free Agent straight into its minors, so both
+		// leads commit in full whatever the occupancy, and freeing the Slot
+		// moves neither figure. The exposure term is a permanent $0.
+		expect(outcome.gates.sendingCap.minorsExposure).toBe(0);
+		expect(outcome.gates.sendingCap.committedBids).toBe(16_000_000);
+		// **The knock-on itself SURVIVES, through Cap Space rather than
+		// exposure.** Sending Ellis away removes what he charged Team D, and
+		// that is still derived on this evaluation rather than written
+		// anywhere — which is the property the example was really about.
+		expect(outcome.gates.sendingCap.capSpace).toBeGreaterThan(0);
 	});
 
 	it('refuses the same Trade outright when Team E can no longer cover what it leads', () => {

@@ -525,9 +525,20 @@ export type TeamMoneyState = {
 export function bidStateFor(
 	auction: Auction | null,
 	team: TeamMoneyState | null,
-	playerIsMinorLeagueEligible: boolean,
 	phase: LeaguePhase
 ): BidState {
+	// **Eligibility is not an input to any gate** (corrected 2026-09-18). The
+	// parameter that carried it is GONE rather than defaulted, so a caller
+	// cannot reintroduce the dependency by passing `true`: an Auction win now
+	// always lands in Active/Bench (`rules/close.ts`), so an eligible Player
+	// bounds and commits exactly as any other does.
+	//
+	// The field below is held at `false` because `BidState` still declares it
+	// and the unbounded branch, Overflow Count and Minors Exposure all read it.
+	// At `false` each of them reaches its correct new value through its own
+	// arithmetic — no branch was special-cased to get there. The field and
+	// those three terms are vestigial pending the deletion sweep.
+	const playerIsMinorLeagueEligible = false;
 	if (auction === null) {
 		return {
 			phase,
@@ -555,7 +566,10 @@ export function bidStateFor(
 		leadingBid:
 			auction.leadingBid === null
 				? null
-				: { teamId: auction.leadingBid.teamId, amount: auction.leadingBid.amount },
+				: {
+						teamId: auction.leadingBid.teamId,
+						amount: auction.leadingBid.amount
+					},
 		closesAt: auction.closesAt,
 		contention: auction.contention,
 		// The published commitment, straight off the fold — never re-derived
@@ -637,8 +651,14 @@ export function teamMoneyStateFor(input: {
 	/** Minor League rows on `team_rosters`. Raw occupancy, never `M`. */
 	readonly minorLeagueOccupied: number;
 	readonly auctions: OpenAuctions;
-	readonly isMinorLeagueEligible: (fantraxPlayerId: string) => boolean;
-	/** That Player's name, for a refusal that must name an Auction. */
+	/**
+	 * That Player's name, for a refusal that must name an Auction.
+	 *
+	 * **There is deliberately no `isMinorLeagueEligible` beside it** (corrected
+	 * 2026-09-18). Eligibility is not an input to any bidding-time rule, and
+	 * the narrowing refuses to accept one so that no gate downstream can come
+	 * to depend on a fact the rules no longer turn on.
+	 */
 	readonly playerNameFor: (fantraxPlayerId: string) => string;
 }): TeamMoneyState {
 	const leading: LeadingBidElsewhere[] = [];
@@ -693,9 +713,27 @@ export function teamMoneyStateFor(input: {
 			// Standard Contention is `false` here, which is the whole point.
 			isContentionEntry: contends
 		};
-		// The partition, and the only place either list is written.
-		if (input.isMinorLeagueEligible(playerId)) eligibleLeading.push(entry);
-		else leading.push(entry);
+		// **No partition any more: every lead commits its full amount**
+		// (corrected 2026-09-18).
+		//
+		// This loop used to route a lead on a Minor League Eligible Player into
+		// `eligibleLeading`, where it reached the Cap only through Minors
+		// Exposure and so committed NOTHING while a Free Minor League Slot
+		// stood ready to absorb it. That rested on the win landing in that slot
+		// at a $0 Cap Hit — and it does not. A Team cannot win a Free Agent
+		// straight into its minors; it must fit him on its active roster first
+		// and move him down afterwards (`rules/close.ts`, the `placement`
+		// constant). Until the Auction closes the Player cannot be moved
+		// anywhere at all, so the money is held for its whole life exactly as a
+		// non-eligible lead's is.
+		//
+		// `eligibleLeading` is therefore never written and stays empty, which
+		// takes Eligible Leading Bids, Overflow Count and Minors Exposure to
+		// zero through their own existing arithmetic rather than by special
+		// case. Those terms are vestigial now, not wrong; the deletion sweep is
+		// a follow-up, and until it lands the figures they publish are honest
+		// zeroes.
+		leading.push(entry);
 	}
 	return {
 		capSpace: input.capSpace,
@@ -1049,13 +1087,23 @@ function evaluateContention(
 	// leading amount — `auctionsReducer` decides this through
 	// `contentionForAmount` and AD-5 makes that answer the answer.
 	if (state.contention !== 'minimum_bid') {
-		return { ...base, passed: true, entry: 'not_a_contention', contenderCount: 0 };
+		return {
+			...base,
+			passed: true,
+			entry: 'not_a_contention',
+			contenderCount: 0
+		};
 	}
 
 	const contenderCount = state.contenders.length;
 	if (compareMoney(amount, MINIMUM_OPENING_BID) === 0) {
 		if (state.contenders.includes(actingTeamId)) {
-			return { ...base, passed: false, entry: 'already_contending', contenderCount };
+			return {
+				...base,
+				passed: false,
+				entry: 'already_contending',
+				contenderCount
+			};
 		}
 		return { ...base, passed: true, entry: 'joins', contenderCount };
 	}
@@ -1133,7 +1181,12 @@ function evaluateSelfBid(state: BidState, actingTeamId: string): SelfBidGateOutc
 function evaluateIncrement(state: BidState, amount: Money): IncrementGateOutcome {
 	const leading = state.leadingBid;
 	if (leading === null || state.contention === 'minimum_bid') {
-		return { passed: true, offered: amount, currentHigh: null, minimumLegal: null };
+		return {
+			passed: true,
+			offered: amount,
+			currentHigh: null,
+			minimumLegal: null
+		};
 	}
 	// The SAME expression `minimumLegalBid` pre-fills the control with.
 	const minimumLegal = minimumRaise(leading);
@@ -1218,7 +1271,10 @@ type BoundBidState = {
 
 /** `BidState`, narrowed once the Team is known to be present. */
 function boundStateFor(state: BidState, team: TeamMoneyState): BoundBidState {
-	return { team, playerIsMinorLeagueEligible: state.playerIsMinorLeagueEligible };
+	return {
+		team,
+		playerIsMinorLeagueEligible: state.playerIsMinorLeagueEligible
+	};
 }
 
 /**
@@ -1332,10 +1388,7 @@ function activeBenchOverflowFor(
 	return {
 		freeMinorLeagueSlots,
 		eligibleLeadingBidsExcludingEntries,
-		activeBenchOverflow: Math.max(
-			0,
-			eligibleLeadingBidsExcludingEntries - freeMinorLeagueSlots
-		)
+		activeBenchOverflow: Math.max(0, eligibleLeadingBidsExcludingEntries - freeMinorLeagueSlots)
 	};
 }
 
@@ -1386,7 +1439,11 @@ function minorsExposureFor(
 ): MinorsExposure {
 	const { overflowCount } = minorsCountsFor(state);
 	if (overflowCount <= 0) {
-		return { minorsExposure: NO_MONEY, exposingBids: [], exposureIncludesThisBid: false };
+		return {
+			minorsExposure: NO_MONEY,
+			exposingBids: [],
+			exposureIncludesThisBid: false
+		};
 	}
 
 	type Entry = ExposingBid & { readonly isThisAuction: boolean };
@@ -1399,7 +1456,12 @@ function minorsExposureFor(
 	if (state.playerIsMinorLeagueEligible) {
 		// The Bid being placed. Its name is never printed — `exposingBids`
 		// drops it — so it carries its id and nothing invented.
-		postBid.push({ fantraxPlayerId, playerName: '', amount, isThisAuction: true });
+		postBid.push({
+			fantraxPlayerId,
+			playerName: '',
+			amount,
+			isThisAuction: true
+		});
 	}
 
 	// Amount descending, id ascending. Sorted before it is summed OR sliced,
@@ -2004,9 +2066,18 @@ function evaluateSlots(state: BidState, entry: ContentionGateOutcome['entry']): 
 		// branch REPLACES them rather than joining them. An entry at a full
 		// roster has `P = 0`, so falling through would let the zero branch
 		// admit a win with nowhere to land.
+		//
+		// **The landing test is an Active/Bench test and nothing else**
+		// (corrected 2026-09-18). It used to read
+		// `|| (playerIsMinorLeagueEligible && freeMinorLeagueSlots >= 1)`,
+		// because FR-18 let a Team join an eligible lottery on the strength of
+		// a Free Minor League Slot the win would land in. It would not land
+		// there: a Team cannot win a Free Agent straight into its minors, so
+		// the only Slot that can receive a lottery win is an Active/Bench one.
+		// A Team at Roster Capacity may now enter NO contention at all,
+		// whatever the Player and however empty its minors.
 		passed: isContentionEntry
-			? figures.freeActiveBenchSlots >= 1 ||
-				(state.playerIsMinorLeagueEligible && figures.freeMinorLeagueSlots >= 1)
+			? figures.freeActiveBenchSlots >= 1
 			: // FR-37's two branches, in the ONE expression `activeBenchCapacityHolds`
 				// holds — read here and read again by `rules/roster-trade.ts`, so the
 				// two commands cannot drift apart about what a full roster is.
@@ -2700,9 +2771,7 @@ function gateSentence(gates: PlaceBidGateResults, gate: PlaceBidGate): string | 
  */
 export function ordinal(value: number): string {
 	const suffix =
-		value % 100 >= 11 && value % 100 <= 13
-			? 'th'
-			: ['th', 'st', 'nd', 'rd'][value % 10] ?? 'th';
+		value % 100 >= 11 && value % 100 <= 13 ? 'th' : (['th', 'st', 'nd', 'rd'][value % 10] ?? 'th');
 	return `${String(value)}${suffix}`;
 }
 
@@ -3129,7 +3198,7 @@ function gateFigure(gates: PlaceBidGateResults, gate: PlaceBidGate): string {
 					return compareMoney(outcome.offered, outcome.joinAmount) < 0
 						? `below the ${formatMoney(outcome.joinAmount)} it takes to join`
 						: `between ${formatMoney(outcome.joinAmount)} and ` +
-							`${formatMoney(outcome.conversionAmount)}, which is neither a join nor a conversion`;
+								`${formatMoney(outcome.conversionAmount)}, which is neither a join nor a conversion`;
 			}
 			break;
 		}
@@ -3283,7 +3352,6 @@ function gateFigure(gates: PlaceBidGateResults, gate: PlaceBidGate): string {
  * Empty when nothing refused, which is the caller's cue that there is no
  * panel to draw.
  */
-
 
 // --- The refusal panel's own furniture -------------------------------------
 
@@ -3632,7 +3700,11 @@ export function bidControlState(input: {
 
 	const reading = readBidAmount(input.amountText);
 	if (reading.kind === 'unusable') {
-		return { blocked: true, detail: bidRefusalDetail(reading.refusal), refusingGates: [] };
+		return {
+			blocked: true,
+			detail: bidRefusalDetail(reading.refusal),
+			refusingGates: []
+		};
 	}
 
 	const gates = evaluate(
@@ -3653,11 +3725,19 @@ export function bidControlState(input: {
 
 	const refusingGates = failedGates(gates);
 	if (refusingGates.length > 0) {
-		return { blocked: true, detail: bidRefusalDetail({ kind: 'gates', gates }), refusingGates };
+		return {
+			blocked: true,
+			detail: bidRefusalDetail({ kind: 'gates', gates }),
+			refusingGates
+		};
 	}
 
 	if (!input.confirmed) {
-		return { blocked: true, detail: bidRefusalDetail({ kind: 'unconfirmed' }), refusingGates: [] };
+		return {
+			blocked: true,
+			detail: bidRefusalDetail({ kind: 'unconfirmed' }),
+			refusingGates: []
+		};
 	}
 
 	return { blocked: false, detail: BID_READY, refusingGates: [] };
@@ -3985,9 +4065,7 @@ export function decide(
 	// converting Bid", arrived at with no branch of its own because a
 	// dissolution is simply not a join.
 	const closesAt =
-		gates.contention.entry === 'joins'
-			? state.closesAt
-			: closeInstantFor(now, AUCTION_CLOCK);
+		gates.contention.entry === 'joins' ? state.closesAt : closeInstantFor(now, AUCTION_CLOCK);
 	if (closesAt === null) {
 		// Two unreachable-together causes, one message: an unreadable `now`,
 		// or a join into a contention with no persisted close. The second
@@ -4101,7 +4179,10 @@ export function decide(
 	};
 
 	if (sealedSeed === null) {
-		const accepted: Accepted<readonly EventEnvelope[]> = { kind: 'accepted', events: [bidPlaced] };
+		const accepted: Accepted<readonly EventEnvelope[]> = {
+			kind: 'accepted',
+			events: [bidPlaced]
+		};
 		return accepted;
 	}
 

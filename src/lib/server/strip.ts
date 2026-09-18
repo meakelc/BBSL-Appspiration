@@ -30,7 +30,6 @@ import { NO_AUCTION_PROBE_ID } from '../core/constants.ts';
 import { fold } from '../core/projection/fold.ts';
 import { INITIAL_AUCTIONS, auctionsReducer } from '../core/projection/auctions.ts';
 import { INITIAL_CONTRACTS, contractsReducer } from '../core/projection/contracts.ts';
-import { INITIAL_ELIGIBILITY, eligibilityReducer, isEligible } from '../core/projection/eligibility.ts';
 import { INITIAL_NOMINATIONS, nominationForPlayer, nominationsReducer } from '../core/projection/nominations.ts';
 import { teamMoneyStateFor } from '../core/rules/bidding.ts';
 import type { TeamMoneyState } from '../core/rules/bidding.ts';
@@ -76,7 +75,6 @@ export async function loadStripTeam(
 		// Commissioner is changing one.
 		const events = await loadEventsViaClient(client);
 		const auctions = fold(INITIAL_AUCTIONS, events, auctionsReducer);
-		const eligibility = fold(INITIAL_ELIGIBILITY, events, eligibilityReducer);
 		const nominations = fold(INITIAL_NOMINATIONS, events, nominationsReducer);
 		// The contracts fold reaches the figures only through `loadTeamRoster`,
 		// which counts a won Player exactly as it counts an imported roster
@@ -91,7 +89,6 @@ export async function loadStripTeam(
 			fantraxPlayerId: NO_AUCTION_PROBE_ID,
 			...(await loadTeamRoster(client, teamId, contracts)),
 			auctions,
-			isMinorLeagueEligible: (playerId) => isEligible(eligibility, playerId),
 			// The name an exposing Auction would be refused by, from the fold
 			// that already holds it — the identical expression the read path
 			// and the locked transaction both use. The strip prints none of

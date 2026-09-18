@@ -73,11 +73,6 @@ import type { OpenAuctions, Restoration } from '../core/projection/auctions.ts';
 import { CONTENTION_DRAWN_EVENT } from '../core/projection/draws.ts';
 import { INITIAL_CONTRACTS, contractsReducer } from '../core/projection/contracts.ts';
 import {
-	INITIAL_ELIGIBILITY,
-	eligibilityReducer,
-	isEligible
-} from '../core/projection/eligibility.ts';
-import {
 	AUCTION_CLOSED_EVENT,
 	AUCTION_TERMINATED_EVENT,
 	INITIAL_NOMINATIONS,
@@ -153,7 +148,6 @@ export async function loadCloseState(
 	const events = await loadEventsViaClient(client);
 	const nominations = fold(INITIAL_NOMINATIONS, events, nominationsReducer);
 	const auctions = fold(INITIAL_AUCTIONS, events, auctionsReducer);
-	const eligibility = fold(INITIAL_ELIGIBILITY, events, eligibilityReducer);
 	const contracts = fold(INITIAL_CONTRACTS, events, contractsReducer);
 
 	const auction = auctionForPlayer(auctions, fantraxPlayerId);
@@ -236,22 +230,10 @@ export async function loadCloseState(
 		// discard. No new query, and no second moment they could describe.
 		capSpace: roster?.capSpace ?? NO_CAP_SPACE,
 		rosterCount: roster?.rosterCount ?? 0,
-		// The eligibility FOLD and the nominations fold, handed through as
-		// `teamMoneyStateFor`'s two callbacks so the cascade's re-test
-		// partitions the winner's other commitments exactly as a Bid would.
-		// `isEligible` is asked per Player rather than pre-computed, for the
-		// reason it is asked per Player everywhere else: the answer is a fold
-		// over the whole log and the set is not enumerable from here.
-		isMinorLeagueEligible: (playerId: string) => isEligible(eligibility, playerId),
 		// The Player's name, with the id as the fallback every `readPayload`
 		// in the core already makes.
 		playerNameFor: (playerId: string) =>
 			nominationForPlayer(nominations, playerId)?.playerName ?? playerId,
-		// The eligibility FOLD's answer, never `free_agent_players`' column —
-		// `server/bidding.ts`'s reason: the column IS the fold of those events,
-		// and asking the table too would make two answers possible inside one
-		// transaction at the moment a Commissioner is changing it.
-		playerIsMinorLeagueEligible: isEligible(eligibility, fantraxPlayerId),
 		// The RAW occupancy at this close, contracts included. `M = max(0, 3 −
 		// occupied)` is the core's derivation and is never computed here.
 		minorLeagueOccupied: roster?.minorLeagueOccupied ?? 0,
@@ -350,10 +332,7 @@ function restoredTeamId(payload: unknown): string | null {
  * A `null` state is the pre-`load` window the enqueue cannot observe; empty is
  * the safe answer there.
  */
-function affectedTeamsForClose(
-	event: AppendedEvent,
-	state: CloseState | null
-): readonly string[] {
+function affectedTeamsForClose(event: AppendedEvent, state: CloseState | null): readonly string[] {
 	const eventType = event.type;
 	// **Answered before the `null` guard, because it does not read the
 	// state.** The appended row names the Team the cancellation is about, so

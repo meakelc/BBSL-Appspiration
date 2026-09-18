@@ -89,7 +89,6 @@ function select(input: {
 		basis: {
 			auctions: input.auctions,
 			rosterFiguresFor: (teamId: string) => input.rosters[teamId] ?? null,
-			isMinorLeagueEligible: () => false,
 			playerNameFor: (playerId: string) => `Player ${playerId}`,
 			now: NOW
 		},
@@ -373,7 +372,6 @@ describe('selectRestoration — the next-highest surviving Bid that still stands
 				auctions: auctionsOf([carter]),
 				rosterFiguresFor: (teamId: string) =>
 					teamId === 't-v' ? figures(8) : teamId === 't-u' ? figures(4) : null,
-				isMinorLeagueEligible: () => false,
 				playerNameFor: (playerId: string) => `Player ${playerId}`,
 				now: NOW
 			},

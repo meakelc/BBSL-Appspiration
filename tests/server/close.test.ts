@@ -517,7 +517,11 @@ describe('closeAuction — one event, one transaction (AC3)', () => {
 });
 
 describe('closeAuction — Slot Placement against the roster at this close (AC2)', () => {
-	it('stashes an eligible Player in the third Minor League Slot at a $0 Cap Hit', async () => {
+	it('places an eligible Player in ACTIVE/BENCH at the full Cap Hit', async () => {
+		// **Corrected 2026-09-18.** A Team cannot win a Free Agent straight
+		// into its minors: it must fit him on its active roster first and move
+		// him down afterwards under FR-44. The free Minor League Slots here are
+		// left alone and the win charges its whole amount.
 		const harness = fakeGateway({
 			events: [nominated(), bidLogged(2, 4_000_000), eligible(3)]
 		});
@@ -525,9 +529,9 @@ describe('closeAuction — Slot Placement against the roster at this close (AC2)
 		await closeAuction(harness.gateway, 'p-1');
 
 		const payload = acceptedPayload(harness);
-		expect(payload.placement).toBe('minor_league');
+		expect(payload.placement).toBe('active_bench');
 		expect(payload.winningAmount).toBe(4_000_000);
-		expect(payload.capHit).toBe(0);
+		expect(payload.capHit).toBe(4_000_000);
 	});
 
 	it('overflows an eligible Player into Active/Bench once all three are occupied', async () => {

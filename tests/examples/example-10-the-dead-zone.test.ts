@@ -82,7 +82,7 @@ const LOTTERY: Auction = {
 	seed: null
 };
 
-const STATE: BidState = bidStateFor(LOTTERY, RICH, false, 'Auction');
+const STATE: BidState = bidStateFor(LOTTERY, RICH, 'Auction');
 
 function bidOf(amount: number): PlaceBid {
 	return {

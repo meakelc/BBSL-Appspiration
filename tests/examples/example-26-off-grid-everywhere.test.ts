@@ -102,7 +102,7 @@ function bidOf(amount: number): PlaceBid {
 
 // --- 26a: Standard Contention, off-grid, and it CLEARS the increment -------
 
-const STANDARD_AT_SIX: BidState = bidStateFor(auctionAt(6_000_000, 'standard'), RICH, false, 'Auction');
+const STANDARD_AT_SIX: BidState = bidStateFor(auctionAt(6_000_000, 'standard'), RICH, 'Auction');
 
 describe('§10 example 26a — $6,750,000 over a $6,000,000 high', () => {
 	it('refuses on granularity', () => {
@@ -149,7 +149,7 @@ describe('§10 example 26a — $6,750,000 over a $6,000,000 high', () => {
 // --- 26b: a Minimum-Bid Contention, off-grid by one dollar -----------------
 
 const LOTTERY_AUCTION: Auction = auctionAt(MINIMUM_BID, 'minimum_bid');
-const LOTTERY: BidState = bidStateFor(LOTTERY_AUCTION, RICH, false, 'Auction');
+const LOTTERY: BidState = bidStateFor(LOTTERY_AUCTION, RICH, 'Auction');
 
 describe('§10 example 26b — $1,000,001 in a Minimum-Bid Contention', () => {
 	it('is the state an Opening Bid of exactly $1,000,000 now produces', () => {
@@ -159,7 +159,7 @@ describe('§10 example 26b — $1,000,001 in a Minimum-Bid Contention', () => {
 		// reach: the opening gate refused exactly $1,000,000 by name. It PASSES
 		// now, so the same state is reachable the ordinary way, and example 26b
 		// is testing a lottery the codebase can actually produce.
-		const opening = evaluate(bidStateFor(null, RICH, false, 'Auction'), bidOf(MINIMUM_BID), NOW);
+		const opening = evaluate(bidStateFor(null, RICH, 'Auction'), bidOf(MINIMUM_BID), NOW);
 		expect(opening.opening.passed).toBe(true);
 		expect(opening.opening.opening).toBe('at_the_minimum');
 	});
@@ -186,7 +186,7 @@ describe('§10 example 26b — $1,000,001 in a Minimum-Bid Contention', () => {
 		// no bids at all, Standard Contention, and the lottery above. The gate
 		// reads the amount and nothing else, so all three agree exactly.
 		const offGrid = 1_000_001;
-		const states: BidState[] = [bidStateFor(null, RICH, false, 'Auction'), STANDARD_AT_SIX, LOTTERY];
+		const states: BidState[] = [bidStateFor(null, RICH, 'Auction'), STANDARD_AT_SIX, LOTTERY];
 		for (const state of states) {
 			expect(evaluate(state, bidOf(offGrid), NOW).granularity).toEqual({
 				passed: false,

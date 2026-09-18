@@ -88,7 +88,7 @@ const AUCTION: Auction = {
 };
 
 /** ...narrowed to what the gates decide from, through the core's own bridge. */
-const STATE: BidState = bidStateFor(AUCTION, RICH, false, 'Auction');
+const STATE: BidState = bidStateFor(AUCTION, RICH, 'Auction');
 
 /** Team B's raise, at exactly one Minimum Increment above the high. */
 const RAISE: PlaceBid = {

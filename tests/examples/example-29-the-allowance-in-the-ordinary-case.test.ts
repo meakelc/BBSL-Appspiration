@@ -82,7 +82,7 @@ function teamS(led: number): TeamMoneyState {
 
 /** The next non-eligible Player, with no Bid on him yet. */
 function stateAfter(led: number): BidState {
-	return bidStateFor(null, teamS(led), false, 'Auction');
+	return bidStateFor(null, teamS(led), 'Auction');
 }
 
 function bidOf(amount: number, fantraxPlayerId: string): PlaceBid {
@@ -234,12 +234,12 @@ describe('§10 example 29 — the allowance, in the ordinary case', () => {
 		// capacity says the same thing at $0 of Cap Space as at $400.0M.
 		for (const capSpace of [0, 20_000_000, 400_000_000]) {
 			const second = evaluate(
-				bidStateFor(null, { ...teamS(1), capSpace: parseMoney(capSpace) }, false, 'Auction'),
+				bidStateFor(null, { ...teamS(1), capSpace: parseMoney(capSpace) }, 'Auction'),
 				bidOf(1_500_000, 'p-2'),
 				NOW
 			);
 			const third = evaluate(
-				bidStateFor(null, { ...teamS(2), capSpace: parseMoney(capSpace) }, false, 'Auction'),
+				bidStateFor(null, { ...teamS(2), capSpace: parseMoney(capSpace) }, 'Auction'),
 				bidOf(1_500_000, 'p-3'),
 				NOW
 			);

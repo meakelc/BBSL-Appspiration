@@ -109,24 +109,33 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 		'14 — Allotment exhaustion'
 	],
 	['example-15-co-manager-race.test.ts', '15 — Co-manager race'],
-	['example-16-minors-placement.test.ts', '16 — Minors placement'],
-	['example-17-minors-overflow.test.ts', '17 — Minors overflow'],
-	['example-18-stashing-beats-the-cap.test.ts', '18 — Stashing beats the cap, on purpose'],
 	[
-		'example-19-overflow-refuses-the-cheap-bid.test.ts',
-		'19 — Overflow refuses the cheap bid, not the expensive one'
+		'example-16-retired-the-win-that-cannot-land-in-minors.test.ts',
+		'16 — The win that cannot land in minors (retired 2026-09-18)'
 	],
 	[
-		'example-20-a-resolved-win-stops-being-exposure.test.ts',
-		'20 — A resolved win stops being exposure'
+		'example-17-retired-there-is-no-minors-overflow.test.ts',
+		'17 — There is no minors overflow (retired 2026-09-18)'
 	],
 	[
-		'example-21-a-lottery-on-an-eligible-player-commits-nothing.test.ts',
-		'21 — A lottery on an eligible player commits nothing'
+		'example-18-retired-stashing-no-longer-beats-the-cap.test.ts',
+		'18 — Stashing no longer beats the cap (retired 2026-09-18)'
 	],
 	[
-		'example-22-a-lottery-that-overflows-does-commit.test.ts',
-		'22 — A lottery that overflows does commit'
+		'example-19-retired-the-cheap-bid-is-still-refused.test.ts',
+		'19 — The cheap bid is still refused (retired 2026-09-18)'
+	],
+	[
+		'example-20-retired-a-resolved-win-stops-being-a-commitment.test.ts',
+		'20 — A resolved win stops being a commitment (retired 2026-09-18)'
+	],
+	[
+		'example-21-retired-every-lottery-entry-commits.test.ts',
+		'21 — Every lottery entry commits (retired 2026-09-18)'
+	],
+	[
+		'example-22-retired-the-lottery-was-already-committed.test.ts',
+		'22 — The lottery was already committed (retired 2026-09-18)'
 	],
 	['example-23-ir-does-not-fill-the-twelve.test.ts', '23 — IR does not fill the twelve'],
 	[
@@ -134,8 +143,8 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 		'24 — A full roster ends non-eligible bidding, money or not'
 	],
 	[
-		'example-25-the-full-roster-can-still-stash.test.ts',
-		'25 — The same full roster can still stash, until it overflows'
+		'example-25-retired-the-full-roster-cannot-stash.test.ts',
+		'25 — The full roster cannot stash (retired 2026-09-18)'
 	],
 	['example-26-off-grid-everywhere.test.ts', '26 — Off-grid amounts are refused everywhere'],
 	[
@@ -178,8 +187,8 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 		'34 — Unlimited lotteries, and the one win that ends them'
 	],
 	[
-		'example-35-the-trigger-is-a-free-slot.test.ts',
-		'35 — The trigger is a free slot, not a roster count'
+		'example-35-retired-a-full-roster-enters-no-lottery.test.ts',
+		'35 — A full roster enters no lottery (retired 2026-09-18)'
 	],
 	// 36-39 and 42 are Story 7.7's Roster Trade examples (FR-41), landed with
 	// the `RecordRosterTrade` command. 42 sits out of sequence below because
@@ -231,8 +240,8 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 		'44 — The optimization after the trade'
 	],
 	[
-		'example-45-the-move-that-buys-bidding-power-by-spending-cap.test.ts',
-		'45 — The Move that buys bidding power by spending cap'
+		'example-45-the-move-that-costs-bidding-power-by-spending-cap.test.ts',
+		'45 — The Move that costs bidding power by spending cap'
 	],
 	[
 		'example-46-the-promotion-the-app-must-refuse-and-the-one-it-must-allow.test.ts',

@@ -125,7 +125,7 @@ function runTheLottery(): {
 	const payloads: BidPlacedPayload[] = [];
 
 	const opening = decide(
-		bidStateFor(null, RICH, false, 'Auction'),
+		bidStateFor(null, RICH, 'Auction'),
 		joinCommand('t-e', 'Team E'),
 		OPENED_AT,
 		OPENING_SEED
@@ -138,7 +138,7 @@ function runTheLottery(): {
 	for (const [index, [teamId, teamName, at]] of JOINS.entries()) {
 		const auction = auctionForPlayer(fold(INITIAL_AUCTIONS, log, auctionsReducer), 'p-1');
 		const decided = decide(
-			bidStateFor(auction, RICH, false, 'Auction'),
+			bidStateFor(auction, RICH, 'Auction'),
 			joinCommand(teamId, teamName),
 			at,
 			// A seed is supplied on every call, exactly as the shell does. A
@@ -159,7 +159,7 @@ describe('§10 example 7 — the lottery grows and the clock does not move', () 
 	it('accepts all three joins, each as a join rather than a raise', () => {
 		const log: AppendedEvent[] = [];
 		const opening = decide(
-			bidStateFor(null, RICH, false, 'Auction'),
+			bidStateFor(null, RICH, 'Auction'),
 			joinCommand('t-e', 'Team E'),
 			OPENED_AT,
 			OPENING_SEED
@@ -169,7 +169,7 @@ describe('§10 example 7 — the lottery grows and the clock does not move', () 
 
 		for (const [index, [teamId, teamName, at]] of JOINS.entries()) {
 			const auction = auctionForPlayer(fold(INITIAL_AUCTIONS, log, auctionsReducer), 'p-1');
-			const state = bidStateFor(auction, RICH, false, 'Auction');
+			const state = bidStateFor(auction, RICH, 'Auction');
 			const gates = evaluate(state, joinCommand(teamId, teamName), at);
 
 			expect(allGatesPassed(gates), teamName).toBe(true);

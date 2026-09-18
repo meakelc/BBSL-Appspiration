@@ -229,7 +229,7 @@ describe('the baseline Maximum Bid — evaluate() output, never a stored figure'
 		const team = teamWith({ minorLeagueOccupied: 0 });
 		const figure = baselineMaximumBid(team, 'Auction', NOW);
 		expect(typeof figure).toBe('number');
-		expect(CORE_STRIP).toContain('bidStateFor(null, team, false, phase)');
+		expect(CORE_STRIP).toContain('bidStateFor(null, team, phase)');
 	});
 
 	it('is null for a viewer bound to no Team', () => {
@@ -262,7 +262,6 @@ describe('the baseline Maximum Bid — evaluate() output, never a stored figure'
 			rosterCount: 9,
 			minorLeagueOccupied: 0,
 			auctions,
-			isMinorLeagueEligible: () => false,
 			playerNameFor: (id) => id
 		});
 		expect(withLead.leading).toHaveLength(1);
@@ -327,7 +326,7 @@ describe('the baseline Maximum Bid — evaluate() output, never a stored figure'
 		// through `baselineCapOutcome`.
 		expect(CORE_STRIP_MARKUP.match(/evaluate\(state, probeFor\(\), now\)/g)).toHaveLength(1);
 		expect(CORE_STRIP_MARKUP).toContain('baselineCapOutcome(team, phase, now).maximumBid');
-		expect(CORE_STRIP_MARKUP.match(/bidStateFor\(null, team, false, phase\)/g)).toHaveLength(1);
+		expect(CORE_STRIP_MARKUP.match(/bidStateFor\(null, team, phase\)/g)).toHaveLength(1);
 	});
 });
 
@@ -696,7 +695,10 @@ describe('loadStripTeam — one read, facts only, and it cannot 500 a page', () 
 		const reads = SERVER_STRIP.match(/loadEventsViaClient\(/g) ?? [];
 		expect(reads).toHaveLength(1);
 		expect(SERVER_STRIP).toContain('auctionsReducer');
-		expect(SERVER_STRIP).toContain('eligibilityReducer');
+		// No `eligibilityReducer` (corrected 2026-09-18): the strip's figures
+		// no longer turn on Minor League Eligibility, so folding it here would
+		// be computing a projection nothing reads.
+		expect(SERVER_STRIP).not.toContain('eligibilityReducer');
 		expect(SERVER_STRIP).toContain('contractsReducer');
 		expect(SERVER_STRIP).toContain('loadTeamRoster');
 	});

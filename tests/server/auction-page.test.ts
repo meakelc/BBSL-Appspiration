@@ -418,9 +418,6 @@ describe('loadAuctionPage — an open Auction', () => {
 				// Maximum Bid: AD-7 forbids a derived money figure being cached
 				// client-side for validation, so the surface gets the inputs and
 				// re-derives through the same `evaluate()` the lock calls.
-				// The fold's answer about this Player, serialised as a FACT so the
-				// surface rebuilds the same `BidState` the lock will.
-				playerIsMinorLeagueEligible: false,
 				team: {
 					capSpace: 156_000_000,
 					rosterCount: 9,
@@ -1527,7 +1524,6 @@ describe('loadAuctionPage — the clock the expiry gate is decided against (Stor
 					seed: null
 				},
 				null,
-				false,
 				'Auction'
 			),
 			{
@@ -1872,7 +1868,9 @@ describe('loadAuctionPage — a Minimum-Bid Contention (Story 3.2, AC7)', () => 
 				seedHash: auction?.seedHash ?? null,
 				contenders: control.contenderTeamIds,
 				team: null,
-				playerIsMinorLeagueEligible: control.playerIsMinorLeagueEligible
+				// Always `false`, and no longer off the wire: an Auction win lands
+				// in Active/Bench whatever the Player's eligibility.
+				playerIsMinorLeagueEligible: false
 			},
 			fantraxPlayerId: 'p-1',
 			viewerTeamId: 't-2',

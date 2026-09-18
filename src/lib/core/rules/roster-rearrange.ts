@@ -277,7 +277,7 @@ export type MaximumBidPair = {
  */
 export function managerMaximumBidFor(money: TeamMoneyState): Money {
 	const figures = teamSolvencyFiguresFor(
-		bidStateFor(null, money, false, 'Auction'),
+		bidStateFor(null, money, 'Auction'),
 		'',
 		NO_MONEY,
 		false

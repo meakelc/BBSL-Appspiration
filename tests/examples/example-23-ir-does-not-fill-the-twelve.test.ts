@@ -60,7 +60,7 @@ const TEAM_N: TeamMoneyState = {
 	minorLeagueOccupied: 0
 };
 
-const STATE: BidState = bidStateFor(null, TEAM_N, false, 'Auction');
+const STATE: BidState = bidStateFor(null, TEAM_N, 'Auction');
 
 function bidOf(amount: number): PlaceBid {
 	return {
@@ -105,7 +105,7 @@ describe('§10 example 23 — IR does not fill the twelve', () => {
 				// Slots, so `N` is the bid alone and `M` is the full three.
 				eligibleLeading: [],
 				minorLeagueOccupied: 0
-			}, false, 'Auction'),
+			}, 'Auction'),
 			bidOf(1_500_000),
 			NOW
 		);
@@ -183,7 +183,6 @@ describe('§10 example 23 — IR does not fill the twelve', () => {
 						}
 					]
 				},
-				false,
 				'Auction'
 			),
 			bidOf(1_500_000),
@@ -214,7 +213,7 @@ describe('§10 example 23 — IR does not fill the twelve', () => {
 				leading: [],
 				eligibleLeading: [],
 				minorLeagueOccupied: 0
-			}, false, 'Auction'),
+			}, 'Auction'),
 			bidOf(1_500_000),
 			NOW
 		);
