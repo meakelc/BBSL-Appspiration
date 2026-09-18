@@ -242,9 +242,20 @@ describe('§10 example 34 — unlimited lotteries, ended by cap space alone', ()
 
 			expect(gates.cap.committedBids, String(held)).toBe(held * 1_000_000);
 			expect(gates.cap.availableCapSpace, String(held)).toBe(9_000_000 - held * 1_000_000);
-			// The MONEY-side projection still counts the Bid being placed, so
-			// `11 + 1` is exactly twelve and the reserve is $0 throughout.
-			expect(gates.cap.projectedAdditions, String(held)).toBe(1);
+			// **The MONEY-side projection counts every ticket the Team holds
+			// AND the one it is placing**, because Committed Bids charges
+			// every one of them: `reserveAdditionsFor`, not
+			// `projectedAdditionsFor` (2026-09-18). Until then this read a
+			// flat `1` — the held tickets dropped out while their capital did
+			// not, which reserved a second $1,000,000 against Slots they had
+			// already funded.
+			expect(gates.cap.projectedAdditions, String(held)).toBe(held + 1);
+			// **The reserve is $0 throughout either way, and that is exactly
+			// why this example never caught the defect.** Team X sits at
+			// Roster Count 11, so `11 + 1` already reaches twelve and
+			// `unfilledSlots` clamps whatever the held tickets contribute. It
+			// takes two or more free Slots to see the difference — which is
+			// what `bidding.test.ts`' Roster Count 7 case is for.
 			expect(gates.cap.rosterReserve, String(held)).toBe(0);
 		}
 	});

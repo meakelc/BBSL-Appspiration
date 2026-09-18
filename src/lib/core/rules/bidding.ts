@@ -1448,18 +1448,20 @@ function minorsExposureFor(
  * from nothing else, so the money side and the slots side are asking two
  * different questions of one Team.
  *
- * Both callers exclude the entries the Team ALREADY holds — the PRD §3
- * glossary defines Projected Active/Bench Additions with entries excluded
- * "however many the Team holds", and Roster Reserve reads that same
- * definition, which makes the reserve larger and therefore stricter. What
- * they differ on is `thisBidIsEntry`, and only `evaluateSlots` can supply
- * it: `evaluateContention` has classified the Bid in front of it and the
- * slots gate is handed that verdict. `evaluateCap` calls this UNCHANGED, so
- * the parameter defaults to `false` and the money side counts the
- * prospective Bid as an ordinary commitment. That is the stricter reading
- * and the deliberate one — §10 example 34's ninth entry passes on money at
- * exactly `Maximum Bid = $1,000,000` because of it, and its tenth is
- * refused there rather than on capacity.
+ * **This is the CAPACITY side, and `evaluateSlots` is now its only caller.**
+ * It excludes the entries the Team already holds, which is PRD §3's
+ * "however many the Team holds" and FR-18's exemption exactly: a lottery
+ * entry is not rationed against the ceiling, because the expected outcome of
+ * a lottery is losing. `thisBidIsEntry` is `evaluateContention`'s verdict on
+ * the Bid in front of the gate, threaded down so the prospective Bid is
+ * exempted on the same ground the held ones are.
+ *
+ * **Roster Reserve does NOT read this figure — see `reserveAdditionsFor`.**
+ * It did until 2026-09-18, and that was the defect: an entry's $1,000,000 is
+ * already inside `committedBids`, so excluding it here left the reserve
+ * still holding back another $1,000,000 for the very Slot that money would
+ * fill. One Slot, funded twice. The exemption is a capacity rule and it was
+ * being spent as a money rule.
  *
  * **The POST-BID basis is not optional**: PRD FR-12 and the §3 glossary both
  * define Projected Active/Bench Additions as counting the bid being placed,
@@ -1502,8 +1504,8 @@ function projectedAdditionsFor(
 	// `evaluateSlots` needs these figures for its own outcome as well as for
 	// this sum, and computing them twice from the same arguments is the
 	// duplication this module argues against everywhere else. The default is
-	// what keeps `evaluateCap`'s call site a single argument: the money gate
-	// wants only the number, so it lets the derivation run here.
+	// what keeps a single-argument call site available to `evaluateActSlots`,
+	// which wants only the number.
 	counts: ActiveBenchOverflowCounts = activeBenchOverflowFor(state, thisBidIsEntry)
 ): number {
 	const { activeBenchOverflow } = counts;
@@ -1511,6 +1513,71 @@ function projectedAdditionsFor(
 		state.team.leading.filter((lead) => !lead.isContentionEntry).length +
 		(state.playerIsMinorLeagueEligible || thisBidIsEntry ? 0 : 1) +
 		activeBenchOverflow
+	);
+}
+
+/**
+ * Reserve Additions — the MONEY side's count of Active/Bench Slots this
+ * Team's outstanding commitments will fill, and the only figure Roster
+ * Reserve may read (2026-09-18).
+ *
+ * The third member of a family this module already has two of. Written out
+ * beside its capacity counterpart so the one term they differ on is visible:
+ *
+ *   Projected Active/Bench Additions = leading.filter(¬entry) + (¬elig ∧ ¬entry ? 1 : 0) + Active/Bench Overflow
+ *   Reserve Additions                = leading                + (¬elig            ? 1 : 0) + Overflow Count
+ *
+ * **Entries are counted here, and excluded there, because the two figures
+ * answer two questions.** Capacity asks "how many Slots may this Team be
+ * rationed against", and FR-18 answers that a lottery entry is rationed
+ * against none. Roster Reserve asks "how many Slots does this Team still
+ * have to FUND at the minimum", and a held entry funds one already: its
+ * $1,000,000 is inside `committedBids`, charged against Available Cap Space
+ * from the instant it is placed. Reserving a second $1,000,000 for the Slot
+ * that money would fill charges the same hole twice, and the Team's Maximum
+ * Bid falls by the entry's full amount rather than by nothing.
+ *
+ * Read the two outcomes and see that neither wants the second charge. If the
+ * entry WINS, the committed $1,000,000 is what bought the Slot and one fewer
+ * hole remains. If it LOSES, the $1,000,000 is released and the hole is
+ * reserved again. The Team needs $1,000,000 for that Slot in both branches
+ * and never $2,000,000, so the exclusion was over-strict by exactly one
+ * minimum salary per held entry.
+ *
+ * **The inversion it produced is how it was found.** A Team at Roster Count
+ * 9 with $20,000,000 bidding $1,000,000 lost $1,000,000 of Maximum Bid; the
+ * same Team bidding $1,100,000 lost $100,000. Offering $100,000 more left it
+ * $900,000 richer in bidding power, which is not a rule anyone wrote.
+ *
+ * **`Overflow Count` and not `Active/Bench Overflow`**, for the same reason
+ * and by the same symmetry. The money-side overflow counts eligible entries
+ * because `minorsExposureFor` charges them; so the Slot an overflowing
+ * eligible entry would take is funded already, and this count must see it.
+ * The pair now reads cleanly: every commitment `committedBids` charges is a
+ * commitment this count projects, and `minorsCountsFor` serves both halves.
+ *
+ * `noProspectiveBid` is `teamSolvencyFiguresFor`'s own parameter, and it
+ * says what it means — a Roster Trade or Drop places no Bid, so there is
+ * nothing to project for one (§10 examples 37 and 40). It is deliberately
+ * NOT `thisBidIsEntry`: a prospective ENTRY commits its $1,000,000 the
+ * moment it lands, so the money side counts it exactly as it counts an
+ * ordinary Bid. `evaluateCap` passes `false` and is unchanged — §10 example
+ * 34's ninth entry still passes on money at exactly `Maximum Bid =
+ * $1,000,000` and its tenth is still refused there rather than on capacity.
+ */
+function reserveAdditionsFor(
+	state: BoundBidState,
+	noProspectiveBid: boolean,
+	// The money-side counts, injected rather than re-derived:
+	// `teamSolvencyFiguresFor` already holds them for Minors Exposure, and a
+	// second `minorsCountsFor` call here would be a second thing to keep in
+	// step with the exposure it must agree with.
+	counts: MinorsCounts
+): number {
+	return (
+		state.team.leading.length +
+		(state.playerIsMinorLeagueEligible || noProspectiveBid ? 0 : 1) +
+		counts.overflowCount
 	);
 }
 
@@ -1713,12 +1780,15 @@ function evaluateCap(state: BidState, fantraxPlayerId: string, amount: Money): C
  * figures: there is no arithmetic to do, and inventing zeroes for one would
  * be inventing a Team.
  *
- * `prospectiveBidIsExempt` is `projectedAdditionsFor`'s `thisBidIsEntry`,
- * widened in DOCUMENTATION and not in behaviour. It is `true` for a
- * Minimum-Bid Contention entry, which projects no Active/Bench addition
- * (FR-18) — and `true` for a Roster Trade, which projects none because there
- * is no prospective Bid to project. `evaluateCap` passes `false` and is
- * unchanged.
+ * `noProspectiveBid` says the one thing it is ever used to say: a Roster
+ * Trade or Drop places no Bid, so nothing is projected for one (§10 examples
+ * 37 and 40). It was `prospectiveBidIsExempt` until 2026-09-18, a name that
+ * carried `projectedAdditionsFor`'s `thisBidIsEntry` meaning as well — "this
+ * Bid is a lottery entry" — and the two readings are not the same fact. No
+ * caller ever passed it for the entry meaning, but the name invited a future
+ * one to, and on the money side that reading is wrong: a prospective entry
+ * commits its $1,000,000 like any other Bid (see `reserveAdditionsFor`).
+ * `evaluateCap` passes `false` and is unchanged.
  */
 export type TeamSolvencyFigures = {
 	readonly capSpace: Money;
@@ -1741,7 +1811,7 @@ export function teamSolvencyFiguresFor(
 	state: BidState,
 	fantraxPlayerId: string,
 	amount: Money,
-	prospectiveBidIsExempt = false
+	noProspectiveBid = false
 ): TeamSolvencyFigures | null {
 	const team = state.team;
 	if (team === null) return null;
@@ -1764,7 +1834,12 @@ export function teamSolvencyFiguresFor(
 	}
 
 	const availableCapSpace = subtractMoney(team.capSpace, committedBids);
-	const projectedAdditions = projectedAdditionsFor(bound, prospectiveBidIsExempt);
+	// **`reserveAdditionsFor` and NOT `projectedAdditionsFor`** — the money
+	// side's own count, reading the same `counts` the exposure above read, so
+	// every commitment charged to `committedBids` is a commitment this
+	// projects. See that function for why the capacity figure cannot serve
+	// here.
+	const projectedAdditions = reserveAdditionsFor(bound, noProspectiveBid, counts);
 	const rosterReserve = multiplyMoney(
 		MINIMUM_OPENING_BID,
 		unfilledSlots(team.rosterCount, projectedAdditions)

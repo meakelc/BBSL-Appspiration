@@ -2212,20 +2212,25 @@ describe('evaluateCap — Maximum Bid, derived on every evaluation (AD-7)', () =
 		expect(accepted.cap.maximumBid).toBe(refused.cap.maximumBid);
 	});
 
-	it('drops held CONTENTION ENTRIES from Roster Reserve, which raises it (Story 10.2)', () => {
-		// **The money side's half of the exemption, at a Roster Count where
-		// the count actually moves the number.** PRD §3 defines Projected
-		// Active/Bench Additions with Minimum-Bid Contention entries excluded
-		// "however many the Team holds", and there is ONE such definition —
-		// so Roster Reserve, which is derived from it, gets the same
-		// treatment. Every other cap assertion involving entries sits at
-		// Roster Count 11 or 12, where `unfilledSlots` clamps to zero whether
-		// the entries are counted or not; this one is at 7, where it does not.
+	it('KEEPS held CONTENTION ENTRIES in Roster Reserve, because their capital is already committed (2026-09-18)', () => {
+		// **The correction to Story 10.2's money half, at a Roster Count where
+		// the count actually moves the number.** 10.2 read PRD §3's "however
+		// many the Team holds" as one definition serving both gates and
+		// dropped held entries from the reserve too. That is right for Roster
+		// Capacity — FR-18 refuses to ration a lottery entry against the
+		// ceiling — and wrong for Roster Reserve, which asks a money question:
+		// each ticket's $1,000,000 is ALREADY inside Committed Bids, so the
+		// Slot it would fill is funded. Reserving a second $1,000,000 against
+		// it charged one hole twice.
 		//
-		//   leads counted:   2 real + 1 this bid          = P 3
-		//   Roster Reserve:  $1.0M x max(0, 12 - (7 + 3)) = $2.0M
-		//   the OLD formula: 5 held + 1                   = P 6
-		//                    $1.0M x max(0, 12 - 13)      = $0
+		//   Reserve Additions: 5 held + 1 this bid        = P 6
+		//   Roster Reserve:    $1.0M x max(0, 12 - 13)    = $0
+		//   the 10.2 formula:  2 real + 1                 = P 3
+		//                      $1.0M x max(0, 12 - 10)    = $2.0M
+		//
+		// Every other cap assertion involving entries sits at Roster Count 11
+		// or 12, where `unfilledSlots` clamps to zero whether the entries are
+		// counted or not; this one is at 7, where it does not.
 		//
 		// Committed Bids is unmoved by any of it — the three tickets still
 		// cost $1,000,000 each, because FR-18 exempts an entry from Roster
@@ -2247,21 +2252,71 @@ describe('evaluateCap — Maximum Bid, derived on every evaluation (AD-7)', () =
 		// Still committed, all five of them.
 		expect(gates.cap.committedBids).toBe(11_000_000);
 		expect(gates.cap.availableCapSpace).toBe(19_000_000);
-		// The two real leads plus the Bid being placed — never the tickets.
-		expect(gates.cap.projectedAdditions).toBe(3);
-		expect(gates.cap.rosterReserve).toBe(2_000_000);
-		expect(gates.cap.maximumBid).toBe(17_000_000);
+		// The two real leads, the three tickets, and the Bid being placed.
+		expect(gates.cap.projectedAdditions).toBe(6);
+		expect(gates.cap.rosterReserve).toBe(0);
+		expect(gates.cap.maximumBid).toBe(19_000_000);
 
-		// **The boundary, so a revert fails on a CAP assertion and not only
-		// on a slots one.** Under the pre-10.2 count the reserve was $0 and
-		// Maximum Bid was $19,000,000, which would have admitted this.
-		expect(evaluate(state, command(17_000_000), NOW).cap.passed).toBe(true);
-		expect(evaluate(state, command(17_500_000), NOW).cap.passed).toBe(false);
-		expect(evaluate(state, command(19_000_000), NOW).cap.passed).toBe(false);
+		// **The boundary, so a revert fails on a CAP assertion and not only on
+		// a slots one.** Under the 10.2 count the reserve was $2,000,000 and
+		// Maximum Bid was $17,000,000, which would have refused this.
+		expect(evaluate(state, command(19_000_000), NOW).cap.passed).toBe(true);
+		expect(evaluate(state, command(17_500_000), NOW).cap.passed).toBe(true);
+		expect(evaluate(state, command(19_500_000), NOW).cap.passed).toBe(false);
 
-		// And the capacity gate agrees about the count here, because this Bid
-		// is not itself an entry — the two only diverge on that.
+		// **And the capacity gate does NOT agree about the count**, which is
+		// the split itself. This Bid is not an entry, so the two differ on the
+		// three held tickets alone: FR-18 keeps them out of here.
 		expect(gates.slots.projectedAdditions).toBe(3);
+	});
+
+	it('costs a minimum Bid no more Maximum Bid than the $1,000,000 the reserve already held for the Slot', () => {
+		// **The regression this split exists for, stated as the inversion that
+		// found it.** SEA placed a minimum Bid on one Player and watched its
+		// Maximum Bid fall by the whole $1,000,000, when the reserve had
+		// provisioned exactly that for the Slot the Bid would fill.
+		//
+		// A Bid of exactly `MINIMUM_BID` always opens or joins a Minimum-Bid
+		// Contention, so its lead carries `isContentionEntry`. Under the 10.2
+		// count that lead was dropped from Projected Active/Bench Additions
+		// while its $1,000,000 stayed in Committed Bids, so the Team paid for
+		// the Slot twice. An ordinary Bid was never charged that way, which
+		// made offering MORE money cost LESS bidding power — the one shape
+		// that proves this was never a deliberate strictness.
+		const before = team({ capSpace: 20_000_000, rosterCount: 9 });
+		const afterEntry = team({
+			capSpace: 20_000_000,
+			rosterCount: 9,
+			leading: [['p-allen', 1_000_000, true]]
+		});
+		const afterStandard = team({
+			capSpace: 20_000_000,
+			rosterCount: 9,
+			leading: [['p-allen', 1_100_000]]
+		});
+		const maximumBidFor = (money: TeamMoneyState) =>
+			evaluate(bidStateFor(null, money, false, 'Auction'), command(1_500_000), NOW).cap
+				.maximumBid;
+
+		// $20.0M less the $1.0M x (12 - 10) the two remaining holes reserve.
+		expect(maximumBidFor(before)).toBe(18_000_000);
+
+		// The minimum Bid spends its $1,000,000 and releases the $1,000,000
+		// the reserve was holding for that same Slot. Net zero, which is what
+		// the Manager expected and what the old count denied them: it read
+		// $17,000,000 here.
+		expect(maximumBidFor(afterEntry)).toBe(18_000_000);
+
+		// The ordinary Bid costs only the $100,000 it offered ABOVE the
+		// minimum — unchanged by this fix, and the figure the entry case now
+		// agrees with.
+		expect(maximumBidFor(afterStandard)).toBe(17_900_000);
+
+		// **The inversion itself, pinned.** Bidding $100,000 more must never
+		// leave a Team richer in bidding power than bidding $100,000 less.
+		expect(Number(maximumBidFor(afterEntry))).toBeGreaterThanOrEqual(
+			Number(maximumBidFor(afterStandard))
+		);
 	});
 });
 
