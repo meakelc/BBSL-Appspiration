@@ -26,12 +26,13 @@
  * several Auctions legitimately share a close instant or a price, and a
  * comparator that returns 0 leaves `Array.prototype.sort` free to reorder
  * them between renders. A sort carries a DIRECTION, which turns the chosen
- * key over and leaves those tie-breaks alone; the filter is a single switch
- * that hides the closed cards.
+ * key over and leaves those tie-breaks alone; the filter is two switches —
+ * one hides what has closed, the other hides what the viewer's Cap could not
+ * lead.
  *
  * **Every string the board prints is here.** The state labels, the icons that
- * ride beside them, the sort labels and their two directions, the switch's own
- * name, the empty screen, the two count sentences and the unbid phrase — so
+ * ride beside them, the sort labels and their two directions, the switches' own
+ * names, the empty screen, the two count sentences and the unbid phrase — so
  * `routes/board/+page.svelte` states nothing
  * of its own and a synonym cannot appear in markup. Where a word already
  * exists in the core it is IMPORTED rather than respelled:
@@ -47,6 +48,7 @@
  * stdlib only, relative .ts imports only so Deno can load it (AD-2).
  */
 
+import { MINIMUM_BID, MINIMUM_INCREMENT } from './constants.ts';
 import { parseInstant } from './instant.ts';
 import type { Money } from './money.ts';
 import {
@@ -153,6 +155,23 @@ export function flipDirection(direction: BoardSortDirection): BoardSortDirection
  * meant it for the session, not for one visit to one page.
  */
 export const DEFAULT_HIDE_CLOSED = false;
+
+/**
+ * The board's SECOND switch: whether the Auctions the viewer could not lead
+ * are hidden.
+ *
+ * It is the other half of the same question the first one asks — "show me the
+ * board I can act on" — and it narrows on a different axis: the first drops
+ * what has finished, this one drops what is out of reach. Neither implies the
+ * other, so they are two switches and not a three-way control: a Manager over
+ * their Cap on half the board still wants the closed cards, and a Manager
+ * reading the settled record still wants the ones they were priced out of.
+ *
+ * Off by default, for `DEFAULT_HIDE_CLOSED`'s reason: the board IS the board
+ * until a Manager says otherwise, and a screen that silently omitted Auctions
+ * on the first visit would be a filter nobody chose.
+ */
+export const DEFAULT_HIDE_ABOVE_CAP = false;
 
 /**
  * The Player reference fields the board renders beside a name.
@@ -394,6 +413,14 @@ export const BOARD_SORT_LEGEND = 'Sort';
  * Auctions" alone would be a heading that could as easily mean the opposite.
  */
 export const BOARD_HIDE_CLOSED_LABEL = 'Hide Closed Auctions';
+/**
+ * The second switch, worded as the act for the same reason — and worded
+ * against the CAP rather than against the Maximum Bid, because `Cap` is the
+ * term the Team's own limit carries everywhere else in this product and the
+ * Maximum Bid is the figure derived from it. A Manager reads "above cap" as
+ * "further than I can go", which is exactly what the switch hides.
+ */
+export const BOARD_HIDE_ABOVE_CAP_LABEL = 'Hide Auctions Above Cap';
 export const BOARD_PRICE_LABEL = 'Price';
 export const BOARD_LEADING_LABEL = 'Leading Bidder';
 export const BOARD_NOMINATED_LABEL = 'Nominated by';
@@ -1002,27 +1029,103 @@ function compareNullsLast(
 	return direction === 'ascending' ? ascending : -ascending;
 }
 
-/** The one field the filter reads. Structural, for `Sortable`'s reason. */
+/** The two fields the filters read. Structural, for `Sortable`'s reason. */
 type Filterable = {
 	readonly state: BoardCardState;
+	readonly price: number | null;
 };
 
 /**
- * The board with the closed cards dropped, as a NEW array — or the board
- * itself when the switch is off.
+ * The least a Bid on this card could be and still LEAD it — the figure the
+ * above-Cap switch measures a Maximum Bid against.
  *
- * Off returns the caller's own list, not a copy that happens to match: the
- * unfiltered view IS the board and hides nothing, and a fresh array there
+ * It is not the price. A price is what the leading Bid already cost, and a
+ * Manager who holds exactly that much cannot place a Bid at all; what decides
+ * whether a card is out of reach is the smallest amount that would put them in
+ * front of it, and the three live states each answer that differently:
+ *
+ *  - `awaiting_opening_bid` — `MINIMUM_BID`. There is nothing to beat, so the
+ *    Opening Bid's own floor is the whole of it. `price` is `null` here.
+ *  - `minimum_bid` — `MINIMUM_BID` as well, and NOT the price plus an
+ *    increment: joining a Minimum-Bid Contention is a Bid of exactly the
+ *    minimum (`projection/auctions.ts`), so a Manager who can afford the
+ *    minimum can enter this one however many Teams are already in it.
+ *  - `standard` — the price plus `MINIMUM_INCREMENT`, the grid every Bid
+ *    above the minimum sits on (`money.ts`).
+ *
+ * A `standard` card with no price cannot occur — the state exists because a
+ * Bid was placed — and the fallback is the minimum rather than a throw: this
+ * is a view filter, and the honest answer to a card the fold could not price
+ * is to leave it on the board.
+ */
+function leastLeadingBid(card: Filterable): number {
+	if (card.state !== 'standard' || card.price === null) return MINIMUM_BID;
+	return card.price + MINIMUM_INCREMENT;
+}
+
+/**
+ * Whether this card is beyond the viewer's Cap — beyond the figure the
+ * persistent strip states, which is the ONE Maximum Bid in this product and is
+ * not recomputed here.
+ *
+ * `false` for every CLOSED card, and that is deliberate rather than an
+ * omission: nobody can bid on a closed Auction at any amount, so a Cap has
+ * nothing to say about it. Hiding what has finished is the other switch's job,
+ * and a closed card that vanished because of this one would leave a Manager
+ * with no switch that brings it back.
+ *
+ * `false` whenever there is no Maximum Bid — a viewer with no Team, or any
+ * phase but the Auction Phase, where `strip.ts` states no such figure because
+ * no Bid is accepted at any amount. A board narrowed against a ceiling that
+ * does not exist would hide cards for a reason nobody could read.
+ *
+ * The comparison is against the strip's BASELINE — the Team's Maximum Bid with
+ * every lead it currently holds committed. On an Auction the viewer already
+ * leads that is conservative: winning it releases nothing, but raising their
+ * own Bid only costs the difference. The board carries no per-card Maximum Bid
+ * and is not about to start (AD-7) — the figure a Manager acts on is the one
+ * the Auction's own page evaluates, and this switch narrows a list rather than
+ * authorising anything.
+ */
+export function aboveCap(card: Filterable, maximumBid: number | null): boolean {
+	if (maximumBid === null) return false;
+	if (card.state === 'closed') return false;
+	return leastLeadingBid(card) > maximumBid;
+}
+
+/** What the two switches are asking of the board. */
+export type BoardFilters = {
+	readonly hideClosed: boolean;
+	readonly hideAboveCap: boolean;
+	/** The strip's own figure, or `null` where there is none. */
+	readonly maximumBid: number | null;
+};
+
+/**
+ * The board with the hidden cards dropped, as a NEW array — or the board
+ * itself when both switches are off.
+ *
+ * Both off returns the caller's own list, not a copy that happens to match:
+ * the unfiltered view IS the board and hides nothing, and a fresh array there
  * would be a new identity on every re-derivation for no reader's benefit.
  *
- * On hides closed cards ENTIRELY. It is what a Manager turns on to get back
- * the board they had before anything closed, and a "mostly open" board would
- * not be that.
+ * ONE pass over one predicate, rather than a filter per switch: the two
+ * narrowings compose to a single question — is this card on the board a
+ * Manager asked for — and answering it in one place is what keeps a card from
+ * being dropped twice or, worse, from surviving one pass and not the other
+ * depending on which ran first.
+ *
+ * Each switch hides ENTIRELY. A Manager who turns one on is asking for the
+ * board without those cards, and a "mostly" filtered board would not be that.
  */
 export function filterBoard<T extends Filterable>(
 	cards: readonly T[],
-	hideClosed: boolean
+	filters: BoardFilters
 ): readonly T[] {
-	if (!hideClosed) return cards;
-	return cards.filter((card) => card.state !== 'closed');
+	if (!filters.hideClosed && !filters.hideAboveCap) return cards;
+	return cards.filter((card) => {
+		if (filters.hideClosed && card.state === 'closed') return false;
+		if (filters.hideAboveCap && aboveCap(card, filters.maximumBid)) return false;
+		return true;
+	});
 }

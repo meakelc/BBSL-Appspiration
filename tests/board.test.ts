@@ -22,7 +22,9 @@ import {
 	AUCTION_STATE_ICONS,
 	AUCTION_STATE_LABELS,
 	AUCTION_STATE_LABELS_NARROW,
+	BOARD_HIDE_ABOVE_CAP_LABEL,
 	BOARD_HIDE_CLOSED_LABEL,
+	DEFAULT_HIDE_ABOVE_CAP,
 	DEFAULT_HIDE_CLOSED,
 	DEFAULT_SORT,
 	DEFAULT_SORT_DIRECTION,
@@ -37,6 +39,7 @@ import {
 	SORT_LABELS,
 	VIEWER_STATE_ICONS,
 	VIEWER_STATE_LABELS,
+	aboveCap,
 	boardCardsFor,
 	boardCountSentence,
 	filterBoard,
@@ -786,44 +789,106 @@ describe('filtering — view state, visibly stated', () => {
 		readonly playerName: string;
 		readonly viewerState: BoardCard['viewerState'];
 		readonly state: BoardCardState;
+		readonly price: number | null;
 	};
 	const rows: readonly Row[] = [
-		{ playerName: 'Alice', viewerState: 'you_lead', state: 'standard' },
-		{ playerName: 'Bob', viewerState: 'outbid', state: 'standard' },
-		{ playerName: 'Carla', viewerState: 'contender', state: 'minimum_bid' },
-		{ playerName: 'Dana', viewerState: 'not_involved', state: 'awaiting_opening_bid' },
-		{ playerName: 'Eve', viewerState: 'won', state: 'closed' }
+		{ playerName: 'Alice', viewerState: 'you_lead', state: 'standard', price: 4_000_000 },
+		{ playerName: 'Bob', viewerState: 'outbid', state: 'standard', price: 8_000_000 },
+		{ playerName: 'Carla', viewerState: 'contender', state: 'minimum_bid', price: 1_000_000 },
+		{
+			playerName: 'Dana',
+			viewerState: 'not_involved',
+			state: 'awaiting_opening_bid',
+			price: null
+		},
+		{ playerName: 'Eve', viewerState: 'won', state: 'closed', price: 20_000_000 }
 	];
+	/** Both switches off and no ceiling — the board as it arrives. */
+	const NOTHING_HIDDEN = { hideClosed: false, hideAboveCap: false, maximumBid: null } as const;
 
-	it('is ONE switch, named for what it does, and starts off', () => {
-		// It replaced a five-way view control. Four of those five views were ways
-		// of asking the board to be a different list than the board — the two
-		// viewer views duplicate Your Positions, and `closed` is a board with
-		// nothing to bid on. What is left is the one narrowing that makes the
-		// live board live again.
+	it('is TWO switches, each named for what it does, and both start off', () => {
+		// The first replaced a five-way view control. Four of those five views
+		// were ways of asking the board to be a different list than the board —
+		// the two viewer views duplicate Your Positions, and `closed` is a board
+		// with nothing to bid on. What is left is the one narrowing that makes
+		// the live board live again.
 		expect(DEFAULT_HIDE_CLOSED).toBe(false);
-		// Worded as the ACT, not as the view left behind: `Closed Auctions`
+		// The second narrows on the other axis: the first drops what has
+		// finished, this drops what is out of reach. Neither implies the other,
+		// which is why they are two switches and not a three-way control.
+		expect(DEFAULT_HIDE_ABOVE_CAP).toBe(false);
+		// Both worded as the ACT, not as the view left behind: `Closed Auctions`
 		// alone is a heading that could as easily mean the opposite.
 		expect(BOARD_HIDE_CLOSED_LABEL).toBe('Hide Closed Auctions');
+		expect(BOARD_HIDE_ABOVE_CAP_LABEL).toBe('Hide Auctions Above Cap');
 	});
 
-	it('on, it hides every closed card ENTIRELY', () => {
+	it('closed on, it hides every closed card ENTIRELY', () => {
 		// The acceptance criterion, stated: a Manager who turns this on is asking
 		// for the board they had before anything closed, and a "mostly open"
 		// board would not be that.
-		expect(filterBoard(rows, true).map((r) => r.playerName)).toEqual([
-			'Alice',
-			'Bob',
-			'Carla',
-			'Dana'
-		]);
+		const hidden = filterBoard(rows, { ...NOTHING_HIDDEN, hideClosed: true });
+		expect(hidden.map((r) => r.playerName)).toEqual(['Alice', 'Bob', 'Carla', 'Dana']);
 		// And it narrows on the CARD's state alone — the reader's own relation
 		// to an Auction never decides whether they can see it.
-		expect(filterBoard(rows, true).every((r) => r.state !== 'closed')).toBe(true);
+		expect(hidden.every((r) => r.state !== 'closed')).toBe(true);
 	});
 
-	it('off, it hides nothing — and hands back the caller’s own list', () => {
-		expect(filterBoard(rows, false)).toBe(rows);
+	it('both off, it hides nothing — and hands back the caller’s own list', () => {
+		expect(filterBoard(rows, NOTHING_HIDDEN)).toBe(rows);
+		// A ceiling alone narrows nothing: the SWITCH is what asks for it.
+		expect(filterBoard(rows, { ...NOTHING_HIDDEN, maximumBid: 0 })).toBe(rows);
+	});
+
+	it('above-Cap measures the least LEADING Bid, never the price', () => {
+		// A price is what the leading Bid already cost; what decides whether a
+		// card is out of reach is the smallest amount that would put the viewer
+		// in front of it. Bob's Auction stands at $8.0M, so $8.0M is not enough
+		// and $8.5M — the price plus one increment — is exactly enough.
+		expect(aboveCap({ state: 'standard', price: 8_000_000 }, 8_000_000)).toBe(true);
+		expect(aboveCap({ state: 'standard', price: 8_000_000 }, 8_500_000)).toBe(false);
+		// Awaiting an Opening Bid: nothing to beat, so the Opening Bid's own
+		// floor is the whole of it.
+		expect(aboveCap({ state: 'awaiting_opening_bid', price: null }, 1_000_000)).toBe(false);
+		expect(aboveCap({ state: 'awaiting_opening_bid', price: null }, 500_000)).toBe(true);
+		// A Minimum-Bid Contention is joined at exactly the minimum, however
+		// many Teams are already in it — NOT at the price plus an increment.
+		expect(aboveCap({ state: 'minimum_bid', price: 1_000_000 }, 1_000_000)).toBe(false);
+	});
+
+	it('above-Cap leaves the CLOSED cards alone, whatever they closed at', () => {
+		// Nobody can bid on a closed Auction at any amount, so a Cap has nothing
+		// to say about it — and a closed card that vanished because of this
+		// switch would leave a Manager with no switch that brings it back.
+		expect(aboveCap({ state: 'closed', price: 20_000_000 }, 1_000_000)).toBe(false);
+		expect(
+			filterBoard(rows, { hideClosed: false, hideAboveCap: true, maximumBid: 1_000_000 }).map(
+				(r) => r.playerName
+			)
+		).toEqual(['Carla', 'Dana', 'Eve']);
+	});
+
+	it('above-Cap hides nothing when there is no ceiling to measure against', () => {
+		// A viewer with no Team, and every phase but the Auction Phase — where
+		// the strip states no Maximum Bid because no Bid is accepted at any
+		// amount. A board narrowed against a ceiling that does not exist would
+		// hide cards for a reason nobody could read.
+		expect(
+			filterBoard(rows, { hideClosed: false, hideAboveCap: true, maximumBid: null }).map(
+				(r) => r.playerName
+			)
+		).toEqual(['Alice', 'Bob', 'Carla', 'Dana', 'Eve']);
+	});
+
+	it('both on, each hides on its own axis in ONE pass', () => {
+		// The two narrowings compose to a single question — is this card on the
+		// board a Manager asked for — so a card cannot survive one pass and not
+		// the other depending on which ran first.
+		expect(
+			filterBoard(rows, { hideClosed: true, hideAboveCap: true, maximumBid: 4_500_000 }).map(
+				(r) => r.playerName
+			)
+		).toEqual(['Alice', 'Carla', 'Dana']);
 	});
 
 	it('counts only the OPEN Auctions, and states no second figure', () => {
