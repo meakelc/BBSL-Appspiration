@@ -187,15 +187,40 @@ describe('mentionSuffixFor — one line per affected Team, on that event’s not
 		expect(line).not.toContain('Nomination Slot');
 	});
 
-	it('says nothing to a Team on a close it did not win', () => {
+	it('says NOTHING AT ALL to a Team on a close it did not win', () => {
 		// The outbid NOMINATOR, who used to be told the close had released their
-		// Slot and now keeps it held. `server/close.ts` no longer addresses them
-		// at all; if one ever arrives here it is a targeting bug, and this module
-		// degrades to the plain factual line rather than inventing a sentence
-		// about somebody else's close.
-		expect(mentionSuffixFor(auctionClosed(SUNS, true), [ARI_ID], DIRECTORY, ORIGIN)).toBe(
-			`<@${ARI_ID}> — A AuctionClosed was recorded (event #7).`
+		// Slot and now keeps it held. `server/close.ts` stopped addressing them,
+		// but the outbox freezes its recipient rows at enqueue time, so every
+		// close filed before that fix still carries a row naming them and those
+		// rows drain on whatever build is running when the drain next runs.
+		//
+		// `''` rather than the plain factual line: degrading would ping a
+		// Manager with `A AuctionClosed was recorded (event #7).`, a ping with
+		// no fact attached, which is worse than the wrong sentence it replaced.
+		expect(mentionSuffixFor(auctionClosed(SUNS, true), [ARI_ID], DIRECTORY, ORIGIN)).toBe('');
+	});
+
+	it('drops a stale addressee and still mentions the winner on the same event', () => {
+		// The shape a real backlog has: one intent row for the winner, filed by
+		// the current write site, and one for the nominator, filed by the old
+		// one. The winner's line is untouched; the stale row emits nothing.
+		const line = mentionSuffixFor(auctionClosed(SUNS, true), [KAI_ID, ARI_ID], DIRECTORY, ORIGIN);
+
+		expect(line).toBe(
+			`<@${KAI_ID}> — Suns — Kai led this Auction at its close, and ` +
+				`your Nomination Slot is free again. ${LINK}`
 		);
+		expect(line).not.toContain(`<@${ARI_ID}>`);
+		expect(line.split('\n')).toHaveLength(1);
+	});
+
+	it('keeps an addressee it cannot place on a Team, rather than inventing a silence', () => {
+		// The filter drops what it can PROVE wrong, never what it merely cannot
+		// verify. An unresolvable snowflake still degrades to the plain factual
+		// line, because an unreadable directory must not manufacture a silence.
+		expect(
+			mentionSuffixFor(auctionClosed(SUNS, true), ['999999999999999999'], DIRECTORY, ORIGIN)
+		).toBe(`<@999999999999999999> — A AuctionClosed was recorded (event #7).`);
 	});
 
 	it('mentions every Contender on the draw itself', () => {
@@ -367,9 +392,13 @@ describe('nothing is suppressed, because no category is mutable', () => {
 		const wire = [ARI_ID, KAI_ID, NOOR_ID];
 		const line = mentionSuffixFor(auctionClosed(SUNS, true), wire, DIRECTORY, ORIGIN);
 
-		// Ari is on the wire but is not the winner, so their line degrades to
-		// the plain factual one — and they are still spelled in the body.
-		expect(mentionsPresentIn(line, wire)).toEqual(wire);
+		// Ari is on the wire — a stale intent row from before `server/close.ts`
+		// stopped addressing the nominator — and is NOT the winner, so this
+		// module declines to name them and they drop out of
+		// `allowed_mentions.users` by construction rather than by a second
+		// filter somebody has to remember to apply. That is the whole point of
+		// narrowing the wire list through the body that was actually rendered.
+		expect(mentionsPresentIn(line, wire)).toEqual([KAI_ID, NOOR_ID]);
 		expect(mentionsPresentIn('', wire)).toEqual([]);
 	});
 
