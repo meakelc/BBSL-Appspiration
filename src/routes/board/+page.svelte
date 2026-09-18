@@ -38,6 +38,7 @@
 		BOARD_CLOSED_AT_LABEL,
 		BOARD_CLOSES_LABEL,
 		BOARD_FINAL_LABEL,
+		BOARD_HIDE_ABOVE_CAP_LABEL,
 		BOARD_HIDE_CLOSED_LABEL,
 		BOARD_LEADING_LABEL,
 		BOARD_NOMINATED_LABEL,
@@ -75,12 +76,18 @@
 	// The Auction deep-link shape is written ONCE, in the core, so `/board`,
 	// `/positions` and Story 5.3's Discord notification all emit one shape.
 	import { auctionPathFor } from '$lib/core/auction-link.ts';
+	// The Cap switch measures the strip's OWN figure, from the strip's own
+	// module — there is one Maximum Bid in this product and the board does not
+	// get a second one. `stripShowsMaximumBid` is the same phase table the
+	// strip gates on, so the switch is offered in exactly the phase the figure
+	// exists in.
+	import { baselineMaximumBid, stripShowsMaximumBid } from '$lib/core/strip.ts';
 	import { closesInPhrase, contenderCountSentence } from '$lib/core/projection/auctions.ts';
 	import { figuresAgeSentence } from '$lib/core/freshness.ts';
 	import { freshness } from '$lib/client/freshness.svelte.ts';
 	// Outbid cards dismissed on Your Positions lose their chip here too.
 	import { dismissals } from '$lib/client/dismissals.svelte.ts';
-	// The switch outlives this component, so the setting it holds does too.
+	// The switches outlive this component, so the settings they hold do too.
 	import { boardView } from '$lib/client/board-view.svelte.ts';
 	import { formatInstant, parseInstant } from '$lib/core/instant.ts';
 
@@ -125,13 +132,13 @@
 	/**
 	 * The pieces of view state, and they are the whole of it. None touches the
 	 * server, and none can change a figure on a card: the sort reorders the
-	 * list, the direction turns that order over, and the switch narrows it.
+	 * list, the direction turns that order over, and the two switches narrow it.
 	 *
 	 * The sort and its direction live HERE and reset on a reload, because an
-	 * ordering is how a Manager is reading the board this minute. The switch
-	 * lives in `boardView` and persists, because hiding the closed cards is a
-	 * standing preference about what the board IS — the distinction the user
-	 * drew, and the module comment explains the mechanism.
+	 * ordering is how a Manager is reading the board this minute. Both switches
+	 * live in `boardView` and persist, because hiding the closed cards — or the
+	 * ones out of reach — is a standing preference about what the board IS: the
+	 * distinction the user drew, and the module comment explains the mechanism.
 	 */
 	let sort = $state<BoardSort>(DEFAULT_SORT);
 	let direction = $state<BoardSortDirection>(DEFAULT_SORT_DIRECTION[DEFAULT_SORT]);
@@ -258,6 +265,47 @@
 	}
 
 	/**
+	 * The viewer's Maximum Bid — the SAME figure the persistent strip states,
+	 * derived the same way from the same transported facts, and never a second
+	 * one of its own.
+	 *
+	 * `data.stripTeam` is the layout's, so this page adds no read and no field
+	 * to the wire: the facts were already inherited by every surface (AD-7), and
+	 * `baselineMaximumBid` is the one expression that turns them into a ceiling.
+	 * The board still transports no per-card figure and still prints none —
+	 * this number leaves the script only as a decision about which cards to
+	 * show.
+	 *
+	 * `null` wherever the strip itself would state nothing: a viewer with no
+	 * Team, and any phase but the Auction Phase — the board is live in Archived
+	 * too, where no Bid is accepted at any amount and a ceiling would bound
+	 * nothing. The guard is `PersistentStrip`'s own, for its reason: this is a
+	 * derivation over a shape a schema drift could change, and a throw here
+	 * would take the whole board down over a filter.
+	 */
+	const maximumBid = $derived.by(() => {
+		if (data.stripTeam === null) return null;
+		if (!stripShowsMaximumBid(data.phase.name)) return null;
+		try {
+			return baselineMaximumBid(data.stripTeam, data.phase.name, nowIso);
+		} catch {
+			return null;
+		}
+	});
+
+	/**
+	 * Whether the Cap switch is offered at all.
+	 *
+	 * A switch that cannot narrow anything is a control that lies about what it
+	 * would do, so it is absent rather than disabled in the two states where
+	 * there is no ceiling to measure against — the Archived board, and a viewer
+	 * with no Team. The setting itself survives underneath: a Manager who left
+	 * it on finds it still on when the figure comes back, because the store
+	 * holds it and this only decides whether the row renders.
+	 */
+	const capSwitchShown = $derived(maximumBid !== null);
+
+	/**
 	 * The list as it is read: filtered, then ordered.
 	 *
 	 * Both are the core's own functions — the comparator that makes every sort
@@ -266,7 +314,16 @@
 	 * reshuffle while a Manager is reading it.
 	 */
 	const shown = $derived(
-		sortBoard(filterBoard(board.cards, boardView.hideClosed), sort, nowIso, direction)
+		sortBoard(
+			filterBoard(board.cards, {
+				hideClosed: boardView.hideClosed,
+				hideAboveCap: boardView.hideAboveCap,
+				maximumBid
+			}),
+			sort,
+			nowIso,
+			direction
+		)
 	);
 
 	/**
@@ -399,8 +456,8 @@
 	{:else}
 		<!-- What the panel below is: the Auction, singular — the event this
 		     league is running, not one of the Auctions counted inside it. The
-		     count of what is open, the switch that hides what is closed and the
-		     ordering are all facts about the Auction rather than about any
+		     count of what is open, the two switches that narrow what is on it
+		     and the ordering are all facts about the Auction rather than about any
 		     Auction, which is what this one word says.
 
 		     It labels the PANEL and nothing beyond it. The two group headings
@@ -434,72 +491,30 @@
 			<h2 class="section-label" id="board-panel-heading">{BOARD_PANEL_HEADING}</h2>
 
 			<section class="panel">
-				<!-- The panel's top row: what the board CONTAINS at the leading
-				     edge, and the one control that changes what it contains at the
-				     trailing one. They belong on one row because they are two halves
-				     of the same fact — the count says how many Auctions are closed,
-				     the switch decides whether those are on screen, and the count's
-				     own wording changes when it is thrown.
+				<!-- What the board CONTAINS, and that alone on its row.
 
-				     The block's `Auctions` heading used to stand here. It is gone,
-				     and down over the cards where it names the list it is actually
-				     over: a panel of controls does not need titling — a sort and a
-				     switch say what they are — and the heading was keeping the
-				     count sentence from leading the panel.
+				     The two switches used to stand here, beside it. They are below the
+				     sort now — where the filter lived before it became a switch, and
+				     where a second one can join it: two controls at the trailing edge
+				     of a count sentence is a row with three things on it, and at 375px
+				     it was a row with three things on two and sometimes three lines.
+				     Below the sort they are a stack of view controls, each on a full
+				     row, reading in the order a Manager sets them: order the board,
+				     then narrow it.
 
-				     The count is a `--size-12-5` line and the switch's own box is
-				     shorter than a touch floor, so this row is as tall as the text
-				     on it and no taller. -->
-				<div class="panel-top">
-					<!-- How many Auctions are OPEN, and that alone.
+				     How many Auctions are OPEN, and that alone. A closed count stood
+				     beside it and is gone: on a phone, which is where this board is
+				     read, two sentences took this row onto a second and sometimes a
+				     third line. One figure, one line.
 
-					     A closed count stood beside it and is gone: on a phone, which
-					     is where this board is read, two sentences took this row onto
-					     a second and sometimes a third line, and pushed the switch off
-					     the count it belongs beside. One figure, one line.
-
-					     The visibly-filtered obligation survives it — the SWITCH is
-					     what discharges it. A labelled control on this row, stating
-					     its own position, is a stronger guarantee than a sentence
-					     describing the setting: it is visible whether or not anything
-					     is hidden, and it is what a Manager passes on the way to the
-					     cards. The obligation was written against a filter buried in a
-					     collapsed disclosure, which this board no longer has. -->
-					<p class="prose" id="board-count">{countSentence}</p>
-
-					<!-- The board's one filter, and it is a SWITCH rather than a
-					     disclosure over radios: one question with a yes and a no does
-					     not need a list, and burying it under a tap would hide the
-					     one control on this page whose position a Manager cannot
-					     infer from the board in front of them.
-
-					     A native checkbox with `role="switch"`, so it is announced as
-					     on or off rather than checked or unchecked, and so the label,
-					     the focus ring and the Space key are the browser's own. It
-					     posts nothing: the only thing it writes is this browser's own
-					     storage, which is why it is still on when the Manager comes
-					     back.
-
-					     The BOX follows its label here, which is the reverse of the
-					     sort radios below and is the trailing edge's doing: this
-					     control is pushed to the right of the panel, so the box last
-					     is the box at the edge — where a thumb reaching across a
-					     phone arrives, and where a Manager scanning down the right of
-					     the panel finds it against the same margin the figures on the
-					     cards below share. Reading order is unaffected: the label
-					     wraps both, so the accessible name is the same sentence
-					     whichever side it is written on. -->
-					<label class="switch" for="board-hide-closed">
-						<span class="prose switch-label">{BOARD_HIDE_CLOSED_LABEL}</span>
-						<input
-							id="board-hide-closed"
-							type="checkbox"
-							role="switch"
-							checked={boardView.hideClosed}
-							onchange={(event) => boardView.set(event.currentTarget.checked)}
-						/>
-					</label>
-				</div>
+				     The visibly-filtered obligation survives it — the SWITCHES are what
+				     discharge it. Labelled controls stating their own positions are a
+				     stronger guarantee than a sentence describing the setting: they are
+				     visible whether or not anything is hidden, and they are what a
+				     Manager passes on the way to the cards. The obligation was written
+				     against a filter buried in a collapsed disclosure, which this board
+				     no longer has. -->
+				<p class="prose" id="board-count">{countSentence}</p>
 
 				<!-- Every price on this board carries its age in anything but Live
 				     (AD-29). The countdowns are exempt and keep running; the
@@ -577,6 +592,66 @@
 					</fieldset>
 				</details>
 
+				<!-- The board's filters, and they are SWITCHES rather than a
+				     disclosure over radios: each is one question with a yes and a
+				     no, and burying either under a tap would hide the two controls
+				     on this page whose positions a Manager cannot infer from the
+				     board in front of them.
+
+				     They sit BELOW the sort — back where the filter stood before it
+				     became a switch — and SIDE BY SIDE on one line, which is the
+				     sort radios' own shape directly above them. Stacked, the pair
+				     cost a row of a screen whose whole job is the cards beneath it;
+				     on one line they read as what they are, a Manager's two answers
+				     to the same question about which board they want. They wrap only
+				     when the two names are wider than the panel.
+
+
+				     Native checkboxes with `role="switch"`, so each is announced as
+				     on or off and the label, the focus ring and the Space key are the
+				     browser's own. Neither posts anything: the only thing they write
+				     is this browser's own storage, which is why they are still set
+				     when the Manager comes back.
+
+				     The BOX LEADS its name on both, which is the sort radios'
+				     order directly above and the reason the two blocks read as one
+				     column of controls: every box on this panel starts at the same
+				     left edge, so what is set and what is not is one scan down that
+				     edge rather than a hunt along each row. Reading order is
+				     unaffected either way — the label wraps both halves, so the
+				     accessible name is the same sentence whichever side the box is
+				     written on. -->
+				<div class="switches">
+					<label class="switch" for="board-hide-closed">
+						<input
+							id="board-hide-closed"
+							type="checkbox"
+							role="switch"
+							checked={boardView.hideClosed}
+							onchange={(event) => boardView.set(event.currentTarget.checked)}
+						/>
+						<span class="prose switch-label">{BOARD_HIDE_CLOSED_LABEL}</span>
+					</label>
+
+					<!-- Offered only where there IS a Cap to measure against — the
+					     Auction Phase, and a viewer with a Team. Absent rather than
+					     disabled in the other states: a switch that could narrow
+					     nothing would be a control describing an act it cannot
+					     perform, and the Archived board has no Maximum Bid at all
+					     because no Bid is accepted there at any amount. -->
+					{#if capSwitchShown}
+						<label class="switch" for="board-hide-above-cap">
+							<input
+								id="board-hide-above-cap"
+								type="checkbox"
+								role="switch"
+								checked={boardView.hideAboveCap}
+								onchange={(event) => boardView.setAboveCap(event.currentTarget.checked)}
+							/>
+							<span class="prose switch-label">{BOARD_HIDE_ABOVE_CAP_LABEL}</span>
+						</label>
+					{/if}
+				</div>
 			</section>
 		</section>
 
@@ -924,59 +999,56 @@
 	}
 
 	/*
-	 * The one switch. A row at the touch floor, like every `.choice` above it —
-	 * the floor stays on every control that spends something, and this one
-	 * spends a Manager's view of the board and then REMEMBERS having spent it.
+	 * The two switches, stacked — a block of view controls below the sort
+	 * rather than one control at the end of the count sentence. The count row
+	 * held one and wrapped at 375px with two, and a filter that drops onto its
+	 * own line at the trailing edge is a control that has left the row it was
+	 * placed on.
 	 *
-	 * The native checkbox, sized to match the radios rather than redrawn as a
-	 * track and a knob: a custom switch would have to reimplement the focus
-	 * ring, the Space key and the disabled state that the browser already
-	 * carries, and `role="switch"` is what makes it announce as on or off.
+	 * The rows MEET: each carries its own padding, and `.controls` above makes
+	 * the same call for the same reason — a gap added to slack that is already
+	 * inside two adjacent boxes stacks two separations where the eye sees one.
+	 *
+	 * The negative margin is the block's, not each row's. It cancels the
+	 * padding at all four edges, so the tap areas reach the panel's own margins
+	 * and the stack occupies exactly the height of its text — `/nominate`'s
+	 * explainer-mark idiom, and the same device `.controls-disclosure[open] >
+	 * .controls` uses to pull its last row back into the panel's gap.
 	 */
-	/*
-	 * The panel's top row: the count at the leading edge, the switch pushed to
-	 * the far edge by the free space rather than by a width — `.card-head`'s own
-	 * device, so the rows in this file that pair a line with something at the
-	 * opposite edge all do it the same way.
-	 *
-	 * It WRAPS, and at 375px it does: two count sentences beside `Hide Closed
-	 * Auctions` are wider than the panel. The switch keeps its `margin-left:
-	 * auto` on the second line, so a wrapped row still puts it at the trailing
-	 * edge instead of dropping it back to the leading one.
-	 *
-	 * `align-items: center` against a count line that may itself wrap to two
-	 * lines: the switch then centres on the pair, which is what keeps it from
-	 * hanging off the first line of a sentence it belongs to the whole of.
-	 */
-	.panel-top {
+	.switches {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
+		/*
+		 * `.controls`' own two axes, for `.controls`' own reason. Across, the
+		 * gap is what keeps two switches from reading as one phrase. Down —
+		 * which is what happens only when the pair is too wide for the panel —
+		 * each switch already carries its own padding, so a row gap on top of it
+		 * would stack two separations where the eye sees one.
+		 */
 		column-gap: var(--space-row-gap);
 		row-gap: 0;
+		margin: calc(-1 * var(--space-row-gap));
 	}
 
 	/*
+	 * One switch. The native checkbox, sized to match the sort radios rather
+	 * than redrawn as a track and a knob: a custom switch would have to
+	 * reimplement the focus ring, the Space key and the disabled state that the
+	 * browser already carries, and `role="switch"` is what makes it announce as
+	 * on or off.
+	 *
 	 * NO `--touch-min` — `/nominate`'s explainer summary made the same call for
-	 * the same reason, and this row is the case it was describing. The floor is
-	 * twice the height of the checkbox it would box, so most of it was empty
-	 * above and below — and because the heading beside it is a `--size-10` label
-	 * with no height of its own, that emptiness became the height of the whole
-	 * row: the heading ended up floating in a band of panel it had not asked
-	 * for.
+	 * the same reason. The floor is twice the height of the checkbox it would
+	 * box, so most of it was empty above and below, and two of them stacked
+	 * were a band of empty panel between the sort and the board.
 	 *
-	 * The target is not lost with it, and this is the idiom the explainer mark
-	 * already uses: the PADDING is the tap area and the negative margin is what
-	 * stops it being layout. The margin box collapses back to the content, so
-	 * the hit area grows and the row does not — and the label text is inside
-	 * the target too, so what a Manager taps is the whole pairing rather than a
-	 * 22px box.
-	 *
-	 * `margin-left` is `auto` rather than negative: that edge has nothing to
-	 * collapse against, because the free space is what pushes this to the
-	 * trailing edge. The `--touch-min` floor is kept, untouched, on every
-	 * control that SPENDS something. This one spends nothing — it hides cards,
-	 * it is reversible by the same tap, and it states its own position.
+	 * The target is not lost with it: the PADDING is the tap area, and the
+	 * label text is inside the target too, so what a Manager taps is the whole
+	 * pairing rather than a 22px box. The `--touch-min` floor is kept,
+	 * untouched, on every control that SPENDS something. These spend nothing —
+	 * they hide cards, each is reversible by the same tap, and each states its
+	 * own position.
 	 */
 	.switch {
 		display: flex;
@@ -984,20 +1056,26 @@
 		gap: var(--space-row-gap);
 		cursor: pointer;
 		padding: var(--space-row-gap);
-		margin: calc(-1 * var(--space-row-gap));
-		margin-left: auto;
 	}
 
+	/*
+	 * Each box LEADS its own name, at the switch's own width — no
+	 * `margin-left: auto`, which belongs to a row that spans something. Two
+	 * switches sharing a line have no far edge to push to, and a box driven
+	 * there would sit against the next switch's name rather than against
+	 * anything of its own.
+	 */
 	.switch input[type='checkbox'] {
 		width: 22px;
 		height: 22px;
+		flex-shrink: 0;
 		accent-color: var(--color-border-interactive);
 	}
 
 	/*
-	 * The switch's name carries the weight its `section-label` neighbours do
-	 * not: it is the only control on the panel whose position a Manager cannot
-	 * read off the board, so it is set as text rather than as a label.
+	 * A switch's name carries the weight its `section-label` neighbours do not:
+	 * these are the only controls on the panel whose positions a Manager cannot
+	 * read off the board, so each is set as text rather than as a label.
 	 */
 	.switch-label {
 		color: var(--color-text);

@@ -25,6 +25,7 @@ import { isHttpError } from '@sveltejs/kit';
 import {
 	AUCTION_STATE_ICONS,
 	AUCTION_STATE_LABELS,
+	BOARD_HIDE_ABOVE_CAP_LABEL,
 	BOARD_HIDE_CLOSED_LABEL,
 	SORT_KEYS,
 	VIEWER_STATE_ICONS,
@@ -255,6 +256,7 @@ describe('the board page — what it renders', () => {
 			'SORT_DIRECTION_LABELS',
 			'SORT_DIRECTION_ICONS',
 			'BOARD_HIDE_CLOSED_LABEL',
+			'BOARD_HIDE_ABOVE_CAP_LABEL',
 			'sortSummary',
 			'EMPTY_BOARD_HEADING',
 			'EMPTY_BOARD_STATEMENT',
@@ -272,9 +274,10 @@ describe('the board page — what it renders', () => {
 		expect(PAGE_CODE).not.toMatch(/'Unbid'|Minimum-Bid Contention/);
 		expect(PAGE_CODE).not.toMatch(/No opening bid/);
 		expect(PAGE_CODE).not.toMatch(/Auctions are (open|hidden)/);
-		// The switch's own name and both direction words are the core's too —
-		// the page prints `BOARD_HIDE_CLOSED_LABEL`, never the sentence in it.
+		// Both switch names and both direction words are the core's too — the
+		// page prints the constants, never the sentences in them.
 		expect(PAGE_CODE).not.toContain(BOARD_HIDE_CLOSED_LABEL);
+		expect(PAGE_CODE).not.toContain(BOARD_HIDE_ABOVE_CAP_LABEL);
 		expect(PAGE_CODE).not.toMatch(/Highest first|Lowest first|Closing first|A to Z/);
 		expect(PAGE_CODE).not.toMatch(/Ascending|Descending/);
 		expect(PAGE_CODE).not.toMatch(/h unbid|unbid for/);
@@ -443,9 +446,13 @@ describe('the board page — what it renders', () => {
 	});
 
 	it('sorts and filters through the core, in the browser, over the transported list', () => {
-		expect(PAGE).toMatch(
-			/sortBoard\(filterBoard\(board\.cards, boardView\.hideClosed\), sort, nowIso, direction\)/
-		);
+		expect(PAGE).toMatch(/hideClosed: boardView\.hideClosed/);
+		expect(PAGE).toMatch(/hideAboveCap: boardView\.hideAboveCap/);
+		// ONE filter call taking both switches and the ceiling, then the sort
+		// over its result: the two narrowings compose to a single question and
+		// are answered in one place.
+		expect(PAGE).toMatch(/filterBoard\(board\.cards, \{/);
+		expect(PAGE).toMatch(/sortBoard\(\s*filterBoard\(/);
 		// Neither control posts anything or reloads anything.
 		expect(PAGE).toMatch(/let sort = \$state<BoardSort>\(DEFAULT_SORT\)/);
 		expect(PAGE).toMatch(
@@ -465,10 +472,10 @@ describe('the board page — what it renders', () => {
 		// into it would make the one figure on the page false the moment an
 		// Auction closes. The filtered notice still measures the whole board.
 		expect(PAGE).toMatch(/boardCountSentence\(openCardCount\(board\.cards\)\)/);
-		// ONE figure on that line. A closed count stood beside it and is gone:
-		// on a phone, where this board is read, two sentences took the row onto
-		// a second and sometimes a third line and pushed the switch off the
-		// count it belongs beside.
+		// ONE figure on that line, and nothing else on it at all. A closed count
+		// stood beside it and is gone, and so are the switches: on a phone, where
+		// this board is read, two sentences took the row onto a second line and a
+		// control at the trailing edge dropped off it onto a third.
 		expect(PAGE).toContain('<p class="prose" id="board-count">{countSentence}</p>');
 		expect(PAGE).not.toContain('closedCountSentence');
 		expect(PAGE).not.toContain('board-closed-count');
@@ -519,8 +526,20 @@ describe('the board page — what it renders', () => {
 		expect(PAGE_CODE).not.toMatch(/\b[A-Z]{3}\b\s*—/);
 	});
 
-	it('carries no per-viewer Maximum Bid — the strip owns that figure', () => {
-		expect(PAGE_CODE).not.toMatch(/maximumBid|capSpace|evaluate\(/i);
+	it('PRINTS no per-viewer Maximum Bid — the strip owns that figure', () => {
+		// The page derives one, and only to decide which cards to show: the Cap
+		// switch has to measure against something, and the something is the
+		// strip's own `baselineMaximumBid` over the facts the layout already
+		// ships. Nothing about it reaches a card — no figure, no label, no money
+		// renderer — so the board still carries no per-card ceiling (AD-7) and
+		// there is still exactly one Maximum Bid in this product.
+		expect(PAGE_CODE).not.toMatch(/capSpace|evaluate\(/i);
+		expect(PAGE_CODE).not.toContain('describeAmount');
+		expect(PAGE_CODE).not.toContain('MAXIMUM_BID_LABELS');
+		// It is read in the script and never rendered: no `maximumBid` appears
+		// anywhere in the markup above the `<style>` block.
+		const markup = PAGE.slice(PAGE.indexOf('</script>'), PAGE.indexOf('<style>'));
+		expect(markup).not.toContain('maximumBid');
 	});
 
 	it('underlines the Player name, because the name is the card’s one control', () => {
@@ -694,10 +713,10 @@ describe('the two view controls', () => {
 		expect(PAGE).toContain('{BOARD_OPEN_HEADING}');
 		expect(PAGE).toContain('{BOARD_CLOSED_HEADING}');
 		expect(PAGE.indexOf('id="board-panel-heading"')).toBeLessThan(
-			PAGE.indexOf('<div class="panel-top">')
+			PAGE.indexOf('id="board-count"')
 		);
 		expect(PAGE.indexOf('id="board-open-heading"')).toBeGreaterThan(
-			PAGE.indexOf('<div class="panel-top">')
+			PAGE.indexOf('id="board-count"')
 		);
 		expect(PAGE.indexOf('id="board-open-heading"')).toBeLessThan(
 			PAGE.indexOf('id="board-closed-heading"')
@@ -782,59 +801,116 @@ describe('the two view controls', () => {
 		expect(PAGE).toContain('{sortSummary(sort, direction)}');
 	});
 
-	it('is ONE switch for the filter, and it persists across navigation', () => {
-		// Five radios in a disclosure became one switch. It is a native checkbox
-		// with `role="switch"`, so it announces as on or off and keeps the
-		// browser's own label, focus ring and Space key.
+	it('is TWO switches for the filters, and both persist across navigation', () => {
+		// Five radios in a disclosure became one switch, and a second joined it.
+		// Each is a native checkbox with `role="switch"`, so it announces as on
+		// or off and keeps the browser's own label, focus ring and Space key.
 		expect(PAGE).toContain('id="board-hide-closed"');
-		expect(PAGE).toMatch(/type="checkbox"\s*\n\s*role="switch"/);
+		expect(PAGE).toContain('id="board-hide-above-cap"');
+		expect([...PAGE.matchAll(/type="checkbox"\s*\n\s*role="switch"/g)]).toHaveLength(2);
 		expect(PAGE).toContain('{BOARD_HIDE_CLOSED_LABEL}');
-		// The box follows its label — the reverse of the sort radios, and the
-		// trailing edge's doing: the control is pushed right, so the box last
-		// is the box at the panel's own margin.
-		const switchMarkup = PAGE.slice(
-			PAGE.indexOf('<label class="switch"'),
-			PAGE.indexOf('</label>', PAGE.indexOf('<label class="switch"'))
-		);
-		expect(switchMarkup.indexOf('{BOARD_HIDE_CLOSED_LABEL}')).toBeLessThan(
-			switchMarkup.indexOf('id="board-hide-closed"')
-		);
+		expect(PAGE).toContain('{BOARD_HIDE_ABOVE_CAP_LABEL}');
+		// The box LEADS its name on both — the sort radios' own order directly
+		// above, and the reason the two blocks read as one column of controls:
+		// every box on this panel starts at the same left edge, so what is set
+		// and what is not is one scan down that edge.
+		const pairs: readonly (readonly [string, string])[] = [
+			['id="board-hide-closed"', '{BOARD_HIDE_CLOSED_LABEL}'],
+			['id="board-hide-above-cap"', '{BOARD_HIDE_ABOVE_CAP_LABEL}']
+		];
+		for (const [id, label] of pairs) {
+			expect(PAGE.indexOf(id)).toBeLessThan(PAGE.indexOf(label));
+		}
 		// The old control is gone entirely — not hidden, gone.
 		expect(PAGE).not.toContain('FILTER_KEYS');
 		expect(PAGE).not.toContain('name="board-filter"');
 		expect(PAGE).not.toContain('board-filter-');
-		// It sticks because it is held OUTSIDE the component: a `$state` in this
-		// file is destroyed with the page, so the setting would last one screen.
+		// They stick because they are held OUTSIDE the component: a `$state` in
+		// this file is destroyed with the page, so a setting would last one
+		// screen.
 		expect(PAGE).toContain("from '$lib/client/board-view.svelte.ts'");
 		expect(PAGE).toMatch(/checked=\{boardView\.hideClosed\}/);
 		expect(PAGE).toMatch(/boardView\.set\(event\.currentTarget\.checked\)/);
-		// And it sits at the TOP of the panel, at the trailing edge — on the
-		// COUNT's own row, pushed there by the free space rather than by a
-		// width. The two are halves of one fact: the count says how many
-		// Auctions are closed and the switch decides whether those are on
-		// screen, so the setting and its consequence are read together.
-		const panelTop = PAGE.slice(
-			PAGE.indexOf('<div class="panel-top">'),
-			PAGE.indexOf('</div>', PAGE.indexOf('<div class="panel-top">'))
+		expect(PAGE).toMatch(/checked=\{boardView\.hideAboveCap\}/);
+		expect(PAGE).toMatch(/boardView\.setAboveCap\(event\.currentTarget\.checked\)/);
+		// And they are READ in an `$effect`, so storage is never touched during
+		// SSR and the server-rendered HTML agrees with the first client paint.
+		expect(PAGE).toMatch(/\$effect\(\(\) => \{\s*boardView\.load\(\);\s*\}\);/);
+	});
+
+	it('puts both switches BELOW the sort, side by side, off the count sentence', () => {
+		// They stood at the trailing edge of the count row, which held one and
+		// wrapped at 375px with two. Below the sort — where the filter lived
+		// before it became a switch — they are a block of view controls read in
+		// the order a Manager sets them: order the board, then narrow it.
+		expect(PAGE.indexOf('<div class="switches">')).toBeGreaterThan(
+			PAGE.indexOf('<details class="controls-disclosure"')
 		);
-		expect(panelTop).toContain('id="board-count"');
-		expect(panelTop).toContain('id="board-hide-closed"');
-		expect(PAGE).toMatch(/\.switch \{[\s\S]*?margin-left: auto;[\s\S]*?\n\t\}/);
-		// It carries its tap area as padding it then CANCELS, rather than as a
-		// touch floor. The heading beside it is a `--size-10` label with no
-		// height of its own, so a 44px box on the switch became the height of
-		// the whole row and the heading floated in a band of empty panel. This
-		// is `/nominate`'s explainer-mark idiom: the hit area grows, the row
-		// does not.
-		const switchRule = PAGE.slice(PAGE.indexOf('.switch {'), PAGE.indexOf('.switch input'));
+		expect(PAGE.indexOf('id="board-count"')).toBeLessThan(PAGE.indexOf('<div class="switches">'));
+		// The count row is gone as a ROW: the sentence is a bare child of the
+		// panel now, with nothing beside it to wrap against.
+		expect(PAGE).not.toContain('<div class="panel-top">');
+		expect(PAGE).not.toMatch(/\.panel-top \{/);
+		// Each switch carries its tap area as padding the BLOCK then cancels,
+		// rather than as a touch floor: the checkbox is half the floor's height,
+		// so two floored controls were a band of empty panel between the sort
+		// and the board. This is `/nominate`'s explainer-mark idiom — the hit
+		// area grows, the row does not.
+		const switchRule = PAGE.slice(PAGE.indexOf('.switch {'), PAGE.indexOf(".switch input"));
 		expect(switchRule).toContain('padding: var(--space-row-gap);');
-		expect(switchRule).toContain('margin: calc(-1 * var(--space-row-gap));');
 		expect(switchRule).not.toContain('--touch-min');
+		const switchesRule = PAGE.slice(PAGE.indexOf('.switches {'), PAGE.indexOf('.switch {'));
+		expect(switchesRule).toContain('margin: calc(-1 * var(--space-row-gap));');
+		// SIDE BY SIDE on one line, which is the sort radios' own shape directly
+		// above them: stacked, the pair cost a row of a screen whose whole job is
+		// the cards beneath it. They wrap only when the two names are wider than
+		// the panel — and the two axes are `.controls`' own, because a row gap on
+		// top of each switch's own padding stacks two separations where the eye
+		// sees one.
+		expect(switchesRule).not.toContain('flex-direction: column;');
+		expect(switchesRule).toContain('flex-wrap: wrap;');
+		expect(switchesRule).toContain('column-gap: var(--space-row-gap);');
+		expect(switchesRule).toContain('row-gap: 0;');
+		// At the panel's LEADING edge, like the sort radios above and the count
+		// sentence above that — nothing on this panel is pushed to the far side,
+		// so the boxes and the words that name them start on the one left edge
+		// a Manager scans down.
+		expect(switchesRule).not.toContain('justify-content');
+		// Each box sits beside its OWN name, not pushed to an edge: sharing a
+		// line, neither switch has a far edge of its own, and a box driven to one
+		// would sit against its neighbour's name.
+		const boxRule = PAGE.slice(
+			PAGE.indexOf(".switch input[type='checkbox']"),
+			PAGE.indexOf('.switch-label')
+		);
+		expect(boxRule).not.toContain('margin-left: auto;');
 		// And the floor is untouched everywhere it belongs — on the controls
 		// that spend something. The sort radios still carry it.
 		expect(PAGE).toMatch(/\.choice \{[\s\S]*?min-height: var\(--touch-min\);[\s\S]*?\n\t\}/);
-		// And it is READ in an `$effect`, so storage is never touched during SSR
-		// and the server-rendered HTML agrees with the first client paint.
-		expect(PAGE).toMatch(/\$effect\(\(\) => \{\s*boardView\.load\(\);\s*\}\);/);
+	});
+
+	it('offers the Cap switch only where there IS a Maximum Bid, and never derives a second one', () => {
+		// The figure is the STRIP's, from the strip's own module, over the facts
+		// the layout already ships (AD-7) — the board adds no read, no field on
+		// the wire, and no second expression that could print a different
+		// number.
+		expect(PAGE).toContain("from '$lib/core/strip.ts'");
+		expect(PAGE).toMatch(/baselineMaximumBid\(data\.stripTeam, data\.phase\.name, nowIso\)/);
+		// Gated on the same phase table the strip gates on: the board is live in
+		// Archived too, where no Bid is accepted at any amount and a ceiling
+		// would bound nothing. Absent rather than disabled — a switch that could
+		// narrow nothing would describe an act it cannot perform.
+		expect(PAGE).toMatch(/stripShowsMaximumBid\(data\.phase\.name\)/);
+		expect(PAGE).toMatch(/if \(data\.stripTeam === null\) return null;/);
+		expect(PAGE).toMatch(/\{#if capSwitchShown\}/);
+		// Absent, not disabled: no control on this page carries the attribute.
+		expect(PAGE).not.toMatch(/disabled(=|\s*\/?>)/);
+		// The derivation is guarded, for `PersistentStrip`'s reason: a throw over
+		// an unexpected shape must cost a filter, never the whole board.
+		expect(PAGE).toMatch(/\} catch \{\s*return null;\s*\}/);
+		// And the figure never reaches the markup — the board prints no per-card
+		// Maximum Bid and no ceiling of its own.
+		expect(PAGE).not.toContain('{maximumBid}');
+		expect(PAGE).not.toContain('describeAmount');
 	});
 });
