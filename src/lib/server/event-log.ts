@@ -21,6 +21,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { INITIAL_WATERMARK } from '../core/projection/watermark.ts';
 import type { AppendedEvent } from '../core/types.ts';
 import { toAppendedEvent } from '../shell/write.ts';
 import type { TransactionalClient } from '../shell/write.ts';
@@ -36,6 +37,13 @@ const AUCTION_EVENTS_TABLE = 'auction_events';
 
 /**
  * Load the entire `auction_events` log, ordered by `seq`, paginated.
+ *
+ * A thin wrapper over `loadAppendedEventsSince` with the lowest possible
+ * bound: `seq` is `generated always as identity` starting at 1, so
+ * `seq > '0'` is every row there can ever be. One implementation, two
+ * callers — the full read and the tail read differ only in that bound, and
+ * writing them as two loops would be two copies of the termination
+ * reasoning below, which is the part that is easy to get wrong.
  *
  * Throws a descriptive error on any read failure — a query error, or a
  * response whose `data` is non-null but not an array, which would otherwise
@@ -55,6 +63,37 @@ const AUCTION_EVENTS_TABLE = 'auction_events';
  * to avoid.
  */
 export async function loadAppendedEvents(client: SupabaseClient): Promise<AppendedEvent[]> {
+	return loadAppendedEventsSince(client, INITIAL_WATERMARK);
+}
+
+/**
+ * The same read, bounded below: every event with `seq` strictly greater than
+ * `since`, ordered by `seq`, paginated.
+ *
+ * **This is a transfer optimisation, never a change of fold semantics.** AD-5
+ * requires a projection to be folded from the entire log, and it still is —
+ * `fold()`'s own header names both of its jobs, "folding the events a
+ * transaction just appended onto an already-loaded projection state" and
+ * "rebuilding a projection from empty state", as the same function. A caller
+ * holding state already folded through `since` and folding this tail onto it
+ * lands on precisely the value a full replay produces, because every reducer
+ * here is a left fold in `seq` order and `auction_events` is insert-only
+ * (AD-4: no role holds UPDATE or DELETE, so no row below `since` can ever
+ * change after it is read).
+ *
+ * `since` is a `seq` as a string, the same shape `AppendedEvent.seq` and
+ * `INITIAL_WATERMARK` carry — never a number, which would misorder the log
+ * once `seq` exceeds `Number.MAX_SAFE_INTEGER` (`projection/watermark.ts`
+ * makes the same argument about the same column).
+ *
+ * The bound is a filter, not an offset: `offset` below still walks the
+ * FILTERED set from zero, so the pagination reasoning is unchanged and holds
+ * for any `since`.
+ */
+export async function loadAppendedEventsSince(
+	client: SupabaseClient,
+	since: string
+): Promise<AppendedEvent[]> {
 	const rows: AppendedEvent[] = [];
 	let offset = 0;
 
@@ -62,6 +101,7 @@ export async function loadAppendedEvents(client: SupabaseClient): Promise<Append
 		const { data, error } = await client
 			.from(AUCTION_EVENTS_TABLE)
 			.select('*')
+			.gt('seq', since)
 			.order('seq', { ascending: true })
 			.range(offset, offset + PAGE_SIZE - 1);
 
@@ -123,4 +163,59 @@ export async function loadAppendedEvents(client: SupabaseClient): Promise<Append
 export async function loadEventsViaClient(client: TransactionalClient): Promise<AppendedEvent[]> {
 	const result = await client.query('select * from auction_events order by seq asc');
 	return result.rows.map((row) => toAppendedEvent(row));
+}
+
+/**
+ * The same read over `pg`, bounded below: every event with `seq` strictly
+ * greater than `since`, in `seq` order.
+ *
+ * `loadAppendedEventsSince`'s PostgREST twin, and its header carries the whole
+ * argument for why a bounded read still satisfies AD-5's "fold the entire log"
+ * — the tail is folded onto state already folded through `since`, and AD-4's
+ * insert-only log is what makes the part below `since` immovable.
+ *
+ * **Every caller of this is inside the AD-6 global write lock**, which is what
+ * makes the `max(seq)` its caller compares against meaningful: the log cannot
+ * grow between that read and this one, so "nothing above `since`" is a fact
+ * about the log rather than a race that happened to come back empty.
+ *
+ * `since` is bound as a parameter, never interpolated: it reaches here from a
+ * `bigint` column as a string and is compared to one.
+ */
+export async function loadEventsViaClientSince(
+	client: TransactionalClient,
+	since: string
+): Promise<AppendedEvent[]> {
+	const result = await client.query(
+		'select * from auction_events where seq > $1 order by seq asc',
+		[since]
+	);
+	return result.rows.map((row) => toAppendedEvent(row));
+}
+
+/**
+ * The log's current height over `pg`: `max(seq)`, or `'0'` for an empty log.
+ *
+ * `'0'` rather than `null`, matching `INITIAL_WATERMARK` — `seq` is `generated
+ * always as identity` starting at 1, so no row can hold it, which is what
+ * makes it an unambiguous "nothing yet" rather than a value to special-case.
+ *
+ * A string, never a number: `seq` is `bigint`, and `pg` hands `int8` back as a
+ * string precisely so it is not rounded. `coalesce` runs in SQL so the empty
+ * case needs no branch here, and `::text` makes the two runtimes agree — `pg`
+ * and deno-postgres shape `int8` differently (AD-8), and a `bigint` from one
+ * would not `===` a string from the other.
+ */
+export async function maxSeqViaClient(client: TransactionalClient): Promise<string> {
+	const result = await client.query(
+		'select coalesce(max(seq), 0)::text as seq from auction_events'
+	);
+	const seq = result.rows[0]?.['seq'];
+	// Validated rather than stringified, `server/watermark.ts`'s reasoning:
+	// `String(undefined)` is the four-character string "undefined", which is
+	// truthy, survives a comparison, and would silently pin a cache forever.
+	if (typeof seq !== 'string' || !/^\d+$/.test(seq)) {
+		throw new Error('auction_events max(seq) read failed: seq was not a whole number');
+	}
+	return seq;
 }

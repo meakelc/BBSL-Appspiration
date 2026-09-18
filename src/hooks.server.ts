@@ -36,7 +36,7 @@ import {
 	isBreakGlassSession,
 	verifyBreakGlassCookie
 } from '$lib/server/commissioner-recovery.ts';
-import { resolveLeagueReadOrDefault } from '$lib/server/phase.ts';
+import { resolveLeagueReadCachedOrDefault } from '$lib/server/league-read-cache.ts';
 import { closedPilotResponse, isClosedPilotHost } from '$lib/server/pilot-closed.ts';
 import { securityHeaders } from '$lib/server/security-headers.ts';
 import { gatherSessionFacts, type SessionGateway } from '$lib/server/session.ts';
@@ -77,7 +77,15 @@ export const handle: Handle = async ({ event, resolve }) => {
 	// projection read to carry. A second read for the watermark would be a
 	// second source for a number that must have one, and the two could disagree
 	// by whatever committed between them.
-	const read = await resolveLeagueReadOrDefault();
+	//
+	// The read is CACHED per process, and this line is why that was needed:
+	// it runs on every request, including the `/api/watermark` poll every
+	// signed-in Manager makes every ten seconds, and folding the whole log for
+	// each of them made the log's size a multiplier on every byte this app
+	// sends. `league-read-cache.ts` still re-reads `max(seq)` here — so the
+	// phase can never come from a database this request could not reach — and
+	// transfers only the events appended since this process last folded.
+	const read = await resolveLeagueReadCachedOrDefault();
 	event.locals.phase = read.phase;
 	event.locals.watermark = read.watermark;
 

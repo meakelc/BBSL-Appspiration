@@ -183,6 +183,7 @@ function fakeClient(seqs: string[]): {
 	const calls = { ranges: 0, limits: 0 };
 	const query = {
 		select: () => query,
+		gt: () => query,
 		order: () => query,
 		async range(from: number, to: number) {
 			calls.ranges += 1;
@@ -202,6 +203,7 @@ function fakeClient(seqs: string[]): {
 function failingClient(): SupabaseClient {
 	const query = {
 		select: () => query,
+		gt: () => query,
 		order: () => query,
 		async range() {
 			return { data: null, error: { message: 'connection refused' } };

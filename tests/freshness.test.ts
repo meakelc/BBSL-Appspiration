@@ -450,11 +450,18 @@ describe('the watermark rides on the one load every page inherits', () => {
 
 	it('has no per-table stamp anywhere — one watermark, one source', () => {
 		// AD-29's "not a per-table stamp". The only `watermark` a load returns
-		// is the one from `locals`, folded once per request in hooks.server.ts.
+		// is the one from `locals`, resolved once per request in
+		// hooks.server.ts. The resolver is the CACHED one — it still folds the
+		// phase and the watermark off one events array, and still re-reads
+		// `max(seq)` every request, but transfers only the tail this process
+		// has not folded. One call is the invariant; which resolver it is is
+		// not, so the assertion pins the count and the single source, and the
+		// uncached name must not appear beside it.
 		const hooks = read('src', 'hooks.server.ts');
 		expect(hooks).toContain('event.locals.watermark = read.watermark');
-		const loads = hooks.match(/resolveLeagueReadOrDefault\(/g) ?? [];
+		const loads = hooks.match(/resolveLeagueReadCachedOrDefault\(/g) ?? [];
 		expect(loads).toHaveLength(1);
+		expect(hooks).not.toMatch(/resolveLeagueReadOrDefault\(/);
 	});
 });
 

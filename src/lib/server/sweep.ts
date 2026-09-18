@@ -111,11 +111,13 @@ import {
 	auctionsReducer,
 	overdueAuctions
 } from '../core/projection/auctions.ts';
+import type { OpenAuctions } from '../core/projection/auctions.ts';
 import { fold } from '../core/projection/fold.ts';
 import type { AppendedEvent } from '../core/types.ts';
 import { requireDatabaseClock } from '../shell/write.ts';
 import type { ConnectionGateway, TransactionalClient } from '../shell/write.ts';
-import { loadEventsViaClient } from './event-log.ts';
+import { loadEventsViaClientSince, maxSeqViaClient } from './event-log.ts';
+import { foldCacheSlot, foldIncrementally } from './fold-cache.ts';
 import type { AssignmentDeadlineOutcome } from './assignment-deadline.ts';
 import type { PhaseEndOutcome } from './phase-end.ts';
 
@@ -378,8 +380,8 @@ async function sweepThenDrain(
 		const now = requireDatabaseClock(clockResult.rows[0]?.['now']);
 		ranAt = now.toISOString();
 
-		const events = await loadEventsViaClient(client);
-		logCoreVersion = newestCoreVersion(events);
+		const swept = await foldSweepState(client);
+		logCoreVersion = swept.coreVersion;
 
 		// **The fail-stop, before anything is closed** (AD-20). An empty log has
 		// no version to compare and nothing to close, so `null` passes through
@@ -426,8 +428,12 @@ async function sweepThenDrain(
 		}
 
 		// **Re-derived from the folded log on every pass**, never remembered.
-		const auctions = fold(INITIAL_AUCTIONS, events, auctionsReducer);
-		const overdue = overdueAuctions(auctions, ranAt);
+		// The EVENTS are not re-read when the log has not grown (see
+		// `foldSweepState`), but the fold and this derivation are redone every
+		// pass against this pass's own clock — which is the half that matters,
+		// because an Auction becomes overdue by time passing, not by anything
+		// being appended.
+		const overdue = overdueAuctions(swept.auctions, ranAt);
 
 		const closed: string[] = [];
 		// Declared, never pushed to. See `TickSummary.skipped`: the column is
@@ -623,6 +629,63 @@ function newestCoreVersion(events: readonly AppendedEvent[]): number | null {
 	const newest = events[events.length - 1];
 	if (newest === undefined) return null;
 	return newest.coreVersion;
+}
+
+/** What a pass folds out of the log before it decides anything. */
+type SweepState = {
+	/** `newestCoreVersion` over the whole log — AD-20's fail-stop input. */
+	readonly coreVersion: number | null;
+	/** The open Auctions, which `overdueAuctions` is then derived from. */
+	readonly auctions: OpenAuctions;
+};
+
+/** This process's folded sweep state, and the `seq` it is folded through. */
+const sweepSlot = foldCacheSlot<SweepState>();
+
+/**
+ * Fold the sweep's state from the log, transferring only what this process has
+ * not already folded.
+ *
+ * **The saving is the idle pass, which is nearly all of them.** The tick runs
+ * every ten seconds forever (AD-10), and on the overwhelming majority of those
+ * passes nothing has been appended since the last one — so re-reading every
+ * row of `auction_events` to re-derive the same `byPlayer` map was, by the
+ * middle of a season, the single largest consumer of this project's database
+ * egress. `fold-cache.ts` carries the argument that this preserves AD-5; what
+ * matters here is that both inputs below fold events and nothing else.
+ *
+ * **What is NOT cached is the part that changes without an event.** An Auction
+ * falls overdue because time passed, so `overdueAuctions` is re-derived from
+ * this state against this pass's own database clock on every single pass,
+ * cached fold or not. The cache decides how many rows were read; it never
+ * decides whether a close is due.
+ *
+ * **`closeAuction` is deliberately left on the full read.** A close is the
+ * least reversible act in this product (AD-4 forbids deleting the event), it
+ * happens a few dozen times a season rather than 8,640 times a day, and its
+ * read costs nothing at that frequency. The saving here is entirely in the
+ * passes that decide to do nothing, so the decision that actually closes an
+ * Auction still folds the whole log, freshly, under its own lock.
+ */
+async function foldSweepState(client: TransactionalClient): Promise<SweepState> {
+	return foldIncrementally<SweepState>({
+		slot: sweepSlot,
+		liveSeq: () => maxSeqViaClient(client),
+		loadSince: (since) => loadEventsViaClientSince(client, since),
+		initial: { coreVersion: null, auctions: INITIAL_AUCTIONS },
+		extend: (state, events) => ({
+			// An empty tail leaves the version where it was: the newest event in
+			// the log is still the newest event this process folded. `null` is
+			// only ever the answer for a log with no events at all.
+			coreVersion: newestCoreVersion(events) ?? state.coreVersion,
+			auctions: fold(state.auctions, events, auctionsReducer)
+		})
+	});
+}
+
+/** Discard this process's folded sweep state. For tests only. */
+export function resetSweepFoldCache(): void {
+	sweepSlot.held = null;
 }
 
 /**
