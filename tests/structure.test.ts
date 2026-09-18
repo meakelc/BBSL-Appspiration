@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -632,5 +632,49 @@ describe('AC2 — the Nomination Slot is released by the fold, never by a stored
 		]);
 		// No timer, no elapsed time, no wall clock: the trigger is the event.
 		expect(nominations).not.toMatch(/Date\.now|new Date\(|setTimeout|setInterval/);
+	});
+});
+
+/**
+ * The single writer to `auction_events` (AD-4, AD-6).
+ *
+ * `shell/write.ts` holds `pg_advisory_xact_lock` from before its insert until
+ * `COMMIT`, so while it is the ONLY insert site, `seq` order and commit order
+ * are the same order — a transaction cannot be assigned a `seq` until the
+ * previous one has committed and released the lock.
+ *
+ * **`server/fold-cache.ts` depends on that and would break silently without
+ * it.** Its incremental `seq > $1` read is safe only because a reader can
+ * never see `seq` 11 while `seq` 10 is still in flight; with a second writer
+ * outside the lock it could, record itself as folded through 11, and skip 10
+ * permanently. A whole-log read has no such hazard, which is exactly why this
+ * property was free before and is load-bearing now.
+ *
+ * So this is pinned HERE rather than left as a sentence in a header: the file
+ * that would break is not the file someone would be editing.
+ */
+describe('the event log has exactly one writer', () => {
+	it('inserts into auction_events from shell/write.ts and nowhere else', () => {
+		const offenders: string[] = [];
+
+		const walk = (dir: string): void => {
+			for (const entry of readdirSync(dir)) {
+				const path = join(dir, entry);
+				if (statSync(path).isDirectory()) {
+					walk(path);
+					continue;
+				}
+				if (!entry.endsWith('.ts')) continue;
+				const source = readFileSync(path, 'utf8');
+				// Comments name the table constantly, so this matches the
+				// STATEMENT: `insert into auction_events`, in either case.
+				if (/insert\s+into\s+(public\.)?auction_events/i.test(source)) {
+					offenders.push(path.slice(ROOT.length).split(sep).join('/'));
+				}
+			}
+		};
+		walk(at('src'));
+
+		expect(offenders).toEqual(['src/lib/shell/write.ts']);
 	});
 });

@@ -26,6 +26,18 @@
  * moving underneath. (Every caller today folds events alone; AD-33's point
  * reads sit BESIDE such folds and are re-read per pass regardless.)
  *
+ * **AD-6's single global write lock is what makes an INCREMENTAL read safe,
+ * and it is the dependency most easily broken from a distance.** A bounded
+ * `seq > $1` read has a hazard a whole-log read does not: if two writers could
+ * overlap, one could be assigned `seq` 11 and commit while `seq` 10 was still
+ * in flight, so a reader would see 11, record itself as folded through 11, and
+ * skip 10 forever. That cannot happen here — `shell/write.ts` holds
+ * `pg_advisory_xact_lock` from before the insert until `COMMIT`, and it is the
+ * ONLY writer to `auction_events` in this codebase — so `seq` order and commit
+ * order are the same order, exactly as AD-5 states. `tests/structure.test.ts`
+ * pins the single-writer half of that, because a second insert site added
+ * outside the lock would break this file silently and at a distance.
+ *
  * **The live `seq` read is not merely a cache key, it is the liveness proof.**
  * Every call performs it, including a hit. A caller can therefore never report
  * a folded answer from a database this request could not reach — which is the
