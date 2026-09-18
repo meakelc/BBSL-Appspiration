@@ -63,7 +63,8 @@ import { decidePhaseEnd, readPhaseEndInstants } from '../core/rules/phase-end.ts
 import type { PhaseEndState } from '../core/rules/phase-end.ts';
 import { runTransactionalWrite } from '../shell/write.ts';
 import type { ConnectionGateway, TransactionalClient } from '../shell/write.ts';
-import { loadEventsViaClient } from './event-log.ts';
+import { loadEventsViaClientSince, maxSeqViaClient } from './event-log.ts';
+import { foldCacheSlot, foldIncrementally } from './fold-cache.ts';
 import { releaseNomination } from './nomination.ts';
 import { EVERY_TEAM, enqueueBroadcastsAndMentions } from './outbox.ts';
 
@@ -117,13 +118,44 @@ export type PhaseEndOutcome = {
  * that fold comes from.
  */
 export async function loadPhaseEndState(client: TransactionalClient): Promise<PhaseEndState> {
-	const events = await loadEventsViaClient(client);
-	return {
-		clock: fold(INITIAL_LEAGUE_CLOCK, events, leagueClockReducer),
-		nominations: fold(INITIAL_NOMINATIONS, events, nominationsReducer),
-		auctions: fold(INITIAL_AUCTIONS, events, auctionsReducer),
-		phase: fold(INITIAL_PHASE, events, phaseReducer)
-	};
+	return foldIncrementally<PhaseEndState>({
+		slot,
+		liveSeq: () => maxSeqViaClient(client),
+		loadSince: (since) => loadEventsViaClientSince(client, since),
+		initial: {
+			clock: INITIAL_LEAGUE_CLOCK,
+			nominations: INITIAL_NOMINATIONS,
+			auctions: INITIAL_AUCTIONS,
+			phase: INITIAL_PHASE
+		},
+		extend: (state, events) => ({
+			clock: fold(state.clock, events, leagueClockReducer),
+			nominations: fold(state.nominations, events, nominationsReducer),
+			auctions: fold(state.auctions, events, auctionsReducer),
+			phase: fold(state.phase, events, phaseReducer)
+		})
+	});
+}
+
+/**
+ * This process's folded phase-end state, and the `seq` it is folded through.
+ *
+ * **The four folds still see one events array**, which is the discipline the
+ * header above is about: they are extended by the same tail, in the same call,
+ * so they cannot disagree about which events they saw. What the cache removes
+ * is the re-reading of rows every one of them has already folded — this runs
+ * inside the tick, every ten seconds, forever (AD-10).
+ *
+ * **The League Clock expires by time passing, not by an event**, so nothing
+ * about WHEN it expires is cached: `decidePhaseEnd` is handed this state and
+ * the transaction's own clock on every pass, exactly as before. The cache
+ * decides how many rows were read and never whether the phase ends.
+ */
+const slot = foldCacheSlot<PhaseEndState>();
+
+/** Discard this process's folded phase-end state. For tests only. */
+export function resetPhaseEndFoldCache(): void {
+	slot.held = null;
 }
 
 /**

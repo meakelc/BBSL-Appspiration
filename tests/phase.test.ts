@@ -55,6 +55,7 @@ function fakeEventsClient(total: number): {
 	const ranges: Array<[number, number]> = [];
 	const query = {
 		select: () => query,
+		gt: () => query,
 		order: () => query,
 		async range(from: number, to: number) {
 			ranges.push([from, to]);
@@ -82,6 +83,7 @@ function cappedEventsClient(
 	const ranges: Array<[number, number]> = [];
 	const query = {
 		select: () => query,
+		gt: () => query,
 		order: () => query,
 		async range(from: number, to: number) {
 			ranges.push([from, to]);
@@ -101,6 +103,7 @@ function cappedEventsClient(
 function failingEventsClient(message: string): SupabaseClient {
 	const query = {
 		select: () => query,
+		gt: () => query,
 		order: () => query,
 		async range() {
 			return { data: null, error: { message } };
@@ -113,6 +116,7 @@ function failingEventsClient(message: string): SupabaseClient {
 function malshapedEventsClient(): SupabaseClient {
 	const query = {
 		select: () => query,
+		gt: () => query,
 		order: () => query,
 		async range() {
 			return { data: { unexpected: 'object, not an array' }, error: null };

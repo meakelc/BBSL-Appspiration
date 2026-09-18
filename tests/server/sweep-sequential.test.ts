@@ -22,7 +22,7 @@
  * insert. It still throws on anything it does not recognise.
  */
 
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import { CORE_VERSION } from '../../src/lib/core/constants.ts';
 import { BID_CANCELLED_EVENT, BID_PLACED_EVENT } from '../../src/lib/core/projection/auctions.ts';
@@ -34,12 +34,42 @@ import {
 import { decideClose } from '../../src/lib/core/rules/close.ts';
 import type { AuctionClosedPayload, BidCancelledPayload } from '../../src/lib/core/rules/close.ts';
 import { closeAuction, loadCloseState } from '../../src/lib/server/close.ts';
-import { runTick } from '../../src/lib/server/sweep.ts';
+import { runTick,
+	resetSweepFoldCache
+} from '../../src/lib/server/sweep.ts';
 import type {
 	ConnectionGateway,
 	QueryResultRow,
 	TransactionalClient
 } from '../../src/lib/shell/write.ts';
+
+
+
+// The tick's loaders hold their folded state in a module-scoped slot, so a
+// test inheriting the previous test's fold would be reading a log that this
+// test's fake never served. Every test starts from a cold process.
+beforeEach(() => resetSweepFoldCache());
+
+/**
+ * The two helpers the log-read fakes below need now that the tick's loaders
+ * read INCREMENTALLY (`loadEventsViaClientSince` / `maxSeqViaClient`).
+ *
+ * The bound is honoured rather than ignored on purpose: a fake that returned
+ * the whole log for every `seq > $1` would let a cached loader fold the same
+ * events twice and still pass, which is precisely the bug these fakes should
+ * be able to catch.
+ */
+function maxSeqOf(rows: readonly QueryResultRow[]): bigint {
+	return rows.reduce((highest, row) => {
+		const seq = BigInt(String(row['seq']));
+		return seq > highest ? seq : highest;
+	}, 0n);
+}
+
+function rowsAbove(rows: readonly QueryResultRow[], since: unknown): QueryResultRow[] {
+	const bound = since === undefined ? 0n : BigInt(String(since));
+	return rows.filter((row) => BigInt(String(row['seq'])) > bound);
+}
 
 /** Noon: both Auctions below are long past their close instants. */
 const NOW = new Date('2026-08-27T12:00:00.000Z');
@@ -191,9 +221,15 @@ function fakeGateway(seed: QueryResultRow[], roster: QueryResultRow[] = ROSTER) 
 				order.push('lock');
 				return { rows: [{ locked: true, now: NOW }] };
 			}
+			if (/coalesce\(max\(seq\)/i.test(sql)) {
+				// `maxSeqViaClient`. Deliberately NOT pushed onto `order`: it is
+				// the cache key `foldIncrementally` compares, not a step of the
+				// pipeline these tests assert the shape of.
+				return { rows: [{ seq: String(maxSeqOf([...seed, ...appendedEvents])) }] };
+			}
 			if (/^select \* from auction_events/i.test(sql)) {
 				order.push('read-log');
-				return { rows: [...seed, ...appendedEvents] };
+				return { rows: rowsAbove([...seed, ...appendedEvents], params[0]) };
 			}
 			// Matched on the TABLE rather than on the column list: Story 4.5
 			// widened this select to carry the Player id and name the Team

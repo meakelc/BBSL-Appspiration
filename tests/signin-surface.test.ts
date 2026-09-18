@@ -14,6 +14,7 @@ import { PHASE_SENTENCES, resolveLeaguePhase } from '../src/lib/server/phase.ts'
 function emptyEventsClient(): SupabaseClient {
 	const query = {
 		select: () => query,
+		gt: () => query,
 		order: () => query,
 		range: async () => ({ data: [], error: null })
 	};

@@ -17,7 +17,7 @@
  * rather than merely unasserted.
  */
 
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import { MINIMUM_BID } from '../../src/lib/core/constants.ts';
 import { BID_PLACED_EVENT } from '../../src/lib/core/projection/auctions.ts';
@@ -33,12 +33,42 @@ import type {
 	AuctionTerminatedPayload,
 	ContractAssignmentOpenedPayload
 } from '../../src/lib/core/rules/phase-end.ts';
-import { evaluateLeagueClock, loadPhaseEndState } from '../../src/lib/server/phase-end.ts';
+import { evaluateLeagueClock, loadPhaseEndState,
+	resetPhaseEndFoldCache
+} from '../../src/lib/server/phase-end.ts';
 import type {
 	ConnectionGateway,
 	QueryResultRow,
 	TransactionalClient
 } from '../../src/lib/shell/write.ts';
+
+
+
+// The tick's loaders hold their folded state in a module-scoped slot, so a
+// test inheriting the previous test's fold would be reading a log that this
+// test's fake never served. Every test starts from a cold process.
+beforeEach(() => resetPhaseEndFoldCache());
+
+/**
+ * The two helpers the log-read fakes below need now that the tick's loaders
+ * read INCREMENTALLY (`loadEventsViaClientSince` / `maxSeqViaClient`).
+ *
+ * The bound is honoured rather than ignored on purpose: a fake that returned
+ * the whole log for every `seq > $1` would let a cached loader fold the same
+ * events twice and still pass, which is precisely the bug these fakes should
+ * be able to catch.
+ */
+function maxSeqOf(rows: readonly QueryResultRow[]): bigint {
+	return rows.reduce((highest, row) => {
+		const seq = BigInt(String(row['seq']));
+		return seq > highest ? seq : highest;
+	}, 0n);
+}
+
+function rowsAbove(rows: readonly QueryResultRow[], since: unknown): QueryResultRow[] {
+	const bound = since === undefined ? 0n : BigInt(String(since));
+	return rows.filter((row) => BigInt(String(row['seq'])) > bound);
+}
 
 /** 08:00 Monday — the open. The League Clock therefore expires 08:00 Wednesday. */
 const OPENED_AT = '2026-08-24T08:00:00.000Z';
@@ -108,9 +138,15 @@ function fakeGateway(options: { events?: QueryResultRow[]; now?: Date } = {}) {
 				order.push('lock');
 				return { rows: [{ locked: true, now: options.now ?? NOW }] };
 			}
+			if (/coalesce\(max\(seq\)/i.test(sql)) {
+				// `maxSeqViaClient`. Deliberately NOT pushed onto `order`: it is
+				// the cache key `foldIncrementally` compares, not a step of the
+				// pipeline these tests assert the shape of.
+				return { rows: [{ seq: String(maxSeqOf([...(options.events ?? []), ...appendedEvents])) }] };
+			}
 			if (/^select \* from auction_events/i.test(sql)) {
 				order.push('read-log');
-				return { rows: [...(options.events ?? []), ...appendedEvents] };
+				return { rows: rowsAbove([...(options.events ?? []), ...appendedEvents], queryParams[0]) };
 			}
 			if (/^insert into auction_events/i.test(sql)) {
 				order.push('append-event');

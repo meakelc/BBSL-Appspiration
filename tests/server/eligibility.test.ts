@@ -734,7 +734,12 @@ describe('loadEligibilityPool', () => {
 					eventsServed = true;
 					return { data: extras.events ?? [], error: null };
 				});
-				return { select: vi.fn(() => ({ order: vi.fn(() => ({ range })) })) };
+				// `gt` is the `seq > since` bound `loadAppendedEventsSince` applies.
+				// `loadRosteredCandidates` reads the whole log, so the bound is
+				// `'0'` and excludes nothing; the builder passes straight through.
+				return {
+					select: vi.fn(() => ({ gt: vi.fn(() => ({ order: vi.fn(() => ({ range })) })) }))
+				};
 			}
 			throw new Error(`unexpected table: ${table}`);
 		});

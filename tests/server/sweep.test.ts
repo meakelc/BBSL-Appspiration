@@ -15,12 +15,14 @@
  * meet for real in `tests/server/sweep-sequential.test.ts`.
  */
 
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import { CORE_VERSION, MINIMUM_BID } from '../../src/lib/core/constants.ts';
 import { BID_PLACED_EVENT } from '../../src/lib/core/projection/auctions.ts';
 import { AUCTION_CLOSED_EVENT } from '../../src/lib/core/projection/nominations.ts';
-import { runTick } from '../../src/lib/server/sweep.ts';
+import { runTick,
+	resetSweepFoldCache
+} from '../../src/lib/server/sweep.ts';
 import type { TickSummary } from '../../src/lib/server/sweep.ts';
 import type { AssignmentDeadlineOutcome } from '../../src/lib/server/assignment-deadline.ts';
 import type { PhaseEndOutcome } from '../../src/lib/server/phase-end.ts';
@@ -31,6 +33,34 @@ import type {
 } from '../../src/lib/shell/write.ts';
 
 const NOW = new Date('2026-08-27T12:00:00.000Z');
+
+
+
+// The tick's loaders hold their folded state in a module-scoped slot, so a
+// test inheriting the previous test's fold would be reading a log that this
+// test's fake never served. Every test starts from a cold process.
+beforeEach(() => resetSweepFoldCache());
+
+/**
+ * The two helpers the log-read fakes below need now that the tick's loaders
+ * read INCREMENTALLY (`loadEventsViaClientSince` / `maxSeqViaClient`).
+ *
+ * The bound is honoured rather than ignored on purpose: a fake that returned
+ * the whole log for every `seq > $1` would let a cached loader fold the same
+ * events twice and still pass, which is precisely the bug these fakes should
+ * be able to catch.
+ */
+function maxSeqOf(rows: readonly QueryResultRow[]): bigint {
+	return rows.reduce((highest, row) => {
+		const seq = BigInt(String(row['seq']));
+		return seq > highest ? seq : highest;
+	}, 0n);
+}
+
+function rowsAbove(rows: readonly QueryResultRow[], since: unknown): QueryResultRow[] {
+	const bound = since === undefined ? 0n : BigInt(String(since));
+	return rows.filter((row) => BigInt(String(row['seq'])) > bound);
+}
 
 /** One heartbeat insert, as the fake recorded its parameters. */
 type Heartbeat = {
@@ -61,10 +91,16 @@ function fakeGateway(options: { events?: QueryResultRow[]; now?: Date; clockThro
 				if (options.clockThrows === true) throw new Error('the clock read failed');
 				return { rows: [{ now: options.now ?? NOW }] };
 			}
+			if (/coalesce\(max\(seq\)/i.test(sql)) {
+				// `maxSeqViaClient`. Deliberately NOT pushed onto `order`: it is
+				// the cache key `foldIncrementally` compares, not a step of the
+				// pipeline these tests assert the shape of.
+				return { rows: [{ seq: String(maxSeqOf(events)) }] };
+			}
 			if (/^select \* from auction_events/i.test(sql)) {
 				order.push('read-log');
 				if (options.logThrows === true) throw new Error('auction_events is unreadable');
-				return { rows: [...events] };
+				return { rows: rowsAbove(events, params[0]) };
 			}
 			if (/^insert into tick_heartbeats/i.test(sql)) {
 				order.push('heartbeat');
@@ -1217,5 +1253,97 @@ describe('runTick — the assignment deadline runs after the phase end and befor
 		expect(String(soleHeartbeat(harness).detail)).toContain(
 			'the assignment deadline was not evaluated'
 		);
+	});
+});
+
+/**
+ * The incremental read (`foldSweepState`).
+ *
+ * The tick runs every ten seconds forever (AD-10), and on almost every pass
+ * nothing has been appended since the last one. These tests pin the two
+ * properties that make skipping the re-read safe: that a warm pass reads no
+ * event rows at all, and that the thing which decides a close — time — is
+ * still re-derived on every pass regardless of the cache.
+ *
+ * A second harness with the same `events` and a later clock is how "the same
+ * log, ten seconds on" is expressed: the fold cache is module state, so it
+ * survives from one harness to the next exactly as it survives from one tick
+ * invocation to the next inside a warm process.
+ */
+describe('runTick — the log is read incrementally, the clock is not', () => {
+	it('reads NO event rows on a second pass when nothing has been appended', async () => {
+		const events = [bid('p-1', '2026-08-27T18:00:00.000Z')];
+		const first = fakeGateway({ events: [...events] });
+		await runTick({ gateway: first.gateway, closeOne: async () => {} });
+		expect(first.order).toEqual(['clock', 'read-log', 'heartbeat']);
+
+		const second = fakeGateway({ events: [...events] });
+		const summary = await runTick({ gateway: second.gateway, closeOne: async () => {} });
+
+		// No 'read-log' at all: the pass asked for `max(seq)`, found it
+		// unchanged, and folded nothing. This is the whole saving, and it is
+		// asserted as the absence of a statement rather than as a row count.
+		expect(second.order).toEqual(['clock', 'heartbeat']);
+		expect(summary.outcome).toBe('ok');
+	});
+
+	it('still closes an Auction that fell overdue by TIME ALONE on a cached pass', async () => {
+		// The Auction closes at 18:00. The first pass runs at 12:00 and finds
+		// nothing due; the second runs at 19:00 against an IDENTICAL log. If the
+		// cache reached any further than the rows it read — if it remembered
+		// "nothing was overdue" rather than the folded Auctions — this close
+		// would never happen, and an Auction would hang until something
+		// unrelated was appended.
+		const events = [bid('p-1', '2026-08-27T18:00:00.000Z')];
+
+		const early = fakeGateway({ events: [...events], now: new Date('2026-08-27T12:00:00.000Z') });
+		const earlyCloser = recordingCloser();
+		await runTick({ gateway: early.gateway, closeOne: earlyCloser.closeOne });
+		expect(earlyCloser.asked).toEqual([]);
+
+		const late = fakeGateway({ events: [...events], now: new Date('2026-08-27T19:00:00.000Z') });
+		const lateCloser = recordingCloser();
+		const summary = await runTick({ gateway: late.gateway, closeOne: lateCloser.closeOne });
+
+		expect(late.order).toEqual(['clock', 'heartbeat']);
+		expect(lateCloser.asked).toEqual(['p-1']);
+		expect(summary.closed).toEqual(['p-1']);
+	});
+
+	it('folds only the tail when the log HAS grown, and converges on the full fold', async () => {
+		const first = fakeGateway({ events: [bid('p-1', '2026-08-27T18:00:00.000Z')] });
+		await runTick({ gateway: first.gateway, closeOne: async () => {} });
+
+		// A second Auction, appended since — and already overdue.
+		const grown = fakeGateway({
+			events: [...first.events, bid('p-2', '2026-08-27T08:00:00.000Z')]
+		});
+		const closer = recordingCloser();
+		const summary = await runTick({ gateway: grown.gateway, closeOne: closer.closeOne });
+
+		// The log grew, so the tail WAS read — and the Auction in it is closed,
+		// which is only true if the tail was folded onto the state already held
+		// rather than replacing it.
+		expect(grown.order).toEqual(['clock', 'read-log', 'heartbeat']);
+		expect(summary.closed).toEqual(['p-2']);
+		expect(closer.asked).toEqual(['p-2']);
+	});
+
+	it('rebuilds rather than extends when the log has been wiped beneath it', async () => {
+		// `scripts/reset-pilot.js` deletes every row and restarts `seq` at 1. A
+		// warm process must not keep folding onto state built from rows that no
+		// longer exist.
+		const seeded = fakeGateway({ events: [bid('p-1', '2026-08-27T08:00:00.000Z')] });
+		const firstCloser = recordingCloser();
+		await runTick({ gateway: seeded.gateway, closeOne: firstCloser.closeOne });
+		expect(firstCloser.asked).toEqual(['p-1']);
+
+		const wiped = fakeGateway({ events: [] });
+		const closer = recordingCloser();
+		const summary = await runTick({ gateway: wiped.gateway, closeOne: closer.closeOne });
+
+		expect(closer.asked).toEqual([]);
+		expect(summary.closed).toEqual([]);
+		expect(summary.logCoreVersion).toBeNull();
 	});
 });

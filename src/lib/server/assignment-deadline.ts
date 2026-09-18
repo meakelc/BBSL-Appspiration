@@ -68,7 +68,8 @@ import { assignmentMonitorFor } from '../core/rules/assignment-monitor.ts';
 import type { AssignmentMonitor } from '../core/rules/assignment-monitor.ts';
 import { runTransactionalWrite } from '../shell/write.ts';
 import type { ConnectionGateway, TransactionalClient, WriteOutcome } from '../shell/write.ts';
-import { loadEventsViaClient } from './event-log.ts';
+import { loadEventsViaClientSince, maxSeqViaClient } from './event-log.ts';
+import { foldCacheSlot, foldIncrementally } from './fold-cache.ts';
 import { enqueueBroadcastsAndMentions } from './outbox.ts';
 import { loadTeamIdentities } from './teams-index.ts';
 
@@ -97,12 +98,41 @@ function rejectionFor(refusal: AssignmentDeadlineRefusal): AssignmentDeadlineRej
 export async function loadAssignmentDeadlineState(
 	client: TransactionalClient
 ): Promise<AssignmentDeadlineTickState> {
-	const events = await loadEventsViaClient(client);
-	return {
-		deadline: fold(INITIAL_ASSIGNMENT_DEADLINE, events, assignmentDeadlineReducer),
-		contracts: fold(INITIAL_CONTRACTS, events, contractsReducer),
-		submitted: fold(INITIAL_ASSIGNMENTS, events, assignmentsReducer)
-	};
+	return foldIncrementally<AssignmentDeadlineTickState>({
+		slot,
+		liveSeq: () => maxSeqViaClient(client),
+		loadSince: (since) => loadEventsViaClientSince(client, since),
+		initial: {
+			deadline: INITIAL_ASSIGNMENT_DEADLINE,
+			contracts: INITIAL_CONTRACTS,
+			submitted: INITIAL_ASSIGNMENTS
+		},
+		extend: (state, events) => ({
+			deadline: fold(state.deadline, events, assignmentDeadlineReducer),
+			contracts: fold(state.contracts, events, contractsReducer),
+			submitted: fold(state.submitted, events, assignmentsReducer)
+		})
+	});
+}
+
+/**
+ * This process's folded assignment-deadline state, and the `seq` it is folded
+ * through.
+ *
+ * **The three folds still see one events array** — the discipline the header
+ * above states — because they are extended by the same tail in the same call.
+ * What the cache removes is re-reading rows all three have already folded, on
+ * a loader the tick runs every ten seconds forever (AD-10).
+ *
+ * **The deadline passes by time passing, not by an event**, so nothing about
+ * when it is due is cached: the decision is re-derived from this state and the
+ * transaction's own clock on every pass, exactly as before.
+ */
+const slot = foldCacheSlot<AssignmentDeadlineTickState>();
+
+/** Discard this process's folded assignment-deadline state. For tests only. */
+export function resetAssignmentDeadlineFoldCache(): void {
+	slot.held = null;
 }
 
 /**
