@@ -503,22 +503,30 @@ export type ExposingBid = {
  * two inputs to `rosterReserve`. Story 2.7's `slots` gate refuses on those
  * same two figures and carries its OWN copy of them on `SlotsGateOutcome`:
  * reporting a capacity refusal as a cap refusal is a defect (AD-7), so the
- * two gates share the derivation — `projectedAdditionsFor` in
- * `rules/bidding.ts` — and never the outcome.
+ * two outcomes are separate, and since 2026-09-18 so are the two
+ * DERIVATIONS.
  *
- * **Story 10.2 changes what that shared derivation counts, on this side
- * too.** PRD §3 defines Projected Active/Bench Additions with Minimum-Bid
- * Contention entries excluded "however many the Team holds", and there is
- * one such definition rather than a money one and a slots one — so the
- * entries a Team already holds drop out of `projectedAdditions` here as
- * well, which makes `rosterReserve` LARGER and therefore stricter. What
- * this gate does not do is treat the Bid being PLACED as an entry: it calls
- * `projectedAdditionsFor` with one argument, the classification defaults to
- * `false`, and the prospective Bid is counted as an ordinary commitment.
- * That is the stricter reading of a Bid whose landing place is still
- * hypothetical, and it is why the two gates can now report different
- * `projectedAdditions` for one Team — §10 example 34's tenth entry is
- * refused on money at a Maximum Bid of $0 precisely because of it.
+ * **This gate's `projectedAdditions` is `reserveAdditionsFor`'s, never
+ * `projectedAdditionsFor`'s** (`rules/bidding.ts`), and the difference is
+ * Minimum-Bid Contention entries. Story 10.2 excluded them from one shared
+ * derivation, on PRD §3's "however many the Team holds" — correct for
+ * Roster Capacity, where FR-18 exempts a lottery entry from being rationed
+ * against the ceiling, and wrong here. A held entry's $1,000,000 is already
+ * inside `committedBids`, so excluding it left `rosterReserve` holding back
+ * a second $1,000,000 for the Slot that money would fill: one hole funded
+ * twice, and a Maximum Bid that fell by an entry's full amount while an
+ * ordinary Bid of $1,100,000 cost it $100,000. The money side therefore
+ * counts every commitment it charges — held entries included, and
+ * `Overflow Count` rather than `Active/Bench Overflow` for the eligible
+ * ones.
+ *
+ * What this gate still does not do is exempt the Bid being PLACED. A
+ * prospective entry commits its $1,000,000 the instant it lands, so it is
+ * counted as an ordinary commitment — which is why §10 example 34's ninth
+ * entry passes on money at exactly `Maximum Bid = $1,000,000` and its tenth
+ * is refused there rather than on capacity. The two gates can therefore
+ * still report different `projectedAdditions` for one Team, now on both the
+ * held entries and the prospective one.
  */
 export type CapGateOutcome = GateOutcome & {
 	readonly offered: Money;

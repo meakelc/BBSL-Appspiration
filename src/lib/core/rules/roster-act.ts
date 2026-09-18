@@ -231,9 +231,11 @@ export function evaluateActCap(team: ActingTeam, money: TeamMoneyState): ActCapG
 		bidStateFor(null, money, false, 'Auction'),
 		'',
 		NO_MONEY,
-		// There is no prospective Bid, so nothing is projected for one. The
-		// Team's existing leads still project, which is the whole of §10
-		// example 37.
+		// `noProspectiveBid`: there is no Bid here, so nothing is projected for
+		// one. The Team's existing leads still project — every one of them,
+		// Minimum-Bid Contention entries included, because their capital is
+		// committed and the Slots it would buy are funded (see
+		// `reserveAdditionsFor`). That is the whole of §10 example 37.
 		true
 	);
 	// Unreachable: `teamMoneyStateFor` always returns a Team, so the state's
@@ -285,10 +287,13 @@ export function evaluateActSlots(
 	after: RosterActTeamFigures,
 	money: TeamMoneyState
 ): ActSlotsGateOutcome {
-	// **`isContentionEntry: true`, and it is the same choice `prospectiveBidIsExempt`
+	// **`isContentionEntry: true`, and it is the same choice `noProspectiveBid`
 	// makes on the money side, for the same reason.** A roster act places no
 	// Bid, so nothing may be projected for one — and `true` is what says so
-	// through this parameter. Read what it does on each derivation it reaches:
+	// through this parameter. The two parameters are spelled differently
+	// because they mean different things wherever a Bid DOES exist; here,
+	// where none does, they happen to agree. Read what it does on each
+	// derivation it reaches:
 	//
 	//  - `activeBenchOverflowFor(bound, true)` — the flag only ever suppresses a
 	//    `+ 1` guarded by `state.playerIsMinorLeagueEligible`, which is `false`
