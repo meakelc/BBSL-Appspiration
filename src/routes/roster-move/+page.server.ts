@@ -42,6 +42,7 @@ import { classifyDeviceClass } from '$lib/core/device-class.ts';
 import { SLOT_LABELS, chargedCapHit } from '$lib/core/rules/roster-import.ts';
 import { describeActAmount } from '$lib/core/rules/roster-act.ts';
 import {
+	REARRANGEABLE_SLOTS,
 	isRearrangeableSlot,
 	rearrangeActSentence,
 	rearrangeRefusalDetail
@@ -75,15 +76,28 @@ import type { Actions, PageServerLoad } from './$types';
 const ROSTER_MOVE_DESTINATION_ID = 'roster-move';
 
 /**
- * The separator between a Player and the Slot they are commanded into, inside
- * one checkbox value.
- *
- * A single multi-valued `move` parameter rather than one parameter per
- * Player, so the whole selection travels as an ordinary repeated query field
- * that a `GET` form produces without any script. Split on the LAST occurrence,
- * so an id that happened to contain the character still parses.
+ * The prefix every per-Player Slot choice is submitted under — `move.<id>`.
  */
-const MOVE_SEPARATOR = '~';
+const MOVE_FIELD_PREFIX = 'move.';
+
+/**
+ * The field name the row for one Player submits under.
+ *
+ * **The Player is in the NAME and the Slot is the VALUE**, which is what lets
+ * each row be an independent radio group. HTML groups radios by name alone, so
+ * one shared `move` field could only ever have held one row's answer — the
+ * two-Slot picker got away with a checkbox per row because "ticked" meant "to
+ * the other one" and there was only ever one other one. With three Slots each
+ * row has two possible targets and a "leave it where it is", which is a choice
+ * rather than a toggle.
+ *
+ * It stays an ordinary repeated `GET` field that a form produces with no
+ * script, and the same shape is what the sheet's cancel link and the commit
+ * action carry, so one parser reads every entry point.
+ */
+function moveFieldFor(fantraxPlayerId: string): string {
+	return `${MOVE_FIELD_PREFIX}${fantraxPlayerId}`;
+}
 
 /**
  * The reason the SHEET is previewed under, which is never written anywhere.
@@ -182,12 +196,12 @@ function actorFrom(session: App.Locals['session']) {
 /**
  * Whether a submitted string is one of the four Slot kinds at all.
  *
- * **The four, not the two.** `isRearrangeableSlot` answers a RULE — which
+ * **The four, not the three.** `isRearrangeableSlot` answers a RULE — which
  * Slots a Move may name — and asking it here would make this route the check
  * for it, which the story forbids and which `evaluateRearrange` already does
  * properly. This asks only whether the string is a `RosterSlotKind`, so
- * `injury_reserve` and `dead_money` are parsed and handed to the core, which
- * refuses the WHOLE act as `unmovable_slot`.
+ * `dead_money` is parsed and handed to the core, which refuses the WHOLE act
+ * as `unmovable_slot`.
  *
  * `SLOT_LABELS` is keyed by the full union, so this test is exhaustive by
  * construction: a fifth Slot kind added to `RosterSlotKind` makes that record
@@ -199,34 +213,39 @@ function isSlotKind(value: string): value is RosterSlotKind {
 }
 
 /**
- * Every `move` value submitted, parsed into the command's own shape.
+ * Every `move.<id>` choice submitted, parsed into the command's own shape.
  *
- * Deduplicated on the Player and sorted by id, so the same selection produces
- * the same command whichever order the checkboxes were ticked in (AD-5).
+ * Deduplicated on the Player — the FIRST value for a field wins, so a crafted
+ * URL repeating one row's field cannot depart the same Contract twice — and
+ * sorted by id, so the same selection produces the same command whichever
+ * order the rows were answered in (AD-5).
  *
- * **It parses; it does not judge.** Only a string that names no Slot kind at
+ * **An empty value means "leave it where it is" and is not a move.** It is the
+ * radio each row is rendered with selected, so an untouched picker submits one
+ * blank field per Contract and commands nothing.
+ *
+ * **It parses; it does not judge.** Only a value that names no Slot kind at
  * all is dropped, because there is nothing to hand the core — every real Slot
- * kind is passed through, INCLUDING the two a Move may not name. That is the
- * difference between a parser and a gate, and it matters twice: the refusal
- * for an Injury Reserve target has to come from the rules core rather than
- * from this screen, and a per-entry drop here would let a POST carrying one
- * legitimate move alongside `p-x~injury_reserve` commit the legitimate leg
- * instead of refusing the whole act.
+ * kind is passed through, INCLUDING the one a Move may not name. That is the
+ * difference between a parser and a gate: the refusal for a Dead Money target
+ * has to come from the rules core rather than from this screen, and a
+ * per-entry drop here would let a POST carrying one legitimate move alongside
+ * `move.p-x=dead_money` commit the legitimate leg instead of refusing the
+ * whole act.
  */
 function movesFrom(
-	values: readonly (string | null)[]
+	params: URLSearchParams
 ): readonly { fantraxPlayerId: string; toPlacement: RosterSlotKind }[] {
 	const byPlayer = new Map<string, RosterSlotKind>();
-	for (const value of values) {
-		if (typeof value !== 'string') continue;
-		const cut = value.lastIndexOf(MOVE_SEPARATOR);
-		if (cut <= 0) continue;
-		const fantraxPlayerId = value.slice(0, cut);
-		const toPlacement = value.slice(cut + 1);
+	for (const [name, value] of params) {
+		if (!name.startsWith(MOVE_FIELD_PREFIX)) continue;
+		const fantraxPlayerId = name.slice(MOVE_FIELD_PREFIX.length);
 		if (fantraxPlayerId === '') continue;
-		if (!isSlotKind(toPlacement)) continue;
+		// "Leave it where it is" — the default every row carries.
+		if (value === '') continue;
+		if (!isSlotKind(value)) continue;
 		if (byPlayer.has(fantraxPlayerId)) continue;
-		byPlayer.set(fantraxPlayerId, toPlacement);
+		byPlayer.set(fantraxPlayerId, value);
 	}
 	return [...byPlayer.entries()]
 		.map(([fantraxPlayerId, toPlacement]) => ({ fantraxPlayerId, toPlacement }))
@@ -239,48 +258,69 @@ function movesFrom(
 		);
 }
 
-/** The other of the two rearrangeable Slots — the only target a picker offers. */
-function opposite(kind: RosterSlotKind): RosterSlotKind {
-	return kind === 'minor_league' ? 'active_bench' : 'minor_league';
+/**
+ * The reviewed selection as a query string — the one place its shape is built.
+ *
+ * The sheet's cancel link and the commit action both carry it, and `movesFrom`
+ * above reads exactly what this writes, so the two cannot drift.
+ */
+function moveQuery(
+	teamId: string,
+	moves: readonly { fantraxPlayerId: string; toPlacement: RosterSlotKind }[]
+): URLSearchParams {
+	const query = new URLSearchParams();
+	query.set('team', teamId);
+	for (const move of moves) query.set(moveFieldFor(move.fantraxPlayerId), move.toPlacement);
+	return query;
 }
 
 /**
  * The Team's roster as the picker lists it.
  *
- * **Only the rearrangeable rows are offered.** Injury Reserve is a Fantrax
- * fact about a player's health and Dead Money is a charge and not a Player;
- * the rules core refuses either if it is named anyway, and the picker not
- * offering them is the same fact said once more where it stops a pointless
- * refusal.
+ * **Only the rearrangeable rows are offered.** Dead Money is a charge and not
+ * a Player; the rules core refuses it if it is named anyway, and the picker not
+ * offering it is the same fact said once more where it stops a pointless
+ * refusal. Injury Reserve rows ARE offered, and so is Injury Reserve as a
+ * target (FR-44) — `REARRANGEABLE_SLOTS` is the one statement of which Slots
+ * participate, and this reads it rather than repeating it.
  *
- * Each row carries the ONE target it can be moved to — there are exactly two
- * participating Slots, so the choice is a toggle rather than a menu — and the
- * CHARGED figure it takes off Cap Space today, which is `$0` for a stash and
- * is exactly the number a Move changes.
+ * Each row carries every OTHER participating Slot as a target — three Slots
+ * means two of them, so the choice is a short list rather than a toggle — and
+ * the CHARGED figure it takes off Cap Space today, which is `$0` for a stash
+ * and is exactly the number a Move changes.
+ *
+ * **The targets come from the rules core's own list, in its own order**, and
+ * the row's current Slot is the only one removed. Nothing here decides which
+ * Slots a Move may name.
  */
-function pickerRowsFor(team: RearrangingTeam) {
+function pickerRowsFor(
+	team: RearrangingTeam,
+	chosen: readonly { fantraxPlayerId: string; toPlacement: RosterSlotKind }[]
+) {
+	const commanded = new Map(chosen.map((move) => [move.fantraxPlayerId, move.toPlacement]));
 	return {
 		teamId: team.teamId,
 		teamName: team.teamName,
 		players: team.rows
 			.filter((row) => isRearrangeableSlot(row.rosterSlotKind))
-			.map((row) => {
-				const toPlacement = opposite(row.rosterSlotKind);
-				return {
-					fantraxPlayerId: row.fantraxPlayerId,
-					playerName: row.playerName,
-					slotLabel: SLOT_LABELS[row.rosterSlotKind],
-					targetLabel: SLOT_LABELS[toPlacement],
-					// The CHARGED figure, which is what the Team's Cap Space counted.
-					// `describeActAmount` for the sheet's reason: an imported Cap Hit
-					// need not sit on the $500,000 grid.
-					capHit: describeActAmount(
-						chargedCapHit({ capHit: row.value, rosterSlotKind: row.rosterSlotKind })
-					),
-					value: `${row.fantraxPlayerId}${MOVE_SEPARATOR}${toPlacement}`,
-					won: row.won
-				};
-			})
+			.map((row) => ({
+				fantraxPlayerId: row.fantraxPlayerId,
+				playerName: row.playerName,
+				slotLabel: SLOT_LABELS[row.rosterSlotKind],
+				// The CHARGED figure, which is what the Team's Cap Space counted.
+				// `describeActAmount` for the sheet's reason: an imported Cap Hit
+				// need not sit on the $500,000 grid.
+				capHit: describeActAmount(
+					chargedCapHit({ capHit: row.value, rosterSlotKind: row.rosterSlotKind })
+				),
+				field: moveFieldFor(row.fantraxPlayerId),
+				targets: REARRANGEABLE_SLOTS.filter((slot) => slot !== row.rosterSlotKind).map(
+					(slot) => ({ value: slot, label: SLOT_LABELS[slot] })
+				),
+				/** The target commanded by the query string, or `''` for "leave it". */
+				chosen: commanded.get(row.fantraxPlayerId) ?? '',
+				won: row.won
+			}))
 			.sort((left, right) => left.playerName.localeCompare(right.playerName))
 	};
 }
@@ -290,14 +330,13 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	const commissioner = actsAsCommissioner(locals.session);
 	const teamId = resolveTeamId(locals, url.searchParams.get('team') ?? '');
-	const moves = movesFrom(url.searchParams.getAll('move'));
+	const moves = movesFrom(url.searchParams);
 	const confirming = url.searchParams.get('confirm') === 'yes';
 
 	const base = {
 		phase: locals.phase,
 		commissioner,
-		teamId,
-		moveValues: moves.map((move) => `${move.fantraxPlayerId}${MOVE_SEPARATOR}${move.toPlacement}`)
+		teamId
 	};
 
 	// Step one, the Commissioner's only: one Team, and nothing else is asked
@@ -330,7 +369,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const withTeam = {
 		...base,
 		teams: commissioner ? preview.teams : [],
-		team: pickerRowsFor(preview.team)
+		// The selection is carried on the ROWS, as each one's chosen target —
+		// there is no separate list of values for the page to match against.
+		team: pickerRowsFor(preview.team, moves)
 	};
 
 	// Step three: the sheet. Only a Move the core PERMITS gets one — a refused
@@ -339,17 +380,13 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	if (confirming) {
 		if (preview.outcome.kind === 'permitted') {
 			const { delta, capBefore, gates, maximumBid } = preview.outcome;
-			// The reviewed selection, in ONE string built here.
+			// The reviewed selection, in ONE string built by `moveQuery`.
 			//
 			// It travels on the commit's action URL rather than as hidden fields
 			// inside the sheet, because the sheet's `<form>` belongs to the sheet
 			// component and a second form nested in it is invalid HTML the
 			// browser silently drops — which would post a Move naming nothing.
-			const query = new URLSearchParams();
-			query.set('team', teamId);
-			for (const move of moves) {
-				query.append('move', `${move.fantraxPlayerId}${MOVE_SEPARATOR}${move.toPlacement}`);
-			}
+			const query = moveQuery(teamId, moves);
 			const input = {
 				act: rearrangeActSentence(delta),
 				commitLabel: ROSTER_MOVE_COMMIT_LABEL,
@@ -408,7 +445,7 @@ export const actions: Actions = {
 		// unknown id would be written into a permanent payload as the Team's
 		// NAME, through `loadRosterRearrangeState`'s `?? teamId` fallback.
 		if (commissioner) requireKnownTeam(await loadRosterRearrangeTeams(writeGateway()), teamId);
-		const moves = movesFrom(url.searchParams.getAll('move'));
+		const moves = movesFrom(url.searchParams);
 
 		const form = await request.formData();
 

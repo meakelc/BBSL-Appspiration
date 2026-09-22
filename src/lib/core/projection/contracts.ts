@@ -56,11 +56,12 @@
 import { parseMoney } from '../money.ts';
 import type { Money } from '../money.ts';
 import type { CapHitRow } from '../rules/roster-import.ts';
-import type { RosterSlotKind, SlotPlacement } from '../types.ts';
+import { ROSTER_PLACEMENTS } from '../types.ts';
+import type { RosterPlacement, RosterSlotKind, SlotPlacement } from '../types.ts';
 import type { Reducer } from './fold.ts';
 import { AUCTION_CLOSED_EVENT, readClosedFacts } from './nominations.ts';
 
-export type { SlotPlacement };
+export type { RosterPlacement, SlotPlacement };
 
 /**
  * The four contract lengths the Year Allotment can spend, and the only values
@@ -180,8 +181,19 @@ export type AuctionContract = {
 	readonly winningAmount: Money;
 	/** What it charges against the Cap. `$0` on a minors placement (AD-23). */
 	readonly capHit: Money;
-	/** Where the Player landed — the one thing Roster Count moves on. */
-	readonly placement: SlotPlacement;
+	/**
+	 * Where the Contract sits now — the one thing Roster Count moves on.
+	 *
+	 * **`RosterPlacement`, not `SlotPlacement`, and the extra member arrives
+	 * only from a Move.** A close produces two placements and `readClosedFacts`
+	 * still validates the payload against exactly those two; a
+	 * `RosterRearranged` recorded afterwards can put the Contract on Injury
+	 * Reserve, and a won Contract has no `team_rosters` row to carry that — the
+	 * event and this field are the whole of where it lives. Narrowing this to
+	 * the close's own union made the Move's reducer case DROP such a move, so
+	 * the log said the Contract was on IR and every read said it was not.
+	 */
+	readonly placement: RosterPlacement;
 	/** Recorded UNSET at a close; set by a `ContractLengthAssigned` (Story 6.1). */
 	readonly contractYears: ContractYears | null;
 	/** The Auction's own persisted expiry — never the transaction clock. */
@@ -696,9 +708,20 @@ export type RosterRearrangedPayload = {
 	readonly reason: string | null;
 };
 
-/** Whether a value is one of the two Slot Placements an Auction Contract may hold. */
-function isSlotPlacement(value: unknown): value is SlotPlacement {
-	return value === 'active_bench' || value === 'minor_league';
+/**
+ * Whether a value is one of the three Slots an Auction Contract may sit in.
+ *
+ * **Three, because a recorded act can re-place a won Contract onto Injury
+ * Reserve** (FR-44) — see `AuctionContract.placement`. It is asked of
+ * `ROSTER_PLACEMENTS` rather than spelled as a disjunction so that a change to
+ * the union reaches this validator without being edited; the two literals it
+ * used to test were exactly the drift this replaces.
+ *
+ * `dead_money` is still refused: it is a charge and not a Slot, so a payload
+ * naming it as a placement is malformed and the entry is skipped.
+ */
+function isRosterPlacement(value: unknown): value is RosterPlacement {
+	return ROSTER_PLACEMENTS.some((candidate) => candidate === value);
 }
 
 /**
@@ -772,7 +795,7 @@ function readTransfers(payload: unknown): readonly RosterTradeTransfer[] {
 		if (typeof fantraxPlayerId !== 'string' || fantraxPlayerId === '') continue;
 		if (typeof toTeamId !== 'string' || toTeamId === '') continue;
 		if (typeof toTeamName !== 'string' || toTeamName === '') continue;
-		if (!isSlotPlacement(toPlacement)) continue;
+		if (!isRosterPlacement(toPlacement)) continue;
 
 		// **All three money fields are REJECTED rather than repaired**, and that
 		// is AD-23 rather than strictness for its own sake. `winningAmount` used
@@ -795,7 +818,7 @@ function readTransfers(payload: unknown): readonly RosterTradeTransfer[] {
 			toTeamId,
 			toTeamName,
 			won: true,
-			fromPlacement: isSlotPlacement(row['fromPlacement']) ? row['fromPlacement'] : toPlacement,
+			fromPlacement: isRosterPlacement(row['fromPlacement']) ? row['fromPlacement'] : toPlacement,
 			toPlacement,
 			capHitBefore,
 			capHitAfter,
@@ -847,10 +870,10 @@ function readMoves(payload: unknown): readonly RosterRearrangedMove[] {
 		const toPlacement = row['toPlacement'];
 		const fromPlacement = row['fromPlacement'];
 		if (typeof fantraxPlayerId !== 'string' || fantraxPlayerId === '') continue;
-		if (!isSlotPlacement(toPlacement)) continue;
+		if (!isRosterPlacement(toPlacement)) continue;
 		// Rejected, never substituted — see the docblock: this field is what
 		// `minors-history.ts` folds placement eligibility from.
-		if (!isSlotPlacement(fromPlacement)) continue;
+		if (!isRosterPlacement(fromPlacement)) continue;
 
 		// **All three money fields are REJECTED rather than repaired** (AD-23),
 		// for `readTransfers`' reason: a stashed win of $18,000,000 charging $0
@@ -952,12 +975,13 @@ export const contractsReducer: Reducer<AuctionContracts> = (state, event) => {
 				// payload would manufacture a Player nobody won.
 				if (contract === null) continue;
 				// Narrowed again at the point of use: `RosterTradeTransfer` carries
-				// a `RosterSlotKind` because an Existing Contract may sit on IR,
-				// while an `AuctionContract`'s `placement` is the two-member
-				// `SlotPlacement` — and a close can only ever have produced one of
-				// those two. `readTransfers` has already refused anything else; this
-				// is what lets the type say so.
-				if (!isSlotPlacement(transfer.toPlacement)) continue;
+				// a `RosterSlotKind` because `dead_money` is one of those, while an
+				// `AuctionContract`'s `placement` is the three-member
+				// `RosterPlacement` — a Contract sits in a Slot, and Dead Money is
+				// not one. `readTransfers` has already refused anything else; this
+				// is what lets the type say so. Injury Reserve passes now that
+				// `arrivalPlacementFor` can land a won Contract there.
+				if (!isRosterPlacement(transfer.toPlacement)) continue;
 				byPlayer = {
 					...byPlayer,
 					[transfer.fantraxPlayerId]: {
@@ -998,11 +1022,17 @@ export const contractsReducer: Reducer<AuctionContracts> = (state, event) => {
 				if (contract === null) continue;
 				// Narrowed again at the point of use, exactly as the Trade's case
 				// narrows: `RosterRearrangedMove` carries a `RosterSlotKind`
-				// because an Existing Contract may sit on IR, while an
-				// `AuctionContract`'s `placement` is the two-member
-				// `SlotPlacement`. `readMoves` has already refused anything else;
-				// this is what lets the type say so.
-				if (!isSlotPlacement(move.toPlacement)) continue;
+				// because `dead_money` is one of those, while an
+				// `AuctionContract`'s `placement` is the three-member
+				// `RosterPlacement`. `readMoves` has already refused anything
+				// else; this is what lets the type say so.
+				//
+				// **Injury Reserve passes here, and that is the whole reason the
+				// union is three.** A won Contract has no `team_rosters` row, so
+				// this case is the only thing that re-places it — when the test was
+				// `isSlotPlacement` a Move to IR appended its event, updated
+				// nothing, and folded to a Contract still sitting where it left.
+				if (!isRosterPlacement(move.toPlacement)) continue;
 				byPlayer = {
 					...byPlayer,
 					[move.fantraxPlayerId]: {

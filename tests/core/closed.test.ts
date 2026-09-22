@@ -252,7 +252,19 @@ describe('the words — one spelling, reachable from every surface', () => {
 		expect(wonCardSentence('minor_league', parseMoney(0))).toBe(
 			'Placed in a Minor League Slot at a $0.0M Cap Hit.'
 		);
-		expect(Object.keys(PLACEMENT_LABELS).sort()).toEqual(['active_bench', 'minor_league']);
+		// **Three, and the third is not reachable from a close** (FR-44). A won
+		// Contract lands in one of two Slots; a Roster Move recorded afterwards
+		// can put it on Injury Reserve, and the Team view prints this sentence
+		// for that row. `dead_money` is still absent — it is a charge and not a
+		// Slot, and nothing was ever placed there.
+		expect(wonCardSentence('injury_reserve', parseMoney(4_000_000))).toBe(
+			'Placed in an Injury Reserve Slot at a $4.0M Cap Hit.'
+		);
+		expect(Object.keys(PLACEMENT_LABELS).sort()).toEqual([
+			'active_bench',
+			'injury_reserve',
+			'minor_league'
+		]);
 	});
 
 	it('never congratulates — the Closed state is stated', () => {

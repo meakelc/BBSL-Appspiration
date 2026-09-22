@@ -41,7 +41,7 @@ import type { AuctionContract, AuctionContracts, ContractYears } from '../projec
 import { contractsWonBy } from '../projection/contracts.ts';
 import type { SubmittedTeams } from '../projection/assignments.ts';
 import { hasSubmittedAssignments } from '../projection/assignments.ts';
-import type { SlotPlacement } from '../types.ts';
+import type { RosterPlacement } from '../types.ts';
 import { describeAmount } from './bidding.ts';
 // `SLOT_LABELS`, never `positions.ts`'s `PLACEMENT_LABELS`: that record is the
 // ARTICLE form ("an Active/Bench Slot") a sentence needs, and a row's metadata
@@ -381,8 +381,8 @@ export type AssignmentRow = {
 	readonly playerName: string;
 	/** What the Auction was won for, in the abbreviated form (AD-8). */
 	readonly winningAmountLabel: string;
-	readonly placement: SlotPlacement;
-	/** That placement in words — `Active/Bench` or `Minor League`. */
+	readonly placement: RosterPlacement;
+	/** That placement in words — `Active/Bench`, `Injury Reserve` or `Minor League`. */
 	readonly placementLabel: string;
 	/** The length currently assigned, or `null` while it is unset. */
 	readonly contractYears: ContractYears | null;
@@ -450,8 +450,10 @@ export function assignmentBoardFor(
 		winningAmountLabel: describeAmount(contract.winningAmount),
 		placement: contract.placement,
 		// Worded HERE and never on the surface. A ternary on the page would also
-		// silently label a future third `SlotPlacement` as Active/Bench; this
-		// record is keyed on the type, so a new kind is a compile error instead.
+		// silently label any placement it did not expect as Active/Bench — which
+		// is exactly what would have happened when Injury Reserve joined
+		// `RosterPlacement` (FR-44); this record is keyed on the full
+		// `RosterSlotKind`, so a new kind is a compile error instead.
 		placementLabel: SLOT_LABELS[contract.placement],
 		contractYears: contract.contractYears,
 		lengthLabel:

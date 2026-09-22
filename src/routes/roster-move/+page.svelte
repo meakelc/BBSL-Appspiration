@@ -11,11 +11,17 @@
 	//
 	// **Three steps, each of them ordinary navigation.** The Commissioner picks
 	// a Team; a Manager's is already decided from the session and step one
-	// never renders for them. Then tick the Contracts to move — there are
-	// exactly two participating Slots, so each row is a toggle to the other one
-	// — then read the sheet and commit. Only the third step posts. Nothing here
-	// needs client JavaScript: with it switched off the pickers still submit,
-	// the sheet still renders, and the Move still commits or is still refused.
+	// never renders for them. Then choose, per Contract, the Slot it is to
+	// occupy — three Slots participate, so each row is its OWN radio group of
+	// the two it is not in plus "leave it where it is", named `move.<id>` so
+	// the groups do not collide — then read the sheet and commit. Only the
+	// third step posts. Nothing here needs client JavaScript: with it switched
+	// off the pickers still submit, the sheet still renders, and the Move still
+	// commits or is still refused.
+	//
+	// Every Slot offered, its label and its field name are the SERVER's, off
+	// the picker row — no list of Slots is spelled in this file, so the page
+	// cannot offer a Slot the rules core would refuse.
 	//
 	// **It words no OUTCOME.** Everything that states what the app decided
 	// arrives already worded from elsewhere and is rendered verbatim: the act
@@ -49,13 +55,22 @@
 
 	type TeamRow = { readonly id: string; readonly name: string };
 
+	type PickerTarget = {
+		readonly value: string;
+		readonly label: string;
+	};
+
 	type PickerPlayer = {
 		readonly fantraxPlayerId: string;
 		readonly playerName: string;
 		readonly slotLabel: string;
-		readonly targetLabel: string;
 		readonly capHit: string;
-		readonly value: string;
+		/** The field name this row's radio group submits under. */
+		readonly field: string;
+		/** Every Slot this Contract may be moved to — its own is not among them. */
+		readonly targets: readonly PickerTarget[];
+		/** The target already commanded, or `''` for "leave it where it is". */
+		readonly chosen: string;
 		readonly won: boolean;
 	};
 
@@ -79,7 +94,6 @@
 	const sheet = $derived(data.sheet as ReasonSheetView | null);
 	const managerSheet = $derived(data.managerSheet as ConfirmSheetView | null);
 	const refusal = $derived(data.refusal as { readonly detail: string } | null);
-	const moveValues = $derived((data.moveValues as readonly string[]) ?? []);
 	const recordForm = $derived(form as RecordForm | undefined);
 	const notice = $derived(recordForm?.notice);
 	// Built server-side and posted to verbatim. The reviewed selection travels
@@ -114,10 +128,10 @@
 		<section class="commissioner-block">
 			<p class="commissioner-label">Choose the Team</p>
 			<p class="prose">
-				A Roster Move re-places one Team’s own Contracts between its Active/Bench Slots and its
-				Minor League Slots. No Contract changes hands and no amount is edited — what changes is
-				what each Contract charges. Nothing is recorded until you have read the sheet and given a
-				reason.
+				A Roster Move re-places one Team’s own Contracts between its Active/Bench Slots, its
+				Injury Reserve Slots and its Minor League Slots. No Contract changes hands and no amount
+				is edited — what changes is what each Contract charges and what it occupies. Nothing is
+				recorded until you have read the sheet and given a reason.
 			</p>
 
 			<!--
@@ -144,10 +158,12 @@
 		<section class="commissioner-block">
 			<p class="commissioner-label">Choose the Contracts to re-place</p>
 			<p class="prose">
-				Tick every Contract to move, and it moves to the other Slot. A Contract in a Minor League
-				Slot charges nothing; the same Contract in an Active/Bench Slot charges in full. Injury
-				Reserve is a Fantrax fact about a player’s health and is not offered, and Dead Money is a
-				charge rather than a Player. A Player being bid on in an open Auction cannot be moved.
+				Choose the Slot each Contract is to occupy; anything left where it is is not moved. A
+				Contract in a Minor League Slot charges nothing; the same Contract in an Active/Bench or
+				an Injury Reserve Slot charges in full, and only an Active/Bench Slot counts against
+				Roster Count. Injury Reserve records the designation the league has already made — this
+				app asserts nothing about a player’s health. Dead Money is a charge rather than a Player
+				and is not offered. A Player being bid on in an open Auction cannot be moved.
 			</p>
 
 			{#if refusal !== null}
@@ -166,18 +182,39 @@
 						<p class="prose">{team.teamName} holds no Contract that can be re-placed.</p>
 					{/if}
 					{#each team.players as player (player.fantraxPlayerId)}
-						<label class="choice">
-							<input
-								type="checkbox"
-								name="move"
-								value={player.value}
-								checked={moveValues.includes(player.value)}
-							/>
-							<span class="prose">
-								{player.playerName} — {player.slotLabel}, Cap Hit {player.capHit} → move to
-								{player.targetLabel}{player.won ? ', won at auction' : ''}
-							</span>
-						</label>
+						<!--
+							One row, one radio group. The "leave it where it is" option is
+							first and is selected unless the query string commands
+							otherwise, so an untouched picker submits a blank value per
+							Contract and commands nothing.
+						-->
+						<fieldset class="row">
+							<legend class="prose">
+								{player.playerName} — {player.slotLabel}, Cap Hit {player.capHit}{player.won
+									? ', won at auction'
+									: ''}
+							</legend>
+							<label class="choice">
+								<input
+									type="radio"
+									name={player.field}
+									value=""
+									checked={player.chosen === ''}
+								/>
+								<span class="prose">Leave in {player.slotLabel}</span>
+							</label>
+							{#each player.targets as target (target.value)}
+								<label class="choice">
+									<input
+										type="radio"
+										name={player.field}
+										value={target.value}
+										checked={player.chosen === target.value}
+									/>
+									<span class="prose">Move to {target.label}</span>
+								</label>
+							{/each}
+						</fieldset>
 					{/each}
 				</fieldset>
 
@@ -191,11 +228,11 @@
 		<section class="manager-block">
 			<p class="section-label">Choose the Contracts to re-place</p>
 			<p class="prose">
-				Tick every Contract to move, and it moves to the other Slot. A Contract in a Minor League
-				Slot charges nothing; the same Contract in an Active/Bench Slot charges in full — so a
-				Roster Move is a deliberate cap decision, and it can move your Maximum Bid in either
-				direction. Injury Reserve is not offered, and a Player being bid on in an open Auction
-				cannot be moved.
+				Choose the Slot each Contract is to occupy; anything left where it is is not moved. A
+				Contract in a Minor League Slot charges nothing; the same Contract in an Active/Bench or
+				an Injury Reserve Slot charges in full — so a Roster Move is a deliberate cap decision,
+				and it can move your Maximum Bid in either direction. A Player being bid on in an open
+				Auction cannot be moved.
 			</p>
 
 			{#if refusal !== null}
@@ -211,18 +248,39 @@
 						<p class="prose">{team.teamName} holds no Contract that can be re-placed.</p>
 					{/if}
 					{#each team.players as player (player.fantraxPlayerId)}
-						<label class="choice">
-							<input
-								type="checkbox"
-								name="move"
-								value={player.value}
-								checked={moveValues.includes(player.value)}
-							/>
-							<span class="prose">
-								{player.playerName} — {player.slotLabel}, Cap Hit {player.capHit} → move to
-								{player.targetLabel}{player.won ? ', won at auction' : ''}
-							</span>
-						</label>
+						<!--
+							One row, one radio group. The "leave it where it is" option is
+							first and is selected unless the query string commands
+							otherwise, so an untouched picker submits a blank value per
+							Contract and commands nothing.
+						-->
+						<fieldset class="row">
+							<legend class="prose">
+								{player.playerName} — {player.slotLabel}, Cap Hit {player.capHit}{player.won
+									? ', won at auction'
+									: ''}
+							</legend>
+							<label class="choice">
+								<input
+									type="radio"
+									name={player.field}
+									value=""
+									checked={player.chosen === ''}
+								/>
+								<span class="prose">Leave in {player.slotLabel}</span>
+							</label>
+							{#each player.targets as target (target.value)}
+								<label class="choice">
+									<input
+										type="radio"
+										name={player.field}
+										value={target.value}
+										checked={player.chosen === target.value}
+									/>
+									<span class="prose">Move to {target.label}</span>
+								</label>
+							{/each}
+						</fieldset>
 					{/each}
 				</fieldset>
 
@@ -263,6 +321,22 @@
 		border-left: var(--accent-bar-width) solid var(--color-attention);
 		background-color: var(--color-surface-sunken);
 		padding: var(--space-row-gap) var(--space-card-gap);
+	}
+
+	/* One Contract's own choices, indented under the Player it names so the
+	   groups read as rows rather than as one long list of Slots. */
+	.row {
+		width: 100%;
+		margin: 0;
+		border: none;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-row-gap);
+	}
+
+	.row .choice {
+		padding-left: var(--space-panel-padding);
 	}
 
 	.team-choice,

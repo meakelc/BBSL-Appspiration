@@ -191,6 +191,37 @@ export const SLOT_PLACEMENTS: readonly SlotPlacement[] = Object.freeze([
 ] as const);
 
 /**
+ * Every Slot a CONTRACT can occupy — a WIDENING of `SlotPlacement` by exactly
+ * one member, and a narrowing of `RosterSlotKind` by exactly one.
+ *
+ * **Three, not two, because a Roster Move may place a Contract on Injury
+ * Reserve** (FR-44, Commissioner branch). A won Contract is re-placed by the
+ * `RosterRearranged` event alone — it has no `team_rosters` row for the
+ * transaction's `UPDATE` to touch — so `AuctionContract.placement` has to be
+ * able to SAY Injury Reserve or the fold would silently leave the Contract in
+ * the Slot it left while the Move sat committed in the log.
+ *
+ * **Three, not four, because Dead Money is not a placement.** It is a charge
+ * that outlives the Contract: nobody holds it, it occupies no Slot, and
+ * `movable` refuses to act on it for every roster act. A union that admitted
+ * it would let a Contract be *placed* into a charge.
+ *
+ * **`SlotPlacement` is deliberately NOT widened.** That union is what a CLOSE
+ * can produce, and no rule in this product places a won Player onto Injury
+ * Reserve at the moment the Auction closes — `close.ts`, `nominations.ts`'s
+ * payload validation and `capHitFor` all still speak the two-member union, and
+ * a Player reaches the third member only by a Move recorded afterwards.
+ */
+export type RosterPlacement = 'active_bench' | 'injury_reserve' | 'minor_league';
+
+/** The three Slots a Contract can occupy, for a total check over a payload. */
+export const ROSTER_PLACEMENTS: readonly RosterPlacement[] = Object.freeze([
+	'active_bench',
+	'injury_reserve',
+	'minor_league'
+] as const);
+
+/**
  * One roster row exactly as the Fantrax adapter emits it (AD-24) — the only
  * shape `core/rules/roster-import.ts` and `server/roster-import.ts` see.
  *

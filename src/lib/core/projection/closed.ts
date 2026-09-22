@@ -38,7 +38,7 @@
 
 import type { Money } from '../money.ts';
 import { describeAmount } from '../rules/bidding.ts';
-import type { SlotPlacement } from '../types.ts';
+import type { RosterPlacement } from '../types.ts';
 import { contractForPlayer } from './contracts.ts';
 import type { AuctionContract, AuctionContracts } from './contracts.ts';
 import { drawForPlayer } from './draws.ts';
@@ -187,13 +187,22 @@ export const CLOSED_LABEL_NARROW = 'Closed';
  * on the won card, and a Closed Auction states it on the card AND on the page
  * — one record, four readers.
  *
- * It is the article-form ("an Active/Bench Slot") a sentence needs, and holds
- * no `injury_reserve` entry at all; the slot-kind HEADINGS a Team view groups
- * by come from `rules/roster-import.ts`'s `SLOT_LABELS`. Two spellings for two
- * registers, and this story adds neither.
+ * It is the article-form ("an Active/Bench Slot") a sentence needs; the
+ * slot-kind HEADINGS a Team view groups by come from
+ * `rules/roster-import.ts`'s `SLOT_LABELS`. Two spellings for two registers.
+ *
+ * **It holds all three placements, and the third is not reachable from a
+ * close.** A won Contract lands in Active/Bench or Minor League and nothing
+ * else; it reaches Injury Reserve only by a Roster Move recorded afterwards
+ * (FR-44), and the sentence below is the one a Team view prints for that
+ * Contract's row. Keyed on `RosterPlacement` rather than `SlotPlacement` so
+ * the record is total over what a Contract can actually be sitting in —
+ * `dead_money` is still absent, because it is a charge and not a Slot and
+ * nothing was ever *placed* there.
  */
-export const PLACEMENT_LABELS: Readonly<Record<SlotPlacement, string>> = Object.freeze({
+export const PLACEMENT_LABELS: Readonly<Record<RosterPlacement, string>> = Object.freeze({
 	active_bench: 'an Active/Bench Slot',
+	injury_reserve: 'an Injury Reserve Slot',
 	minor_league: 'a Minor League Slot'
 });
 
@@ -206,7 +215,7 @@ export const PLACEMENT_LABELS: Readonly<Record<SlotPlacement, string>> = Object.
  * charge as an $11.0M one. No celebration and no exclamation — this is a
  * statement of what the roster now holds.
  */
-export function wonCardSentence(placement: SlotPlacement, capHit: Money): string {
+export function wonCardSentence(placement: RosterPlacement, capHit: Money): string {
 	return `Placed in ${PLACEMENT_LABELS[placement]} at a ${describeAmount(capHit)} Cap Hit.`;
 }
 

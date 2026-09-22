@@ -186,8 +186,9 @@ type PickerPlayer = {
 	fantraxPlayerId: string;
 	playerName: string;
 	slotLabel: string;
-	targetLabel: string;
-	value: string;
+	field: string;
+	targets: ReadonlyArray<{ value: string; label: string }>;
+	chosen: string;
 	won: boolean;
 };
 
@@ -247,8 +248,11 @@ async function expectRefusal(run: () => unknown, status: number): Promise<void> 
 	if (isHttpError(thrown)) expect(thrown.status).toBe(status);
 }
 
-const DEMOTE_ONE = 'move=p-stash~active_bench';
-const DEMOTE_TWO = 'move=p-two-stash~active_bench';
+// One Player's choice is one field, named for that Player — see
+// `moveFieldFor`. Three Slots participate, so a shared `move` field could
+// only ever have carried one row's answer.
+const DEMOTE_ONE = 'move.p-stash=active_bench';
+const DEMOTE_TWO = 'move.p-two-stash=active_bench';
 
 describe('/roster-move — the guards, on load AND on the action', () => {
 	it('refuses a signed-out visitor, both ways', async () => {
@@ -451,7 +455,7 @@ describe('/roster-move — a refused Move gets no sheet', () => {
 	it('reports the core’s own sentence and stays on the picker', async () => {
 		// `p-active` has no pool row and has never been observed in a Minor
 		// League Slot, so the promotion is refused by the rules core.
-		const data = await loadAt('?team=t-1&confirm=yes&move=p-active~minor_league', COMMISSIONER);
+		const data = await loadAt('?team=t-1&confirm=yes&move.p-active=minor_league', COMMISSIONER);
 
 		expect(data.step).toBe('players');
 		expect(data.sheet).toBeNull();
@@ -463,29 +467,26 @@ describe('/roster-move — a refused Move gets no sheet', () => {
 	});
 
 	it('returns a 409 with the core’s sentence when the action itself is refused', async () => {
-		const outcome = await commit('?team=t-1&move=p-active-2~minor_league', 'A reason.', COMMISSIONER);
+		const outcome = await commit('?team=t-1&move.p-active-2=minor_league', 'A reason.', COMMISSIONER);
 
 		expect(outcome.status).toBe(409);
 		expect(outcome.data.notice).toContain('never been told');
 	});
 
-	it('lets the RULES CORE refuse a hand-typed Injury Reserve target', async () => {
-		// **The route parses; it does not judge.** `p-active~injury_reserve` is
-		// not a selection any surface produced, but dropping it here would make
-		// this screen the check for a rule the core owns — and the matrix says
-		// the refusal comes from the rules core, not the screen.
-		const data = await loadAt('?team=t-1&confirm=yes&move=p-active~injury_reserve', COMMISSIONER);
+	it('PERMITS an Injury Reserve target and sheets it, rather than refusing', async () => {
+		// The rule FR-44 changed: the Commissioner records the IR designation
+		// the league already made. The sheet is what a permitted act gets.
+		const data = await loadAt('?team=t-1&confirm=yes&move.p-active=injury_reserve', COMMISSIONER);
 
-		expect(data.step).toBe('players');
-		expect(data.refusal?.detail).toContain('Injury Reserve');
-		expect(data.refusal?.detail).toContain("player's health");
-		// Not the empty-act refusal, which is what a per-entry drop would have
-		// produced.
-		expect(data.refusal?.detail).not.toContain('names no Contracts');
+		expect(data.step).toBe('sheet');
+		expect(data.refusal).toBeNull();
+		expect(data.sheet?.act).toContain('Injury Reserve');
+		// The reviewed selection round-trips in the shape the parser reads.
+		expect(data.commitAction).toContain('move.p-active=injury_reserve');
 	});
 
 	it('lets the rules core refuse a hand-typed Dead Money target too', async () => {
-		const data = await loadAt('?team=t-1&confirm=yes&move=p-active~dead_money', COMMISSIONER);
+		const data = await loadAt('?team=t-1&confirm=yes&move.p-active=dead_money', COMMISSIONER);
 
 		expect(data.refusal?.detail).toContain('Dead Money');
 		expect(data.refusal?.detail).not.toContain('names no Contracts');
@@ -493,17 +494,17 @@ describe('/roster-move — a refused Move gets no sheet', () => {
 
 	it('refuses the WHOLE act when one leg of a mixed POST names an unmovable Slot', async () => {
 		// The regression a per-entry drop hid: one legitimate demotion beside
-		// one Injury Reserve target used to commit the legitimate leg. The act
-		// is one act, so an unmovable leg refuses all of it and writes nothing.
+		// one unmovable target used to commit the legitimate leg. The act is one
+		// act, so an unmovable leg refuses all of it and writes nothing.
 		world.statements.length = 0;
 		const outcome = await commit(
-			`?team=t-1&${DEMOTE_ONE}&move=p-active~injury_reserve`,
+			`?team=t-1&${DEMOTE_ONE}&move.p-active=dead_money`,
 			'A reason.',
 			COMMISSIONER
 		);
 
 		expect(outcome.status).toBe(409);
-		expect(outcome.data.notice).toContain('Injury Reserve');
+		expect(outcome.data.notice).toContain('Dead Money');
 		// Nothing was written: no event and no row.
 		expect(world.statements.filter((sql) => /^update team_rosters/i.test(sql))).toHaveLength(0);
 		expect(world.statements.filter((sql) => /^insert into auction_events/i.test(sql))).toHaveLength(
@@ -512,9 +513,9 @@ describe('/roster-move — a refused Move gets no sheet', () => {
 	});
 
 	it('still drops a string that names no Slot kind at all', async () => {
-		// There is nothing to hand the core for `p-active~nowhere`: it is not a
-		// `RosterSlotKind`, so the act genuinely names nothing.
-		const data = await loadAt('?team=t-1&confirm=yes&move=p-active~nowhere', COMMISSIONER);
+		// There is nothing to hand the core for `move.p-active=nowhere`: it is
+		// not a `RosterSlotKind`, so the act genuinely names nothing.
+		const data = await loadAt('?team=t-1&confirm=yes&move.p-active=nowhere', COMMISSIONER);
 
 		expect(data.refusal?.detail).toContain('names no Contracts');
 	});
