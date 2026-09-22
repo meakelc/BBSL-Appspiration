@@ -52,7 +52,7 @@ import type {
 	RosterRearrangedMove
 } from '../projection/contracts.ts';
 import type { OpenNominations } from '../projection/nominations.ts';
-import { REARRANGE_ROSTER_GATES } from '../types.ts';
+import { REARRANGE_ROSTER_GATES, ROSTER_PLACEMENTS } from '../types.ts';
 import type {
 	ActCapGateOutcome,
 	ContestedGateOutcome,
@@ -79,19 +79,31 @@ import type { TeamMoneyState } from './bidding.ts';
 import { SLOT_LABELS } from './roster-import.ts';
 
 /**
- * The two Slots a Move may name, as a source or as a target.
+ * The three Slots a Move may name, as a source or as a target.
  *
- * **Injury Reserve is not rearrangeable and Dead Money is not a Slot**
- * (FR-44). IR is a Fantrax fact about a player's health, not a placement this
- * app assigns, and an app that moved a Contract out of it would be inventing
- * a medical opinion; Dead Money is a charge and not a Player, which is the
- * same thing `movable` says for a Drop. Stated once, HERE, so the picker not
- * offering either is a courtesy rather than the check.
+ * **Injury Reserve IS rearrangeable, and Dead Money is still not a Slot**
+ * (FR-44). The two exclusions were once one sentence and they were never the
+ * same rule: Dead Money is a charge and not a Player — nobody holds it, it
+ * occupies nothing, and `movable` says so for every roster act — while Injury
+ * Reserve is an ordinary Slot with an ordinary ceiling that a Team's roster
+ * genuinely occupies.
+ *
+ * IR was withheld because placing a Contract there is a claim about a player's
+ * health, which is Fantrax's fact and not this app's. That reasoning holds for
+ * a Manager and does not hold for the Commissioner, who is RECORDING a
+ * placement the league already made — the same thing every other act on this
+ * surface does, and the same reason the Move is Commissioner-only at all
+ * (`server/destinations.ts`). The League's own IR designation is not a medical
+ * opinion this app invents; it is a fact the Cap arithmetic has to see, because
+ * an IR Contract charges in full and drops out of Roster Count, and until this
+ * change the only way to state it was to re-import the whole roster.
+ *
+ * Stated once, HERE, so the picker offering three targets is a courtesy rather
+ * than the check. `ROSTER_PLACEMENTS` is the union asked for rather than a
+ * fourth literal list: a Contract's placements and a Move's namable Slots are
+ * the same set, and writing them twice would let them drift.
  */
-export const REARRANGEABLE_SLOTS: readonly RosterSlotKind[] = Object.freeze([
-	'active_bench',
-	'minor_league'
-]);
+export const REARRANGEABLE_SLOTS: readonly RosterSlotKind[] = ROSTER_PLACEMENTS;
 
 /** Whether one Slot kind may be the source or the target of a Move. */
 export function isRearrangeableSlot(kind: RosterSlotKind): boolean {
@@ -129,11 +141,11 @@ export type RearrangingPlayer = {
 /**
  * The Team a Move acts on: who they are and everything they hold.
  *
- * **The whole roster, Dead Money and Injury Reserve included.** Cap Space is
- * a sum over every row a Team carries, so handing this module only the
- * movable ones would compute a Cap Space the Teams page disagrees with.
- * Neither kind can be NAMED in a Move — `isRearrangeableSlot` is what says so
- * — but both still count.
+ * **The whole roster, Dead Money included.** Cap Space is a sum over every row
+ * a Team carries, so handing this module only the movable ones would compute a
+ * Cap Space the Teams page disagrees with. Dead Money cannot be NAMED in a
+ * Move — `movable` and `isRearrangeableSlot` both say so — but it still
+ * counts.
  *
  * No figures are carried. Cap Space, Roster Count and all three occupancies
  * are DERIVED from `rows` on every evaluation, before the Move and after it,
@@ -392,10 +404,11 @@ export function evaluateRearrange(
 				gates: null
 			};
 		}
-		// **Neither end may be Injury Reserve or Dead Money**, and the refusal is
-		// the rules core's rather than the screen's. `movable` states the Dead
-		// Money half for every roster act; `isRearrangeableSlot` states FR-44's
-		// own half, which additionally excludes IR.
+		// **Neither end may be Dead Money**, and the refusal is the rules core's
+		// rather than the screen's. `movable` states it for every roster act and
+		// `isRearrangeableSlot` states it again over the target, which is what
+		// refuses a crafted POST naming `dead_money` as a destination — there is
+		// no row to move there and no Slot for it to occupy.
 		if (!movable(row) || !isRearrangeableSlot(row.rosterSlotKind) || !isRearrangeableSlot(move.toPlacement)) {
 			return {
 				kind: 'refused',
@@ -538,10 +551,11 @@ export function rearrangeRefusalDetail(
 			const from = SLOT_LABELS[refusal.fromPlacement];
 			const to = SLOT_LABELS[refusal.toPlacement];
 			return (
-				`A Roster Move re-places a Contract between an ${SLOT_LABELS.active_bench} Slot and a ` +
-				`${SLOT_LABELS.minor_league} Slot, and ${refusal.playerName} was named ${from} → ${to} on ` +
-				`${refusal.teamName}. ${SLOT_LABELS.injury_reserve} is a Fantrax fact about a player's health ` +
-				`and not a placement this app assigns, and ${SLOT_LABELS.dead_money} is a charge and not a Slot.`
+				`A Roster Move re-places a Contract between an ${SLOT_LABELS.active_bench} Slot, an ` +
+				`${SLOT_LABELS.injury_reserve} Slot and a ${SLOT_LABELS.minor_league} Slot, and ` +
+				`${refusal.playerName} was named ${from} → ${to} on ${refusal.teamName}. ` +
+				`${SLOT_LABELS.dead_money} is a charge and not a Slot: nobody holds it, it occupies nothing, ` +
+				`and it cannot be re-placed or moved into.`
 			);
 		}
 		case 'never_observed_eligible':
@@ -631,22 +645,39 @@ export function rearrangeRefusalDetail(
  * `null` where the charge did not move: the amber marker is the product's
  * single attention colour, and a sheet that marks every row marks nothing.
  * That is the honest answer for a Move that only re-labels the Slot a
- * Contract already occupies.
+ * Contract already occupies — and it is also the honest answer for the
+ * Active/Bench ↔ Injury Reserve pair, where both Slots charge in full and the
+ * only thing that moves is Roster Count, which the sheet's own figure rows
+ * state before and after.
+ *
+ * **The arrival Slot is NAMED from the move, never assumed from the
+ * direction.** With two rearrangeable Slots a falling charge could only mean
+ * Minor League and a rising one could only mean Active/Bench, so the sentences
+ * named those Slots as literals. Injury Reserve makes the second literal a
+ * lie: a stash promoted from Minor League to Injury Reserve starts charging in
+ * full and never goes near an Active/Bench Slot.
  */
 export function moveAttention(move: RearrangeMove): string | null {
 	const direction = compareMoney(move.capHitAfter, move.capHitBefore);
 	if (direction === 0) return null;
 
 	const stated = `The Contract's value is unchanged at ${describeActAmount(move.value)}.`;
+	const arrived = SLOT_LABELS[move.toPlacement];
 	if (direction < 0) {
 		return (
 			`${move.playerName} stops charging: ${describeActAmount(subtractMoney(move.capHitBefore, move.capHitAfter))} ` +
-			`goes back to Cap Space, because a ${SLOT_LABELS.minor_league} Contract charges nothing. ${stated}`
+			`goes back to Cap Space, because a ${arrived} Contract charges nothing. ${stated}`
 		);
 	}
+	// **The article is a constant and the union is why.** Only `minor_league`
+	// charges nothing, so a FALLING charge can only have arrived there ("a
+	// Minor League Contract") and a RISING one can only have arrived in
+	// Active/Bench or Injury Reserve — both of which take "an". A vowel test on
+	// the label would be a rule about spelling standing in for a rule about
+	// Slots.
 	return (
 		`${move.playerName} starts charging: ${describeActAmount(subtractMoney(move.capHitAfter, move.capHitBefore))} ` +
-		`comes off Cap Space, because an ${SLOT_LABELS.active_bench} Contract charges in full. ${stated}`
+		`comes off Cap Space, because an ${arrived} Contract charges in full. ${stated}`
 	);
 }
 

@@ -56,8 +56,8 @@ import {
 	stripShowsOutstandingBids
 } from './strip.ts';
 import { formatTeamManagers, teamManagerSuffix } from './team-identity.ts';
-import { SLOT_PLACEMENTS } from './types.ts';
-import type { CapGateOutcome, RosterSlotKind, SlotPlacement } from './types.ts';
+import { ROSTER_PLACEMENTS } from './types.ts';
+import type { CapGateOutcome, RosterPlacement, RosterSlotKind } from './types.ts';
 
 /**
  * The order the roster is grouped in, declared rather than incidental (AD-1).
@@ -573,11 +573,19 @@ function compareText(left: string, right: string): number {
 }
 
 /**
- * The `SlotPlacement` a roster slot kind IS, or `null` for one no close can
- * produce — Injury Reserve and Dead Money alike.
+ * The `RosterPlacement` a roster slot kind IS, or `null` for the one that is
+ * not a Slot at all — Dead Money.
+ *
+ * **Injury Reserve moved to the left of this line** (FR-44). It used to answer
+ * `null` beside Dead Money, which made a won Contract on IR the one roster row
+ * with no placement sentence; a Roster Move can put a Contract there
+ * deliberately now, so the sentence is owed. `ROSTER_PLACEMENTS` is the union
+ * asked for, exactly as `SLOT_PLACEMENTS` was — the narrowing still comes FROM
+ * the union rather than from excluding the kinds that are not placements, so a
+ * fifth roster slot kind cannot be mistaken for one by default.
  */
-function placementOf(slotKind: RosterSlotKind): SlotPlacement | null {
-	return SLOT_PLACEMENTS.find((candidate) => candidate === slotKind) ?? null;
+function placementOf(slotKind: RosterSlotKind): RosterPlacement | null {
+	return ROSTER_PLACEMENTS.find((candidate) => candidate === slotKind) ?? null;
 }
 
 /** A roster row, rendered. */
@@ -602,14 +610,15 @@ function entryFor(row: TeamRosterRow): TeamRosterEntry {
 		// already prints — `PLACEMENT_LABELS` through `wonCardSentence`, not a
 		// second spelling here.
 		//
-		// **Narrowed by asking `SLOT_PLACEMENTS`, never by excluding the kinds
+		// **Narrowed by asking `ROSTER_PLACEMENTS`, never by excluding the kinds
 		// that are not placements.** This read `!== 'injury_reserve'` and then
 		// cast, which was true of a three-member union and became a lie the
 		// moment `dead_money` joined it (Story 7.6) — a Dead Money row would
 		// have been handed to `wonCardSentence` as a placement it cannot
-		// express. The narrowing now comes FROM the placement union, so a
-		// fifth roster slot kind cannot be mistaken for a placement by
-		// default.
+		// express. The narrowing comes FROM the placement union, so a fifth
+		// roster slot kind cannot be mistaken for a placement by default, and
+		// Injury Reserve gained its sentence by joining that union rather than
+		// by an exception here.
 		wonSentence: row.won && placement !== null ? wonCardSentence(placement, row.capHit) : null
 	};
 }

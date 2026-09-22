@@ -248,7 +248,10 @@ function detailFor(
 			// winning amount (AD-23) — `contractRowsFor` carries the identical
 			// field through to `computeCapSpace`.
 			capHit: contract.capHit,
-			rosterSlotKind: contract.placement as RosterSlotKind,
+			// No cast: `RosterPlacement` is a narrowing of `RosterSlotKind` by
+			// exactly `dead_money`, so a Contract's placement IS a roster slot
+			// kind. It used to need one, and the cast outlived its reason.
+			rosterSlotKind: contract.placement,
 			won: true,
 			// **Both `null`, and that is the honest answer rather than a gap.**
 			// An Auction Contract has no imported term and no draft round: it

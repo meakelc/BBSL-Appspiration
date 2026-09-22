@@ -718,14 +718,23 @@ describe('contractsReducer — a Roster Trade (Story 7.7, FR-41)', () => {
 		expect(Object.keys(contracts.byPlayer)).toEqual([]);
 	});
 
-	it('refuses a placement outside the two legal ones — a moved win never lands on IR', () => {
-		const contracts = foldClosures(
-			close(1),
-			move(2, [transfer({ toPlacement: 'injury_reserve' })])
-		);
+	it('carries a won Contract onto IR, and refuses Dead Money — which is not a Slot', () => {
+		// **Injury Reserve is a placement now** (FR-44): `arrivalPlacementFor`
+		// passes an IR row through unchanged, so a Contract traded while on IR
+		// arrives on IR. It used to be dropped here, which left the fold saying
+		// the Contract was still where it started while the log said otherwise.
+		const onIr = foldClosures(close(1), move(2, [transfer({ toPlacement: 'injury_reserve' })]));
 
-		expect(contractForPlayer(contracts, 'p-1')?.teamId).toBe('t-1');
-		expect(contractForPlayer(contracts, 'p-1')?.placement).toBe('active_bench');
+		expect(contractForPlayer(onIr, 'p-1')?.teamId).toBe('t-2');
+		expect(contractForPlayer(onIr, 'p-1')?.placement).toBe('injury_reserve');
+
+		// Dead Money still is not: nobody holds it and it occupies nothing, so a
+		// payload naming it as a destination is malformed and the entry is
+		// skipped.
+		const dead = foldClosures(close(1), move(2, [transfer({ toPlacement: 'dead_money' })]));
+
+		expect(contractForPlayer(dead, 'p-1')?.teamId).toBe('t-1');
+		expect(contractForPlayer(dead, 'p-1')?.placement).toBe('active_bench');
 	});
 
 	it('survives a payload with no transfers array at all', () => {
@@ -859,13 +868,21 @@ describe('contractsReducer — a Roster Move (Story 7.11, FR-44)', () => {
 		expect(Object.keys(contracts.byPlayer)).toEqual([]);
 	});
 
-	it('refuses a placement outside the two legal ones — a moved win never lands on IR', () => {
-		const contracts = foldClosures(
-			close(1),
-			rearranged(2, [moveOf({ toPlacement: 'injury_reserve' })])
-		);
+	it('re-places a won Contract onto IR, and refuses Dead Money — which is not a Slot', () => {
+		// **This case is the ONLY thing that re-places a won Contract**, which
+		// has no `team_rosters` row for the transaction's `UPDATE` to touch. While
+		// the test here was `isSlotPlacement` a Commissioner's Move to Injury
+		// Reserve appended its event, updated nothing, and folded to a Contract
+		// still sitting in the Slot it left (FR-44).
+		const onIr = foldClosures(close(1), rearranged(2, [moveOf({ toPlacement: 'injury_reserve' })]));
 
-		expect(contractForPlayer(contracts, 'p-1')?.placement).toBe('active_bench');
+		expect(contractForPlayer(onIr, 'p-1')?.placement).toBe('injury_reserve');
+
+		// Dead Money still is not a Slot, so the entry is skipped and the
+		// Contract stays where the rest of the log says it is.
+		const dead = foldClosures(close(1), rearranged(2, [moveOf({ toPlacement: 'dead_money' })]));
+
+		expect(contractForPlayer(dead, 'p-1')?.placement).toBe('active_bench');
 	});
 
 	it('SKIPS a move whose money is not a whole number of dollars, rather than repairing it', () => {
@@ -890,7 +907,10 @@ describe('contractsReducer — a Roster Move (Story 7.11, FR-44)', () => {
 		// decide whether the app has ever observed a Contract in a Minor League
 		// Slot, so substituting `active_bench` for a missing origin would erase
 		// the observation that makes a demoted stash promotable again.
-		for (const bad of [undefined, null, 'injury_reserve', 'dead_money', '', 42]) {
+		// `injury_reserve` is NOT in this list: it is a placement a Move can
+		// genuinely have come from (FR-44), so a payload carrying it is readable
+		// rather than malformed. `dead_money` is not a Slot and stays.
+		for (const bad of [undefined, null, 'dead_money', '', 42]) {
 			const contracts = foldClosures(
 				close(1),
 				rearranged(2, [moveOf({ fromPlacement: bad })])

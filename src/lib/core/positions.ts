@@ -90,7 +90,7 @@ import {
 } from './rules/bidding.ts';
 import type { BidState } from './rules/bidding.ts';
 import { PLACE_BID_GATES } from './types.ts';
-import type { PlaceBidGate, PlaceBidGateResults, SlotPlacement } from './types.ts';
+import type { PlaceBidGate, PlaceBidGateResults, RosterPlacement } from './types.ts';
 
 /**
  * The five groups. `nomination_slot` is one of them rather than a footer,
@@ -388,7 +388,11 @@ export type WonCard = {
 	readonly winningAmountLabel: string;
 	/** What it charges against the Cap. `$0` on a minors placement (AD-23). */
 	readonly capHit: Money;
-	readonly placement: SlotPlacement;
+	/**
+	 * Where the Contract sits now — `RosterPlacement`, because a Roster Move
+	 * recorded after the close can have put it on Injury Reserve (FR-44).
+	 */
+	readonly placement: RosterPlacement;
 	/** The Auction's own persisted expiry — the surface renders it absolutely. */
 	readonly closedAt: string;
 	/**

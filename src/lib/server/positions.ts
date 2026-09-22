@@ -51,7 +51,7 @@ import {
 import { INITIAL_PHASE, phaseReducer } from '../core/projection/phase.ts';
 import { bidStateFor, teamMoneyStateFor } from '../core/rules/bidding.ts';
 import { formatTeamManager } from '../core/team-identity.ts';
-import type { SlotPlacement } from '../core/types.ts';
+import type { RosterPlacement } from '../core/types.ts';
 import { loadEventsViaClient } from './event-log.ts';
 import { loadTeamRoster } from './team-roster.ts';
 import type { ConnectionGateway, TransactionalClient } from '../shell/write.ts';
@@ -66,7 +66,7 @@ export type WonCardView = {
 	readonly playerName: string;
 	readonly metadata: string | null;
 	readonly winningAmountLabel: string;
-	readonly placement: SlotPlacement;
+	readonly placement: RosterPlacement;
 	readonly closedAt: string;
 	/** `null` until a closed Auction has a page — see `core/positions.ts`. */
 	readonly href: string | null;

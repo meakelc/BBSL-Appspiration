@@ -34,6 +34,7 @@ import {
 	rearrangeRefusalDetail
 } from '../src/lib/core/rules/roster-rearrange.ts';
 import type {
+	RearrangeMove,
 	RearrangingPlayer,
 	RosterRearrangeState
 } from '../src/lib/core/rules/roster-rearrange.ts';
@@ -115,30 +116,64 @@ describe('evaluateRearrange — the shape refusals', () => {
 		expect(rearrangeRefusalDetail(outcome.refusal, null)).toContain('Named p-nobody');
 	});
 
-	it('refuses Injury Reserve as a SOURCE — the rules core, not the screen', () => {
+	it('permits Injury Reserve as a SOURCE — activating a Contract the league cleared', () => {
+		// **Roster Count is what moves, not the charge.** An IR Contract already
+		// charges in full, so activating it takes nothing further off Cap Space
+		// and occupies one of the twelve (PRD §3 "Roster Count", §10 ex 23).
 		const outcome = evaluateRearrange(
 			STATE,
 			command([{ fantraxPlayerId: 'p-ir', toPlacement: 'active_bench' }])
 		);
 
-		expect(outcome.kind).toBe('refused');
-		if (outcome.kind !== 'refused') return;
-		expect(outcome.refusal.kind).toBe('unmovable_slot');
-		expect(outcome.gates).toBeNull();
-		const detail = rearrangeRefusalDetail(outcome.refusal, null);
-		expect(detail).toContain('Injury Reserve');
-		expect(detail).toContain("player's health");
+		expect(outcome.kind).toBe('permitted');
+		if (outcome.kind !== 'permitted') return;
+		expect(outcome.delta.before.rosterCount).toBe(2);
+		expect(outcome.delta.after.rosterCount).toBe(3);
+		expect(outcome.delta.before.injuryReserveOccupied).toBe(1);
+		expect(outcome.delta.after.injuryReserveOccupied).toBe(0);
+		expect(outcome.delta.after.capSpace).toBe(outcome.delta.before.capSpace);
+		// No charge moved, so no amber marker: the figure rows above already
+		// state the Roster Count and the occupancy on either side.
+		expect(moveAttention(outcome.delta.moves[0] as RearrangeMove)).toBeNull();
 	});
 
-	it('refuses Injury Reserve as a TARGET', () => {
+	it('permits Injury Reserve as a TARGET, and asks no eligibility for it', () => {
+		// `p-active-2` is in neither the pool nor the observation fold — the
+		// Contract §10 example 46 refuses a PROMOTION for. Injury Reserve asks
+		// neither, because the app is recording a designation the league already
+		// made rather than deciding a placement of its own.
 		const outcome = evaluateRearrange(
 			STATE,
-			command([{ fantraxPlayerId: 'p-active', toPlacement: 'injury_reserve' }])
+			command([{ fantraxPlayerId: 'p-active-2', toPlacement: 'injury_reserve' }])
 		);
 
-		expect(outcome.kind).toBe('refused');
-		if (outcome.kind !== 'refused') return;
-		expect(outcome.refusal.kind).toBe('unmovable_slot');
+		expect(outcome.kind).toBe('permitted');
+		if (outcome.kind !== 'permitted') return;
+		expect(outcome.delta.after.rosterCount).toBe(1);
+		expect(outcome.delta.after.injuryReserveOccupied).toBe(2);
+		// Both Slots charge in full, so Cap Space stands.
+		expect(outcome.delta.after.capSpace).toBe(outcome.delta.before.capSpace);
+	});
+
+	it('starts a stash charging when it is placed on Injury Reserve, and says which Slot', () => {
+		// **The sentence names the Slot the Contract ARRIVED in.** With two
+		// Slots a rising charge could only mean Active/Bench and the wording
+		// said so as a literal; Injury Reserve makes that literal a lie.
+		const outcome = evaluateRearrange(
+			STATE,
+			command([{ fantraxPlayerId: 'p-stash', toPlacement: 'injury_reserve' }])
+		);
+
+		expect(outcome.kind).toBe('permitted');
+		if (outcome.kind !== 'permitted') return;
+		const attention = moveAttention(outcome.delta.moves[0] as RearrangeMove);
+		expect(attention).toContain('starts charging');
+		expect(attention).toContain('an Injury Reserve Contract charges in full');
+		expect(attention).not.toContain('Active/Bench');
+		// The $3,000,000 a stash charged nothing for comes off Cap Space, and
+		// Roster Count does not rise — IR is outside the twelve.
+		expect(outcome.delta.after.rosterCount).toBe(outcome.delta.before.rosterCount);
+		expect(outcome.delta.after.injuryReserveOccupied).toBe(2);
 	});
 
 	it('refuses Dead Money as a source and as a target alike', () => {
@@ -154,10 +189,12 @@ describe('evaluateRearrange — the shape refusals', () => {
 		}
 	});
 
-	it('names exactly the two participating Slots, in one place', () => {
+	it('names exactly the three participating Slots, in one place', () => {
 		expect(isRearrangeableSlot('active_bench')).toBe(true);
 		expect(isRearrangeableSlot('minor_league')).toBe(true);
-		expect(isRearrangeableSlot('injury_reserve')).toBe(false);
+		expect(isRearrangeableSlot('injury_reserve')).toBe(true);
+		// The one exclusion left, and it is `movable`'s rather than FR-44's:
+		// Dead Money is a charge and not a Player.
 		expect(isRearrangeableSlot('dead_money')).toBe(false);
 	});
 });

@@ -399,14 +399,20 @@ describe('the roster listing — grouped by slot kind, IR outside the twelve', (
 		expect(entry?.playerName).toBe('Won Then Released');
 		expect(entry?.won).toBe(true);
 		expect(entry?.wonSentence).toBeNull();
-		// The same row on Injury Reserve — the other non-placement kind — has
-		// always behaved this way, and still does.
+		// **Injury Reserve moved to the other side of this line** (FR-44). It
+		// answered `null` beside Dead Money while no act could place a Contract
+		// there; a Roster Move can now, so a won row on IR is owed the same
+		// placement sentence every other Slot's is. Dead Money above is the
+		// only kind left with none, which is the whole of what `placementOf`
+		// narrows out.
 		const onIr = viewFor({
-			rosterRows: [row({ rosterSlotKind: 'injury_reserve', won: true })]
+			rosterRows: [
+				row({ rosterSlotKind: 'injury_reserve', capHit: parseMoney(4_000_000), won: true })
+			]
 		});
 		expect(
 			onIr.roster.find((group) => group.slotKind === 'injury_reserve')?.entries[0]?.wonSentence
-		).toBeNull();
+		).toBe('Placed in an Injury Reserve Slot at a $4.0M Cap Hit.');
 	});
 
 	it('states Dead Money as MONEY beside the figures, and omits it for a Team carrying none', () => {
