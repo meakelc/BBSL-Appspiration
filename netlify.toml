@@ -17,6 +17,26 @@
   command = "npm run build"
   publish = "build"
 
+  # Skip the build when nothing that reaches the deployed app changed.
+  #
+  # Every production deploy is metered, and much of this repo's history is
+  # planning and test work that cannot change what is served: `_bmad*`,
+  # `tests/`, `.github/`, `.claude/` and Markdown. Netlify skips the build
+  # when this command exits 0, which `git diff --quiet` does only when the
+  # diff is EMPTY outside those paths.
+  #
+  # Written as an EXCLUDE list, never an include list, so it fails toward
+  # building: a new top-level build input is picked up without anyone
+  # remembering to name it here. `src/` imports from `supabase/functions/`
+  # and `npm run build` runs `scripts/`, which is exactly the kind of input an
+  # include list would have silently missed.
+  #
+  # The ref guard forces a build when there is nothing to compare against —
+  # a first deploy, a cleared cache or a retry, where the two refs are equal
+  # and an empty diff would otherwise skip it. A git error (a shallow clone
+  # missing the cached commit) exits non-zero, which also builds.
+  ignore = "[ \"$CACHED_COMMIT_REF\" != \"$COMMIT_REF\" ] && git diff --quiet \"$CACHED_COMMIT_REF\" \"$COMMIT_REF\" -- . ':(exclude)_bmad' ':(exclude)_bmad-output' ':(exclude)tests' ':(exclude).github' ':(exclude).claude' ':(exclude)*.md'"
+
 [build.environment]
   NODE_VERSION = "24"
   # Load-bearing, not cleanup fodder: Netlify's own default NODE_VERSION
