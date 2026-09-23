@@ -102,11 +102,14 @@ const EXPECTED: Record<
 		// eligibility is an FR-35 input to an open Auction's cap arithmetic. A
 		// rostered Contract has no open Auction, so the surface lists the
 		// rostered half here and `refuseEligibilityChange` accepts it.
+		// Story 7.13 adds `close-reversal`: a registered permission with no menu
+		// row (`listed: false`) — the control lives on the won Contract's row.
 		commissionerOnly: [
 			'minor-league-eligibility',
 			'roster-move',
 			'roster-trade',
 			'roster-drop',
+			'close-reversal',
 			'divergence'
 		]
 	},
@@ -117,6 +120,7 @@ const EXPECTED: Record<
 			'roster-move',
 			'roster-trade',
 			'roster-drop',
+			'close-reversal',
 			'assignment-monitoring',
 			'export-gate',
 			'divergence'

@@ -94,10 +94,11 @@ function contractsFor(...playerIds: readonly string[]): AuctionContracts {
 			capHit: parseMoney(5_000_000),
 			placement: 'active_bench',
 			contractYears: null,
-			closedAt: '2026-09-10T00:00:00.000Z'
+			closedAt: '2026-09-10T00:00:00.000Z',
+			closeSeq: '1'
 		};
 	}
-	return { byPlayer };
+	return { byPlayer, reversed: {} };
 }
 
 /**

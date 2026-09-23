@@ -246,6 +246,12 @@ const SECTION_10_EXAMPLES: Array<[file: string, example: string]> = [
 	[
 		'example-46-the-promotion-the-app-must-refuse-and-the-one-it-must-allow.test.ts',
 		'46 — The promotion the app must refuse, and the one it must allow'
+	],
+	// Story 7.13 (FR-32, AD-33): the reversal, what it frees, and everything
+	// it leaves standing — and the IR Move that only fits after it.
+	[
+		'example-58-a-close-reversed-and-what-it-leaves-alone.test.ts',
+		'58 — A Close reversed, and what it leaves alone'
 	]
 ];
 
@@ -595,11 +601,13 @@ describe('AC2 — the Nomination Slot is released by the fold, never by a stored
 		// and a termination end an Auction alike, and both return the Player to
 		// the pool.
 		['OPEN_NOMINATIONS_TABLE', ['delete from', 'delete from', 'insert into']],
-		// The Nomination Slot: one INSERT, and exactly ONE delete, because only
-		// a win frees a Slot (FR-9 amended). A second delete here would be a
-		// second way to free one, and the termination path is precisely the one
-		// that must not have it.
-		['NOMINATION_SLOTS_TABLE', ['delete from', 'insert into']]
+		// The Nomination Slot: exactly ONE delete, because only a win frees a
+		// Slot (FR-9 amended). A second delete here would be a second way to
+		// free one, and the termination path is precisely the one that must not
+		// have it. TWO inserts since Story 7.13: a nomination claims a Slot, and
+		// a reversed Close hands back the Slot it released — only when its
+		// record says so (AD-32, AD-33).
+		['NOMINATION_SLOTS_TABLE', ['delete from', 'insert into', 'insert into']]
 	])('issues only INSERTs and DELETEs against %s, and never a SELECT', (table, expected) => {
 		// "Nothing reads the claim tables to answer a question" (Story 2.2's
 		// Always, carried into 2.3): they are write-side constraints, and the
@@ -621,14 +629,17 @@ describe('AC2 — the Nomination Slot is released by the fold, never by a stored
 		// a close frees, because the League Clock ran out with that Player still
 		// Awaiting an Opening Bid. It frees no Nomination Slot — since FR-8 was
 		// amended only a win does that, and a termination has no winner. There
-		// is still no fourth case, and in particular no timer of any kind.
+		// is no timer of any kind. Story 7.13 added the fourth: a reversed Close
+		// RE-HOLDS the Slot it released, from the reversal's own record — it
+		// releases nothing, so the two releasing events are still the only two.
 		const nominations = code('src/lib/core/projection/nominations.ts');
 		const cases = [...nominations.matchAll(/case\s+([A-Z_]+):/g)].map((match) => match[1]);
 
 		expect(cases).toEqual([
 			'NOMINATION_PLACED_EVENT',
 			'AUCTION_TERMINATED_EVENT',
-			'AUCTION_CLOSED_EVENT'
+			'AUCTION_CLOSED_EVENT',
+			'AUCTION_CLOSE_REVERSED_EVENT'
 		]);
 		// No timer, no elapsed time, no wall clock: the trigger is the event.
 		expect(nominations).not.toMatch(/Date\.now|new Date\(|setTimeout|setInterval/);

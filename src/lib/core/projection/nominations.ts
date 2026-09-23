@@ -138,6 +138,21 @@ export const AUCTION_CLOSED_EVENT = 'AuctionClosed';
  */
 export const AUCTION_TERMINATED_EVENT = 'AuctionTerminated';
 
+/**
+ * The event type that reverses one Auction Close (Story 7.13, FR-32, AD-33).
+ *
+ * **Defined here and re-exported from `contracts.ts`**, whose payload type and
+ * reducer case are the event's main meaning. It is defined in THIS module for
+ * `AUCTION_CLOSED_EVENT`'s reason: `contracts.ts` already imports this file,
+ * so the one literal lives on the side of that edge both folds can reach
+ * without an import cycle.
+ *
+ * This fold's half is the Slot: a close that released the winning Team's
+ * Nomination Slot hands it back — only when the reversal's record says so,
+ * and only when the Team holds no Slot now.
+ */
+export const AUCTION_CLOSE_REVERSED_EVENT = 'AuctionCloseReversed';
+
 /** One open nomination, as every refusal sentence needs to name it. */
 export type OpenNomination = {
 	/** The Player nominated. */
@@ -463,6 +478,55 @@ export function readTerminatedPlayerId(payload: unknown): string | null {
 }
 
 /**
+ * The Slot an `AuctionCloseReversed` re-holds, or `null` (Story 7.13).
+ *
+ * `null` unless the payload says `slotReheld: true` AND carries a readable
+ * `reheldNomination` — an explicit record, never a default. The nomination is
+ * rebuilt as a Slot-holding `OpenNomination` exactly as `readPayload` would
+ * have folded it, with the names falling back to their ids for that reader's
+ * reason; `seq` is that `NominationPlaced`'s own log position.
+ *
+ * **Exported because the re-hold has two halves that must agree** —
+ * `readClosedPlayerId`'s reason. This fold re-holds the Slot;
+ * `server/nomination.ts`'s `reholdNominationSlot` re-inserts the claim row.
+ * Both read the event through this one function, so the table and the fold
+ * cannot come to disagree about which reversals re-held a Slot.
+ */
+export function readReheldSlot(
+	payload: unknown
+): { readonly nomination: OpenNomination; readonly seq: string } | null {
+	if (typeof payload !== 'object' || payload === null) return null;
+	const record = payload as Record<string, unknown>;
+	if (record['slotReheld'] !== true) return null;
+	const nomination = record['reheldNomination'];
+	if (typeof nomination !== 'object' || nomination === null) return null;
+	const fields = nomination as Record<string, unknown>;
+	const seq = fields['seq'];
+	const fantraxPlayerId = fields['fantraxPlayerId'];
+	const teamId = fields['teamId'];
+	const occurredAt = fields['occurredAt'];
+	if (typeof seq !== 'string' || !/^(?:0|[1-9][0-9]*)$/.test(seq)) return null;
+	if (typeof fantraxPlayerId !== 'string' || fantraxPlayerId === '') return null;
+	if (typeof teamId !== 'string' || teamId === '') return null;
+	if (typeof occurredAt !== 'string' || occurredAt === '') return null;
+	const playerName = fields['playerName'];
+	const teamName = fields['teamName'];
+	const managerId = fields['managerId'];
+	return {
+		seq,
+		nomination: {
+			fantraxPlayerId,
+			playerName: typeof playerName === 'string' && playerName !== '' ? playerName : fantraxPlayerId,
+			teamId,
+			teamName: typeof teamName === 'string' && teamName !== '' ? teamName : teamId,
+			managerId: typeof managerId === 'string' && managerId !== '' ? managerId : null,
+			holdsSlot: true,
+			occurredAt
+		}
+	};
+}
+
+/**
  * Every entry of a record except the named key.
  *
  * Built through `Object.entries`/`Object.fromEntries` rather than by
@@ -610,6 +674,27 @@ export const nominationsReducer: Reducer<OpenNominations> = (state, event) => {
 			// replay converge.
 			const afterSeat = releaseSeat(state, closed.fantraxPlayerId) ?? state;
 			return releaseSlot(afterSeat, closed.teamId) ?? afterSeat;
+		}
+		case AUCTION_CLOSE_REVERSED_EVENT: {
+			// **The Slot a reversed close released, re-held from the RECORD**
+			// (Story 7.13, AD-32, AD-33). The decision was taken once, in the
+			// shell, and written onto the payload as `slotReheld` plus the
+			// nomination that held the Slot — because once a close has released
+			// it, this fold no longer knows which nomination that was. Replay
+			// reads the record; it never re-derives it.
+			//
+			// `byPlayer` is untouched: the reversal does not reopen the Auction
+			// and puts nobody back on the board (AD-33). And a Team that holds a
+			// Slot now keeps the one it holds — a Nomination made with the
+			// released Slot stands — which is also what makes a second fold of
+			// this event a no-op (AD-5).
+			const reheld = readReheldSlot(event.payload)?.nomination ?? null;
+			if (reheld === null) return state;
+			if (hasOwn(state.byTeam, reheld.teamId)) return state;
+			return {
+				byPlayer: state.byPlayer,
+				byTeam: { ...state.byTeam, [reheld.teamId]: reheld }
+			};
 		}
 		default:
 			return state;

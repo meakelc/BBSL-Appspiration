@@ -112,7 +112,8 @@ describe('contractsReducer — what a close records', () => {
 			capHit: 0,
 			placement: 'minor_league',
 			contractYears: null,
-			closedAt: '2026-08-27T09:00:00.000Z'
+			closedAt: '2026-08-27T09:00:00.000Z',
+			closeSeq: '1'
 		});
 	});
 
@@ -585,7 +586,8 @@ describe('contractsReducer — a Roster Trade (Story 7.7, FR-41)', () => {
 			capHit: 18_000_000,
 			placement: 'active_bench',
 			contractYears: null,
-			closedAt: '2026-08-27T09:00:00.000Z'
+			closedAt: '2026-08-27T09:00:00.000Z',
+			closeSeq: '1'
 		});
 	});
 

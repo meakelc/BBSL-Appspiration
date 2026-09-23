@@ -557,3 +557,31 @@ describe('mentionSuffixFor — the assignment deadline’s two markers', () => {
 		}
 	});
 });
+
+// --- Story 7.13: a reversed Close ------------------------------------------
+
+describe('mentionSuffixFor — AuctionCloseReversed (Story 7.13)', () => {
+	const reversal = (teamId = SUNS) =>
+		event('AuctionCloseReversed', {
+			closeSeq: '7',
+			fantraxPlayerId: PLAYER,
+			playerName: 'Anthony Davis',
+			teamId,
+			teamName: DIRECTORY.teamNames.get(teamId),
+			reason: 'Illegal IR designation.'
+		});
+
+	it('mentions the Team whose win was reversed, both Managers on one line', () => {
+		expect(mentionSuffixFor(reversal(), [KAI_ID, NOOR_ID], DIRECTORY, ORIGIN)).toBe(
+			`<@${KAI_ID}> <@${NOOR_ID}> — Suns — Kai & Noor won an Auction whose Close the ` +
+				`Commissioner has reversed. The Contract has left your roster. ${LINK}`
+		);
+	});
+
+	it('drops an addressee from any other Team — targeted exactly as a close is', () => {
+		expect(mentionSuffixFor(reversal(), [ARI_ID], DIRECTORY, ORIGIN)).toBe('');
+		const line = mentionSuffixFor(reversal(), [KAI_ID, ARI_ID], DIRECTORY, ORIGIN);
+		expect(line).not.toContain(`<@${ARI_ID}>`);
+		expect(line).toContain(`<@${KAI_ID}>`);
+	});
+});

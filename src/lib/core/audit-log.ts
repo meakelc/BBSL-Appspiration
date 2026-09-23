@@ -64,6 +64,7 @@ import {
 import { CONTENTION_DRAWN_EVENT } from './projection/draws.ts';
 import { AUCTION_OPENED_EVENT, CONTRACT_ASSIGNMENT_OPENED_EVENT } from './projection/phase.ts';
 import {
+	AUCTION_CLOSE_REVERSED_EVENT,
 	CONTRACT_LENGTH_ASSIGNED_EVENT,
 	DROP_RECORDED_EVENT,
 	ROSTER_REARRANGED_EVENT,
@@ -289,14 +290,46 @@ export type AuditReferences = {
 	readonly teamNames: ReadonlyMap<string, string>;
 	readonly playerNames: ReadonlyMap<string, string>;
 	readonly managerNames: ReadonlyMap<string, string>;
+	/**
+	 * Every reversed close: the `AuctionClosed`'s `seq` -> the
+	 * `AuctionCloseReversed` that names it (Story 7.13, FR-33). Built by the
+	 * loader from the SAME events array (`reversedClosesIn`), so a reversed
+	 * close's own row can say **Reversed** — the close stays in the Log,
+	 * unedited (AD-4), and the reader is told it did not stand.
+	 */
+	readonly reversedCloses: ReadonlyMap<string, string>;
 };
 
 /** The references a first pass runs with, to learn which ids to resolve. */
 export const NO_REFERENCES: AuditReferences = Object.freeze({
 	teamNames: new Map<string, string>(),
 	playerNames: new Map<string, string>(),
-	managerNames: new Map<string, string>()
+	managerNames: new Map<string, string>(),
+	reversedCloses: new Map<string, string>()
 });
+
+/**
+ * The reversed closes in a log: close `seq` -> reversal `seq` (Story 7.13).
+ *
+ * Pure, and read off the payload's `closeSeq` alone. The FIRST reversal that
+ * names a close is the one that stands, exactly as `contractsReducer` keeps
+ * it, so the Log and the fold agree about which event reversed what.
+ */
+export function reversedClosesIn(events: readonly AppendedEvent[]): ReadonlyMap<string, string> {
+	const ordered = [...events].sort((a, b) => {
+		const left = BigInt(a.seq);
+		const right = BigInt(b.seq);
+		return left < right ? -1 : left > right ? 1 : 0;
+	});
+	const reversed = new Map<string, string>();
+	for (const event of ordered) {
+		if (event.type !== AUCTION_CLOSE_REVERSED_EVENT) continue;
+		const closeSeq = text(asPayload(event.payload), 'closeSeq');
+		if (closeSeq === null || reversed.has(closeSeq)) continue;
+		reversed.set(closeSeq, event.seq);
+	}
+	return reversed;
+}
 
 /**
  * A Team, named: the payload's own name where it carries one, the resolved
@@ -1091,6 +1124,95 @@ function renderRosterMove(payload: Payload, refs: AuditReferences): AuditRender 
 }
 
 /**
+ * `AuctionCloseReversed` — `projection/contracts.ts`'s
+ * `AuctionCloseReversedPayload` (Story 7.13, FR-32, FR-33).
+ *
+ * A distinct **Close Reversal** entry: the reason verbatim and first, then
+ * the close it names by `seq`, the Contract as it stood, whether a Nomination
+ * Slot was re-held, every Bid Cancellation that STANDS, and the Team's
+ * figures before and after. The cancelled and restored Teams are parties, so
+ * a Team whose lead the reversed close restored finds this row under its own
+ * filter — and is told it still leads.
+ */
+function renderCloseReversal(payload: Payload, refs: AuditReferences): AuditRender {
+	const teamId = text(payload, 'teamId');
+	const fantraxPlayerId = text(payload, 'fantraxPlayerId');
+	const team = teamNamed(refs, teamId, text(payload, 'teamName'));
+	const player = playerNamed(refs, fantraxPlayerId, text(payload, 'playerName'));
+	const reheld = flag(payload, 'slotReheld');
+	const reheldNomination = asPayload(payload['reheldNomination']);
+	const cancellations = payloadList(payload, 'standingCancellations');
+	const solvencyBefore = asPayload(payload['solvencyBefore']);
+	const solvencyAfter = asPayload(payload['solvencyAfter']);
+	const solvencyPair = (label: string, key: string): AuditDetail | null => {
+		const left = amount(solvencyBefore, key);
+		const right = amount(solvencyAfter, key);
+		if (left === null && right === null) return null;
+		return { label: `${team} — ${label}`, value: `${left ?? '—'}${TO}${right ?? '—'}` };
+	};
+	const standing =
+		cancellations.length === 0
+			? EMPTY_LIST
+			: cancellations
+					.map((cancellation) => {
+						const cancelledTeam = teamNamed(
+							refs,
+							text(cancellation, 'teamId'),
+							text(cancellation, 'teamName')
+						);
+						const on = playerNamed(
+							refs,
+							text(cancellation, 'fantraxPlayerId'),
+							text(cancellation, 'playerName')
+						);
+						const restored = text(cancellation, 'restoredTeamName');
+						return `${cancelledTeam} on ${on}${restored === null ? '' : ` (${restored} still leads)`}`;
+					})
+					.join(LIST_SEPARATOR);
+	const slot =
+		reheld === null
+			? null
+			: reheld
+				? `Re-held — ${playerNamed(
+						refs,
+						text(reheldNomination, 'fantraxPlayerId'),
+						text(reheldNomination, 'playerName')
+					)}`
+				: 'Not re-held';
+	return {
+		headline: `The Close that gave ${player} to ${team} was reversed.`,
+		details: [
+			...rows(
+				row('Reason', text(payload, 'reason')),
+				row('Reversed close', text(payload, 'closeSeq')),
+				row('Winning amount', amount(payload, 'winningAmount')),
+				row('Cap Hit removed', amount(payload, 'capHit')),
+				row('Removed from', wordToken(SLOT_KIND_WORDS, payload['placement'])),
+				row('Auction closed at', text(payload, 'closedAt')),
+				row('Nomination Slot', slot),
+				row('Bid Cancellations that stand', standing)
+			),
+			...figureRows(team, asPayload(payload['teamBefore']), asPayload(payload['teamAfter'])),
+			...rows(
+				solvencyPair('Available Cap Space', 'availableCapSpace'),
+				solvencyPair('Maximum Bid', 'maximumBid')
+			)
+		],
+		teams: distinct([
+			teamId,
+			...cancellations.flatMap((cancellation) => [
+				text(cancellation, 'teamId'),
+				text(cancellation, 'restoredTeamId')
+			])
+		]),
+		players: distinct([
+			fantraxPlayerId,
+			...cancellations.map((cancellation) => text(cancellation, 'fantraxPlayerId'))
+		])
+	};
+}
+
+/**
  * The registry: a LOOKUP from `event_type` to a renderer, never a union.
  *
  * An absent key is not an error — `renderAuditEvent` falls back to the
@@ -1149,6 +1271,9 @@ const RENDERERS: Readonly<Record<string, AuditEntry>> = Object.freeze({
 	// 7.11's Roster Move is the record FR-44 requires, and the Audit Log is the
 	// only surface the act appears on.
 	[ROSTER_REARRANGED_EVENT]: { label: 'Roster Move recorded', render: renderRosterMove },
+	// Story 7.13: the distinct entry FR-32 requires. `RENDERERS` is OPEN, so
+	// `tests/core/audit-log.test.ts` is the only proof this key exists.
+	[AUCTION_CLOSE_REVERSED_EVENT]: { label: 'Close Reversal', render: renderCloseReversal },
 	[MINOR_LEAGUE_ELIGIBILITY_SET]: {
 		label: 'Minor League Eligibility set',
 		render: renderEligibilitySet
@@ -1410,7 +1535,22 @@ export function renderAuditEvent(event: AppendedEvent, refs: AuditReferences): A
 	const entry = RENDERERS[event.type];
 	const base =
 		entry === undefined ? renderUnknown(event.type, event.payload) : entry.render(payload, refs);
-	const merged = mergeOverride(payload, refs, base);
+	const overridden = mergeOverride(payload, refs, base);
+	// **A reversed close says so on its own row** (Story 7.13, AD-33). The
+	// close is never edited or removed (AD-4); the reader is told, where they
+	// read it, that it did not stand and which entry reversed it.
+	const reversalSeq =
+		event.type === AUCTION_CLOSED_EVENT ? (refs.reversedCloses.get(event.seq) ?? null) : null;
+	const merged: AuditRender =
+		reversalSeq === null
+			? overridden
+			: {
+					...overridden,
+					details: [
+						...overridden.details,
+						{ label: 'Outcome', value: `Reversed — see entry ${reversalSeq}` }
+					]
+				};
 	return {
 		seq: event.seq,
 		occurredAt: event.occurredAt,

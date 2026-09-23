@@ -1549,3 +1549,36 @@ describe('auctionAtClose — the history a settled Auction left behind', () => {
 		expect(auctionAtClose(log, 'p-1')).toBeNull();
 	});
 });
+
+describe('auctionAtClose — cut at a NAMED close (Story 7.13)', () => {
+	const closeOf = (seq: number) =>
+		event(seq, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1' }));
+	// Closed, reversed, re-nominated and closed again. The reversal is folded by
+	// no reducer here — the Auction was already gone — so the second round's
+	// Bids start a fresh Auction after the first close.
+	const log = [
+		bid(1, 6_000_000, { teamId: 't-1' }),
+		bid(2, 8_000_000, { teamId: 't-2' }),
+		closeOf(3),
+		event(4, 'AuctionCloseReversed', { closeSeq: '3', fantraxPlayerId: 'p-1' }),
+		bid(5, 2_000_000, { teamId: 't-3' }),
+		bid(6, 3_000_000, { teamId: 't-4' }),
+		closeOf(7)
+	];
+
+	it('returns only the second round’s Bids when the second close is named', () => {
+		const second = auctionAtClose(log, 'p-1', '7');
+		expect(second?.bids.map((entry) => entry.seq)).toEqual(['5', '6']);
+		expect(second?.leadingBid?.teamId).toBe('t-4');
+	});
+
+	it('returns the first round when the first close is named, and by default', () => {
+		expect(auctionAtClose(log, 'p-1', '3')?.bids.map((entry) => entry.seq)).toEqual(['1', '2']);
+		expect(auctionAtClose(log, 'p-1')?.bids.map((entry) => entry.seq)).toEqual(['1', '2']);
+	});
+
+	it('returns null for a named seq that is not a close of this Player', () => {
+		expect(auctionAtClose(log, 'p-1', '5')).toBeNull();
+		expect(auctionAtClose(log, 'p-2', '7')).toBeNull();
+	});
+});

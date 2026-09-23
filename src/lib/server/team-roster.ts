@@ -209,6 +209,8 @@ function importedRowsFrom(rows: readonly Record<string, unknown>[]): TeamRosterE
 		capHit: parseMoney(row['cap_hit']),
 		rosterSlotKind: String(row['roster_slot_kind']) as RosterSlotKind,
 		won: false,
+		// No close produced an imported row (Story 7.13).
+		closeSeq: null,
 		// FR-43's exception, carried rather than re-read (Story 7.8). Both are
 		// nullable on the table: `rookie_scale_round` is `null` for an ordinary
 		// Contract and for every row imported before the designation was
@@ -253,6 +255,8 @@ function detailFor(
 			// kind. It used to need one, and the cast outlived its reason.
 			rosterSlotKind: contract.placement,
 			won: true,
+			// The close that produced this Contract — what a reversal names.
+			closeSeq: contract.closeSeq,
 			// **Both `null`, and that is the honest answer rather than a gap.**
 			// An Auction Contract has no imported term and no draft round: it
 			// was won in this auction, it is not in Fantrax until the FR-30/31

@@ -449,9 +449,10 @@ export function auctionForPlayer(auctions: OpenAuctions, fantraxPlayerId: string
  * it closed — nothing assembled from leftovers and nothing invented, which is
  * what the page's checkability claim actually requires.
  *
- * **The FIRST close for the Player is the cut**, which is `contractsReducer`'s
- * own rule for which close produced the contract — so the history this returns
- * and the winner printed above it can never describe two different Auctions.
+ * **The named close is the cut** — the `closeSeq` of the Contract the caller
+ * renders (Story 7.13) — so the history this returns and the winner printed
+ * above it can never describe two different Auctions. Without one, the FIRST
+ * close for the Player is the cut.
  * Everything before that point is folded in full, so a Player whose earlier
  * nomination was terminated and who was nominated again contributes no Bids
  * from the abandoned round: this reducer's own `AuctionTerminated` case
@@ -469,13 +470,24 @@ export function auctionForPlayer(auctions: OpenAuctions, fantraxPlayerId: string
  */
 export function auctionAtClose(
 	events: readonly AppendedEvent[],
-	fantraxPlayerId: string
+	fantraxPlayerId: string,
+	atCloseSeq: string | null = null
 ): Auction | null {
+	// **The close to cut at is NAMED when the caller knows it** (Story 7.13).
+	// A Player can now be won, reversed and won again, so "the first close"
+	// is no longer necessarily the close whose Contract the page shows above
+	// the history. The caller passes the `closeSeq` of the Contract it is
+	// rendering — live or reversed — and the history is cut at exactly that
+	// close. With no `closeSeq`, the first close is the cut, as before.
 	let closeSeq: bigint | null = null;
 	for (const event of events) {
 		if (event.type !== AUCTION_CLOSED_EVENT) continue;
 		if (readClosedPlayerId(event.payload) !== fantraxPlayerId) continue;
 		const seq = BigInt(event.seq);
+		if (atCloseSeq !== null) {
+			if (event.seq === atCloseSeq) closeSeq = seq;
+			continue;
+		}
 		if (closeSeq === null || seq < closeSeq) closeSeq = seq;
 	}
 	if (closeSeq === null) return null;

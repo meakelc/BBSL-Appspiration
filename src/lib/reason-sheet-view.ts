@@ -48,6 +48,8 @@ import type {
 	RearrangeMove,
 	RosterRearrangeDelta
 } from './core/rules/roster-rearrange.ts';
+import { closeReversalAttention } from './core/rules/close-reversal.ts';
+import type { CloseReversalDecision, SlotPair } from './core/rules/close-reversal.ts';
 
 /**
  * One before→after row, as the caller states it.
@@ -545,3 +547,99 @@ export { rearrangeActSentence } from './core/rules/roster-rearrange.ts';
 
 /** The commit control's own words. Never "Confirm" — it names the act. */
 export const ROSTER_MOVE_COMMIT_LABEL = 'Record the Roster Move';
+
+// --- Story 7.13: reversing an Auction Close --------------------------------
+
+/**
+ * One Team's Nomination Slot, in words — `Open`, or held and on whom.
+ *
+ * `teamFigureRows` has no Slot row, because no roster act moves one; a
+ * reversal can, so the row is built here.
+ */
+function slotWords(held: SlotPair['before']): string {
+	return held === null ? 'Open' : `Held — ${held.playerName}`;
+}
+
+/**
+ * Every row a Close reversal's sheet shows, in reading order (Story 7.13,
+ * FR-32, UX: the sheet titled *Reverse this Close*).
+ *
+ * **Before → after for Cap Space, Available Cap Space, Maximum Bid, Roster
+ * Count and Nomination Slot**, then one row per standing Bid Cancellation
+ * stated as NOT undone. `teamFigureRows` carries none of Available Cap Space,
+ * Maximum Bid or the Slot, so they are built here — every figure is the pure
+ * core's (`figuresFor`, `teamSolvencyFiguresFor`), and this formats nothing
+ * but through `describeActAmount`.
+ *
+ * The consequence notes ride the rows they are about, from
+ * `closeReversalAttention`: the Player returning to the pool on Cap Space;
+ * the IR Roster Move and the Contract Assignment warning on Roster Count; the
+ * Slot's reason on the Slot; and "nothing else is undone" on the closing row
+ * that lists what stands.
+ */
+export function closeReversalReasonRows(decision: CloseReversalDecision): readonly ReasonSheetRow[] {
+	const notes = closeReversalAttention(decision);
+	const team = decision.teamAfter.teamName;
+	const label = (figure: string): string => `${team} · ${figure}`;
+	const rosterNotes = [notes.irMove, notes.contractAssignment].filter(
+		(note): note is string => note !== null
+	);
+	return [
+		{
+			label: label('Cap Space'),
+			before: describeActAmount(decision.teamBefore.capSpace),
+			after: describeActAmount(decision.teamAfter.capSpace),
+			attention: notes.pool
+		},
+		{
+			label: label('Available Cap Space'),
+			before: describeActAmount(decision.solvencyBefore.availableCapSpace),
+			after: describeActAmount(decision.solvencyAfter.availableCapSpace),
+			attention: null
+		},
+		{
+			label: label('Maximum Bid'),
+			before: describeActAmount(decision.solvencyBefore.maximumBid),
+			after: describeActAmount(decision.solvencyAfter.maximumBid),
+			attention: null
+		},
+		{
+			label: label('Roster Count'),
+			before: String(decision.teamBefore.rosterCount),
+			after: String(decision.teamAfter.rosterCount),
+			attention: rosterNotes.length === 0 ? null : rosterNotes.join(' ')
+		},
+		{
+			label: label(SLOT_LABELS.injury_reserve),
+			before: `${String(decision.teamBefore.injuryReserveOccupied)} of ${String(INJURY_RESERVE_SLOTS)}`,
+			after: `${String(decision.teamAfter.injuryReserveOccupied)} of ${String(INJURY_RESERVE_SLOTS)}`,
+			attention: null
+		},
+		{
+			label: label('Nomination Slot'),
+			before: slotWords(decision.slot.before),
+			after: slotWords(decision.slot.after),
+			attention: notes.slot
+		},
+		...decision.standingCancellations.map((cancellation) => ({
+			label: `Bid Cancellation · ${cancellation.playerName}`,
+			before: `${cancellation.teamName}'s ${describeActAmount(cancellation.amount)} Bid cancelled${
+				cancellation.restoredTeamName === null ? '' : `; ${cancellation.restoredTeamName} leads`
+			}`,
+			after: 'Stands — not undone',
+			attention: null
+		})),
+		{
+			label: 'Bid Cancellations and the League Clock',
+			before: `${String(decision.standingCancellations.length)} cancelled by this Close`,
+			after: 'Unchanged',
+			attention: notes.nothingElse
+		}
+	];
+}
+
+/** The act, as one finished sentence — the pure core's, re-exported. */
+export { closeReversalActSentence } from './core/rules/close-reversal.ts';
+
+/** The commit control's own words. Never "Confirm" — it names the act. */
+export const CLOSE_REVERSAL_COMMIT_LABEL = 'Reverse this Close';

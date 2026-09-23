@@ -157,6 +157,12 @@ const CATALOG: Readonly<Record<LeaguePhase, readonly Destination[]>> = Object.fr
 		destination('roster-trade', 'Trade', '/roster-trade', true),
 		// Story 7.8: recording a release the Team made in Fantrax.
 		destination('roster-drop', 'Drop', '/roster-drop', true),
+		// Story 7.13: reversing a Close that should not have stood. NOT listed
+		// — the control lives in place, on the won Contract's row on the Team
+		// page — but registered, or `requireLiveDestination` refuses the
+		// route. Absent from Archived, so `requireLiveDestination` refuses it
+		// there (403) before the route's `requireOverridablePhase` is reached.
+		destination('close-reversal', 'Reverse a Close', '/close-reversal', true, false),
 		// Story 7.9: the surface that says an act above is NEEDED. Live in the
 		// same two phases the acts it proposes into are live in, and absent from
 		// Archived for the same reason they are — `requireOverridablePhase`
@@ -185,6 +191,10 @@ const CATALOG: Readonly<Record<LeaguePhase, readonly Destination[]>> = Object.fr
 		destination('roster-move', 'Roster Move', '/roster-move', true),
 		destination('roster-trade', 'Trade', '/roster-trade', true),
 		destination('roster-drop', 'Drop', '/roster-drop', true),
+		// Story 7.13, on the same terms as the Auction list above. FR-32
+		// permits a reversal in Contract Assignment; the sheet warns what it
+		// costs there.
+		destination('close-reversal', 'Reverse a Close', '/close-reversal', true, false),
 		destination('assignment-monitoring', 'Assignment monitoring', '/assignment-monitoring', true),
 		destination('export-gate', 'Export gate', '/export-gate', true),
 		// Story 7.9, on the same terms as the Auction list above.

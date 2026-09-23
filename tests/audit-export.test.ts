@@ -31,7 +31,8 @@ const REFERENCES: AuditReferences = {
 		[TEAM_B, 'Celtics']
 	]),
 	playerNames: new Map([[PLAYER_ONE, 'Jalen Green']]),
-	managerNames: new Map([[MANAGER_A, 'Meakel']])
+	managerNames: new Map([[MANAGER_A, 'Meakel']]),
+	reversedCloses: new Map()
 };
 
 function event(seq: string, type: string, payload: unknown, teamId: string): AppendedEvent {

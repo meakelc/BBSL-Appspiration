@@ -387,3 +387,56 @@ describe('loadBoard — the closed cards, off the two folds that survive a close
 		expect(board.cards[0]?.viewerState).toBe('not_involved');
 	});
 });
+
+describe('loadBoard — a reversed Close (Story 7.13)', () => {
+	it('labels the card Reversed in both widths and states the actor and the reason', async () => {
+		const close = row(
+			AUCTION_CLOSED_EVENT,
+			closedPayload({ fantraxPlayerId: 'p-rev', teamId: 't-won', teamName: 'Rockets' }),
+			'2026-09-02T00:00:00.000Z'
+		);
+		const reversal = {
+			...row(
+				'AuctionCloseReversed',
+				{
+					closeSeq: close.seq,
+					fantraxPlayerId: 'p-rev',
+					teamId: 't-won',
+					reason: 'Won with an illegal IR designation.'
+				},
+				'2026-09-03T00:00:00.000Z'
+			),
+			// The ENVELOPE names the acting Commissioner, not the payload.
+			manager_id: 'm-comm',
+			team_id: 't-comm'
+		};
+		const { gateway } = fakeGateway({
+			events: [close, reversal],
+			managers: [{ id: 'm-comm', team_id: 't-comm', display_name: 'Dana' }]
+		});
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const board = await loadBoard(gateway as any, 't-won');
+		const card = board.cards.find((one) => one.fantraxPlayerId === 'p-rev');
+		expect(card?.reversed).toBe(true);
+		expect(card?.auctionStateLabel).toBe('Reversed');
+		expect(card?.auctionStateLabelNarrow).toBe('Reversed');
+		// The Team that won it is still named, and it is not theirs any more.
+		expect(card?.wonBy).toBe('Rockets');
+		expect(card?.viewerState).toBe('not_involved');
+		expect(card?.reversalStatement).toBe(
+			'Reversed by the Commissioner, Dana. The Player is back in the pool. Reason: Won with an ' +
+				'illegal IR designation.'
+		);
+	});
+
+	it('carries no reversal statement on a close that stands', async () => {
+		const { gateway } = fakeGateway({
+			events: [row(AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-kept' }), '2026-09-02T00:00:00.000Z')]
+		});
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const board = await loadBoard(gateway as any, null);
+		expect(board.cards[0]?.reversed).toBe(false);
+		expect(board.cards[0]?.reversalStatement).toBeNull();
+		expect(board.cards[0]?.auctionStateLabel).toBe('Closed');
+	});
+});

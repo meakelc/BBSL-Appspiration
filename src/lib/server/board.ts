@@ -40,6 +40,7 @@ import {
 	VIEWER_STATE_ICONS,
 	VIEWER_STATE_LABELS,
 	boardCardsFor,
+	boardReversedStatement,
 	metadataLine,
 	priceLabel
 } from '../core/board.ts';
@@ -54,6 +55,7 @@ import { INITIAL_AUCTIONS, auctionsReducer } from '../core/projection/auctions.t
 import { INITIAL_CONTRACTS, contractsReducer } from '../core/projection/contracts.ts';
 import { INITIAL_DRAWS, drawsReducer } from '../core/projection/draws.ts';
 import { INITIAL_NOMINATIONS, nominationsReducer } from '../core/projection/nominations.ts';
+import { REVERSED_LABEL } from '../core/projection/closed.ts';
 import { formatTeamManager } from '../core/team-identity.ts';
 import { loadEventsViaClient } from './event-log.ts';
 import type { ConnectionGateway, TransactionalClient } from '../shell/write.ts';
@@ -131,6 +133,13 @@ export type BoardCardView = {
 	/** Where the Player landed and what it charges — the core's own sentence. */
 	/** The Auction's own persisted expiry, `null` while it is still open. */
 	readonly closedAt: string | null;
+	/** Whether this closed card's Close was reversed (Story 7.13). */
+	readonly reversed: boolean;
+	/**
+	 * The reversal in words — the Commissioner who acted and the reason —
+	 * or `null` on every card that is not a reversed close (Story 7.13).
+	 */
+	readonly reversalStatement: string | null;
 };
 
 /** The whole board, as the route returns it. */
@@ -252,7 +261,9 @@ function distinctManagerIds(cards: readonly BoardCard[]): readonly string[] {
 		for (const managerId of [
 			card.leadingManagerId,
 			card.nominatedByManagerId,
-			card.winningManagerId
+			card.winningManagerId,
+			// The Commissioner who reversed a close (Story 7.13) — same statement.
+			card.reversedByManagerId
 		]) {
 			if (managerId === null || managerId === '' || seen.has(managerId)) continue;
 			seen.add(managerId);
@@ -344,8 +355,11 @@ export async function loadBoard(
 										null)
 							),
 				closesAt: card.closesAt,
-				auctionStateLabel: AUCTION_STATE_LABELS[card.state],
-				auctionStateLabelNarrow: AUCTION_STATE_LABELS_NARROW[card.state],
+				// A reversed close reads Reversed, in both widths (Story 7.13).
+				auctionStateLabel: card.reversed ? REVERSED_LABEL : AUCTION_STATE_LABELS[card.state],
+				auctionStateLabelNarrow: card.reversed
+					? REVERSED_LABEL
+					: AUCTION_STATE_LABELS_NARROW[card.state],
 				auctionStateIcon: AUCTION_STATE_ICONS[card.state],
 				state: card.state,
 				contenderCount: card.contenderCount,
@@ -377,7 +391,21 @@ export async function loadBoard(
 									: (managerNames.get(pairKey(card.winningManagerId, card.winningTeamId ?? '')) ??
 										null)
 							),
-				closedAt: card.closedAt
+				closedAt: card.closedAt,
+				reversed: card.reversed,
+				// The actor resolved through the SAME (Manager, Team) pairing
+				// every other name on the board uses; unresolved, the core's
+				// sentence says "the Commissioner" and invents nobody.
+				reversalStatement: card.reversed
+					? boardReversedStatement(
+							card.reversedByManagerId === null
+								? null
+								: (managerNames.get(
+										pairKey(card.reversedByManagerId, card.reversedByTeamId ?? '')
+									) ?? null),
+							card.reversalReason ?? ''
+						)
+					: null
 			}))
 		};
 	} catch (error) {

@@ -191,6 +191,12 @@ export type TeamRosterEntry = {
 	/** Whether the row is an Auction Contract rather than an imported one. */
 	readonly won: boolean;
 	/**
+	 * The `seq` of the `AuctionClosed` that produced a WON row, or `null` for
+	 * an imported one (Story 7.13). It is what the Commissioner's
+	 * Reverse-this-Close control on the row names (AD-33).
+	 */
+	readonly closeSeq: string | null;
+	/**
 	 * Where a WON Player landed and what it charges, in the words Your
 	 * Positions already uses — `null` for an imported row, which was never
 	 * placed by a close and has no such statement to make.
@@ -376,6 +382,11 @@ export type TeamRosterRow = {
 	readonly rosterSlotKind: RosterSlotKind;
 	/** Whether this row came from an `AuctionClosed` rather than the import. */
 	readonly won: boolean;
+	/**
+	 * The `seq` of the `AuctionClosed` that produced a won row — `null` for an
+	 * imported one (Story 7.13, AD-33).
+	 */
+	readonly closeSeq: string | null;
 	/**
 	 * Years still to run on an IMPORTED Contract, as Fantrax stated them
 	 * (Story 7.8) — `null` for an Auction Contract, which has no imported
@@ -605,6 +616,8 @@ function entryFor(row: TeamRosterRow): TeamRosterEntry {
 		capHitLabel: describeAmount(chargedCapHit(row)),
 		slotKind: row.rosterSlotKind,
 		won: row.won,
+		// The close a reversal would name — only a won row has one (AD-33).
+		closeSeq: row.won ? row.closeSeq : null,
 		// A won Player is a roster row on the same footing as an imported one,
 		// and the sentence saying where he landed is the one Your Positions
 		// already prints — `PLACEMENT_LABELS` through `wonCardSentence`, not a

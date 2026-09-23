@@ -33,14 +33,22 @@
  * second definition of any of the three. A `+ wonCount` anywhere would be the
  * wrong shape.
  *
- * **First close wins.** A second `AuctionClosed` for one Player is a no-op —
- * the same discipline `nominationsReducer` and `auctionsReducer` already take
- * on the events they fold — which is what makes folding the same log twice
- * converge (AD-5). An insert-only log cannot be corrected in place, so a
- * malformed historical row is SKIPPED rather than thrown over, exactly as the
- * other two reducers skip it.
+ * **A reversed close yields no Contract; any other close yields one** (AD-33,
+ * Story 7.13). This used to read "first close wins; a second cannot arrive",
+ * and that assumption no longer holds: a close the Commissioner reverses puts
+ * the Player back in the pool, and a later genuine close of the same Player is
+ * a second, real close. So the fold keeps the set of REVERSED close `seq`s —
+ * `AuctionContracts.reversed` — and the rule is restated over it. A close
+ * whose `seq` is in that set yields no Contract however often or in whatever
+ * order it is folded; any other close for a Player who holds no live Contract
+ * yields one; and a close for a Player who already holds one is still a
+ * no-op, which is what makes folding the same log twice converge (AD-5). A
+ * Player holds at most ONE live Auction Contract without anything assuming he
+ * is only ever won once. An insert-only log cannot be corrected in place
+ * (AD-4), so a malformed historical row is SKIPPED rather than thrown over,
+ * exactly as the other two reducers skip it.
  *
- * **First close wins, LATEST assignment wins**, and the two rules sit in one
+ * **One live close per Player, LATEST assignment wins**, and the two rules sit in one
  * reducer without contradicting each other because they are about different
  * events. Story 6.1 adds `ContractLengthAssigned`, which sets `contractYears`
  * on a contract this fold already holds; a Manager may correct a length until
@@ -59,7 +67,11 @@ import type { CapHitRow } from '../rules/roster-import.ts';
 import { ROSTER_PLACEMENTS } from '../types.ts';
 import type { RosterPlacement, RosterSlotKind, SlotPlacement } from '../types.ts';
 import type { Reducer } from './fold.ts';
-import { AUCTION_CLOSED_EVENT, readClosedFacts } from './nominations.ts';
+import {
+	AUCTION_CLOSED_EVENT,
+	AUCTION_CLOSE_REVERSED_EVENT,
+	readClosedFacts
+} from './nominations.ts';
 
 export type { RosterPlacement, SlotPlacement };
 
@@ -90,7 +102,9 @@ export type ContractYears = 1 | 2 | 3 | 4;
  * learning a second source.
  *
  * **The LATEST assignment per Player wins**, which is the exact opposite of
- * `AUCTION_CLOSED_EVENT`'s first-wins rule, and both are right. A close is a
+ * `AUCTION_CLOSED_EVENT`'s rule — an un-reversed close yields the one live
+ * Contract and a second close cannot displace it (AD-33) — and both are
+ * right. A close is a
  * fact about an Auction that happened once; an assignment is the Manager's
  * current answer to a question they may change until they submit their Team as
  * final. A correction is therefore an APPENDED event and never an update, and
@@ -198,16 +212,65 @@ export type AuctionContract = {
 	readonly contractYears: ContractYears | null;
 	/** The Auction's own persisted expiry — never the transaction clock. */
 	readonly closedAt: string;
+	/**
+	 * The `seq` of the `AuctionClosed` that produced this Contract (Story 7.13).
+	 *
+	 * The identity a reversal names (AD-33). A Player can now be won, have the
+	 * close reversed, and be won again, so "the Player's contract" no longer
+	 * identifies one close — this does. A string, as every `seq` in this core
+	 * is (AD-8: an `int8` is never a JavaScript number).
+	 */
+	readonly closeSeq: string;
 };
 
-/** Every Auction Contract this log has produced, keyed on the Player. */
+/**
+ * One reversed close, remembered (Story 7.13, AD-33).
+ *
+ * **The Contract as it stood when it was reversed**, not as the close wrote
+ * it: a Move may have put it on Injury Reserve since, and the record of what
+ * was taken off the Team is the Contract it actually held. Beside it, the
+ * reversal's own `seq`, instant and reason, so every surface that states the
+ * outcome — the Board, the Auction page, the Audit Log — reads **Reversed**
+ * with who and why rather than a close that did not happen.
+ */
+export type ReversedClose = {
+	readonly contract: AuctionContract;
+	/** The `AuctionCloseReversed` event's own `seq`. */
+	readonly reversalSeq: string;
+	/** That event's own instant, as the shell read the db clock. */
+	readonly reversedAt: string;
+	/** The Commissioner's stated reason, verbatim. */
+	readonly reason: string;
+	/**
+	 * The acting Commissioner, off the reversal's own envelope — so a surface
+	 * can state WHO reversed the close, not only why. `null` for an envelope
+	 * that names no actor.
+	 */
+	readonly reversedByManagerId: string | null;
+	readonly reversedByTeamId: string | null;
+};
+
+/**
+ * Every Auction Contract this log has produced, keyed on the Player — and
+ * every close that was reversed, keyed on the close's `seq`.
+ *
+ * **`reversed` is a MAP, not a set, and keyed on `closeSeq` rather than on
+ * the Player** (Story 7.13, Design Notes). A set would be enough to skip a
+ * reversed close on replay, but the Board, the Auction page and the Audit Log
+ * must all read **Reversed** and all three compose off this fold: deleting
+ * the Contract alone would make the Auction vanish, which is the "close that
+ * did not happen" the PRD forbids. Keying on the close keeps a later genuine
+ * close of the same Player separate from the one that was reversed (AD-5).
+ */
 export type AuctionContracts = {
 	readonly byPlayer: Readonly<Record<string, AuctionContract>>;
+	readonly reversed: Readonly<Record<string, ReversedClose>>;
 };
 
 /** With no `AuctionClosed` event, no Auction has produced a contract. */
 export const INITIAL_CONTRACTS: AuctionContracts = Object.freeze({
-	byPlayer: Object.freeze({}) as Readonly<Record<string, AuctionContract>>
+	byPlayer: Object.freeze({}) as Readonly<Record<string, AuctionContract>>,
+	reversed: Object.freeze({}) as Readonly<Record<string, ReversedClose>>
 });
 
 /**
@@ -216,8 +279,39 @@ export const INITIAL_CONTRACTS: AuctionContracts = Object.freeze({
  * Fantrax player ids, which are data, so a key of `constructor` must not read
  * back as an inherited function and be mistaken for a contract.
  */
-function hasOwn(record: Readonly<Record<string, AuctionContract>>, key: string): boolean {
+function hasOwn(record: Readonly<Record<string, unknown>>, key: string): boolean {
 	return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+/** The reversal of one close, or `null` when that close stands (AD-33). */
+export function reversalOfClose(
+	contracts: AuctionContracts,
+	closeSeq: string
+): ReversedClose | null {
+	if (!hasOwn(contracts.reversed, closeSeq)) return null;
+	return contracts.reversed[closeSeq] ?? null;
+}
+
+/**
+ * The LATEST reversed close for a Player, or `null` when none of his closes
+ * was reversed.
+ *
+ * "Latest" by `closeSeq` compared as `BigInt` — `fold.ts`'s reason: `seq` is
+ * an `int8` and a string comparison puts `"9"` after `"10"`. A Player can be
+ * won and reversed more than once, and a surface showing one closed card per
+ * Player shows the most recent.
+ */
+export function latestReversalFor(
+	contracts: AuctionContracts,
+	fantraxPlayerId: string
+): ReversedClose | null {
+	let latest: ReversedClose | null = null;
+	for (const closeSeq of Object.keys(contracts.reversed).sort()) {
+		const reversal = reversalOfClose(contracts, closeSeq);
+		if (reversal === null || reversal.contract.fantraxPlayerId !== fantraxPlayerId) continue;
+		if (latest === null || BigInt(closeSeq) > BigInt(latest.contract.closeSeq)) latest = reversal;
+	}
+	return latest;
 }
 
 /** The Auction Contract for a Player, or `null` when no close produced one. */
@@ -340,7 +434,7 @@ export function contractsWonBy(
  */
 function readPayload(
 	payload: unknown,
-	event: { readonly occurredAt: string }
+	event: { readonly occurredAt: string; readonly seq: string }
 ): AuctionContract | null {
 	const facts = readClosedFacts(payload);
 	if (facts === null) return null;
@@ -361,7 +455,9 @@ function readPayload(
 		placement: facts.placement,
 		// Stated as the absence it is, never as a zero-length contract.
 		contractYears: null,
-		closedAt: typeof closedAt === 'string' && closedAt !== '' ? closedAt : event.occurredAt
+		closedAt: typeof closedAt === 'string' && closedAt !== '' ? closedAt : event.occurredAt,
+		// The close's own log position — the identity a reversal names (AD-33).
+		closeSeq: event.seq
 	};
 }
 
@@ -708,6 +804,171 @@ export type RosterRearrangedPayload = {
 	readonly reason: string | null;
 };
 
+// --- Story 7.13: the reversed close, recorded and folded -------------------
+
+/**
+ * The event type that reverses one Auction Close (Story 7.13, FR-32, AD-33,
+ * PRD §10 example 58).
+ *
+ * **Exported from here, beside the reducer that gives it meaning, and
+ * DEFINED in `nominations.ts`.** Two folds give it meaning — this one removes
+ * the Contract, `nominationsReducer` re-holds a released Slot — and this
+ * module already imports `nominations.ts` for `AUCTION_CLOSED_EVENT`. Defining
+ * the string there and re-exporting it here keeps ONE literal with no import
+ * cycle, which is exactly how `AUCTION_CLOSED_EVENT` itself is shared.
+ *
+ * **A compensating event, never a correction** (AD-4). The `AuctionClosed` it
+ * names by `seq` stays in `auction_events`, unedited, in its place; so do the
+ * `BidCancelled` events that close caused. The reversal undoes exactly one
+ * thing: the Contract leaves the winning Team and the Player returns to the
+ * pool (AD-33).
+ */
+export { AUCTION_CLOSE_REVERSED_EVENT } from './nominations.ts';
+
+/**
+ * The nomination a reversal hands its Nomination Slot back to — carried on
+ * the payload, never re-derived by a fold (AD-32).
+ *
+ * Once a close has released the Slot, the fold no longer knows which
+ * nomination held it. The shell recovers it by folding the log's prefix
+ * before the close and records it here, so a replay reads the record. `seq`
+ * is that `NominationPlaced`'s own log position: the re-inserted
+ * `nomination_slots` row references it, exactly as the original claim did.
+ */
+export type ReheldNomination = {
+	readonly seq: string;
+	readonly fantraxPlayerId: string;
+	readonly playerName: string;
+	readonly teamId: string;
+	readonly teamName: string;
+	readonly managerId: string | null;
+	readonly occurredAt: string;
+};
+
+/**
+ * One FR-40 Bid Cancellation the reversed close caused, stated as STANDING.
+ *
+ * Recorded so the Audit Log can say, from the reversal's own row, what the
+ * reversal did NOT undo (AD-33). `restoredTeamName` is who the cancellation's
+ * restoration handed the lead to, or `null` — and they still lead.
+ */
+export type StandingCancellation = {
+	readonly cancelledSeq: string;
+	readonly fantraxPlayerId: string;
+	readonly playerName: string;
+	readonly teamId: string;
+	readonly teamName: string;
+	readonly amount: Money;
+	readonly restoredTeamId: string | null;
+	readonly restoredTeamName: string | null;
+};
+
+/** Available Cap Space and Maximum Bid at one instant — `teamSolvencyFiguresFor`'s. */
+export type CloseReversalSolvency = {
+	readonly availableCapSpace: Money;
+	readonly maximumBid: Money;
+};
+
+/**
+ * The payload an `AuctionCloseReversed` carries — the whole act, in the log.
+ *
+ * It names the reversed close by `closeSeq` (AD-33) and restates the Contract
+ * as it stood — Player, Team, winning amount, Cap Hit and CURRENT placement —
+ * so the Audit Log and Discord read one row. `slotReheld` and
+ * `reheldNomination` are the decision, recorded (AD-32).
+ *
+ * **`teamBefore`/`teamAfter` and `solvencyBefore`/`solvencyAfter`, never
+ * `before`/`after`.** `core/audit-log.ts`'s `mergeOverride` reads any
+ * top-level `before`/`after` pair as an override state map and prints it raw
+ * — `DropRecordedPayload`'s note, and spec-7-11's Change Log.
+ *
+ * The actor rides the envelope's `manager_id`/`team_id` as every other
+ * event's does; `reason` is on the payload because there is no column for it.
+ */
+export type AuctionCloseReversedPayload = {
+	readonly closeSeq: string;
+	readonly fantraxPlayerId: string;
+	readonly playerName: string;
+	/** The Team whose Contract is removed — the close's winner. */
+	readonly teamId: string;
+	readonly teamName: string;
+	readonly winningAmount: Money;
+	/** What the Contract was charging when it was reversed. */
+	readonly capHit: Money;
+	/** Where the Contract sat when it was reversed — not necessarily where it landed. */
+	readonly placement: RosterPlacement;
+	/** The reversed Auction's own persisted expiry. */
+	readonly closedAt: string;
+	readonly slotReheld: boolean;
+	readonly reheldNomination: ReheldNomination | null;
+	readonly standingCancellations: readonly StandingCancellation[];
+	readonly teamBefore: RosterActTeamFigures;
+	readonly teamAfter: RosterActTeamFigures;
+	readonly solvencyBefore: CloseReversalSolvency;
+	readonly solvencyAfter: CloseReversalSolvency;
+	/** The Commissioner's stated reason — non-blank, trimmed, permanent. */
+	readonly reason: string;
+};
+
+/** A canonical non-negative `seq` — digits, no sign, no leading zero. */
+const CANONICAL_SEQ = /^(?:0|[1-9][0-9]*)$/;
+
+/**
+ * The `AuctionCloseReversed` payload as this reducer needs it, read
+ * defensively — `readAssignmentPayload`'s discipline, for its reason.
+ *
+ * `closeSeq` and `fantraxPlayerId` are REJECTED when absent: they are what the
+ * fold acts on. The rest is read so that a reversal whose close this fold
+ * never produced a Contract for still records a `ReversedClose` a surface can
+ * state — the names fall back to their ids, as a close's do.
+ */
+function readReversalPayload(
+	payload: unknown,
+	event: { readonly occurredAt: string }
+): { readonly closeSeq: string; readonly reason: string; readonly fallback: AuctionContract | null } | null {
+	if (typeof payload !== 'object' || payload === null) return null;
+	const record = payload as Record<string, unknown>;
+	const closeSeq = record['closeSeq'];
+	const fantraxPlayerId = record['fantraxPlayerId'];
+	if (typeof closeSeq !== 'string' || !CANONICAL_SEQ.test(closeSeq)) return null;
+	if (typeof fantraxPlayerId !== 'string' || fantraxPlayerId === '') return null;
+	const reason = typeof record['reason'] === 'string' ? record['reason'] : '';
+
+	const teamId = record['teamId'];
+	const winningAmount = readMoney(record['winningAmount']);
+	const capHit = readMoney(record['capHit']);
+	const placement = record['placement'];
+	const fallback: AuctionContract | null =
+		typeof teamId === 'string' &&
+		teamId !== '' &&
+		winningAmount !== null &&
+		capHit !== null &&
+		isRosterPlacement(placement)
+			? {
+					fantraxPlayerId,
+					playerName:
+						typeof record['playerName'] === 'string' && record['playerName'] !== ''
+							? record['playerName']
+							: fantraxPlayerId,
+					teamId,
+					teamName:
+						typeof record['teamName'] === 'string' && record['teamName'] !== ''
+							? record['teamName']
+							: teamId,
+					winningAmount,
+					capHit,
+					placement,
+					contractYears: null,
+					closedAt:
+						typeof record['closedAt'] === 'string' && record['closedAt'] !== ''
+							? record['closedAt']
+							: event.occurredAt,
+					closeSeq
+				}
+			: null;
+	return { closeSeq, reason, fallback };
+}
+
 /**
  * Whether a value is one of the three Slots an Auction Contract may sit in.
  *
@@ -906,21 +1167,68 @@ function readMoves(payload: unknown): readonly RosterRearrangedMove[] {
  * reason: an event type this reducer has not been taught is not an error, it
  * is simply not about contracts.
  *
- * **The FIRST close for a Player wins.** A second `AuctionClosed` naming a
- * Player who already holds a contract changes nothing, which is what makes
- * folding the same log twice converge on the identical state (AD-5) — and it
- * is the same answer the other two reducers give a double close, so all three
- * agree about what a repeated event means. In practice one cannot arrive: an
- * Auction leaves `auctionsReducer` and `nominationsReducer` on its close, so
- * nothing can produce a second one for the same Player.
+ * **A reversed close yields no Contract; any other close yields one** (AD-33,
+ * restating what used to be "the first close wins"). A close whose `seq` is in
+ * `reversed` is skipped however often, and in whatever order, it is folded
+ * (AD-5). A close naming a Player who already holds a LIVE contract changes
+ * nothing, which is what makes folding the same log twice converge on the
+ * identical state — and it is the same answer the other two reducers give a
+ * double close. A second GENUINE close of one Player is now reachable: the
+ * first is reversed, the Player returns to the pool, and is won again; that
+ * close finds no live contract and yields a fresh one with its own `closeSeq`.
  */
 export const contractsReducer: Reducer<AuctionContracts> = (state, event) => {
 	switch (event.type) {
 		case AUCTION_CLOSED_EVENT: {
+			// A reversed close yields no Contract, whatever order or multiplicity
+			// it arrives in (AD-5, AD-33). The `seq` is the close's identity; the
+			// Player is not, because he may be won again.
+			if (hasOwn(state.reversed, event.seq)) return state;
 			const contract = readPayload(event.payload, event);
 			if (contract === null) return state;
 			if (hasOwn(state.byPlayer, contract.fantraxPlayerId)) return state;
-			return { byPlayer: { ...state.byPlayer, [contract.fantraxPlayerId]: contract } };
+			return {
+				...state,
+				byPlayer: { ...state.byPlayer, [contract.fantraxPlayerId]: contract }
+			};
+		}
+		// **The compensating event** (Story 7.13, AD-33, AD-4). It REMEMBERS the
+		// reversed close — so a replay of that close yields nothing and every
+		// surface can read Reversed — and removes the Player's live Contract
+		// ONLY when that Contract is the one this close produced. A reversal
+		// naming a close whose Contract has already gone (or never existed) must
+		// not delete a later, genuine Contract for the same Player.
+		//
+		// A second reversal of the same close is a no-op: the first one's record
+		// stands, which is what makes a double replay converge.
+		case AUCTION_CLOSE_REVERSED_EVENT: {
+			const reversal = readReversalPayload(event.payload, event);
+			if (reversal === null) return state;
+			if (hasOwn(state.reversed, reversal.closeSeq)) return state;
+			const live = Object.values(state.byPlayer).find(
+				(candidate) => candidate.closeSeq === reversal.closeSeq
+			);
+			const contract = live ?? reversal.fallback;
+			if (contract === null) return state;
+			const reversed: ReversedClose = {
+				contract,
+				reversalSeq: event.seq,
+				reversedAt: event.occurredAt,
+				reason: reversal.reason,
+				reversedByManagerId: event.managerId,
+				reversedByTeamId: event.teamId
+			};
+			return {
+				byPlayer:
+					live === undefined
+						? state.byPlayer
+						: Object.fromEntries(
+								Object.entries(state.byPlayer).filter(
+									([playerId]) => playerId !== live.fantraxPlayerId
+								)
+							),
+				reversed: { ...state.reversed, [reversal.closeSeq]: reversed }
+			};
 		}
 		// **The LATEST assignment for a Player wins** (Story 6.1). A Manager may
 		// change a length until their Team is submitted as final, and a change
@@ -943,6 +1251,7 @@ export const contractsReducer: Reducer<AuctionContracts> = (state, event) => {
 			// Player.
 			if (contract.teamId !== assignment.teamId) return state;
 			return {
+				...state,
 				byPlayer: {
 					...state.byPlayer,
 					[assignment.fantraxPlayerId]: { ...contract, contractYears: assignment.contractYears }
@@ -968,7 +1277,7 @@ export const contractsReducer: Reducer<AuctionContracts> = (state, event) => {
 		case ROSTER_TRADE_RECORDED_EVENT: {
 			let byPlayer = state.byPlayer;
 			for (const transfer of readTransfers(event.payload)) {
-				const contract = contractForPlayer({ byPlayer }, transfer.fantraxPlayerId);
+				const contract = contractForPlayer({ ...state, byPlayer }, transfer.fantraxPlayerId);
 				// A transfer naming a Player who holds no Auction Contract folds
 				// nothing: an Existing Contract moved by the `UPDATE` this event
 				// commits beside, and inventing a contract out of a transfer
@@ -994,7 +1303,7 @@ export const contractsReducer: Reducer<AuctionContracts> = (state, event) => {
 					}
 				};
 			}
-			return byPlayer === state.byPlayer ? state : { byPlayer };
+			return byPlayer === state.byPlayer ? state : { ...state, byPlayer };
 		}
 		// **The LATEST move for a Player wins** (Story 7.11, FR-44), which is
 		// the Trade's rule and not `AuctionClosed`'s. A Contract may be demoted
@@ -1014,7 +1323,7 @@ export const contractsReducer: Reducer<AuctionContracts> = (state, event) => {
 		case ROSTER_REARRANGED_EVENT: {
 			let byPlayer = state.byPlayer;
 			for (const move of readMoves(event.payload)) {
-				const contract = contractForPlayer({ byPlayer }, move.fantraxPlayerId);
+				const contract = contractForPlayer({ ...state, byPlayer }, move.fantraxPlayerId);
 				// A move naming a Player who holds no Auction Contract folds
 				// nothing: an Existing Contract moved by the `UPDATE` this event
 				// commits beside, and inventing a contract out of a move payload
@@ -1042,7 +1351,7 @@ export const contractsReducer: Reducer<AuctionContracts> = (state, event) => {
 					}
 				};
 			}
-			return byPlayer === state.byPlayer ? state : { byPlayer };
+			return byPlayer === state.byPlayer ? state : { ...state, byPlayer };
 		}
 		default:
 			return state;

@@ -142,9 +142,19 @@ const ASSIGNMENT_REMINDER_CLAUSE = 'still have Players with no contract length.'
 const ASSIGNMENT_DEADLINE_PASSED_CLAUSE =
 	'still have Players with no contract length, and the assignment deadline has passed. No length was assigned.';
 
+/**
+ * The reversal clause (Story 7.13). It rides `led_at_close` — no new
+ * category, and a Manager who hears about their closes hears about one being
+ * taken back — but says its own thing: the Team whose win was reversed has
+ * lost a Contract through no act of its own.
+ */
+const CLOSE_REVERSED_CLAUSE =
+	'won an Auction whose Close the Commissioner has reversed. The Contract has left your roster.';
+
 const CLAUSE_FOR_EVENT_TYPE: Readonly<Record<string, string>> = Object.freeze({
 	AssignmentRemindersSent: ASSIGNMENT_REMINDER_CLAUSE,
-	AssignmentDeadlinePassed: ASSIGNMENT_DEADLINE_PASSED_CLAUSE
+	AssignmentDeadlinePassed: ASSIGNMENT_DEADLINE_PASSED_CLAUSE,
+	AuctionCloseReversed: CLOSE_REVERSED_CLAUSE
 });
 
 /** A payload as an object, or an empty one. `broadcast.ts`'s `fields`. */
@@ -245,6 +255,11 @@ function categoryFor(event: BroadcastEvent, teamId: string | null): Notification
 			return 'outbid';
 		case 'AuctionClosed':
 			return teamId !== null && teamId === text(payload, 'teamId') ? 'led_at_close' : null;
+		// **A reversal is about the Team whose win it took back** (Story 7.13),
+		// named on the payload exactly as the close named it — the same
+		// category, the same one Team, and a mistargeted addressee gets nothing.
+		case 'AuctionCloseReversed':
+			return teamId !== null && teamId === text(payload, 'teamId') ? 'led_at_close' : null;
 		case 'ContentionDrawn':
 			return 'contender';
 		case 'ContractAssignmentOpened':
@@ -329,7 +344,11 @@ function withoutMistargeted(
 	discordUserIds: readonly string[],
 	directory: LeagueDirectory
 ): readonly string[] {
-	if (event.eventType !== 'AuctionClosed') return discordUserIds;
+	// A reversal is targeted exactly as a close is: at the payload's Team
+	// (Story 7.13), so a stale or wrong row cannot ping anybody else.
+	if (event.eventType !== 'AuctionClosed' && event.eventType !== 'AuctionCloseReversed') {
+		return discordUserIds;
+	}
 	const winnerTeamId = text(fields(event.payload), 'teamId');
 	// A close whose payload names no winner is not one this filter can judge.
 	// It is already malformed and every addressee degrades to the plain line.
