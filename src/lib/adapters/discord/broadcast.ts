@@ -66,7 +66,12 @@ export const BROADCAST_EVENT_TYPES: readonly string[] = [
 	// line of its own is owed to the channel. It still gets copy below, because
 	// `composeNotice` words every group it drains and the fallback line is not
 	// a sentence anybody should have to read.
-	'AssignmentDeadlinePassed'
+	'AssignmentDeadlinePassed',
+	// Story 7.13. A reversed Close IS announced — unlike a Trade, a Drop or a
+	// Move — because it takes a Player off a Team that won him in public, and
+	// the league heard about that win here. The notice names the actor and the
+	// reason; the winning Team's Managers are mentioned.
+	'AuctionCloseReversed'
 ];
 
 /** Whether an appended event's type earns a line in the league channel. */
@@ -394,6 +399,39 @@ function composed(event: BroadcastEvent, directory: LeagueDirectory): string | n
 			// the `ContentionDrawn` event, where the seed's verifiability would
 			// not be.
 			return `${player} drawn to ${winner}. Seed: ${seed}. Contenders, in order: ${listed}.`;
+		}
+
+		case 'AuctionCloseReversed': {
+			// The actor is the ENVELOPE's Manager — the Commissioner who acted —
+			// and the Team is the payload's: the one the Contract left. Stated
+			// plainly, with the reason verbatim and nothing added to it.
+			// The Team the Contract left, with EVERY Manager acting for it —
+			// nobody on that Team acted, so no single Manager is the one named.
+			const teamId = text(payload, 'teamId');
+			const teamName =
+				text(payload, 'teamName') ??
+				(teamId === null ? null : (directory.teamNames.get(teamId) ?? null));
+			const team =
+				teamName === null
+					? null
+					: formatTeamManagers(
+							teamName,
+							(teamId === null ? [] : (directory.managersOfTeam.get(teamId) ?? []))
+								.map((managerId) => directory.managerNames.get(managerId))
+								.filter((name): name is string => name !== undefined)
+						);
+			// Normalised to `null`: a joined name that arrived `undefined` must
+			// not reach the sentence as the word "undefined".
+			const player = text(payload, 'playerName') ?? event.playerName ?? null;
+			const reason = text(payload, 'reason');
+			const actor =
+				event.managerId === null ? null : (directory.managerNames.get(event.managerId) ?? null);
+			if (team === null || player === null || reason === null) return null;
+			const who = actor === null ? 'The Commissioner' : `The Commissioner, ${actor},`;
+			return (
+				`${who} reversed the Close that gave ${player} to ${team}. ${player} is back in the pool. ` +
+				`Reason: ${reason}`
+			);
 		}
 
 		case 'AuctionOpened': {

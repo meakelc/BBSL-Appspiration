@@ -31,7 +31,8 @@ import {
 	filterAuditRows,
 	parseAuditQuery,
 	renderAuditAmount,
-	renderAuditEvent
+	renderAuditEvent,
+	reversedClosesIn
 } from '../../src/lib/core/audit-log.ts';
 import type { AuditFilter, AuditReferences, AuditRow } from '../../src/lib/core/audit-log.ts';
 import { parseMoney } from '../../src/lib/core/money.ts';
@@ -55,6 +56,7 @@ import {
 	CONTRACT_ASSIGNMENT_OPENED_EVENT
 } from '../../src/lib/core/projection/phase.ts';
 import {
+	AUCTION_CLOSE_REVERSED_EVENT,
 	CONTRACT_LENGTH_ASSIGNED_EVENT,
 	DROP_RECORDED_EVENT,
 	ROSTER_REARRANGED_EVENT,
@@ -92,6 +94,7 @@ import type { NominationPlacedPayload } from '../../src/lib/server/nomination.ts
 import type { AuctionOpenedPayload } from '../../src/lib/server/auction-open.ts';
 import type { ImportPromotedPayload } from '../../src/lib/server/import-promotion.ts';
 import type {
+	AuctionCloseReversedPayload,
 	ContractLengthAssignedPayload,
 	DropRecordedPayload,
 	RosterRearrangedPayload,
@@ -128,7 +131,8 @@ const REFERENCES: AuditReferences = {
 		[PLAYER_ONE, 'Jalen Green'],
 		[PLAYER_TWO, 'Alperen Sengun']
 	]),
-	managerNames: new Map([[MANAGER_A, 'Meakel']])
+	managerNames: new Map([[MANAGER_A, 'Meakel']]),
+	reversedCloses: new Map()
 };
 
 let nextSeq = 0;
@@ -413,6 +417,50 @@ const ROSTER_MOVE: RosterRearrangedPayload = {
 	reason: 'Recorded on behalf of the Manager, who is travelling.'
 };
 
+/**
+ * A reversed Close (Story 7.13, FR-32): Lakers' win of Jalen Green reversed,
+ * the close's cancellation of Celtics on Alperen Sengun standing with Bulls
+ * restored there, and the Slot re-held on the nomination that held it.
+ */
+const CLOSE_REVERSED: AuctionCloseReversedPayload = {
+	closeSeq: '4',
+	fantraxPlayerId: PLAYER_ONE,
+	playerName: 'Jalen Green',
+	teamId: TEAM_A,
+	teamName: 'Lakers',
+	winningAmount: parseMoney(4_000_000),
+	capHit: parseMoney(4_000_000),
+	placement: 'active_bench',
+	closedAt: '2026-09-01T09:00:00.000Z',
+	slotReheld: true,
+	reheldNomination: {
+		seq: '2',
+		fantraxPlayerId: PLAYER_TWO,
+		playerName: 'Alperen Sengun',
+		teamId: TEAM_A,
+		teamName: 'Lakers',
+		managerId: MANAGER_A,
+		occurredAt: '2026-08-30T09:00:00.000Z'
+	},
+	standingCancellations: [
+		{
+			cancelledSeq: '3',
+			fantraxPlayerId: PLAYER_TWO,
+			playerName: 'Alperen Sengun',
+			teamId: TEAM_B,
+			teamName: 'Celtics',
+			amount: parseMoney(2_000_000),
+			restoredTeamId: TEAM_C,
+			restoredTeamName: 'Bulls'
+		}
+	],
+	teamBefore: FIGURES(TEAM_A, 'Lakers', 5_000_000),
+	teamAfter: FIGURES(TEAM_A, 'Lakers', 9_000_000),
+	solvencyBefore: { availableCapSpace: parseMoney(5_000_000), maximumBid: parseMoney(4_000_000) },
+	solvencyAfter: { availableCapSpace: parseMoney(9_000_000), maximumBid: parseMoney(7_000_000) },
+	reason: 'Lakers held an IR Contract against the free-agency rule.'
+};
+
 const ELIGIBILITY_SET: MinorLeagueEligibilitySetPayload = {
 	fantraxPlayerId: PLAYER_ONE,
 	playerName: 'Jalen Green',
@@ -478,6 +526,7 @@ function everyKnownEvent(): AppendedEvent[] {
 		event(ROSTER_TRADE_RECORDED_EVENT, ROSTER_TRADE),
 		event(DROP_RECORDED_EVENT, DROP),
 		event(ROSTER_REARRANGED_EVENT, ROSTER_MOVE),
+		event(AUCTION_CLOSE_REVERSED_EVENT, CLOSE_REVERSED),
 		event(MINOR_LEAGUE_ELIGIBILITY_SET, ELIGIBILITY_SET),
 		event(ASSIGNMENTS_SUBMITTED_EVENT, ASSIGNMENTS_SUBMITTED),
 		event(ASSIGNMENT_DEADLINE_SET_EVENT, DEADLINE_SET),
@@ -1128,5 +1177,61 @@ describe('the count sentence', () => {
 	it('says how many of how many when a filter is in force', () => {
 		expect(auditCountSentence(3, 19)).toBe('3 of 19 entries.');
 		expect(auditCountSentence(1, 1)).toBe('1 entry.');
+	});
+});
+
+describe('a Close Reversal (Story 7.13, FR-32, FR-33)', () => {
+	it('is its own entry, labelled Close Reversal, with the reason first', () => {
+		const entry = only([event(AUCTION_CLOSE_REVERSED_EVENT, CLOSE_REVERSED)]);
+		expect(entry.typeLabel).toBe('Close Reversal');
+		expect(entry.headline).toBe('The Close that gave Jalen Green to Lakers was reversed.');
+		expect(entry.details[0]).toEqual({
+			label: 'Reason',
+			value: 'Lakers held an IR Contract against the free-agency rule.'
+		});
+		// Printed once: the base renderer files the reason, and the override
+		// merge does not file it a second time.
+		expect(entry.details.filter((detail) => detail.label === 'Reason')).toHaveLength(1);
+	});
+
+	it('states the close it names, the Slot, and every cancellation that stands', () => {
+		const text = rendered(only([event(AUCTION_CLOSE_REVERSED_EVENT, CLOSE_REVERSED)]));
+		expect(text).toContain('Reversed close 4');
+		expect(text).toContain('Nomination Slot Re-held — Alperen Sengun');
+		expect(text).toContain('Celtics on Alperen Sengun (Bulls still leads)');
+		expect(text).toContain('Lakers — Cap Space $5.0M → $9.0M');
+		expect(text).toContain('Lakers — Maximum Bid $4.0M → $7.0M');
+		// No raw token and no `before`/`after` override map printed raw.
+		expect(text).not.toContain('active_bench');
+		expect(text).not.toContain(TEAM_A);
+	});
+
+	it('makes the cancelled and restored Teams parties, so their filters find it', () => {
+		const entry = only([event(AUCTION_CLOSE_REVERSED_EVENT, CLOSE_REVERSED)]);
+		expect(entry.teams).toEqual(expect.arrayContaining([TEAM_A, TEAM_B, TEAM_C]));
+		expect(entry.players).toEqual(expect.arrayContaining([PLAYER_ONE, PLAYER_TWO]));
+	});
+
+	it('marks the reversed AuctionClosed Reversed on its own row, and leaves it in the Log', () => {
+		const closed = event(AUCTION_CLOSED_EVENT, AUCTION_CLOSED);
+		const reversal = event(AUCTION_CLOSE_REVERSED_EVENT, { ...CLOSE_REVERSED, closeSeq: closed.seq });
+		const events = [closed, reversal];
+		const refs: AuditReferences = { ...REFERENCES, reversedCloses: reversedClosesIn(events) };
+		const rows = auditRowsFor(events, refs);
+		expect(rows).toHaveLength(2);
+		const closeRow = rows.find((entry) => entry.seq === closed.seq);
+		expect(closeRow?.details.at(-1)).toEqual({
+			label: 'Outcome',
+			value: `Reversed — see entry ${reversal.seq}`
+		});
+		// An un-reversed close carries no Outcome row.
+		const standing = auditRowsFor([closed], REFERENCES)[0];
+		expect(standing?.details.some((detail) => detail.label === 'Outcome')).toBe(false);
+	});
+
+	it('maps a reversed close to the FIRST reversal naming it', () => {
+		const first = event(AUCTION_CLOSE_REVERSED_EVENT, { ...CLOSE_REVERSED, closeSeq: '77' });
+		const second = event(AUCTION_CLOSE_REVERSED_EVENT, { ...CLOSE_REVERSED, closeSeq: '77' });
+		expect(reversedClosesIn([second, first]).get('77')).toBe(first.seq);
 	});
 });

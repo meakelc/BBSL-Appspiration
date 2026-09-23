@@ -353,7 +353,12 @@ describe('scope — exactly one override reaches for this mechanism', () => {
 			// would be auction-grade ceremony over a third party's noise. The
 			// assertion below is what would catch a later edit quietly giving it
 			// one.
-			'src/routes/divergence/+page.server.ts'
+			'src/routes/divergence/+page.server.ts',
+			// Story 7.13's Close reversal — a full override (FR-32): the reason
+			// sheet, `requireOverrideReason` and `requireOverridablePhase`, on a
+			// destination reached from the won Contract's row on the Team page.
+			'src/routes/close-reversal/+page.server.ts',
+			'src/routes/close-reversal/+page.svelte'
 		];
 		const naming = sources().filter((path) =>
 			/buildOverrideRecord|requireOverrideReason|requireOverridablePhase|reasonSheetView|ReasonSheet/.test(
@@ -397,6 +402,9 @@ describe('scope — exactly one override reaches for this mechanism', () => {
 			)
 		);
 		expect(reaching.sort()).toEqual([
+			// Story 7.13's Close reversal (FR-32) — a fourth override, reviewed.
+			'src/routes/close-reversal/+page.server.ts',
+			'src/routes/close-reversal/+page.svelte',
 			'src/routes/divergence/+page.server.ts',
 			'src/routes/roster-drop/+page.server.ts',
 			'src/routes/roster-drop/+page.svelte',

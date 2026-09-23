@@ -71,6 +71,7 @@ import {
 import { fold } from '../core/projection/fold.ts';
 import {
 	AUCTION_CLOSED_EVENT,
+	AUCTION_CLOSE_REVERSED_EVENT,
 	AUCTION_TERMINATED_EVENT,
 	INITIAL_NOMINATIONS,
 	NOMINATION_PLACED_EVENT,
@@ -78,6 +79,7 @@ import {
 	nominationForTeam,
 	nominationsReducer,
 	readClosedFacts,
+	readReheldSlot,
 	readTerminatedPlayerId
 } from '../core/projection/nominations.ts';
 import {
@@ -650,6 +652,48 @@ export const releaseNomination: ProjectionUpdater = async (client, appended) => 
 			`delete from ${OPEN_NOMINATIONS_TABLE}
 			where fantrax_player_id = $1`,
 			[terminated]
+		);
+	}
+};
+
+/**
+ * Re-insert the Slot claim a reversed Close hands back, on the appending
+ * transaction's own client (Story 7.13, FR-32, AD-32, AD-33).
+ *
+ * **The only other way a Slot claim is written, and it lives HERE** — the one
+ * module that owns `nomination_slots` — rather than beside the reversal. A
+ * close that released the winning Team's Slot deleted this row; reversing the
+ * close puts it back only when the reversal's RECORD says so
+ * (`slotReheld: true`), which the core decided only when the Team held no Slot
+ * at that moment. The row carries the RE-HELD nomination's own `seq` and
+ * instant, because the claim belongs to that nomination exactly as the
+ * original did.
+ *
+ * Read through `readReheldSlot`, the core's own reader for this event — the
+ * same function `nominationsReducer` folds through — so the table and the
+ * fold cannot disagree about which reversals re-held a Slot.
+ *
+ * Deliberately NOT `on conflict do nothing`, for `claimNomination`'s reason: a
+ * collision means the fold and the table disagree, and a swallowed one is a
+ * silent wrong answer. It aborts the transaction instead.
+ *
+ * Registered by `server/close-reversal.ts` and by nothing else.
+ */
+export const reholdNominationSlot: ProjectionUpdater = async (client, appended) => {
+	for (const event of appended) {
+		if (event.type !== AUCTION_CLOSE_REVERSED_EVENT) continue;
+		const reheld = readReheldSlot(event.payload);
+		if (reheld === null) continue;
+		await client.query(
+			`insert into ${NOMINATION_SLOTS_TABLE}
+				(team_id, fantrax_player_id, seq, occurred_at)
+			values ($1, $2, $3, $4)`,
+			[
+				reheld.nomination.teamId,
+				reheld.nomination.fantraxPlayerId,
+				reheld.seq,
+				reheld.nomination.occurredAt
+			]
 		);
 	}
 };

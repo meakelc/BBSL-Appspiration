@@ -2233,3 +2233,63 @@ describe('loadAuctionPage — a cancelled Bid carries its cause to the wire (Sto
 		expect(cancellation?.causePlayerName).not.toBe('p-9');
 	});
 });
+
+describe('readClosedAuction — a close reversed and won again (Story 7.13)', () => {
+	const firstRound = [
+		nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1'),
+		bidPlaced(2, 'p-1', 't-2', 'Rockets', 'm-2', 6_000_000, '2026-08-26T09:00:00.000Z', '2026-08-27T09:00:00.000Z'),
+		bidPlaced(3, 'p-1', 't-3', 'Suns', 'm-3', 8_000_000, '2026-08-26T10:00:00.000Z', '2026-08-27T10:00:00.000Z'),
+		logEvent(4, AUCTION_CLOSED_EVENT, closedPayload({ fantraxPlayerId: 'p-1' })),
+		logEvent(5, 'AuctionCloseReversed', {
+			closeSeq: '4',
+			fantraxPlayerId: 'p-1',
+			playerName: 'Jalen Green',
+			teamId: CLOSED_TEAM_ID,
+			teamName: 'Team W',
+			winningAmount: 1_000_000,
+			capHit: 1_000_000,
+			placement: 'active_bench',
+			closedAt: '2026-08-27T09:00:00.000Z',
+			reason: 'Illegal IR designation.'
+		})
+	];
+	const managers = [
+		{ id: 'm-2', teamId: 't-2', displayName: 'Ali' },
+		{ id: 'm-3', teamId: 't-3', displayName: 'Bo' },
+		{ id: 'm-4', teamId: 't-4', displayName: 'Cy' }
+	];
+
+	it('renders a reversed close as closed, with the reversal stated', async () => {
+		const harness = fakeGateway({
+			events: firstRound,
+			teams: [CLOSED_TEAM_ID, 't-2', 't-3'],
+			managers
+		});
+		const closed = closedPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
+		expect(closed?.kind).toBe('closed');
+		expect(closed?.reversal?.statement).toContain('Reason: Illegal IR designation.');
+		expect(closed?.bids.map((entry) => entry.seq)).toEqual(['2', '3']);
+	});
+
+	it('cuts the history at the SECOND close once the Player is won again', async () => {
+		const harness = fakeGateway({
+			events: [
+				...firstRound,
+				nominated(6, 'p-1', 'Jalen Green', 't-4', 'Nets', 'm-4'),
+				bidPlaced(7, 'p-1', 't-4', 'Nets', 'm-4', 2_000_000, '2026-08-28T09:00:00.000Z', '2026-08-29T09:00:00.000Z'),
+				logEvent(
+					8,
+					AUCTION_CLOSED_EVENT,
+					closedPayload({ fantraxPlayerId: 'p-1', teamId: 't-4', teamName: 'Nets', winningAmount: 2_000_000, capHit: 2_000_000 })
+				)
+			],
+			teams: [CLOSED_TEAM_ID, 't-2', 't-3', 't-4'],
+			managers
+		});
+		const closed = closedPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
+		expect(closed?.reversal).toBeNull();
+		expect(closed?.winner).toBe('Nets');
+		// Only the second round's Bid — the first round's belong to the reversed close.
+		expect(closed?.bids.map((entry) => entry.seq)).toEqual(['7']);
+	});
+});

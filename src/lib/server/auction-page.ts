@@ -134,7 +134,11 @@ import {
 import type { OpenNomination } from '../core/projection/nominations.ts';
 import { INITIAL_PHASE, phaseReducer } from '../core/projection/phase.ts';
 import type { LeaguePhase } from '../core/projection/phase.ts';
-import { closedAuctionFor, selectedPositionSentence } from '../core/projection/closed.ts';
+import {
+	closedAuctionFor,
+	reversedCloseStatement,
+	selectedPositionSentence
+} from '../core/projection/closed.ts';
 import type { ClosedAuction } from '../core/projection/closed.ts';
 import { INITIAL_CONTRACTS, contractsReducer } from '../core/projection/contracts.ts';
 import { INITIAL_DRAWS, drawsReducer } from '../core/projection/draws.ts';
@@ -506,6 +510,12 @@ export type ClosedAuctionPageState = {
 	 */
 	readonly bids: readonly AuctionPageBid[];
 	/**
+	 * The reversal of this close, in words, or `null` when it stands
+	 * (Story 7.13, FR-32). A reversed close still renders as a closed Auction
+	 * — **Reversed**, with the reason — never as one that did not happen.
+	 */
+	readonly reversal: { readonly statement: string } | null;
+	/**
 	 * The database clock at the moment of the read — the ONE instant the
 	 * relative phrase beside the closed stamp is derived from, read from
 	 * Postgres and never from Node (AD-3), exactly as the open read anchors
@@ -797,7 +807,7 @@ async function readClosedAuction(
 	// one log read per request is this module's discipline — up to the close
 	// that produced the contract above. Names resolve through the one helper the
 	// open branch uses, so a Bid reads identically on either side of the close.
-	const closedBids = auctionAtClose(events, fantraxPlayerId)?.bids ?? [];
+	const closedBids = auctionAtClose(events, fantraxPlayerId, contract.closeSeq)?.bids ?? [];
 	const history = renderBidHistory(closedBids, await resolveBidderNames(client, closedBids));
 
 	return {
@@ -828,6 +838,8 @@ async function readClosedAuction(
 								: null
 					},
 		bids: history,
+		reversal:
+			closed.reversal === null ? null : { statement: reversedCloseStatement(closed.reversal) },
 		figuresAt
 	};
 }

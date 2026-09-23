@@ -117,6 +117,11 @@
 		// pre-worded by the core exactly as every other field here is.
 		readonly wonBy: string | null;
 		readonly closedAt: string | null;
+		// A closed card whose Close was reversed (Story 7.13): it reads
+		// Reversed and names the Team it was won by, never a win that stands.
+		readonly reversed: boolean;
+		// Who reversed it and why, pre-worded by the core — `null` otherwise.
+		readonly reversalStatement: string | null;
 	};
 
 	type Board = {
@@ -796,6 +801,12 @@
 							<span class="section-label">{BOARD_WON_BY_LABEL}</span>
 							{card.wonBy}
 						</p>
+						{#if card.reversalStatement !== null}
+							<!-- A reversed close (Story 7.13): the state word above says
+							     Reversed, and this says who acted and why — never a win
+							     that stands, never a close that did not happen. -->
+							<p class="card-when">{card.reversalStatement}</p>
+						{/if}
 						<!-- The closed instant in the viewer's own timezone.
 						     Labelled, because a bare date on a card carrying no
 						     clock names nothing. -->

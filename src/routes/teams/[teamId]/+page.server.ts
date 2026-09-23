@@ -20,17 +20,27 @@
  * named in a query parameter would let anyone read another Manager's.
  *
  * **There is no action here at all.** The route reads and rolls back.
+ *
+ * **`isCommissioner` decides one more thing** (Story 7.13): whether a won
+ * Contract's row carries the dashed Reverse-this-Close link. It is a RENDER
+ * decision only — `/close-reversal` refuses a non-Commissioner on `load` and
+ * on the action whatever this page showed — and it is offered only in the two
+ * phases a reversal is permitted in, so an Archived page shows no control the
+ * route would refuse.
  */
 
 import { error } from '@sveltejs/kit';
 
-import { requireLiveDestination } from '$lib/server/destinations.ts';
+import { requireLiveDestination, resolveDestinations } from '$lib/server/destinations.ts';
 import { loadTeamView } from '$lib/server/team-view.ts';
 import { writeGateway } from '$lib/shell/db.ts';
 
 import type { PageServerLoad } from './$types';
 
 const TEAMS_DESTINATION_ID = 'teams';
+
+/** The destination the won row's Commissioner control links to (Story 7.13). */
+const CLOSE_REVERSAL_DESTINATION_ID = 'close-reversal';
 
 /**
  * The viewing Team, from the session and nothing else (AD-4).
@@ -59,8 +69,18 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		error(404, 'There is no Team with that id.');
 	}
 
+	const isCommissioner =
+		locals.session.kind === 'registered' && locals.session.manager.isCommissioner;
+
 	return {
 		phase: locals.phase,
+		isCommissioner,
+		// Asked of the ONE catalog rather than of a phase list here (AD-30):
+		// the control shows exactly where `/close-reversal` is live for this
+		// session — a Commissioner, in a phase that permits a reversal.
+		canReverseCloses: resolveDestinations(locals.phase.name, locals.session).some(
+			(entry) => entry.id === CLOSE_REVERSAL_DESTINATION_ID
+		),
 		// Every label and sentence on the page is already chosen by
 		// `core/team-view.ts` — the surface prints them and words nothing
 		// itself.

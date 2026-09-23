@@ -65,7 +65,7 @@ import {
 import type { ClosedAuction } from './projection/closed.ts';
 import type { AuctionContracts } from './projection/contracts.ts';
 import type { Draws } from './projection/draws.ts';
-import { openNominations } from './projection/nominations.ts';
+import { nominationForPlayer, openNominations } from './projection/nominations.ts';
 import type { OpenNominations } from './projection/nominations.ts';
 import { describeAmount } from './rules/bidding.ts';
 
@@ -250,6 +250,24 @@ export type BoardCard = {
 	/** The Auction's own persisted expiry, `null` on every card still open. */
 	readonly closedAt: string | null;
 	readonly viewerState: BoardViewerState;
+	/**
+	 * Whether this closed card's Close was reversed (Story 7.13, FR-32) —
+	 * `false` on every open card and every standing close.
+	 *
+	 * A reversed close is still a closed card: it reads **Reversed**
+	 * (`REVERSED_LABEL`) rather than a close that did not happen, and it
+	 * carries no won glyph — the Contract left the Team, so nobody holds it.
+	 */
+	readonly reversed: boolean;
+	/**
+	 * The reversal's actor and reason, `null` on every card that is not a
+	 * reversed close (Story 7.13). The epic requires the Board to show a
+	 * reversal "as Reversed with actor and reason"; the Manager's NAME is a
+	 * `managers` read, so the core carries the ids and the shell resolves them.
+	 */
+	readonly reversalReason: string | null;
+	readonly reversedByManagerId: string | null;
+	readonly reversedByTeamId: string | null;
 };
 
 /**
@@ -445,6 +463,18 @@ export const BOARD_CLOSES_LABEL = 'Auction Clock';
  */
 export const BOARD_FINAL_LABEL = 'Final amount';
 export const BOARD_WON_BY_LABEL = 'Won by';
+/**
+ * What a REVERSED closed card says beneath `Won by` (Story 7.13, FR-32): who
+ * acted, that the win did not stand, and the Commissioner's reason verbatim.
+ * The Team is still named above it — the reversal is shown, never hidden.
+ *
+ * `actor` is the Commissioner's display name, or `null` when it cannot be
+ * resolved — the sentence then says "the Commissioner" and nothing invented.
+ */
+export function boardReversedStatement(actor: string | null, reason: string): string {
+	const who = actor === null ? 'the Commissioner' : `the Commissioner, ${actor}`;
+	return `Reversed by ${who}. The Player is back in the pool. Reason: ${reason}`;
+}
 export const BOARD_CLOSED_AT_LABEL = 'Closed';
 
 /**
@@ -834,7 +864,11 @@ export function boardCardsFor(
 			winningTeamName: null,
 			winningManagerId: null,
 			closedAt: null,
-			viewerState: viewerStateFor(auction, viewerTeamId)
+			viewerState: viewerStateFor(auction, viewerTeamId),
+			reversed: false,
+			reversalReason: null,
+			reversedByManagerId: null,
+			reversedByTeamId: null
 		});
 	}
 
@@ -844,6 +878,12 @@ export function boardCardsFor(
 	// contract cannot be nominated again (the gate refuses it), and a close
 	// deletes the nomination that would otherwise put them in the loop above.
 	for (const closed of closedAuctions(contracts, draws)) {
+		// **A reversed close gives way to the Player's open nomination**
+		// (Story 7.13). Reversal returns him to the pool, so he can be on the
+		// board again; the live card is the one a Manager acts on, and one
+		// card per Player keeps the board's `#each` key unique.
+		const reversed = closed.reversal !== null;
+		if (reversed && nominationForPlayer(nominations, closed.fantraxPlayerId) !== null) continue;
 		const reference = metadata.get(closed.fantraxPlayerId) ?? null;
 		cards.push({
 			fantraxPlayerId: closed.fantraxPlayerId,
@@ -875,7 +915,12 @@ export function boardCardsFor(
 			winningTeamName: closed.contract.teamName,
 			winningManagerId: closed.winningManagerId,
 			closedAt: closed.contract.closedAt,
-			viewerState: closedViewerStateFor(closed, viewerTeamId)
+			// No won glyph on a reversed close: nobody holds the Contract.
+			viewerState: reversed ? 'not_involved' : closedViewerStateFor(closed, viewerTeamId),
+			reversed,
+			reversalReason: closed.reversal?.reason ?? null,
+			reversedByManagerId: closed.reversal?.reversedByManagerId ?? null,
+			reversedByTeamId: closed.reversal?.reversedByTeamId ?? null
 		});
 	}
 

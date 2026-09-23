@@ -224,6 +224,7 @@ describe('the Teams index — every Team is a row', () => {
 						capHit: parseMoney(2_000_000),
 						rosterSlotKind: 'dead_money',
 						won: false,
+						closeSeq: null,
 						// Story 7.8's two columns. Dead Money is a charge and not a
 						// Contract, so neither is a fact about it.
 						contractYearsRemaining: null,

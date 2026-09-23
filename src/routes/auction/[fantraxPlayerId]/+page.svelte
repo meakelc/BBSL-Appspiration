@@ -64,6 +64,7 @@
 		SEED_REVEALED_LABEL,
 		SELECTED_CONTENDER_ICON,
 		SELECTED_CONTENDER_LABEL,
+		REVERSED_LABEL,
 		VERIFY_INVITATION,
 		VERIFY_PATH
 	} from '$lib/core/projection/closed.ts';
@@ -243,6 +244,8 @@
 		 * The close removes the control, not the record.
 		 */
 		readonly bids: readonly AuctionBid[];
+		/** The reversal of this close, already worded, or `null` (Story 7.13). */
+		readonly reversal: { readonly statement: string } | null;
 		readonly figuresAt: string;
 	};
 
@@ -945,7 +948,9 @@
 			<p class="section-label">{BOARD_FINAL_LABEL}</p>
 			<p class="auction-state">
 				<span class="auction-state-icon" aria-hidden="true">{AUCTION_STATE_ICONS.closed}</span>
-				<span>{AUCTION_STATE_LABELS.closed}</span>
+				<!-- A reversed close reads Reversed, never Closed and never as
+				     a close that did not happen (Story 7.13). -->
+				<span>{closed.reversal === null ? AUCTION_STATE_LABELS.closed : REVERSED_LABEL}</span>
 			</p>
 		</div>
 		<!-- What the Player went for, at the money size this page gives the one
@@ -957,6 +962,11 @@
 			<span class="section-label">{BOARD_WON_BY_LABEL}</span>
 			{closed.winner}
 		</p>
+		{#if closed.reversal !== null}
+			<!-- The reversal, worded by the core: who acted, what it undid and
+			     the reason verbatim. -->
+			<p class="prose" id="auction-reversal">{closed.reversal.statement}</p>
+		{/if}
 		<!-- The close instant, TWICE: the relative phrase and the absolute
 		     stamp in the viewer's own timezone, and the absolute is never
 		     dropped for space. -->

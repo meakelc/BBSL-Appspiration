@@ -39,8 +39,8 @@
 import type { Money } from '../money.ts';
 import { describeAmount } from '../rules/bidding.ts';
 import type { RosterPlacement } from '../types.ts';
-import { contractForPlayer } from './contracts.ts';
-import type { AuctionContract, AuctionContracts } from './contracts.ts';
+import { contractForPlayer, latestReversalFor, reversalOfClose } from './contracts.ts';
+import type { AuctionContract, AuctionContracts, ReversedClose } from './contracts.ts';
 import { drawForPlayer } from './draws.ts';
 import type { Draw, Draws } from './draws.ts';
 
@@ -88,10 +88,26 @@ export type ClosedAuction = {
 	 * different record would name a person who was not there.
 	 */
 	readonly winningManagerId: string | null;
+	/**
+	 * The reversal of this close, or `null` when it stands (Story 7.13, AD-33).
+	 *
+	 * A reversed close is still a closed Auction — shown as **Reversed** with
+	 * the actor and reason, never as a close that did not happen — so it is
+	 * composed here like any other and carries its reversal beside the
+	 * Contract it removed. `contract` is then the Contract AS IT STOOD when it
+	 * was reversed.
+	 */
+	readonly reversal: ReversedClose | null;
 };
 
 /**
  * The Closed state of one Player's Auction, or `null` when there is none.
+ *
+ * **One answer per Player, and the live Contract wins** (Story 7.13). A Player
+ * holding a live Contract answers with it; a Player with none answers with
+ * the LATEST reversed close for him, if any. That keeps one closed card per
+ * Player — the Board keys its `#each` on the Player id — and makes a Player
+ * re-won after a reversal read Closed, not Reversed.
  *
  * `null` covers three different histories on purpose — never nominated,
  * nominated and still open, and drawn but never closed — because a surface
@@ -103,7 +119,12 @@ export function closedAuctionFor(
 	draws: Draws,
 	fantraxPlayerId: string
 ): ClosedAuction | null {
-	const contract = contractForPlayer(contracts, fantraxPlayerId);
+	const live = contractForPlayer(contracts, fantraxPlayerId);
+	const reversal =
+		live === null
+			? latestReversalFor(contracts, fantraxPlayerId)
+			: reversalOfClose(contracts, live.closeSeq);
+	const contract = live ?? reversal?.contract ?? null;
 	if (contract === null) return null;
 	const draw = drawForPlayer(draws, fantraxPlayerId);
 	return {
@@ -131,7 +152,8 @@ export function closedAuctionFor(
 		winningManagerId:
 			draw !== null && draw.kind === 'drawn' && draw.winningTeamId === contract.teamId
 				? draw.winningManagerId
-				: null
+				: null,
+		reversal
 	};
 }
 
@@ -149,7 +171,13 @@ export function closedAuctionFor(
  */
 export function closedAuctions(contracts: AuctionContracts, draws: Draws): readonly ClosedAuction[] {
 	const closed: ClosedAuction[] = [];
-	for (const playerId of Object.keys(contracts.byPlayer).sort()) {
+	// The live Contracts' Players AND every reversed close's Player, once each
+	// (Story 7.13) — `closedAuctionFor` then picks the one answer per Player.
+	const players = new Set(Object.keys(contracts.byPlayer));
+	for (const reversal of Object.values(contracts.reversed)) {
+		players.add(reversal.contract.fantraxPlayerId);
+	}
+	for (const playerId of [...players].sort()) {
 		const one = closedAuctionFor(contracts, draws, playerId);
 		if (one === null) continue;
 		closed.push(one);
@@ -177,6 +205,31 @@ export const CLOSED_LABEL = 'Closed';
  * inventing a second spelling for it would be a synonym nobody asked for.
  */
 export const CLOSED_LABEL_NARROW = 'Closed';
+
+/**
+ * What a reversed close is called, wherever its outcome is shown (Story 7.13,
+ * FR-32). One word, beside `CLOSED_LABEL` and in its register: the Auction
+ * closed, and the Commissioner reversed that close. It is never shown as a
+ * close that did not happen, and never as a win.
+ */
+export const REVERSED_LABEL = 'Reversed';
+
+/**
+ * What a reversed close says of itself, wherever its outcome is shown in
+ * full (Story 7.13, FR-32).
+ *
+ * It states the act, what it undid and the Commissioner's reason verbatim —
+ * never that the Auction did not happen. The winning Team is named because
+ * the Contract left THAT Team, and the Player's return to the pool is stated
+ * because it is the one consequence a reader acts on.
+ */
+export function reversedCloseStatement(reversal: ReversedClose): string {
+	const { contract } = reversal;
+	return (
+		`The Commissioner reversed this Close. ${contract.playerName}'s Contract left ` +
+		`${contract.teamName} and ${contract.playerName} returned to the pool. Reason: ${reversal.reason}`
+	);
+}
 
 /**
  * What each placement is called, in the glossary's own words.

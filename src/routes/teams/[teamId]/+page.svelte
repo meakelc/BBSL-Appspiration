@@ -36,6 +36,8 @@
 		readonly capHitLabel: string;
 		readonly slotKind: string;
 		readonly won: boolean;
+		/** The close a won row came from — what Reverse this Close names (Story 7.13). */
+		readonly closeSeq: string | null;
 		readonly wonSentence: string | null;
 	};
 
@@ -350,6 +352,21 @@
 								{#if entry.wonSentence !== null}
 									<span class="row-note">{entry.wonSentence}</span>
 								{/if}
+								{#if data.canReverseCloses && entry.won && entry.closeSeq !== null}
+									<!-- The first Commissioner control on a roster row
+									     (Story 7.13): on the won Contract, in place. A
+									     link to the reason sheet, dashed and labelled —
+									     the route refuses a non-Commissioner whatever
+									     this rendered. -->
+									<div class="row-commissioner">
+										<div class="commissioner-block">
+											<a
+												class="control-commissioner"
+												href="/close-reversal?close={entry.closeSeq}">Reverse this Close</a
+											>
+										</div>
+									</div>
+								{/if}
 							</li>
 						{/each}
 					</ul>
@@ -448,6 +465,12 @@
 	}
 
 	/* A won Player's placement sentence, beneath the row it belongs to. */
+	/* The Commissioner control on a won row takes a line of its own, so the
+	   name and the figure above it keep their row at 375px. */
+	.row-commissioner {
+		flex-basis: 100%;
+	}
+
 	.row-note {
 		flex-basis: 100%;
 		font-size: var(--size-11);

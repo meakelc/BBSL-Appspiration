@@ -72,6 +72,7 @@ function row(overrides: Partial<TeamRosterRow> = {}): TeamRosterRow {
 		capHit: parseMoney(4_000_000),
 		rosterSlotKind: 'active_bench',
 		won: false,
+		closeSeq: null,
 		// Story 7.8 added both to the row. An ordinary imported Contract with
 		// no rookie-scale designation is the default the Team view is about.
 		contractYearsRemaining: 3,
@@ -791,5 +792,26 @@ describe('the bids figures on a Team view', () => {
 
 		expect(rival.outstandingBidsSentence).toBeTypeOf('string');
 		expect(rival.contentionEntriesSentence).toBeTypeOf('string');
+	});
+});
+
+// --- Story 7.13: the close a won row came from -----------------------------
+
+describe('closeSeq on a roster row (Story 7.13, AD-33)', () => {
+	it('carries the close on a WON row — what Reverse this Close names — and none on an imported one', () => {
+		const view = viewFor({
+			rosterRows: [
+				row({ fantraxPlayerId: 'p-won', won: true, closeSeq: '42' }),
+				row({ fantraxPlayerId: 'p-imported', won: false, closeSeq: null })
+			]
+		});
+		const entries = view.roster.find((group) => group.slotKind === 'active_bench')?.entries ?? [];
+		expect(entries.find((entry) => entry.fantraxPlayerId === 'p-won')?.closeSeq).toBe('42');
+		expect(entries.find((entry) => entry.fantraxPlayerId === 'p-imported')?.closeSeq).toBeNull();
+	});
+
+	it('never carries a close on an imported row, whatever the row says', () => {
+		const view = viewFor({ rosterRows: [row({ won: false, closeSeq: '9' })] });
+		expect(view.roster.find((group) => group.slotKind === 'active_bench')?.entries[0]?.closeSeq).toBeNull();
 	});
 });

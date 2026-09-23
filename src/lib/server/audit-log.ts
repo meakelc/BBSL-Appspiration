@@ -38,6 +38,7 @@ import { error } from '@sveltejs/kit';
 
 import {
 	NO_REFERENCES,
+	reversedClosesIn,
 	UNKNOWN_TYPE_REFUSAL_STATUS,
 	auditPartyIds,
 	auditPlayerOptions,
@@ -240,7 +241,10 @@ export async function loadAuditLog(gateway: ConnectionGateway): Promise<AuditLog
 		const references: AuditReferences = {
 			teamNames,
 			playerNames,
-			managerNames
+			managerNames,
+			// From the SAME events array, so a reversed close's row and the
+			// reversal's own entry cannot describe two different logs (Story 7.13).
+			reversedCloses: reversedClosesIn(events)
 		};
 
 		const rows = auditRowsFor(events, references);

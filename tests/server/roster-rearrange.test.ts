@@ -543,6 +543,7 @@ describe('rearrangingTeamFor — a won row with no folded Contract fails LOUDLY'
 							capHit: parseMoney(0),
 							rosterSlotKind: 'minor_league',
 							won: true,
+							closeSeq: '1',
 							contractYearsRemaining: null,
 							rookieScaleRound: null
 						}
@@ -568,6 +569,7 @@ describe('rearrangingTeamFor — a won row with no folded Contract fails LOUDLY'
 						capHit: parseMoney(5_000_000),
 						rosterSlotKind: 'active_bench',
 						won: false,
+						closeSeq: null,
 						contractYearsRemaining: 3,
 						rookieScaleRound: null
 					}

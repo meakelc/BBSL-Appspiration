@@ -96,7 +96,10 @@ describe('BROADCAST_EVENT_TYPES — seven types, and nothing else', () => {
 			'ContractAssignmentOpened',
 			// Story 6.2. The deadline itself is a league-wide fact; the reminder
 			// that precedes it is not, which is why only one of the pair is here.
-			'AssignmentDeadlinePassed'
+			'AssignmentDeadlinePassed',
+			// Story 7.13. A reversed Close takes back a win the channel heard
+			// about, so the channel hears about the reversal — actor and reason.
+			'AuctionCloseReversed'
 		]);
 	});
 
@@ -730,5 +733,56 @@ describe('noticeFor — AssignmentRemindersSent', () => {
 		expect(noticeFor(event('AssignmentRemindersSent', {}), DIRECTORY)).toBe(
 			'A AssignmentRemindersSent was recorded (event #1).'
 		);
+	});
+});
+
+// --- Story 7.13: a reversed Close ------------------------------------------
+
+describe('noticeFor — AuctionCloseReversed (Story 7.13, FR-32)', () => {
+	const reversal = (overrides: Partial<BroadcastEvent> = {}) =>
+		event(
+			'AuctionCloseReversed',
+			{
+				closeSeq: '7',
+				fantraxPlayerId: PLAYER,
+				playerName: 'Anthony Davis',
+				teamId: BULLS,
+				teamName: 'Bulls',
+				reason: 'Bulls held an IR Contract against the free-agency rule.'
+			},
+			// The actor is the Commissioner — Dana, who holds no Team here.
+			{ managerId: DANA, ...overrides }
+		);
+
+	it('names the actor, the Team the Contract left, and the reason verbatim', () => {
+		expect(noticeFor(reversal(), DIRECTORY)).toBe(
+			'The Commissioner, Dana, reversed the Close that gave Anthony Davis to Bulls — Ari. ' +
+				'Anthony Davis is back in the pool. Reason: Bulls held an IR Contract against the ' +
+				'free-agency rule.'
+		);
+	});
+
+	it('still states the act when the actor cannot be named', () => {
+		expect(noticeFor(reversal({ managerId: null }), DIRECTORY)).toContain(
+			'The Commissioner reversed the Close'
+		);
+	});
+
+	it('falls back to the plain line when the reason is missing', () => {
+		const bare = event('AuctionCloseReversed', { teamId: BULLS, playerName: 'Anthony Davis' });
+		expect(noticeFor(bare, DIRECTORY)).toBe('A AuctionCloseReversed was recorded (event #1).');
+	});
+});
+
+describe('noticeFor — AuctionCloseReversed with no Player name to be had', () => {
+	it('falls back rather than writing "undefined" when the joined name arrives undefined', () => {
+		const nameless = event(
+			'AuctionCloseReversed',
+			{ teamId: BULLS, teamName: 'Bulls', reason: 'A reason.' },
+			{ playerName: undefined as unknown as string | null }
+		);
+		const line = noticeFor(nameless, DIRECTORY);
+		expect(line).not.toContain('undefined');
+		expect(line).toBe('A AuctionCloseReversed was recorded (event #1).');
 	});
 });
