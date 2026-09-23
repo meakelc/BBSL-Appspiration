@@ -1,7 +1,8 @@
 ---
 stepsCompleted: [1, 2, 3]
-updated: 2026-09-18
+updated: 2026-09-23
 amendments:
+  - '2026-09-23 — **Story 7.13 (Reverse an Auction Close) appended to Epic 7 and placed first in its build order**, after the approved Sprint Change Proposal 2026-09-23: BKN won an Auction it had room for only because a Contract sat in Injury Reserve against the league''s free-agency rule. FR-32 inventory line and the Epic 7 summary amended in place. PRD eleventh pass; spine AD-33.'
   - '2026-09-18 — **Story 2.8 RETIRED and FR-35 with it — the first SHIPPED story this breakdown has had to withdraw.** Driven by PRD tenth pass and commit `7bb7a26` on `pilot`, which led the documents deliberately because the gates it fixed were permitting bids mid-auction that the league''s rule forbids. The league corrected a rule this breakdown had built on since 2026-08-16: **you cannot win a Free Agent straight into your minors** — a Team must fit him on its active roster first, and only afterwards may it move him down under FR-44, which is what reopens the Slot. Every Auction win lands in an Active/Bench Slot at the full winning amount, so **Minor League Eligibility is no longer an input to any bidding-time rule**, surviving only in FR-44 and FR-41. No epic and no story added. Requirements inventory amended in place: **FR-35 retired**, FR-12, FR-14, FR-25 and FR-37 rewritten; **AR-40 retired** and its hazard re-pointed at the Projected-Additions / Reserve-Additions pair, AR-8 narrowed; the FR→Epic map struck FR-35 and amended FR-14. Acceptance criteria amended across Epics 1, 2, 3, 6, 7 and 10 — Slot Placement at a Close, the lottery landing test, the sweep''s witness (placement can no longer tell the batched and sequential shapes apart; it now runs at a capacity boundary), the Trade, Drop and Move knock-ons, and FR-37''s eligible carve-out. **One capability was genuinely lost and is outstanding work:** a cap refusal no longer names the Auction holding the money, and PRD FR-13 now requires it back. A second follow-up: sweep the four zero-valued figures out of the core.'
   - '2026-09-17 — **No epic and no story added; six passages amended, and two of them stated the live rule''s exact opposite.** Driven by PRD ninth pass and commit `e5b9cbc`, after SPEC.md CAP-3/CAP-11 were re-derived the same day. The root cause is older than the change signal: **FR-9 was rewritten on 2026-09-14** (commit `523a82a`) so that a Nomination Slot is released when its Team **wins a Player** and at no other time, and neither this file nor SPEC.md absorbed it — so for three days both confidently described the superseded rule, which is the dangerous direction of staleness because nothing fails. Requirements inventory amended in place, as every prior entry did: **FR-9 rewritten**, **FR-10''s 24-hour notification struck** (removed from scope 2026-09-04 as unnecessary rather than deferred — the board flag stays and is the actual requirement), **FR-27 rewritten** (a Close mentions the **winner alone**; the Slot release rides that same line; **no category is mutable**). Epic 5''s header line amended. **Shipped stories are annotated, never rewritten** — the Story 7.6 and 7.10 precedent: Story 2.3''s two fold criteria, Story 5.3''s trigger list and its 24-hour criterion, Story 5.4''s three-mutable-categories and mute-suppression criteria, Story 10.5''s *"the Slot is released as on any Close"* (backwards — a termination has no winner and frees no Slot), and Story 10.6''s inherited *"the mutable set stays exactly slot_release"*. Story 5.4 keeps its now-false TITLE deliberately, with a note, because the title is part of the record. Nothing is renumbered. Story 5.4''s unmutable criterion was **broadened rather than struck** — it is the one that got *more* true. Amend this file in place, as every entry here did; bmad-create-epics-and-stories has no update path and its step-01 would overwrite the file.'
   - '2026-09-16 — **Epic 11 (Take it back — ninety seconds to undo a bid) appended**, and **Story 7.12 appended to Epic 7**, after PRD FR-15 was REVERSED from a prohibition to a rule (commit c49898e) and the architecture spine, the PRD again, and SPEC.md were all brought current for it the same day. Requirements inventory amended in place: **FR-15 rewritten** — it read "no voluntary bid retraction" from 2026-08-16, and the 2026-09-08 narrowing existed specifically to keep the Team locked out while FR-40 let the system act; **FR-43 exception STRUCK**, deleted upstream 2026-09-16; **AR-45 … AR-48 added**; **UX-DR42 … UX-DR44 added**; **four stale ranges corrected** — the FR inventory header (FR-40 to FR-44), the Coverage Map header (FR-43 to FR-44), and NFR1 and AR-25 (examples 1–28 to 1–57). Epics 1–6 and 8–10 are untouched, as are Stories 7.1–7.11, which are NOT renumbered. **Story 7.6 is annotated rather than rewritten**: it shipped 2026-09-10, and its rookie-scale acceptance criterion is struck through with a superseding note instead of being edited away, because it is the record its code was verified against — the same treatment Story 7.10 gave Story 7.9. **Story 7.12 RECORDS work already in the code** (commit 5222c13) rather than scheduling it, because a deleted rule is the dangerous direction of staleness: it leaves an artifact confidently describing behaviour that no longer exists, and nothing fails. PRD §10 example 12 is deliberately left OUT of Epic 11 — it is the unbid-nomination case and belongs with Epic 2''s nomination stories. Amend this file in place, as every entry here did; bmad-create-epics-and-stories has no update path and its step-01 would overwrite the file.'
@@ -103,7 +104,7 @@ FR-31: Commissioner can mark the auction archived — read-only thereafter, acce
 
 **§4.10 Commissioner Controls and Audit**
 
-FR-32: Commissioner can void a Bid, adjust Cap Space, terminate an Auction, release a Nomination Slot, extend or expire any Clock, and assign a contract length on a Team's behalf — each requiring a free-text reason before commit, each logged with before-state and after-state; voiding a Bid restores the prior Leading Bidder and prior Auction Clock **and** recomputes the League Clock without that Bid's reset, prospectively only; refused once archived.
+FR-32: Commissioner can void a Bid, adjust Cap Space, terminate an Auction, **reverse an Auction Close** (the winner's Contract removed and the Player returned to the pool, nothing else undone — *added 2026-09-23*), release a Nomination Slot, extend or expire any Clock, and assign a contract length on a Team's behalf — each requiring a free-text reason before commit, each logged with before-state and after-state; voiding a Bid restores the prior Leading Bidder and prior Auction Clock **and** recomputes the League Clock without that Bid's reset, prospectively only; refused once archived.
 FR-33: Any Manager can read the complete Audit Log — append-only and uneditable by any role including the Commissioner, covering every Nomination, Bid, Close, draw with seed, override, import and export, filterable by Team, Player and event type, and exportable.
 FR-34: Commissioner can pause and resume the entire auction — every Clock stops advancing, Bids and Nominations are refused with the pause stated as the reason, each Clock resumes with exactly the remaining time it held, and both acts are announced to Managers and posted to Discord.
 
@@ -383,7 +384,7 @@ Every Manager assigns contract lengths against their Year Allotment, and the Com
 
 ### Epic 7: The referee's controls and the record
 
-The Commissioner can void a Bid, adjust Cap Space, terminate an Auction, release a Nomination Slot, extend or expire any Clock, assign a length on a Team's behalf, and pause and resume the whole auction — every act carrying a mandatory free-text reason and a before/after — and any Manager can read the complete append-only Audit Log. The Commissioner can also **record what happened in Fantrax**: a trade, or a drop and the Dead Money it leaves behind, with both Teams' cap and slot positions recomputing from it — and be told when Fantrax and the app have drifted apart at all.
+The Commissioner can void a Bid, adjust Cap Space, terminate an Auction, reverse a Close that should not have stood, release a Nomination Slot, extend or expire any Clock, assign a length on a Team's behalf, and pause and resume the whole auction — every act carrying a mandatory free-text reason and a before/after — and any Manager can read the complete append-only Audit Log. The Commissioner can also **record what happened in Fantrax**: a trade, or a drop and the Dead Money it leaves behind, with both Teams' cap and slot positions recomputing from it — and be told when Fantrax and the app have drifted apart at all.
 
 **FRs covered:** FR-32, FR-33, FR-34, **FR-41, FR-42, FR-43** *(added 2026-09-10)*, **FR-44** *(added 2026-09-12)*
 
@@ -2052,7 +2053,7 @@ So that the record stays readable forever and nothing can be changed after the f
 
 ## Epic 7: The referee's controls and the record
 
-The Commissioner can void a Bid, adjust Cap Space, terminate an Auction, release a Nomination Slot, extend or expire any Clock, assign a length on a Team's behalf, and pause and resume the whole auction — every act carrying a mandatory free-text reason and a before/after — and any Manager can read the complete append-only Audit Log. Since 2026-09-10 the Commissioner can also record a trade or a drop that happened in Fantrax, and be told when Fantrax and the app have drifted apart.
+The Commissioner can void a Bid, adjust Cap Space, terminate an Auction, reverse a Close that should not have stood, release a Nomination Slot, extend or expire any Clock, assign a length on a Team's behalf, and pause and resume the whole auction — every act carrying a mandatory free-text reason and a before/after — and any Manager can read the complete append-only Audit Log. Since 2026-09-10 the Commissioner can also record a trade or a drop that happened in Fantrax, and be told when Fantrax and the app have drifted apart.
 
 ### Implementation order — trade functions first
 
@@ -2062,6 +2063,7 @@ The Commissioner can void a Bid, adjust Cap Space, terminate an Auction, release
 
 | Build | Story | Depends on | Note |
 | --- | --- | --- | --- |
+| **0 — urgent, live incident** | **7.13** Reverse an Auction Close | 7.1, 7.5, 7.11 (all done) | Added 2026-09-23. Needs none of 7.2 – 7.4. See the AD-20 note in the story |
 | **parallel, start now** | **7.6** Dead Money and the rookie-scale designation *(its `2RK` clause since deleted — Story 7.12)* | **nothing** | The only story here with no dependency on 7.1. Pure core, adapter, migration and a display change; also fixes a latent import defect on its own merits |
 | **1** | **7.1** The Commissioner control class and the reason sheet | — | **Smaller than it reads.** `src/lib/styles/commissioner.css` and `src/lib/server/commissioner-guard.ts` shipped in Epic 1; what remains is the reason sheet, which nothing in `src/` implements yet |
 | **2** | **7.7** Record a Roster Trade | 7.1 | **Trades work from here.** Two stories to a usable tool |
@@ -2651,6 +2653,71 @@ So that no designation on a contract can quietly hand a team money the League sa
 **Then** the way back is a **new rule**, never a designation test reintroduced into the one expression that decides the amount
 
 ---
+
+### Story 7.13: Reverse an Auction Close
+
+*(New 2026-09-23, from `sprint-change-proposal-2026-09-23.md`. BKN won an Auction it had room for only because Ja Morant sat in an Injury Reserve Slot, against the league's rule that during free agency IR holds only a player not expected to start the season. Nothing in the product could take a closed Auction's Player back. PRD FR-32, §10 example 58; ARCHITECTURE-SPINE AD-33.)*
+
+As the Commissioner,
+I want to reverse a Close that should not have stood and return its Player to the pool,
+So that a win the rules would have refused is undone in the open, without rewriting anything anybody else did.
+
+**Acceptance Criteria:**
+
+**Given** a closed Auction whose Auction Contract is still held by its winning Team
+**When** the Commissioner reverses its Close
+**Then** one `AuctionCloseReversed` compensating event is appended, naming the reversed `AuctionClosed` by `seq`, the Player, the Team, the winning amount, the Cap Hit, the Contract's current placement, whether a Nomination Slot is re-held, and the reason
+**And** the original `AuctionClosed`, and every `BidPlaced` and `BidCancelled` before or after it, are **never** deleted or mutated (AD-4)
+**And** the reason sheet is mandatory, per Story 7.1
+
+**Given** a reversed Close
+**When** the projections fold it
+**Then** the winning Team no longer holds the Contract: its Cap Hit leaves Cap Space and, where it sat in Active/Bench, Roster Count falls by one
+**And** the Player is nominatable again by any Team, because the `under_contract` gate no longer finds him
+**And** the fold remembers **which close `seq`s are reversed**, so a re-folded duplicate of the reversed close never brings the Contract back, and a later, genuine close of the same Player produces a fresh Contract (AD-5, AD-33)
+
+**Given** the Close had released the winning Team's Nomination Slot (`releasedNominationSlot: true`)
+**When** the reversal commits
+**Then** the Slot is re-held **only if the Team holds none now**, and its claim row is re-inserted in the same transaction
+**And** if the Team has since nominated with it, that Nomination stands, nothing is re-held, and the reason sheet says so in words
+
+**Given** Bid Cancellations the Close caused under FR-40
+**When** the Close is reversed
+**Then** they and their restorations stand unchanged, and the reason sheet lists each one as not undone
+**And** the League Clock is not recomputed; no reset is removed
+
+**Given** the won Contract has since been traded (Story 7.7) or dropped (Story 7.8)
+**When** a reversal is attempted
+**Then** it is refused as a machine-readable rejection naming the act, the date and the Team now holding the Player
+**And** a Contract moved between Slots within its own Team (Story 7.11) does **not** block it: the reversal removes it from whichever Slot it now occupies
+
+**Given** a Close already reversed, or an archived auction
+**When** a reversal is attempted
+**Then** it is refused
+
+**Given** the reason sheet
+**When** it renders
+**Then** it names the act in Georgia — *Reverse this Close*
+**And** it shows before → after for the Team's Cap Space, Available Cap Space, Maximum Bid, Roster Count and Nomination Slot
+**And** an `attention` note states in words that the Player returns to the pool, that nothing else is undone, and — where the Team holds a Contract in Injury Reserve — that a Roster Move is the separate next step, taken **after** the reversal because before it the Move would breach the ceiling of 12
+**And** during the Contract Assignment Phase it also states that the Team falls below twelve and cannot export until resolved
+
+**Given** where the control lives
+**When** it is placed
+**Then** it sits **on the won Auction Contract's row** on the Team's roster, beside the Commissioner Roster Move, in the Commissioner control class
+**And** not on a closed-Auction page, which does not yet exist (deferred-work, spec-3-6)
+
+**Given** a reversal
+**When** it is broadcast and logged
+**Then** it is posted to Discord with the actor and reason, mentioning the winning Team's Managers
+**And** the Audit Log shows it as a distinct **Close Reversal** entry, filterable by Team, Player and event type
+**And** the closed Auction reads **Reversed** wherever its outcome is shown
+
+**Given** the §10 suite
+**When** it runs
+**Then** PRD §10 example **58** passes as a named test
+
+**Deployment (AD-20).** This story touches `src/lib/core/` during a live Auction Phase, and AD-20's required pause (AD-13) does not exist yet — Story 7.4 is backlog. Deploy in a quiet window with the §10 suite green and a **recorded reason** stating that no pause was available (`sprint-change-proposal-2026-09-23.md` §5).
 
 ## Epic 8: Ready to open — rehearsal, liveness, and restore
 

@@ -7,11 +7,11 @@ paradigm: 'functional core / imperative shell, with an event-sourced auction dom
 scope: 'The whole v1 system: Fantrax CSV import, identity, nomination, bidding and cap enforcement, clocks and contention, the bid board, notifications, contract assignment, export, commissioner controls and audit.'
 status: final
 created: '2026-08-16'
-updated: '2026-09-18'
+updated: '2026-09-23'
 binds:
   - 'FR-1 … FR-44 (PRD §4)'
   - 'NFR set (PRD §5)'
-  - 'Rule resolution examples 1–57 (PRD §10)'
+  - 'Rule resolution examples 1–58 (PRD §10)'
   - 'CAP-1 … CAP-23 (SPEC.md)'
 sources:
   - '_bmad-output/planning-artifacts/prds/prd-BBSL-Appspiration-2026-08-16/prd.md'
@@ -87,7 +87,7 @@ Dependencies point one way only: **shell → core**. The core imports nothing fr
 
 ### AD-4 — The auction domain is an append-only event log
 
-- **Binds:** nominations, bids, closes, draws, phase transitions, overrides; FR-32, FR-33; NFR §5 "Measurability"
+- **Binds:** nominations, bids, closes, draws, phase transitions, overrides **including a Close Reversal (AD-33, added 2026-09-23)**; FR-32, FR-33; NFR §5 "Measurability"
 - **Prevents:** an audit log maintained as a parallel system that drifts the first time someone forgets to write to it
 - **Rule:** `auction_events` is insert-only; no `UPDATE` or `DELETE` is granted to any role, including the service role and the commissioner. FR-33's audit log is a read of this table, not a second table. Correcting anything — including FR-32's bid voiding — appends a compensating event and never mutates history. Every event carries a monotonic `seq` (database-assigned on insert), an `occurredAt`, a `schemaVersion`, a `coreVersion` (AD-24), the acting manager and team, and — because an insert-only log cannot be backfilled — the **measurement fields §5 requires**: device class on bid and nomination events, and dispatch plus delivery outcome on notification events. Imported reference data stays in ordinary mutable tables; **the world is not event-sourced, only the auction is.**
 
@@ -95,7 +95,7 @@ Dependencies point one way only: **shell → core**. The core imports nothing fr
 
 - **Binds:** all current-state tables read by the UI; FR-23 – FR-25, FR-39
 - **Prevents:** the log and the tables disagreeing, and a corrupt projection becoming unrecoverable state
-- **Rule:** projections are written only by folding events, inside the same transaction that appends them. **Folds are ordered by `seq`, never by `occurredAt`** — under AD-6 a transaction queued on the lock commits later while holding an earlier timestamp, so timestamp order and commit order differ. A full rebuild must be possible at any time and must be **deterministic given the same event log and the same reference-data snapshot**; because folds read mutable reference data (cap hits, eligibility flags, commissioner corrections), reference-data mutations are themselves recorded as events so a rebuild reproduces the world as it stood, not as it is now. A rebuild is idempotent: replaying `AuctionClosed` must converge on the same contract rows rather than duplicating them.
+- **Rule:** projections are written only by folding events, inside the same transaction that appends them. **Folds are ordered by `seq`, never by `occurredAt`** — under AD-6 a transaction queued on the lock commits later while holding an earlier timestamp, so timestamp order and commit order differ. A full rebuild must be possible at any time and must be **deterministic given the same event log and the same reference-data snapshot**; because folds read mutable reference data (cap hits, eligibility flags, commissioner corrections), reference-data mutations are themselves recorded as events so a rebuild reproduces the world as it stood, not as it is now. A rebuild is idempotent: replaying `AuctionClosed` must converge on the same contract rows rather than duplicating them. *(Since 2026-09-23, "converge" means modulo the reversed-close set of AD-33: a reversed close yields no row however often it is replayed.)*
 
 ### AD-6 — One global write lock, one key
 
@@ -346,6 +346,17 @@ Dependencies point one way only: **shell → core**. The core imports nothing fr
 - **The Fantrax read is shell, adapter-confined, and writes nothing.** It runs outside the write lock and outside the core: the core reads no clock and no network (AD-1, AD-3), and a divergence is not a rule. Every field name and response shape stays inside `adapters/fantrax/` (AD-24), so a shape change between offseasons is one module. **A read produces a proposal and never an event, a row, or a projection.** That guarantee is **structural, not a naming convention**: the reader is a pure function that **never receives a database client as an argument**, so a write from inside it is a type error rather than a discipline someone has to remember. Only the calling shell code persists what the reader returns. Role separation would be the stronger control, as AD-9 gives the browser and AD-16 gives anonymous reads — but every server-side adapter here holds the one service role, including the Fantrax *importer*, which legitimately writes. Reader and importer therefore sit in one module under one credential, and the argument-shape rule is what keeps a future shared helper from quietly growing the write path this AD forbids.
 - **The detector's failure mode is stated, not silent.** A reader that has stopped answering must render as *stopped*, never as *no divergences* (FR-42). This is the same reasoning AD-19 applies to the tick heartbeat: the dangerous state is not the outage, it is the outage that looks like health.
 
+### AD-33 — A Close is reversed by a compensating event, and a reversal undoes exactly one thing
+
+*(Added 2026-09-23 by `sprint-change-proposal-2026-09-23.md`: a Team won a Player it had room for only because a Contract sat in Injury Reserve against the league's free-agency rule, and nothing in the product could take a closed Auction's Player back.)*
+
+- **Binds:** FR-32, FR-33; `core/projection/contracts.ts`, `core/projection/nominations.ts`, `core/rules/`; AD-4, AD-5, AD-6, AD-31, AD-32; PRD §10 example 58; Story 7.13
+- **Prevents:** a Close undone by deleting or editing the log, a Contract that comes back when a reversed close is folded again, and a reversal that grows into cross-Auction surgery
+- **Rule:** reversing a Close appends **one** `AuctionCloseReversed` naming the reversed close's `seq`. The Auction ends with no winner and the Player returns to the pool — **and that is all it does**. It does **not** unwind the FR-40 cancellations the Close caused, does **not** touch the League Clock, and does **not** reopen the Auction. Each of those would be a second rule meeting reality, and the league chose termination precisely so that none of them is needed (2026-09-23). The one other effect is bounded and recorded on the event: a Nomination Slot the Close released is re-held **only if the Team holds none now**.
+- **Convergence is restated, not abandoned.** AD-5's *"replaying `AuctionClosed` must converge"* held under first-close-wins, and `contracts.ts` documented a second close for a Player as unreachable. A reversed Player can be nominated and won again, so that is no longer true. `contractsReducer` now keeps the set of **reversed close `seq`s**: a close in that set yields no Contract whatever order or multiplicity it is folded in, and a close not in it yields one as before. A Player holds at most one live Auction Contract at a time without the fold assuming he is only ever won once.
+- **A reversal is a world change for the winning Team, and it refuses rather than cascades (AD-32).** It can only *free* capacity and cap, so it can trigger nothing — no cancellation, no restoration. It is refused, never adapted, when the Contract has since moved to another Team or been dropped; a Contract moved between Slots within its own Team is removed from wherever it now sits.
+- **No migration.** `auction_events.event_type` is generic `text`. A re-held Nomination Slot's claim row is re-inserted into its existing table (`20260914000000_nomination_slot_released_on_win.sql`), inside the appending transaction, through the projection seam `server/nomination.ts` already uses.
+
 ## Consistency Conventions
 
 | Concern | Convention |
@@ -554,7 +565,7 @@ bbsl-auction/
 | §4.7 Notifications (FR-26, FR-27) | `adapters/discord`, `functions/tick` | AD-17, AD-18, AD-27, AD-21 |
 | §4.8 Contract assignment (FR-28, FR-29) | `core/rules/allotment`, `routes/team/contracts` | AD-1, AD-4, AD-23 |
 | §4.9 Export to Fantrax (FR-30, FR-31, FR-36) | `adapters/fantrax/export`, `routes/admin/export` | AD-24, AD-8, AD-23 |
-| §4.10 Commissioner controls & audit (FR-32 – FR-34) | `core/rules/override`, `routes/admin` | AD-4, AD-13, AD-15, `Audit` convention |
+| §4.10 Commissioner controls & audit (FR-32 – FR-34) | `core/rules/override`, `routes/admin` | AD-4, AD-13, AD-15, AD-33, `Audit` convention |
 | §4.10 Roster Trades, Drops & Moves (FR-41, FR-43, FR-44; CAP-22) | `core/rules/bidding` (gates reused), `core/rules/roster-act`, `core/rules/roster-import`, `core/projection/contracts`, `routes/admin` and one Manager-facing route, one migration (FR-43 only) | **AD-32**, AD-4, AD-5, AD-6, AD-23, AD-26, AD-31 |
 | §4.10 Roster Divergence (FR-42; CAP-23) *(contingent)* | `adapters/fantrax/`, shell reader, `routes/admin` | **AD-32**, AD-24, AD-19, AD-1 |
 | §5 Rule correctness | `tests/examples/` | AD-25, AD-1 |
