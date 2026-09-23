@@ -125,6 +125,23 @@ function fakeGateway(
 		 * inside a live contention and simply comes back empty.
 		 */
 		sealedSeed?: string;
+		/**
+		 * A row `auction_contention_seeds` already holds for some Player, as
+		 * though committed by an EARLIER, now-concluded round (Story 7.13,
+		 * AD-14) — the row a close-then-reversal-then-renomination leaves
+		 * behind, since this table has no delete path.
+		 *
+		 * `undefined` is the ordinary case: no prior round, no existing row.
+		 * When given, the fake's `insert into auction_contention_seeds`
+		 * handler enforces the table's real primary key exactly as Postgres
+		 * would — a plain insert against an occupied key throws `23505`; only
+		 * `on conflict (fantrax_player_id) do update` succeeds. That is what
+		 * makes `recordContentionSeed`'s regression provable here rather than
+		 * merely asserted: revert its `on conflict` clause and this option's
+		 * test starts throwing again, for the identical reason a Manager's
+		 * Bid did.
+		 */
+		existingContentionSeed?: { fantraxPlayerId: string; seed: string; createdAt?: string };
 	} = {}
 ) {
 	const order: string[] = [];
@@ -138,6 +155,26 @@ function fakeGateway(
 	 * does not recognise, which is what makes the absence provable.
 	 */
 	let seedRows: unknown[][] = [];
+	// The table's own state, as Postgres would hold it — keyed on
+	// `fantrax_player_id`, exactly as `auction_contention_seeds_pkey` is.
+	// Pre-seeded from `existingContentionSeed` when given, and snapshotted so
+	// a ROLLBACK can restore exactly what a real Postgres rollback would
+	// leave standing: whatever existed before this transaction, and nothing
+	// this transaction wrote.
+	const seedTable = new Map<string, { seed: string; createdAt: unknown }>(
+		options.existingContentionSeed === undefined
+			? []
+			: [
+					[
+						options.existingContentionSeed.fantraxPlayerId,
+						{
+							seed: options.existingContentionSeed.seed,
+							createdAt: options.existingContentionSeed.createdAt ?? '2026-08-01T00:00:00.000Z'
+						}
+					]
+				]
+	);
+	const seedTableBeforeTransaction = new Map(seedTable);
 	let seq = 40;
 	let released = 0;
 	let committed = false;
@@ -191,6 +228,22 @@ function fakeGateway(
 				};
 			}
 			if (/^insert into auction_contention_seeds/i.test(sql)) {
+				const [fantraxPlayerId, seed, createdAt] = queryParams;
+				const key = String(fantraxPlayerId);
+				const onConflict = /on conflict/i.test(sql);
+				// The table's real primary key, enforced exactly as Postgres would:
+				// a plain insert against an occupied key is a `23505` — the failure
+				// a Manager saw as a bare 500 before `recordContentionSeed` gained
+				// its `on conflict` clause (Story 7.13's regression).
+				if (seedTable.has(key) && !onConflict) {
+					throw Object.assign(
+						new Error(
+							`duplicate key value violates unique constraint "auction_contention_seeds_pkey"`
+						),
+						{ code: '23505' }
+					);
+				}
+				seedTable.set(key, { seed: String(seed), createdAt });
 				order.push('append-seed');
 				seedRows.push([...queryParams]);
 				return { rows: [] };
@@ -230,6 +283,12 @@ function fakeGateway(
 				// that rolls back.
 				appendedEvents.length = 0;
 				seedRows = [];
+				// The table itself rolls back to what stood before this
+				// transaction opened — a pre-existing row (from an earlier,
+				// already-committed round) survives; anything THIS transaction
+				// wrote does not.
+				seedTable.clear();
+				for (const [key, value] of seedTableBeforeTransaction) seedTable.set(key, value);
 				return { rows: [] };
 			}
 			// Story 5.2 registered `enqueueBroadcasts` on this write, so the
@@ -289,6 +348,10 @@ function fakeGateway(
 		appendedEvents,
 		get seedRows() {
 			return seedRows;
+		},
+		/** The seed table's current row for one Player, or `undefined`. */
+		seedTableRowFor(fantraxPlayerId: string) {
+			return seedTable.get(fantraxPlayerId);
 		},
 		state: {
 			get released() {
@@ -1466,6 +1529,55 @@ describe('placeBid — the lottery seed (AC5, AD-14)', () => {
 			seeds.add(String(harness.seedRows[0]?.[1]));
 		}
 		expect(seeds.size).toBe(5);
+	});
+
+	/**
+	 * **Story 7.13's regression.** A close can now be reversed (AD-33), the
+	 * Player renominated, and a fresh Minimum-Bid Contention opened on him a
+	 * SECOND time — but `auction_contention_seeds` is keyed on
+	 * `fantrax_player_id` alone and has no delete path, so the row the FIRST
+	 * round's opening wrote is still sitting on that key. Before
+	 * `recordContentionSeed` gained its `on conflict` clause, the second
+	 * opening's plain `insert` collided with it — a `23505` raised inside
+	 * `runTransactionalWrite`'s `projections` hook, uncaught anywhere in the
+	 * write pipeline (`shell/write.ts` re-throws unchanged), which reached a
+	 * Manager as a bare 500 rather than any refusal this core words.
+	 *
+	 * `fakeGateway`'s `existingContentionSeed` reproduces exactly that stale
+	 * row, and its insert handler enforces the real primary key — so this
+	 * test fails the way the bug did if `recordContentionSeed` ever loses its
+	 * `on conflict` clause.
+	 */
+	it('opens a SECOND Minimum-Bid Contention for a Player whose reversed close already sealed one', async () => {
+		const harness = fakeGateway({
+			events: [nominated()],
+			existingContentionSeed: {
+				fantraxPlayerId: 'p-1',
+				seed: 'a'.repeat(64),
+				createdAt: '2026-08-01T00:00:00.000Z'
+			}
+		});
+
+		const outcome = await placeBid(
+			harness.gateway,
+			ACTOR,
+			'p-1',
+			parseMoney(1_000_000),
+			DEVICE_CLASS
+		);
+
+		expect(outcome.kind).toBe('accepted');
+		expect(harness.order).toContain('append-seed');
+		expect(harness.state.rolledBack).toBe(false);
+
+		// The stale row is OVERWRITTEN with the new round's seed — the old
+		// round's reveal is already durable in `auction_events` by the time a
+		// second round can exist at all, so the sealed copy is dead weight the
+		// instant the first round concluded, and keeping it would leave the
+		// SECOND round unable to reach its own reveal.
+		const [, freshSeed] = harness.seedRows[0] ?? [];
+		expect(freshSeed).not.toBe('a'.repeat(64));
+		expect(harness.seedTableRowFor('p-1')?.seed).toBe(freshSeed);
 	});
 
 	it('writes NO seed row on an ordinary opening, a raise or a join', async () => {

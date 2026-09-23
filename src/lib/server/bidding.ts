@@ -354,12 +354,35 @@ function generateSeed(): string {
  * silent: a row written for a Bid whose payload published nothing, or a
  * published commitment with no seed to reveal.
  *
- * Deliberately NOT `on conflict do nothing`. The primary key is one seed per
- * Player's contention, and a collision means an opening was accepted for an
- * Auction that already had one — a state the gates make unreachable. Swallowing
- * it would leave the published commitment pointing at the WRONG seed, which is
- * the one failure AD-14 cannot survive; aborting the transaction refuses the
- * Bid instead.
+ * **`on conflict` UPSERTs since Story 7.13, and that story is exactly why.**
+ * Until close reversal existed, the primary key really did mean "one seed per
+ * Player, ever" — a Player was won at most once, so a collision could only
+ * mean an opening accepted for a contention that already had one, a state the
+ * gates made unreachable. Story 7.13 made a SECOND genuine opening for the
+ * same Player reachable: a close can be reversed, the Player renominated, and
+ * a fresh Minimum-Bid Contention opened at the same `MINIMUM_BID` a second
+ * time — and the row from the FIRST round was still sitting on the primary
+ * key, because this table has no delete path at all (`AD-14`'s "read, never
+ * re-written" was written before a second round was possible). The insert then
+ * raised `23505`, uncaught anywhere in the write pipeline, which surfaced to a
+ * Manager as a bare 500 rather than any refusal this core words.
+ *
+ * **The overwrite is safe, and it is safe for a reason that is still
+ * structural rather than assumed.** By the time a SECOND opening for one
+ * Player reaches this hook, the FIRST round is guaranteed already concluded —
+ * `refuseNomination`'s `already_nominated`/`under_contract` gates refuse a
+ * nomination for a Player still on the board or under contract, so a second
+ * `NominationPlaced`, and so a second opening `BidPlaced`, cannot exist while
+ * the first round's Auction is still live. And a concluded round has ALWAYS
+ * already revealed its seed into `auction_events` before it could conclude — a
+ * live Minimum-Bid Contention cannot be closed or terminated without first
+ * being drawn or dissolved (`rules/close.ts`), both of which write the reveal
+ * to the log. So any row this upsert would replace belongs to a round whose
+ * seed the log has already published in the clear; the sealed copy is dead
+ * weight from the instant that round ended, and overwriting it loses nothing
+ * AD-14 protects. A genuine same-round double-write — two openings for one
+ * Player's one LIVE contention — remains exactly as unreachable as before,
+ * because nothing here changed what makes an opening reachable at all.
  *
  * A factory rather than a bare `ProjectionUpdater` because the seed is per
  * transaction: `placeBid` generates one, passes it to `decide()` and closes
@@ -380,7 +403,9 @@ export function recordContentionSeed(seed: string): ProjectionUpdater {
 			await client.query(
 				`insert into ${CONTENTION_SEEDS_TABLE}
 					(fantrax_player_id, seed, created_at)
-				values ($1, $2, $3)`,
+				values ($1, $2, $3)
+				on conflict (fantrax_player_id) do update
+					set seed = excluded.seed, created_at = excluded.created_at`,
 				// The EVENT's own instant, not a second clock read: the row and
 				// the event it belongs to state the same moment (AD-3).
 				[payload.fantraxPlayerId, seed, event.occurredAt]
