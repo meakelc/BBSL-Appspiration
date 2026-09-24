@@ -82,7 +82,7 @@ export type Credentials = { readonly url: string; readonly key: string };
 /**
  * Everything this module reaches the world through.
  *
- * All four have real defaults, so production constructs the contract with no
+ * All five have real defaults, so production constructs the contract with no
  * arguments at all; a test substitutes the ones it needs and drives the poll
  * and the channel callbacks directly.
  */
@@ -95,6 +95,33 @@ export type FreshnessPorts = {
 	readonly credentials?: () => Credentials;
 	/** Re-runs every `load`. `invalidateAll` in production. */
 	readonly reload?: () => Promise<void>;
+	/** Whether the tab is hidden, and a way to hear it change. `document` in production. */
+	readonly visibility?: Visibility;
+};
+
+/**
+ * The page's visibility, as the poll needs it.
+ *
+ * A port rather than a direct `document` read for the reason every other
+ * collaborator here is one: the suite runs in `node`, where there is no
+ * `document`, and the pause-while-hidden behaviour is exactly the kind of
+ * thing a source-text assertion cannot see.
+ */
+export type Visibility = {
+	/** True when the tab is backgrounded. False wherever there is no document. */
+	readonly hidden: () => boolean;
+	/** Call `listener` on every visibility change; returns the unsubscribe. */
+	readonly watch: (listener: () => void) => () => void;
+};
+
+/** The real page's visibility, inert during SSR where `document` does not exist. */
+const documentVisibility: Visibility = {
+	hidden: () => typeof document !== 'undefined' && document.visibilityState === 'hidden',
+	watch: (listener) => {
+		if (typeof document === 'undefined') return () => {};
+		document.addEventListener('visibilitychange', listener);
+		return () => document.removeEventListener('visibilitychange', listener);
+	}
 };
 
 /**
@@ -143,7 +170,7 @@ export class FreshnessContract {
 	#client: SupabaseClient | null = null;
 	#subscription: RealtimeChannel | null = null;
 	#ticking: ReturnType<typeof setInterval> | null = null;
-	#onVisible: (() => void) | null = null;
+	#unwatchVisibility: (() => void) | null = null;
 
 	/** A reload is in flight. */
 	#reloading = false;
@@ -166,7 +193,8 @@ export class FreshnessContract {
 					url: env['PUBLIC_SUPABASE_URL'] ?? '',
 					key: env['PUBLIC_SUPABASE_ANON_KEY'] ?? ''
 				})),
-			reload: ports.reload ?? (() => invalidateAll())
+			reload: ports.reload ?? (() => invalidateAll()),
+			visibility: ports.visibility ?? documentVisibility
 		};
 	}
 
@@ -236,10 +264,23 @@ export class FreshnessContract {
 		if (this.#started) return;
 		this.#started = true;
 		this.#openChannel();
+		if (!this.#ports.visibility.hidden()) this.#startInterval();
+		this.#watchVisibility();
+	}
+
+	/** Begin polling on `LIVENESS_INTERVAL`. A no-op when already polling. */
+	#startInterval(): void {
+		if (this.#ticking !== null) return;
 		this.#ticking = setInterval(() => {
 			this.#tick();
 		}, LIVENESS_INTERVAL);
-		this.#watchVisibility();
+	}
+
+	/** Stop polling. A no-op when not polling. */
+	#stopInterval(): void {
+		if (this.#ticking === null) return;
+		clearInterval(this.#ticking);
+		this.#ticking = null;
 	}
 
 	/**
@@ -253,15 +294,10 @@ export class FreshnessContract {
 	 * nothing here worth keeping.
 	 */
 	stop(): void {
-		if (this.#ticking !== null) {
-			clearInterval(this.#ticking);
-			this.#ticking = null;
-		}
-		if (this.#onVisible !== null) {
-			if (typeof document !== 'undefined') {
-				document.removeEventListener('visibilitychange', this.#onVisible);
-			}
-			this.#onVisible = null;
+		this.#stopInterval();
+		if (this.#unwatchVisibility !== null) {
+			this.#unwatchVisibility();
+			this.#unwatchVisibility = null;
 		}
 		if (this.#subscription !== null) {
 			// `removeChannel` returns a promise; a rejection during teardown is
@@ -286,27 +322,30 @@ export class FreshnessContract {
 	}
 
 	/**
-	 * Poll the moment the tab is looked at again.
+	 * Stop polling while the tab is hidden, and poll the moment it is looked at
+	 * again.
 	 *
-	 * **`setInterval` is throttled — often to once a minute — in a backgrounded
-	 * tab.** Going Stale while the phone is face-down is correct; still being
-	 * Stale for most of a minute after it is picked up is not, and the AC says
-	 * so: recovery is immediate and silent. The interval alone cannot deliver
-	 * that, because the interval is the thing being throttled. This listener is
-	 * what makes the first thing a returning Manager's tab does be a liveness
-	 * check.
+	 * **A hidden tab does not poll at all.** Every poll is a billed Netlify
+	 * Function invocation, and a tab left open overnight was one a minute even
+	 * under the browser's background throttling — for a page nobody is reading.
+	 * Pausing costs nothing the freshness contract promises: a hidden tab renders
+	 * no state for anyone to be misled by, and the tick on return advances `now`
+	 * BEFORE it polls, so the returning Manager's first frame shows the true age
+	 * of what they are looking at, never a stale page dressed as Live.
 	 *
-	 * Guarded for a non-browser environment: this module is imported by
-	 * server-rendered layouts, and `document` does not exist there.
+	 * **Recovery is still immediate and silent**, as the AC requires: the first
+	 * thing a returning tab does is a liveness check, and only then does the
+	 * interval resume.
 	 */
 	#watchVisibility(): void {
-		if (typeof document === 'undefined') return;
-		const listener = (): void => {
-			if (document.visibilityState !== 'visible') return;
+		this.#unwatchVisibility = this.#ports.visibility.watch(() => {
+			if (this.#ports.visibility.hidden()) {
+				this.#stopInterval();
+				return;
+			}
 			this.#tick();
-		};
-		this.#onVisible = listener;
-		document.addEventListener('visibilitychange', listener);
+			this.#startInterval();
+		});
 	}
 
 	/**

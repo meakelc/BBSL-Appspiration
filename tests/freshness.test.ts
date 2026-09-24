@@ -474,8 +474,8 @@ describe('the watermark rides on the one load every page inherits', () => {
  * first), and a higher `seq` arriving during an in-flight reload was swallowed.
  * Both are behaviour, and behaviour is what the tests below assert.
  *
- * `FreshnessContract` takes four ports with real defaults, so a test substitutes
- * `fetch`, `createClient`, `credentials` and `reload` and drives the private
+ * `FreshnessContract` takes five ports with real defaults, so a test substitutes
+ * `fetch`, `createClient`, `credentials`, `reload` and `visibility` and drives the private
  * paths through the public surface. No DOM and no socket are involved.
  */
 
@@ -758,5 +758,144 @@ describe('a raise arriving while a reload is in flight', () => {
 		});
 		expect(seen).toEqual(['2', '3']);
 		contract.stop();
+	});
+});
+
+describe('a hidden tab does not poll', () => {
+	/**
+	 * Every poll is a billed Netlify Function invocation, so a backgrounded tab
+	 * must make none — and must still check liveness the moment it is looked at
+	 * again, which is the AC's "recovery is immediate and silent".
+	 */
+	function fakeVisibility(initiallyHidden: boolean) {
+		let hidden = initiallyHidden;
+		let listener: (() => void) | null = null;
+		return {
+			port: {
+				hidden: () => hidden,
+				watch: (next: () => void) => {
+					listener = next;
+					return () => {
+						listener = null;
+					};
+				}
+			},
+			set(next: boolean) {
+				hidden = next;
+				listener?.();
+			},
+			get watching() {
+				return listener !== null;
+			}
+		};
+	}
+
+	function countingContract(visibility: ReturnType<typeof fakeVisibility>) {
+		const calls = { count: 0 };
+		const contract = contractWith({
+			fetch: async () => {
+				calls.count += 1;
+				return jsonResponse(200, reading('4', AT));
+			},
+			visibility: visibility.port
+		});
+		contract.observeServerRead(reading('4', AT));
+		return { contract, calls };
+	}
+
+	it('polls on the interval while visible', async () => {
+		vi.useFakeTimers();
+		try {
+			const visibility = fakeVisibility(false);
+			const { contract, calls } = countingContract(visibility);
+			contract.start();
+			await vi.advanceTimersByTimeAsync(LIVENESS_INTERVAL * 3 + 1);
+			expect(calls.count).toBe(3);
+			contract.stop();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('makes no request while hidden, however long it stays hidden', async () => {
+		vi.useFakeTimers();
+		try {
+			const visibility = fakeVisibility(false);
+			const { contract, calls } = countingContract(visibility);
+			contract.start();
+			await vi.advanceTimersByTimeAsync(LIVENESS_INTERVAL + 1);
+			expect(calls.count).toBe(1);
+
+			visibility.set(true);
+			await vi.advanceTimersByTimeAsync(LIVENESS_INTERVAL * 360);
+			expect(calls.count).toBe(1);
+			contract.stop();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('does not start the interval when started in a hidden tab', async () => {
+		vi.useFakeTimers();
+		try {
+			const visibility = fakeVisibility(true);
+			const { contract, calls } = countingContract(visibility);
+			contract.start();
+			await vi.advanceTimersByTimeAsync(LIVENESS_INTERVAL * 10);
+			expect(calls.count).toBe(0);
+			contract.stop();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('polls at once on becoming visible, then resumes the interval', async () => {
+		vi.useFakeTimers();
+		try {
+			const visibility = fakeVisibility(true);
+			const { contract, calls } = countingContract(visibility);
+			contract.start();
+
+			visibility.set(false);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(calls.count).toBe(1);
+
+			await vi.advanceTimersByTimeAsync(LIVENESS_INTERVAL * 2 + 1);
+			expect(calls.count).toBe(3);
+			contract.stop();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('does not stack a second interval on repeated visible events', async () => {
+		vi.useFakeTimers();
+		try {
+			const visibility = fakeVisibility(false);
+			const { contract, calls } = countingContract(visibility);
+			contract.start();
+
+			// Two `visible` events with no `hidden` between them: each checks at
+			// once, but only one interval may be left running.
+			visibility.set(false);
+			visibility.set(false);
+			await vi.advanceTimersByTimeAsync(0);
+			const afterEvents = calls.count;
+
+			await vi.advanceTimersByTimeAsync(LIVENESS_INTERVAL * 2 + 1);
+			expect(calls.count - afterEvents).toBe(2);
+			contract.stop();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('stops listening for visibility on stop()', () => {
+		const visibility = fakeVisibility(false);
+		const { contract } = countingContract(visibility);
+		contract.start();
+		expect(visibility.watching).toBe(true);
+		contract.stop();
+		expect(visibility.watching).toBe(false);
 	});
 });
