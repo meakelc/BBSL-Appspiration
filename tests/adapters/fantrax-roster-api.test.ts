@@ -78,8 +78,8 @@ const FIXTURE = JSON.stringify({
 			teamName: 'Team A',
 			salaryCap: 165000000,
 			rosterItems: [
-				{ contract: { smallId: 'c1', name: 'Amir Powell' }, id: '01eon', position: 'PG', salary: 2.25e7, status: 'ACTIVE' },
-				{ contract: { smallId: 'c2', name: 'Bo Ellis' }, id: '04ewu', position: 'SF', salary: 3000000, status: 'RESERVE' }
+				{ contract: { smallId: 'c1', name: '2028' }, id: '01eon', position: 'PG', salary: 2.25e7, status: 'ACTIVE' },
+				{ contract: { smallId: 'c2', name: '2RK29' }, id: '04ewu', position: 'SF', salary: 3000000, status: 'RESERVE' }
 			]
 		},
 		'ftx-b': {
@@ -251,7 +251,8 @@ describe('the salary rounding and the grid', () => {
 		);
 		expect(result.kind).toBe('ok');
 		if (result.kind !== 'ok') return;
-		expect(result.snapshot.moneyWarnings).toEqual(['Odd Money']);
+		// Named by id: `contract.name` is the contract label, not the Player.
+		expect(result.snapshot.moneyWarnings).toEqual(['p1']);
 		expect(result.snapshot.teams[0]?.members).toHaveLength(1);
 	});
 

@@ -178,9 +178,10 @@ function fakeGateway(options: {
 const TEAMS = [{ id: 't-h', name: 'Team H' }];
 
 /**
- * Team H holds four Contracts: an ordinary Active/Bench deal, a full-term
+ * Team H holds five Contracts: an ordinary Active/Bench deal, a full-term
  * second-round rookie deal (which carries like any other since the
- * rookie-scale exception was removed), a stash and one it keeps.
+ * rookie-scale exception was removed), a stash, a stash worth $0 — the only
+ * kind of release that now carries nothing — and one it keeps.
  */
 const ROSTERS: readonly RosterRow[] = [
 	{
@@ -208,6 +209,15 @@ const ROSTERS: readonly RosterRow[] = [
 		capHit: 3_000_000,
 		rosterSlotKind: 'minor_league',
 		contractYearsRemaining: 2,
+		rookieScaleRound: null
+	},
+	{
+		teamId: 't-h',
+		fantraxPlayerId: 'p-zero',
+		playerName: 'Worth Nothing',
+		capHit: 0,
+		rosterSlotKind: 'minor_league',
+		contractYearsRemaining: 1,
 		rookieScaleRound: null
 	},
 	{
@@ -274,13 +284,29 @@ describe('recordDrop — one transaction, one statement per release, and no outb
 		expect(updates).toHaveLength(1);
 		expect(updates[0]?.params).toEqual(['p-rookie']);
 	});
-	it('DELETEs a Minor League release too, by the SAME rule — it was charging $0', async () => {
+	it('UPDATEs a Minor League release too — it carries its full salary', async () => {
+		// The server-side regression for Brooklyn's Koby Brea (2026-09-23): a
+		// stash charging $0 used to be DELETEd, taking its salary off the Cap.
 		const harness = fakeGateway({ rosters: ROSTERS, teams: TEAMS });
 
 		await recordDrop(
 			harness.gateway,
 			ACTOR,
 			{ teamId: 't-h', fantraxPlayerIds: ['p-stash'], reason: REASON },
+			'desktop'
+		);
+
+		expect(harness.order.filter((step) => step === 'carry-row')).toHaveLength(1);
+		expect(harness.order.filter((step) => step === 'remove-row')).toHaveLength(0);
+	});
+
+	it('DELETEs only a release worth $0', async () => {
+		const harness = fakeGateway({ rosters: ROSTERS, teams: TEAMS });
+
+		await recordDrop(
+			harness.gateway,
+			ACTOR,
+			{ teamId: 't-h', fantraxPlayerIds: ['p-zero'], reason: REASON },
 			'desktop'
 		);
 
@@ -294,7 +320,7 @@ describe('recordDrop — one transaction, one statement per release, and no outb
 		await recordDrop(
 			harness.gateway,
 			ACTOR,
-			{ teamId: 't-h', fantraxPlayerIds: ['p-plain', 'p-stash'], reason: REASON },
+			{ teamId: 't-h', fantraxPlayerIds: ['p-plain', 'p-zero'], reason: REASON },
 			'desktop'
 		);
 
@@ -361,17 +387,17 @@ describe('recordDrop — one transaction, one statement per release, and no outb
 			'p-plain',
 			'p-stash'
 		]);
-		// Each carried amount, and the fate that followed from it. The stash was
-		// charging $0, which is the ONLY way a release now carries nothing.
+		// Each carried amount, and the fate that followed from it. Both carry
+		// their full value: the stash was charging $0, and the Drop starts it.
 		expect(payload.released[0]?.deadMoney).toBe(2_000_000);
 		expect(payload.released[0]?.removed).toBe(false);
-		expect(payload.released[1]?.deadMoney).toBe(0);
-		expect(payload.released[1]?.removed).toBe(true);
+		expect(payload.released[1]?.deadMoney).toBe(3_000_000);
+		expect(payload.released[1]?.removed).toBe(false);
 		// Roster Count falls by one - a Minor League row never counted toward
-		// the twelve - and Cap Space does not move at all: the Active/Bench
-		// Contract keeps charging as Dead Money and the stash was charging $0.
+		// the twelve - and Cap Space falls by the stash's salary alone: the
+		// Active/Bench Contract keeps charging what it already charged.
 		expect(payload.teamBefore.rosterCount - payload.teamAfter.rosterCount).toBe(1);
-		expect(payload.teamAfter.capSpace - payload.teamBefore.capSpace).toBe(0);
+		expect(payload.teamBefore.capSpace - payload.teamAfter.capSpace).toBe(3_000_000);
 	});
 
 	it('writes NOTHING when a gate refuses — no event, no row, no commit', async () => {

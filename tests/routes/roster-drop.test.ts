@@ -387,17 +387,18 @@ describe('/roster-drop — committing', () => {
 		expect(world.statements.join('\n')).not.toMatch(/notification_outbox/i);
 	});
 
-	it('DELETEs the row of a release that carries nothing - a Minor League stash', async () => {
-		// A Minor League row was charging $0, which since the rookie-scale
-		// exception was removed is the only way a release carries nothing.
+	it('converts a Minor League stash to Dead Money rather than deleting it', async () => {
+		// A stash was charging $0, and it still carries its full salary once
+		// dropped - the old rule DELETEd it and handed the salary back
+		// (Brooklyn, Koby Brea, 2026-09-23).
 		world.statements.length = 0;
 
 		await commit('?team=t-1&drop=p-2', 'Stashed Player, released in Fantrax.');
 
+		expect(world.statements.filter((sql) => /^update team_rosters/i.test(sql))).toHaveLength(1);
 		expect(world.statements.filter((sql) => /^delete from team_rosters/i.test(sql))).toHaveLength(
-			1
+			0
 		);
-		expect(world.statements.filter((sql) => /^update team_rosters/i.test(sql))).toHaveLength(0);
 	});
 
 	it('commits the Drop the URL names, not one the form could restate', async () => {
@@ -405,8 +406,7 @@ describe('/roster-drop — committing', () => {
 
 		await commit('?team=t-1&drop=p-2', 'The stash only.');
 
-		// One statement, for the one Player named — and it is a `DELETE`,
-		// because a Minor League row was charging nothing.
+		// One statement, for the one Player named.
 		expect(world.statements.filter((sql) => /team_rosters/i.test(sql) && !/^select/i.test(sql)))
 			.toHaveLength(1);
 	});

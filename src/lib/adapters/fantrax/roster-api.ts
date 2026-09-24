@@ -145,6 +145,10 @@ export function isFantraxRosterStatus(value: unknown): value is FantraxRosterSta
 export type FantraxRosterMember = {
 	/** Normalised (`normaliseFantraxPlayerId`), never the raw API form. */
 	readonly playerId: string;
+	/**
+	 * The normalised id again: the endpoint carries no name. Kept as a field so
+	 * stored reads keep their shape; `server/divergence.ts` resolves the name.
+	 */
 	readonly playerName: string;
 	/**
 	 * Advisory only. A placement difference between the app and Fantrax is the
@@ -317,8 +321,8 @@ function asRecord(value: unknown): Record<string, unknown> | null {
  * `{"contract":{"smallId","name"},"id":"01eon","position","salary":2.25E7,"status"}`.
  * `salaryCap`, `position` and `contract` are read for nothing — money,
  * contract length and Slot placement are never taken from this endpoint as
- * authoritative — except that `contract.name` is the Player's display name and
- * is used only to print a sentence.
+ * authoritative. `contract.name` is the contract label (`2RK29`), NOT the
+ * Player's name, and nothing in the payload is; see `playerName` below.
  *
  * Exported separately from the transport so the payload shape is testable with
  * no `fetch` at all — the split `adapters/fantrax/pool-file.ts` gets for free
@@ -432,11 +436,12 @@ export function parseRosterPayload(body: string): FantraxRosterResult {
 				};
 			}
 
-			const contract = asRecord(item['contract']);
-			const rawName = contract === null ? undefined : contract['name'];
-			// The id is the honest fallback: a membership-only detector must not
-			// refuse a row because a display field is missing.
-			const playerName = typeof rawName === 'string' && rawName.trim() !== '' ? rawName.trim() : playerId;
+			// **This payload carries no Player name, and `contract.name` is not
+			// one.** It is the League's contract label — `2028`, `2RK29`, `2K30` —
+			// and printing it as a name put "2K30" on the divergence page as a
+			// Player (2026-09-23). The id is stored instead, and the shell resolves
+			// a real name from what the app already knows when it renders.
+			const playerName = playerId;
 
 			// **Read for the warning and for nothing else.** An absent `salary`
 			// is not an error here — no figure from this endpoint is

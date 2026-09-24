@@ -15,9 +15,10 @@
  * `rules/roster-drop.ts` is what decided which — this file applies the
  * payload verbatim and re-derives neither the amount nor the fate. The
  * `UPDATE` keeps the row's own `cap_hit`: a Dead Money row charges in full,
- * and the charged figure for the kinds that survive IS the stored figure, so
- * there is nothing to rewrite. A `minor_league` row never reaches the
- * `UPDATE` at all — it was charging `$0` and is removed.
+ * and a dropped Contract's Dead Money IS its stored figure, so there is
+ * nothing to rewrite. That holds for a `minor_league` row too — its `cap_hit`
+ * is stored in full even while it charges `$0`, so reclassifying it is what
+ * starts the salary charging.
  *
  * **Only an Existing Contract can be dropped, which is why there is no third
  * case.** `evaluateDrop` refuses a won Player as a shape refusal, so every
@@ -91,10 +92,10 @@ export const DROP_ROSTER_ROW_SQL =
 /**
  * The statement a released Contract that carries nothing is removed by.
  *
- * A Minor League row was charging `$0`, and a full-term second-round
- * rookie-scale deal is released to `$0` by FR-43's exception. Removing the
- * row IS the release: Cap Space is a sum over the rows a Team holds, so a row
- * that is gone charges nothing without a second rule saying so.
+ * Only a Contract whose stated value is itself `$0` reaches this: every other
+ * release carries its full value as Dead Money, a Minor League one included.
+ * Removing the row IS the release: Cap Space is a sum over the rows a Team
+ * holds, so a row that is gone charges nothing without a second rule saying so.
  */
 export const REMOVE_ROSTER_ROW_SQL = 'delete from team_rosters where fantrax_player_id = $1';
 

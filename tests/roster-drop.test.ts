@@ -128,22 +128,35 @@ describe('the one conversion — no Slot kind is a special case', () => {
 		expect(delta.after.injuryReserveOccupied).toBe(delta.before.injuryReserveOccupied - 1);
 	});
 
-	it('leaves nothing behind for a Minor League Contract, and removes the row', () => {
+	it('carries a Minor League Contract in FULL, and Cap Space falls by it', () => {
+		// **The regression for Brooklyn's Koby Brea (2026-09-23).** A stash was
+		// charging $0, and the old rule carried the CHARGE — so it left nothing
+		// behind, removed the row and handed the Team its salary back. The
+		// League charges a dropped minors Contract its salary as Dead Money like
+		// any other.
 		const { release, delta } = releaseOf(
 			stateOf([player('p-m', 'Stashed', 'minor_league', 3_000_000)]),
 			'p-m'
 		);
 
-		// It was charging $0, so there is nothing to carry — and the row is
-		// removed because the amount is $0, not because the Slot kind was
-		// tested.
 		expect(release?.chargedCapHit).toBe(0);
+		expect(release?.deadMoney).toBe(3_000_000);
+		expect(release?.removed).toBe(false);
+		expect(release?.value).toBe(3_000_000);
+		// It newly charges, so Cap Space FALLS by the salary.
+		expect(delta.after.capSpace).toBe(delta.before.capSpace - 3_000_000);
+		expect(delta.after.minorLeagueOccupied).toBe(0);
+	});
+
+	it('removes the row only when the Contract is itself worth $0', () => {
+		const { release, delta } = releaseOf(
+			stateOf([player('p-zero', 'Nothing', 'minor_league', 0)]),
+			'p-zero'
+		);
+
 		expect(release?.deadMoney).toBe(0);
 		expect(release?.removed).toBe(true);
-		// The full value is still recorded beside the charge (AD-23).
-		expect(release?.value).toBe(3_000_000);
 		expect(delta.after.capSpace).toBe(delta.before.capSpace);
-		expect(delta.after.minorLeagueOccupied).toBe(0);
 	});
 
 	it('carries a full-term SECOND-round rookie deal in full - there is no exception', () => {
@@ -231,10 +244,10 @@ describe('the one conversion — no Slot kind is a special case', () => {
 			.replace(/^\s*\/\/.*$/gm, '');
 		expect(source).not.toMatch(/rosterSlotKind\s*===\s*'minor_league'/);
 		expect(source).not.toMatch(/rosterSlotKind\s*===\s*'injury_reserve'/);
-		// One `deadMoneyFor`, and it is `chargeOf` alone - no waiver, no ternary,
-		// nothing that could grow a second answer.
+		// One `deadMoneyFor`, and it is the full value alone - no waiver, no
+		// ternary, nothing that could grow a second answer.
 		expect(source).not.toMatch(/releasesToNothing|ROOKIE_SCALE_EXEMPT/);
-		expect(source.match(/return chargeOf\(row\);/g)).toHaveLength(1);
+		expect(source.match(/return row\.value;/g)).toHaveLength(1);
 		expect(source.match(/const removed = compareMoney\(deadMoney, NO_MONEY\) === 0;/g)).toHaveLength(
 			1
 		);
@@ -630,19 +643,26 @@ describe('the sheet', () => {
 		expect(sentence).toContain('$1.0M');
 	});
 
-	it('carries no attention sentence for an IR or Minor League release', () => {
+	it('carries no attention sentence for an IR release', () => {
 		const ir = releaseOf(stateOf([player('p-ir', 'Hurt', 'injury_reserve', 1_500_000)]), 'p-ir');
+
+		if (ir.release === undefined) throw new Error('no release');
+		// It frees no Active/Bench Slot and moves no figure — and the amber
+		// marker means something only while it is not on every row.
+		expect(dropAttention(ir.release)).toBeNull();
+	});
+
+	it('warns that a Minor League release STARTS its salary charging', () => {
 		const minors = releaseOf(
 			stateOf([player('p-m', 'Stashed', 'minor_league', 3_000_000)]),
 			'p-m'
 		);
 
-		if (ir.release === undefined || minors.release === undefined) throw new Error('no release');
-		// Neither frees an Active/Bench Slot, so neither moves Maximum Bid by
-		// that route — and the amber marker means something only while it is
-		// not on every row.
-		expect(dropAttention(ir.release)).toBeNull();
-		expect(dropAttention(minors.release)).toBeNull();
+		if (minors.release === undefined) throw new Error('no release');
+		const sentence = dropAttention(minors.release);
+		expect(sentence).toContain('Stashed');
+		expect(sentence).toContain('$3.0M');
+		expect(sentence).toContain('Cap Space falls');
 	});
 
 	it('orders the releases by `fantraxPlayerId`, whatever order they were named in', () => {
