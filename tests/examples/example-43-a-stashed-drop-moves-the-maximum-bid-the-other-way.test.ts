@@ -1,38 +1,28 @@
 /**
- * PRD §10 example 43 — **A stashed Drop moves the Maximum Bid NOWHERE**
- * (FR-43), rewritten on 2026-09-18.
+ * PRD §10 example 43 — **A stashed Drop costs its whole salary** (FR-43),
+ * amended 2026-09-23.
  *
- * The example used to read:
+ * Rewritten on 2026-09-18 to "a stashed Drop moves the Maximum Bid NOWHERE":
+ * the stash was charging $0, so the Drop released nothing, removed the row and
+ * left every figure where it was. **That rule was wrong for this League.** A
+ * dropped minors Contract carries its salary as Dead Money like any other, and
+ * the old reading fired once in production — Brooklyn dropped Koby Brea from a
+ * Minor League Slot and the app removed his $1,000,000 row instead of charging
+ * it.
  *
- * > Team L occupies one Minor League Slot (`M` = 1), has Roster Count 10 and
- * > Cap Space $20,000,000, and leads two eligible Auctions at $12,000,000 and
- * > $4,000,000 — so Minors Exposure is the largest of them that `M` cannot
- * > absorb, $12,000,000. It drops the stashed Player. […] `M` rises to 2,
- * > Overflow falls to 0, **Minors Exposure falls to $0** and Available Cap
- * > Space is the full $20,000,000.
+ * So Team L's stash, stated at $3,000,000 and charging $0 while stashed, stays
+ * on the roster as $3,000,000 of Dead Money. Cap Space FALLS by that amount,
+ * Roster Count does not move (a stash never counted toward it and Dead Money
+ * does not either), and the Maximum Bid falls with Cap Space.
  *
- * **The gain is gone, because the exposure it released never existed.** A
- * Team cannot win a Free Agent straight into its minors, so both of Team L's
- * leads commit their full amounts from the moment they are placed and a Free
- * Minor League Slot absorbs nothing. Freeing one by dropping the stash moves
- * no money at all.
- *
- * **The example's REAL point survives, and is now sharper.** It exists beside
- * example 40 to show that "a Drop lowers the Maximum Bid" is not a rule. It
- * still is not: example 40's Active/Bench Drop frees a Roster Slot that costs
- * $1,000,000 to reserve and leaves the Team POORER at the bidding table, while
- * this Drop leaves it exactly where it was. Two Drops, two different answers,
- * and neither of them the flat rule — which is what the pair is for.
- *
- * So what this file pins now is a Drop that changes NOTHING: the row was
- * charging $0, so nothing is released; Roster Count never counted it, so
- * nothing is freed; and the Minor League Slot it gives back buys no bidding
- * power. A figure that moved here would mean minors had re-entered the money.
+ * **The example's point beside example 40 survives.** "A Drop lowers the
+ * Maximum Bid by the $1,000,000 reserve" is still not a rule: example 40's
+ * Active/Bench Drop costs exactly the reserve on the freed hole, while this
+ * one costs the stash's whole salary and frees no Active/Bench Slot at all.
  *
  * **Everything still derives rather than being written.** `teamMoneyStateFor`
- * recomputes on every evaluation from the post-Drop occupancy; nothing is
- * recalculated, stored or invalidated anywhere, and this file asserts the
- * figures that fall out rather than figures anybody set.
+ * recomputes on every evaluation from the post-Drop rows; nothing is
+ * recalculated, stored or invalidated anywhere.
  *
  * Driven through the `RecordDrop` command itself (Story 7.8) — `evaluateDrop`
  * applies the act and hands the resulting state to the same derivations the
@@ -81,9 +71,7 @@ function row(
 		rosterSlotKind: kind,
 		value: parseMoney(value),
 		won: false,
-		// An ordinary imported Contract: no rookie-scale designation, so FR-43's
-		// exception does not apply — and it does not need to, because a Minor
-		// League row leaves nothing behind by the ordinary rule.
+		// An ordinary imported Contract, with no rookie-scale designation.
 		contractYearsRemaining: 2,
 		rookieScaleRound: null
 	};
@@ -184,7 +172,7 @@ function figuresOf(rows: readonly DroppablePlayer[]) {
 	return figures;
 }
 
-describe('§10 example 43 — a stashed Drop moves the Maximum Bid nowhere', () => {
+describe('§10 example 43 — a stashed Drop costs its whole salary', () => {
 	it('starts Team L at M = 1, Roster Count 10, Cap Space $20,000,000, nothing exposed', () => {
 		const before = figuresOf(ROWS);
 
@@ -202,36 +190,33 @@ describe('§10 example 43 — a stashed Drop moves the Maximum Bid nowhere', () 
 		expect(before.availableCapSpace).toBe(20_000_000 - (BIG_LEAD + SMALL_LEAD));
 	});
 
-	it('commits, carries nothing, and REMOVES the row', () => {
+	it('commits, carries the full salary, and KEEPS the row as Dead Money', () => {
 		const outcome = evaluateDrop(stateOf(ROWS), DROP);
 
 		expect(outcome.kind).toBe('permitted');
 		if (outcome.kind !== 'permitted') return;
 		const release = outcome.delta.released[0];
-		// It was charging $0, so there is nothing to carry — and the row is
-		// removed because the amount is $0, by the same expression that keeps
-		// an Active/Bench row.
+		// It was charging $0 while stashed, and the Drop starts all of it.
 		expect(release?.chargedCapHit).toBe(0);
-		expect(release?.deadMoney).toBe(0);
-		expect(release?.removed).toBe(true);
+		expect(release?.deadMoney).toBe(STASH_VALUE);
+		expect(release?.removed).toBe(false);
 		// The stated value survives on the record beside the charge (AD-23).
 		expect(release?.value).toBe(STASH_VALUE);
 	});
 
-	it('leaves Cap Space and Roster Count exactly where they were', () => {
+	it('lowers Cap Space by the salary and leaves Roster Count where it was', () => {
 		const outcome = evaluateDrop(stateOf(ROWS), DROP);
 		if (outcome.kind !== 'permitted') throw new Error('refused');
 
-		expect(outcome.delta.after.capSpace).toBe(20_000_000);
 		expect(outcome.delta.before.capSpace).toBe(20_000_000);
+		expect(outcome.delta.after.capSpace).toBe(20_000_000 - STASH_VALUE);
 		// A stash never counted against the twelve, so dropping it frees
-		// nothing there — which is the whole reason this example moves the
-		// opposite way from example 40.
+		// nothing there — which is what separates this example from example 40.
 		expect(outcome.delta.after.rosterCount).toBe(10);
 		expect(outcome.delta.before.rosterCount).toBe(10);
 	});
 
-	it('raises M to 2, and no money figure moves with it', () => {
+	it('raises M to 2, and the freed Minor League Slot buys nothing', () => {
 		const outcome = evaluateDrop(stateOf(ROWS), DROP);
 		if (outcome.kind !== 'permitted') throw new Error('refused');
 
@@ -250,36 +235,33 @@ describe('§10 example 43 — a stashed Drop moves the Maximum Bid nowhere', () 
 
 		const gate = outcome.gates.cap;
 		// The freed Slot buys nothing: both leads were committed in full before
-		// the Drop and still are after it.
+		// the Drop and still are after it. Available Cap Space falls by the
+		// salary alone.
 		expect(gate.minorsExposure).toBe(0);
 		expect(gate.committedBids).toBe(BIG_LEAD + SMALL_LEAD);
-		expect(gate.availableCapSpace).toBe(20_000_000 - (BIG_LEAD + SMALL_LEAD));
+		expect(gate.availableCapSpace).toBe(20_000_000 - STASH_VALUE - (BIG_LEAD + SMALL_LEAD));
 	});
 
-	it('leaves the Maximum Bid UNMOVED, which is still not example 40', () => {
+	it('lowers the Maximum Bid by the whole salary, which is still not example 40', () => {
 		const before = figuresOf(ROWS);
 		const outcome = evaluateDrop(stateOf(ROWS), DROP);
 		if (outcome.kind !== 'permitted') throw new Error('refused');
 		const after = outcome.gates.cap;
 
-		// **Nothing moves, and that is the assertion.** The old example gained
-		// $11,000,000 here — $12,000,000 of released exposure less $1,000,000
-		// back into Roster Reserve. Neither term exists: the leads were always
-		// committed in full, and neither of them stopped projecting an
-		// Active/Bench addition, because they never did anything else.
+		// Cap Space falls by the salary and nothing offsets it: the leads were
+		// always committed in full, and no Active/Bench Slot was freed, so the
+		// reserve does not move.
 		expect(after.minorsExposure).toBe(before.minorsExposure);
 		expect(after.committedBids).toBe(before.committedBids);
 		expect(after.rosterReserve).toBe(before.rosterReserve);
-		expect(after.maximumBid).toBe(before.maximumBid);
-		// Not one dollar was released and Roster Count did not move, so there
-		// was never anything for a figure to move ON.
-		expect(after.capSpace).toBe(before.capSpace);
 		expect(after.rosterCount).toBe(before.rosterCount);
+		expect(before.capSpace - after.capSpace).toBe(STASH_VALUE);
+		expect(before.maximumBid - after.maximumBid).toBe(STASH_VALUE);
 
-		// **The pair with example 40 still holds**, which is the whole reason
-		// this file exists: that Drop leaves the Team POORER at the bidding
-		// table and this one leaves it exactly as it was, so "a Drop lowers the
-		// Maximum Bid" is still not a rule.
-		expect(after.maximumBid).not.toBeLessThan(before.maximumBid);
+		// **The pair with example 40 still holds**: that Drop costs exactly the
+		// $1,000,000 reserve on a freed hole, and this one costs a salary and
+		// frees no hole — so "a Drop lowers the Maximum Bid by the reserve" is
+		// still not a rule.
+		expect(before.maximumBid - after.maximumBid).not.toBe(1_000_000);
 	});
 });

@@ -39,6 +39,7 @@ import {
 	DISMISSALS_SQL,
 	INSERT_DISMISSAL_SQL,
 	INSERT_READ_SQL,
+	PLAYER_NAMES_SQL,
 	configuredVolumeFraction,
 	dismissDivergence,
 	loadDivergenceView,
@@ -73,6 +74,8 @@ type World = {
 		roster_slot_kind: string;
 	}>;
 	dismissals: string[];
+	pool: Array<{ fantrax_player_id: string; player_name: string }>;
+	events: Array<Record<string, unknown>>;
 	statements: Array<{ sql: string; params: readonly unknown[] }>;
 };
 
@@ -83,6 +86,8 @@ function emptyWorld(overrides: Partial<World> = {}): World {
 		teams: [],
 		rosters: [],
 		dismissals: [],
+		pool: [],
+		events: [],
 		statements: [],
 		...overrides
 	};
@@ -136,7 +141,11 @@ function fakeGateway(world: World): ConnectionGateway {
 				return { rows: world.rosters as unknown as QueryResultRow[] };
 			}
 
-			if (/^select \* from auction_events/i.test(sql)) return { rows: [] };
+			if (/^select \* from auction_events/i.test(sql)) {
+				return { rows: world.events as unknown as QueryResultRow[] };
+			}
+
+			if (sql === PLAYER_NAMES_SQL) return { rows: world.pool as unknown as QueryResultRow[] };
 
 			if (sql === DISMISSALS_SQL) {
 				return { rows: world.dismissals.map((fingerprint) => ({ fingerprint })) };
@@ -792,5 +801,78 @@ describe('the shell canonicalises BOTH sides — hazard 2', () => {
 		// With no contracts, both Players read as departures — the control.
 		const without = await loadDivergenceView(gateway, { volumeFraction: 1 });
 		expect(without.report?.guard.tripped).toBe(true);
+	});
+});
+
+describe('an unknown arrival is NAMED from what the app knows, never from the contract label', () => {
+	// The roster endpoint carries no Player name. Reads before 2026-09-23
+	// stored `contract.name` in its place — "2K30" reached the page as a Player
+	// on Brooklyn's roster — so the stored name is never printed.
+	function worldWithArrival(overrides: Partial<World> = {}): World {
+		return emptyWorld({
+			teams: [{ id: 't-bkn', name: 'Brooklyn', fantrax_team_id: 'ftx-bkn' }],
+			rosters: [
+				{ team_id: 't-bkn', fantrax_player_id: '*0kept*', player_name: 'Kept', roster_slot_kind: 'active_bench' }
+			],
+			reads: [
+				{
+					read_at: new Date('2026-09-14T11:00:00.000Z'),
+					outcome: 'ok',
+					detail: null,
+					membership: {
+						'ftx-bkn': [
+							{ playerId: '0kept', playerName: '2028', rosterSlotKind: 'active_bench' },
+							{ playerId: '0brea', playerName: '2K30', rosterSlotKind: 'minor_league' }
+						]
+					},
+					money_warnings: [],
+					money_warning_count: 0
+				}
+			],
+			...overrides
+		});
+	}
+
+	it('names a Player the app has DROPPED from the DropRecorded event', async () => {
+		const world = worldWithArrival({
+			events: [
+				{
+					seq: '7',
+					occurred_at: new Date('2026-09-14T10:00:00.000Z'),
+					schema_version: 1,
+					core_version: 1,
+					event_type: 'DropRecorded',
+					payload: { released: [{ fantraxPlayerId: '*0BREA*', playerName: 'Koby Brea' }] },
+					manager_id: null,
+					team_id: null
+				}
+			]
+		});
+
+		const view = await loadDivergenceView(fakeGateway(world), { volumeFraction: 1, missingConfiguration: [] });
+
+		expect(view.report?.arrivals.map((arrival) => arrival.playerName)).toEqual(['Koby Brea']);
+	});
+
+	it('names a Player from the Free Agent pool', async () => {
+		const world = worldWithArrival({
+			pool: [{ fantrax_player_id: '*0brea*', player_name: 'Koby Brea' }]
+		});
+
+		const view = await loadDivergenceView(fakeGateway(world), { volumeFraction: 1, missingConfiguration: [] });
+
+		expect(view.report?.arrivals.map((arrival) => arrival.playerName)).toEqual(['Koby Brea']);
+	});
+
+	it('states the Fantrax id when nothing names him — never the stored contract label', async () => {
+		const view = await loadDivergenceView(fakeGateway(worldWithArrival()), {
+			volumeFraction: 1,
+			missingConfiguration: []
+		});
+
+		expect(view.report?.arrivals.map((arrival) => arrival.playerName)).toEqual([
+			'Fantrax player 0brea'
+		]);
+		expect(JSON.stringify(view.report)).not.toContain('2K30');
 	});
 });

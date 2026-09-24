@@ -44,7 +44,11 @@ import type {
 } from '../adapters/fantrax/roster-api.ts';
 import { DIVERGENCE_READ_INTERVAL, DIVERGENCE_VOLUME_FRACTION } from '../core/constants.ts';
 import { fold } from '../core/projection/fold.ts';
-import { INITIAL_CONTRACTS, contractsReducer } from '../core/projection/contracts.ts';
+import {
+	DROP_RECORDED_EVENT,
+	INITIAL_CONTRACTS,
+	contractsReducer
+} from '../core/projection/contracts.ts';
 import { compareMembership } from '../core/rules/divergence.ts';
 import type {
 	AppRosterMember,
@@ -52,7 +56,7 @@ import type {
 	DivergenceTeam,
 	FantraxMember
 } from '../core/rules/divergence.ts';
-import type { RosterSlotKind } from '../core/types.ts';
+import type { AppendedEvent, RosterSlotKind } from '../core/types.ts';
 import type { ConnectionGateway, TransactionalClient } from '../shell/write.ts';
 import { loadEventsViaClient } from './event-log.ts';
 
@@ -70,6 +74,13 @@ export const DIVERGENCE_TEAMS_SQL =
  */
 export const DIVERGENCE_ROSTERS_SQL =
 	'select team_id::text as team_id, fantrax_player_id, player_name, roster_slot_kind from team_rosters order by fantrax_player_id';
+
+/**
+ * The Free Agent pool's names — one of the two places a Player on a Fantrax
+ * roster but on no app roster can be named from. The roster endpoint carries
+ * no name at all (`adapters/fantrax/roster-api.ts`).
+ */
+export const PLAYER_NAMES_SQL = 'select fantrax_player_id, player_name from free_agent_players';
 
 /** The most recent read of ANY outcome — what decides whether the surface is stopped. */
 export const LATEST_READ_SQL =
@@ -400,13 +411,14 @@ export async function loadDivergenceView(
 		const events = await loadEventsViaClient(client);
 		const contracts = fold(INITIAL_CONTRACTS, events, contractsReducer);
 		const dismissedFingerprints = await loadDismissals(client);
+		const names = playerNamesFrom(await client.query(PLAYER_NAMES_SQL), events, appMembers);
 
 		return {
 			read: { kind: 'read', readAt: latest.readAt, moneyWarnings: latest.moneyWarnings },
 			report: compareMembership({
 				teams,
 				appMembers,
-				fantraxMembers: fantraxMembersFrom(latest.membership),
+				fantraxMembers: fantraxMembersFrom(latest.membership, names),
 				// The KEYS of the stored membership, which is what makes "Fantrax
 				// returned an empty roster for this Team" distinguishable from
 				// "Fantrax returned no roster for this Team" — see the input type.
@@ -503,19 +515,63 @@ async function loadDismissals(client: TransactionalClient): Promise<readonly str
 	return result.rows.map((row) => String(row['fingerprint'] ?? '')).filter((value) => value !== '');
 }
 
-/** The stored membership, flattened into the shape the core compares. */
-export function fantraxMembersFrom(membership: StoredMembership): readonly FantraxMember[] {
+/**
+ * Every name the app knows, keyed by CANONICAL Fantrax id.
+ *
+ * The Fantrax roster endpoint carries no Player name, so a Player on a Fantrax
+ * roster is named from what the app already holds: a live roster row, the
+ * Free Agent pool, or a Drop already recorded — the last being what names a
+ * Player the app released while a Fantrax read still lists him. Later sources
+ * win, and a live roster row is the last.
+ */
+export function playerNamesFrom(
+	pool: { readonly rows: ReadonlyArray<Record<string, unknown>> },
+	events: readonly AppendedEvent[],
+	appMembers: readonly AppRosterMember[]
+): ReadonlyMap<string, string> {
+	const names = new Map<string, string>();
+	const add = (rawId: unknown, rawName: unknown): void => {
+		if (typeof rawId !== 'string' || typeof rawName !== 'string' || rawName.trim() === '') return;
+		const id = normaliseFantraxPlayerId(rawId);
+		if (id !== '') names.set(id, rawName.trim());
+	};
+	for (const row of pool.rows) add(row['fantrax_player_id'], row['player_name']);
+	for (const event of events) {
+		if (event.type !== DROP_RECORDED_EVENT) continue;
+		const payload = event.payload as { released?: unknown } | null;
+		if (payload === null || typeof payload !== 'object' || !Array.isArray(payload.released)) continue;
+		for (const release of payload.released as ReadonlyArray<Record<string, unknown> | null>) {
+			if (release === null || typeof release !== 'object') continue;
+			add(release['fantraxPlayerId'], release['playerName']);
+		}
+	}
+	for (const member of appMembers) add(member.fantraxPlayerId, member.playerName);
+	return names;
+}
+
+/**
+ * The stored membership, flattened into the shape the core compares.
+ *
+ * **The stored `playerName` is never printed.** Reads before 2026-09-23 stored
+ * the contract label there (`2K30`), and later ones store the id, so a name
+ * comes from `names` or, failing that, is stated as the Fantrax id.
+ */
+export function fantraxMembersFrom(
+	membership: StoredMembership,
+	names: ReadonlyMap<string, string> = new Map()
+): readonly FantraxMember[] {
 	const members: FantraxMember[] = [];
 	for (const fantraxTeamId of Object.keys(membership).sort()) {
 		if (!Object.prototype.hasOwnProperty.call(membership, fantraxTeamId)) continue;
 		for (const member of membership[fantraxTeamId] ?? []) {
+			// Canonicalised again on the way out, so the two sides of the
+			// comparison are brought into one form in ONE place whatever shape
+			// an older stored row happens to carry.
+			const playerId = normaliseFantraxPlayerId(member.playerId);
 			members.push({
 				fantraxTeamId,
-				// Canonicalised again on the way out, so the two sides of the
-				// comparison are brought into one form in ONE place whatever shape
-				// an older stored row happens to carry.
-				playerId: normaliseFantraxPlayerId(member.playerId),
-				playerName: member.playerName,
+				playerId,
+				playerName: names.get(playerId) ?? `Fantrax player ${playerId}`,
 				rosterSlotKind: member.rosterSlotKind
 			});
 		}

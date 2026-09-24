@@ -6,17 +6,15 @@
  * two lines:
  *
  * ```
- * deadMoney = chargedCapHit(row)
+ * deadMoney = row.value
  * removed   = deadMoney is $0
  * ```
  *
- * and every outcome falls out of them. An Active/Bench or Injury Reserve
- * Contract carries its full charge and its row is reclassified `dead_money`.
- * A Minor League row was charging `$0`, so nothing is carried and the row is
- * removed — and removing the row IS the release of its Cap Hit back to Cap
- * Space. Nothing here tests `rosterSlotKind` to decide either half: a branch
- * on `minor_league` would be a second spelling of `chargedCapHit`, which is
- * the one statement of "a Minor League row charges $0" (AR-43).
+ * and every outcome falls out of them. Every released Contract carries its
+ * full value and its row is reclassified `dead_money` — from Active/Bench or
+ * Injury Reserve that is what it was already charging, and from a Minor
+ * League Slot it is a charge the Drop newly starts (amended 2026-09-23).
+ * Nothing here tests `rosterSlotKind` to decide either half.
  *
  * **There is no rookie-scale exception, and its absence is the rule.** FR-43
  * carried one — a second-round rookie Contract from the current draft class
@@ -216,21 +214,25 @@ export type DropOutcome =
  * The Dead Money one release carries — **the one expression that decides the
  * amount**, and the only one.
  *
- * `chargeOf` is `chargedCapHit` over the row's full value, which is the same
- * function `computeCapSpace` sums and therefore the same answer the Team's
- * Cap Space was computed from a line earlier. That is what makes "Cap Space
- * stands still" in §10 example 40 an identity rather than a coincidence: the
- * row keeps charging exactly what it charged.
+ * **The Contract's full value, whatever Slot it was released from.** A
+ * dropped Contract's salary is owed in full: from Active/Bench or Injury
+ * Reserve that is exactly what it was already charging, so Cap Space stands
+ * still (§10 example 40); from a Minor League Slot it was charging `$0` while
+ * stashed, and the Drop is what starts it charging — Cap Space FALLS by the
+ * salary (§10 example 43, amended 2026-09-23).
  *
- * **It is `chargeOf` and nothing else.** There is no waiver to test for here:
- * the League's amnesty runs before the auction opens and is already settled
- * in the imported rosters, so every Contract this product releases carries
- * what it was charging. A Minor League row still leaves nothing behind, and
- * it does so because it was charging `$0` — not because this function knows
- * anything about Slots.
+ * That last case was once `chargeOf(row)` — the charged amount — which carried
+ * `$0` for a stash and removed the row. It fired once, on a $1,000,000 Minor
+ * League Contract (Brooklyn, Koby Brea), and handed the Team back a salary the
+ * League still charges. The League rule is that a dropped minors Contract
+ * carries its salary as Dead Money like any other.
+ *
+ * There is still no waiver to test for: the League's amnesty runs before the
+ * auction opens and is already settled in the imported rosters. A row is
+ * removed only when its stated value is itself `$0`.
  */
 function deadMoneyFor(row: DroppablePlayer): Money {
-	return chargeOf(row);
+	return row.value;
 }
 
 /**
@@ -370,9 +372,9 @@ export function evaluateDrop(state: RosterDropState, command: RecordDrop): DropO
 		if (removed) continue;
 		// The surviving row: Dead Money, valued at exactly what is carried.
 		// `chargedCapHit` returns a `dead_money` row's stated hit in full, so
-		// the Team's Cap Space after the act is its Cap Space before it —
-		// which is §10 example 40's "Cap Space still $5,000,000", derived
-		// rather than asserted.
+		// an Active/Bench release leaves Cap Space where it was — §10 example
+		// 40's "Cap Space still $5,000,000" — and a Minor League release
+		// lowers it by the salary, both derived rather than asserted.
 		carried.push({ ...row, rosterSlotKind: 'dead_money', value: deadMoney });
 	}
 
@@ -519,12 +521,25 @@ export function dropRefusalDetail(
  * back. The sentence states the one direction that remains rather than
  * branching on a case that cannot arise.
  *
- * `null` for an Injury Reserve or Minor League release, because neither frees
- * an Active/Bench Slot and neither moves Maximum Bid by this route — the
- * amber marker is the product's single attention colour, and a sheet that
- * marks every row marks nothing.
+ * **A Minor League release is marked too, for the opposite surprise.** A
+ * stash was charging `$0`, and the Drop starts its whole salary charging as
+ * Dead Money — so Cap Space falls by the salary, and a Commissioner who reads
+ * "it was in the minors" as "it costs nothing to drop" is wrong by exactly
+ * that amount (amended 2026-09-23).
+ *
+ * `null` for an Injury Reserve release, because it frees no Active/Bench Slot
+ * and moves no figure — the amber marker is the product's single attention
+ * colour, and a sheet that marks every row marks nothing.
  */
 export function dropAttention(release: DropRelease): string | null {
+	if (release.fromPlacement === 'minor_league') {
+		if (release.removed) return null;
+		return (
+			`${release.playerName} was charging nothing in a Minor League Slot, and dropping him ` +
+			`starts all ${describeActAmount(release.deadMoney)} charging as Dead Money — so Cap Space ` +
+			`falls by that much, and the Maximum Bid with it.`
+		);
+	}
 	if (release.fromPlacement !== 'active_bench') return null;
 
 	// Fact one, true of EVERY Active/Bench release: the freed hole has to be

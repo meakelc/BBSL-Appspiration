@@ -69,6 +69,7 @@ vi.mock('$lib/shell/db.ts', () => ({
 				if (/from teams/i.test(sql)) return { rows: world.teams };
 				if (/from team_rosters/i.test(sql)) return { rows: world.rosters };
 				if (/^select \* from auction_events/i.test(sql)) return { rows: [] };
+				if (/from free_agent_players/i.test(sql)) return { rows: [] };
 				if (/^select fingerprint from fantrax_divergence_dismissals/i.test(sql)) {
 					return { rows: world.dismissals.map((fingerprint) => ({ fingerprint })) };
 				}
