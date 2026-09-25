@@ -48,7 +48,7 @@ import { compareMoney } from '../money.ts';
 import type { Money } from '../money.ts';
 import { auctionForPlayer, wasCancelled } from '../projection/auctions.ts';
 import type { Bid, OpenAuctions, Restoration } from '../projection/auctions.ts';
-import type { RestoreLeadingBid } from '../types.ts';
+import type { RestoreLeadingBid, RestoreLeadingBidGateResults } from '../types.ts';
 import {
 	allRestoreGatesPassed,
 	bidStateFor,
@@ -187,7 +187,7 @@ export function selectRestoration(input: {
 	if (auction.contention === 'minimum_bid') return { restored: null, ...clocks };
 
 	for (const candidate of candidatesFor(auction.bids, input.withdrawnSeq)) {
-		if (!candidateStands(candidate, input.fantraxPlayerId, input.basis)) continue;
+		if (!bidStandsFor(candidate, input.fantraxPlayerId, input.basis)) continue;
 		return {
 			restored: {
 				seq: candidate.seq,
@@ -235,14 +235,37 @@ function candidatesFor(bids: readonly Bid[], withdrawnSeq: string): readonly Bid
  * the batched read did not cover that Team, which is a state a candidate can
  * legitimately be in on a partial basis; refusing to restore is the
  * conservative answer, and it is the same answer a failed gate gives.
+ *
+ * **Exported since Story 7.14**, and renamed from `candidateStands` because it
+ * now has a second caller that is not choosing among candidates: a
+ * Commissioner reinstating a cancelled Bid re-tests that ONE Bid's Team
+ * through this very gate set (`rules/bid-reinstatement.ts`). One re-test, two
+ * callers, and no second selector.
  */
-function candidateStands(
+export function bidStandsFor(
 	candidate: Bid,
 	fantraxPlayerId: string,
 	basis: RestorationBasis
 ): boolean {
+	const gates = restoreGateResultsFor(candidate, fantraxPlayerId, basis);
+	return gates !== null && allRestoreGatesPassed(gates);
+}
+
+/**
+ * `bidStandsFor`'s answer with its arithmetic — both gates' own outcomes —
+ * or `null` for a Team the basis has no roster figures for (Story 7.14).
+ *
+ * The reinstatement refuses by NAMING the gate that failed, which a boolean
+ * cannot do; this is the same evaluation `bidStandsFor` reads, not a second
+ * one beside it.
+ */
+export function restoreGateResultsFor(
+	candidate: Bid,
+	fantraxPlayerId: string,
+	basis: RestorationBasis
+): RestoreLeadingBidGateResults | null {
 	const figures = basis.rosterFiguresFor(candidate.teamId);
-	if (figures === null) return false;
+	if (figures === null) return null;
 	const team = teamMoneyStateFor({
 		teamId: candidate.teamId,
 		// The Auction being restored, excluded from both lists exactly as a
@@ -271,5 +294,5 @@ function candidateStands(
 		managerId: candidate.managerId,
 		amount: candidate.amount
 	};
-	return allRestoreGatesPassed(evaluateRestore(state, command, basis.now));
+	return evaluateRestore(state, command, basis.now);
 }

@@ -343,7 +343,11 @@ describe('leagueClockReducer', () => {
 			'AUCTION_OPENED_EVENT',
 			'NOMINATION_PLACED_EVENT',
 			'BID_PLACED_EVENT',
-			'BID_VOIDED_EVENT'
+			'BID_VOIDED_EVENT',
+			// Story 7.14: a reinstatement ERASES later Bids, and each erased Bid
+			// takes the void's treatment — a NON-reset that only records
+			// withdrawn `seq`s, exactly as `BID_VOIDED_EVENT` does.
+			'BID_CANCELLATION_REVERSED_EVENT'
 		]);
 		// The origin is not a reset and the void is not a reset. Exactly two
 		// event types append to `resets`, which is AD-22's set, unwidened.

@@ -151,6 +151,47 @@ const ASSIGNMENT_DEADLINE_PASSED_CLAUSE =
 const CLOSE_REVERSED_CLAUSE =
 	'won an Auction whose Close the Commissioner has reversed. The Contract has left your roster.';
 
+/**
+ * The two reinstatement clauses (Story 7.14). One event, two different facts
+ * about two kinds of addressee: the reinstated Team leads again through no act
+ * of its own, and every Team whose later Bid was erased has lost it the same
+ * way. Chosen per addressed Team off the payload, never by category alone.
+ */
+const BID_REINSTATED_CLAUSE =
+	'had a cancelled Bid reinstated by the Commissioner. It leads this Auction again.';
+const BID_ERASED_CLAUSE =
+	'bid on this Auction after a cancellation the Commissioner has reversed. That Bid is erased and its capital released.';
+
+/**
+ * The Team ids whose STANDING Bids a reinstatement erased, off its payload.
+ *
+ * A later Bid another Close had already cancelled is erased too, but it
+ * committed nothing and its Team lost nothing by this act — so that Team is
+ * neither addressed nor told its Bid was erased and its capital released.
+ */
+function erasedTeamIds(payload: Record<string, unknown>): readonly string[] {
+	const erased = payload['erasedBids'];
+	if (!Array.isArray(erased)) return [];
+	return erased
+		.map((entry) => fields(entry))
+		.filter((bid) => bid['wasCancelled'] !== true)
+		.map((bid) => text(bid, 'teamId'))
+		.filter((teamId): teamId is string => teamId !== null);
+}
+
+/**
+ * The reinstatement clause for one addressed Team, or `null` for a Team the
+ * event is not about — which degrades to the plain line, as a mistargeted
+ * close addressee does.
+ */
+function reinstatementClauseFor(event: BroadcastEvent, teamId: string | null): string | null {
+	if (teamId === null) return null;
+	const payload = fields(event.payload);
+	if (teamId === text(payload, 'teamId')) return BID_REINSTATED_CLAUSE;
+	if (erasedTeamIds(payload).includes(teamId)) return BID_ERASED_CLAUSE;
+	return null;
+}
+
 const CLAUSE_FOR_EVENT_TYPE: Readonly<Record<string, string>> = Object.freeze({
 	AssignmentRemindersSent: ASSIGNMENT_REMINDER_CLAUSE,
 	AssignmentDeadlinePassed: ASSIGNMENT_DEADLINE_PASSED_CLAUSE,
@@ -286,6 +327,8 @@ function categoryFor(event: BroadcastEvent, teamId: string | null): Notification
  * that adding a category cannot leave a clause unassigned.
  */
 function clauseFor(event: BroadcastEvent, teamId: string | null): string | null {
+	// A reinstatement's clause turns on WHICH of its Teams is addressed.
+	if (event.eventType === 'BidCancellationReversed') return reinstatementClauseFor(event, teamId);
 	// The per-type override first — see `CLAUSE_FOR_EVENT_TYPE`. Three event
 	// types share one category and two of them need their own sentence, so the
 	// type is consulted before the category rather than the category being
@@ -344,6 +387,20 @@ function withoutMistargeted(
 	discordUserIds: readonly string[],
 	directory: LeagueDirectory
 ): readonly string[] {
+	// A reinstatement is about the reinstated Team and every erased Team
+	// (Story 7.14), and about nobody else.
+	if (event.eventType === 'BidCancellationReversed') {
+		const payload = fields(event.payload);
+		const reinstated = text(payload, 'teamId');
+		// Fail CLOSED: a reinstatement naming no reinstated Team is malformed,
+		// and this family of overrides pings nobody it cannot prove it is about.
+		if (reinstated === null) return [];
+		const about = [reinstated, ...erasedTeamIds(payload)];
+		return discordUserIds.filter((discordUserId) => {
+			const teamId = teamOf(discordUserId, directory);
+			return teamId === null || about.includes(teamId);
+		});
+	}
 	// A reversal is targeted exactly as a close is: at the payload's Team
 	// (Story 7.13), so a stale or wrong row cannot ping anybody else.
 	if (event.eventType !== 'AuctionClosed' && event.eventType !== 'AuctionCloseReversed') {

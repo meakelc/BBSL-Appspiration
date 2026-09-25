@@ -585,3 +585,43 @@ describe('mentionSuffixFor — AuctionCloseReversed (Story 7.13)', () => {
 		expect(line).toContain(`<@${KAI_ID}>`);
 	});
 });
+
+// --- Story 7.14: a reinstated Bid ------------------------------------------
+
+describe('mentionSuffixFor — BidCancellationReversed (Story 7.14)', () => {
+	const reinstatement = () =>
+		event('BidCancellationReversed', {
+			cancellationSeq: '5479',
+			fantraxPlayerId: PLAYER,
+			playerName: 'Anthony Davis',
+			teamId: SUNS,
+			teamName: 'Suns',
+			amount: 2_000_000,
+			erasedBids: [{ seq: '5534', teamId: BULLS, teamName: 'Bulls', amount: 1_000_000 }],
+			reason: 'Reinstated.'
+		});
+
+	it('tells the reinstated Team it leads again, and the erased Team its Bid is gone', () => {
+		const line = mentionSuffixFor(reinstatement(), [KAI_ID, NOOR_ID, ARI_ID], DIRECTORY, ORIGIN);
+		expect(line).toBe(
+			`<@${KAI_ID}> <@${NOOR_ID}> — Suns — Kai & Noor had a cancelled Bid reinstated by the ` +
+				`Commissioner. It leads this Auction again. ${LINK}\n` +
+				`<@${ARI_ID}> — Bulls — Ari bid on this Auction after a cancellation the Commissioner has ` +
+				`reversed. That Bid is erased and its capital released. ${LINK}`
+		);
+	});
+
+	it('drops an addressee from a Team the reinstatement is not about', () => {
+		expect(mentionSuffixFor(reinstatement(), [MEAKEL_ID], DIRECTORY, ORIGIN)).toBe('');
+	});
+});
+
+describe('mentionSuffixFor — BidCancellationReversed naming no reinstated Team', () => {
+	it('fails CLOSED: nobody is pinged', () => {
+		const malformed = event('BidCancellationReversed', {
+			fantraxPlayerId: PLAYER,
+			erasedBids: [{ seq: '5534', teamId: BULLS, amount: 1_000_000 }]
+		});
+		expect(mentionSuffixFor(malformed, [KAI_ID, ARI_ID, MEAKEL_ID], DIRECTORY, ORIGIN)).toBe('');
+	});
+});

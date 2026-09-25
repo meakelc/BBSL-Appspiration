@@ -104,12 +104,15 @@ const EXPECTED: Record<
 		// rostered half here and `refuseEligibilityChange` accepts it.
 		// Story 7.13 adds `close-reversal`: a registered permission with no menu
 		// row (`listed: false`) — the control lives on the won Contract's row.
+		// Story 7.14 adds `bid-reinstatement` on the same terms, in THIS phase
+		// only — the control lives on a cancelled row of the Auction page.
 		commissionerOnly: [
 			'minor-league-eligibility',
 			'roster-move',
 			'roster-trade',
 			'roster-drop',
 			'close-reversal',
+			'bid-reinstatement',
 			'divergence'
 		]
 	},

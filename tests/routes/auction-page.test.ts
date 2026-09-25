@@ -865,7 +865,11 @@ describe('the Auction page — what it never renders', () => {
 			'bidCancelledSentence',
 			'BID_CANCELLED_LABEL',
 			'history-cancelled',
-			'history-cancelled-label'
+			'history-cancelled-label',
+			// Story 7.14: the `BidCancelled` seq a Commissioner's reinstatement
+			// link carries. It names the cancellation being REVERSED — the
+			// opposite of offering one.
+			'cancellationSeq'
 		];
 		for (const occurrence of PAGE_CODE.match(/[A-Za-z_-]*cancel[A-Za-z_-]*/gi) ?? []) {
 			expect(permitted, occurrence).toContain(occurrence);

@@ -358,7 +358,12 @@ describe('scope — exactly one override reaches for this mechanism', () => {
 			// sheet, `requireOverrideReason` and `requireOverridablePhase`, on a
 			// destination reached from the won Contract's row on the Team page.
 			'src/routes/close-reversal/+page.server.ts',
-			'src/routes/close-reversal/+page.svelte'
+			'src/routes/close-reversal/+page.svelte',
+			// Story 7.14's Bid reinstatement — a full override (FR-32): the
+			// reason sheet, `requireOverrideReason` and `requireOverridablePhase`,
+			// on a destination reached from a cancelled row of the Auction page.
+			'src/routes/bid-reinstatement/+page.server.ts',
+			'src/routes/bid-reinstatement/+page.svelte'
 		];
 		const naming = sources().filter((path) =>
 			/buildOverrideRecord|requireOverrideReason|requireOverridablePhase|reasonSheetView|ReasonSheet/.test(
@@ -402,6 +407,9 @@ describe('scope — exactly one override reaches for this mechanism', () => {
 			)
 		);
 		expect(reaching.sort()).toEqual([
+			// Story 7.14's Bid reinstatement (FR-32, FR-40) — a fifth, reviewed.
+			'src/routes/bid-reinstatement/+page.server.ts',
+			'src/routes/bid-reinstatement/+page.svelte',
 			// Story 7.13's Close reversal (FR-32) — a fourth override, reviewed.
 			'src/routes/close-reversal/+page.server.ts',
 			'src/routes/close-reversal/+page.svelte',

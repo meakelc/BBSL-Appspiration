@@ -918,7 +918,8 @@ function bidCancelled(
 	causeFantraxPlayerId: string,
 	causePlayerName: string,
 	restoration: Record<string, unknown> | null,
-	occurredAt = '2026-08-26T13:00:00.000Z'
+	occurredAt = '2026-08-26T13:00:00.000Z',
+	extra: Record<string, unknown> = {}
 ): QueryResultRow {
 	return logEvent(
 		seq,
@@ -929,7 +930,8 @@ function bidCancelled(
 			teamId,
 			causeFantraxPlayerId,
 			causePlayerName,
-			restoration
+			restoration,
+			...extra
 		},
 		occurredAt,
 		// No acting Manager or Team on the envelope: a cancellation is the
@@ -2147,7 +2149,10 @@ describe('loadAuctionPage — a cancelled Bid carries its cause to the wire (Sto
 	 * Player, and seated Team 2 beneath it. The page needs two facts and only
 	 * two: what the causing win was called, and whether anybody now leads.
 	 */
-	function cancelledAuction(restoration: Record<string, unknown> | null) {
+	function cancelledAuction(
+		restoration: Record<string, unknown> | null,
+		extra: Record<string, unknown> = {}
+	) {
 		return fakeGateway({
 			events: [
 				nominated(1, 'p-1', 'Jalen Green', 't-1', 'Lakers', 'm-1', NOMINATED_AT),
@@ -2171,7 +2176,17 @@ describe('loadAuctionPage — a cancelled Bid carries its cause to the wire (Sto
 					'2026-08-26T12:00:00.000Z',
 					'2026-08-27T12:00:00.000Z'
 				),
-				bidCancelled(4, 'p-1', '3', 't-1', 'p-9', 'Stephen Curry', restoration)
+				bidCancelled(
+					4,
+					'p-1',
+					'3',
+					't-1',
+					'p-9',
+					'Stephen Curry',
+					restoration,
+					undefined,
+					extra
+				)
 			],
 			freeAgents: [
 				{ fantraxPlayerId: 'p-1', playerName: 'Jalen Green', positions: 'SG', nbaTeam: 'HOU' }
@@ -2200,7 +2215,12 @@ describe('loadAuctionPage — a cancelled Bid carries its cause to the wire (Sto
 		// successor was seated.
 		expect(auction?.bids.find((bid) => bid.seq === '3')?.cancellation).toEqual({
 			causePlayerName: 'Stephen Curry',
-			restored: true
+			restored: true,
+			// Story 7.14: the `BidCancelled` event's own seq, for the
+			// Commissioner's reinstatement link — and an $8.5M lead is not a
+			// lottery entry, so the link may be offered.
+			cancellationSeq: '4',
+			reinstatable: true
 		});
 		// The Bid the cascade seated is untouched: a restoration is not a
 		// cancellation, and nothing marks it.
@@ -2216,7 +2236,23 @@ describe('loadAuctionPage — a cancelled Bid carries its cause to the wire (Sto
 
 		expect(auction?.bids.find((bid) => bid.seq === '3')?.cancellation).toEqual({
 			causePlayerName: 'Stephen Curry',
-			restored: false
+			restored: false,
+			// Story 7.14: the `BidCancelled` event's own seq, for the
+			// Commissioner's reinstatement link — and an $8.5M lead is not a
+			// lottery entry, so the link may be offered.
+			cancellationSeq: '4',
+			reinstatable: true
+		});
+	});
+
+	it('offers no reinstatement where the payload RECORDED a lottery entry, whatever the amount (Story 7.14)', async () => {
+		// An $8.5M Bid the payload says was a Minimum-Bid Contention entry: the
+		// control follows the recorded fact the core refuses on, never the amount.
+		const harness = cancelledAuction(null, { wasContentionEntry: true });
+		const auction = openPage(await loadAuctionPage(harness.gateway, 'p-1', VIEWER_TEAM));
+		expect(auction?.bids.find((bid) => bid.seq === '3')?.cancellation).toMatchObject({
+			cancellationSeq: '4',
+			reinstatable: false
 		});
 	});
 
