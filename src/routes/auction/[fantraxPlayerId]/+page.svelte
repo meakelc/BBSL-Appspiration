@@ -112,6 +112,10 @@
 		readonly cancellation: {
 			readonly causePlayerName: string;
 			readonly restored: boolean;
+			/** The `BidCancelled` event's own `seq` — what a reinstatement names (Story 7.14). */
+			readonly cancellationSeq: string;
+			/** `false` for a lottery entry, which is never reinstated. */
+			readonly reinstatable: boolean;
 		} | null;
 	};
 
@@ -893,6 +897,24 @@
 							<span class="history-cancelled">
 								{bidCancelledSentence(bid.cancellation.causePlayerName, bid.cancellation.restored)}
 							</span>
+							{#if data.canReinstateBids && bid.cancellation.reinstatable}
+								<!-- Story 7.14: the Commissioner's reinstatement, in place on
+								     the cancelled row, carrying the cancellation's own `seq`.
+								     A link to the reason sheet, dashed and labelled — the route
+								     refuses a non-Commissioner whatever this rendered, and the
+								     core refuses whatever this offered. -->
+								<!-- Spans, displayed as blocks: the control sits inside the
+								     inline `.history-bidder`, where a `<div>` is invalid. -->
+								<span class="history-commissioner">
+									<span class="commissioner-block">
+										<a
+											class="control-commissioner"
+											href="/bid-reinstatement?cancellation={bid.cancellation.cancellationSeq}"
+											>Reinstate this Bid</a
+										>
+									</span>
+								</span>
+							{/if}
 						{/if}
 					</span>
 					<!-- Whitespace-tight, and it has to be. `.history-row` is
@@ -1741,6 +1763,16 @@
 	.history-cancelled {
 		color: var(--color-text-secondary);
 		font-size: var(--size-11);
+	}
+
+	/* Story 7.14: the reinstatement control, on its own line under the cause. */
+	.history-commissioner {
+		display: block;
+		margin-top: var(--space-row-gap);
+	}
+
+	.history-commissioner .commissioner-block {
+		display: block;
 	}
 
 	/*

@@ -50,6 +50,9 @@ import type {
 } from './core/rules/roster-rearrange.ts';
 import { closeReversalAttention } from './core/rules/close-reversal.ts';
 import type { CloseReversalDecision, SlotPair } from './core/rules/close-reversal.ts';
+import { bidReinstatementAttention } from './core/rules/bid-reinstatement.ts';
+import type { BidReinstatementDecision } from './core/rules/bid-reinstatement.ts';
+import type { Money } from './core/money.ts';
 
 /**
  * One before→after row, as the caller states it.
@@ -643,3 +646,62 @@ export { closeReversalActSentence } from './core/rules/close-reversal.ts';
 
 /** The commit control's own words. Never "Confirm" — it names the act. */
 export const CLOSE_REVERSAL_COMMIT_LABEL = 'Reverse this Close';
+
+// --- Story 7.14: reinstating a cancelled Bid -------------------------------
+
+/**
+ * Every row a Bid reinstatement's sheet shows, in reading order (Story 7.14).
+ *
+ * **Before → after for the Leading Bid, the Auction Clock, the Bids placed
+ * after the cancellation, and the League Clock** — the four things the act
+ * moves. Every figure and instant is the pure core's decision, and every
+ * consequence note is `bidReinstatementAttention`'s; this formats nothing but
+ * through `describeActAmount`.
+ */
+export function bidReinstatementReasonRows(
+	decision: BidReinstatementDecision
+): readonly ReasonSheetRow[] {
+	const notes = bidReinstatementAttention(decision);
+	const player = decision.cancellation.playerName;
+	const bidWords = (bid: { readonly teamName: string; readonly amount: Money }): string =>
+		`${bid.teamName} · ${describeActAmount(bid.amount)}`;
+	return [
+		{
+			label: `${player} · Leading Bid`,
+			before: decision.leaderBefore === null ? 'None' : bidWords(decision.leaderBefore),
+			after: bidWords(decision.reinstated),
+			attention: notes.leader
+		},
+		{
+			label: `${player} · Auction Clock`,
+			before: decision.closesAtBefore ?? 'None',
+			after: decision.reinstated.closesAt,
+			attention: notes.clock
+		},
+		{
+			label: `${player} · Bids after the cancellation`,
+			before:
+				decision.erased.length === 0 ? 'None' : decision.erased.map(bidWords).join(', '),
+			after: decision.erased.length === 0 ? 'None' : 'Erased',
+			attention: notes.erased
+		},
+		{
+			label: 'League Clock',
+			before: decision.leagueClockExpiryBefore ?? 'None',
+			after: decision.leagueClockExpiryAfter ?? 'None',
+			attention: notes.leagueClock
+		},
+		{
+			label: `${decision.reinstated.teamName} · Cap and Slots, as of now`,
+			before: 'Bid cancelled',
+			after: 'Both pass',
+			attention: null
+		}
+	];
+}
+
+/** The act, as one finished sentence — the pure core's, re-exported. */
+export { bidReinstatementActSentence } from './core/rules/bid-reinstatement.ts';
+
+/** The commit control's own words. Never "Confirm" — it names the act. */
+export const BID_REINSTATEMENT_COMMIT_LABEL = 'Reinstate this Bid';

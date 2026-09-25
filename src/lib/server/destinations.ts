@@ -163,6 +163,12 @@ const CATALOG: Readonly<Record<LeaguePhase, readonly Destination[]>> = Object.fr
 		// route. Absent from Archived, so `requireLiveDestination` refuses it
 		// there (403) before the route's `requireOverridablePhase` is reached.
 		destination('close-reversal', 'Reverse a Close', '/close-reversal', true, false),
+		// Story 7.14: reinstating a Bid an FR-40 cancellation should not have
+		// withdrawn. NOT listed — the control lives in place, on the cancelled
+		// row of the Auction page's Bid history — but registered, or
+		// `requireLiveDestination` refuses the route. Auction Phase ONLY: a
+		// reinstated Bid must still be able to close, which needs the sweep.
+		destination('bid-reinstatement', 'Reinstate a Bid', '/bid-reinstatement', true, false),
 		// Story 7.9: the surface that says an act above is NEEDED. Live in the
 		// same two phases the acts it proposes into are live in, and absent from
 		// Archived for the same reason they are — `requireOverridablePhase`

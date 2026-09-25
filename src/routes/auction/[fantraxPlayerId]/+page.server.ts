@@ -58,7 +58,7 @@ import {
 	bidRefusalDetail,
 	readBidAmount
 } from '$lib/core/rules/bidding.ts';
-import { requireLiveDestination } from '$lib/server/destinations.ts';
+import { requireLiveDestination, resolveDestinations } from '$lib/server/destinations.ts';
 import { loadAuctionPage } from '$lib/server/auction-page.ts';
 import { placeBid } from '$lib/server/bidding.ts';
 import type { BidRejection } from '$lib/server/bidding.ts';
@@ -68,6 +68,9 @@ import { writeGateway } from '$lib/shell/db.ts';
 import type { Actions, PageServerLoad } from './$types';
 
 const AUCTION_DESTINATION_ID = 'auction';
+
+/** Story 7.14's surface — where a cancelled row's Commissioner control links. */
+const BID_REINSTATEMENT_DESTINATION_ID = 'bid-reinstatement';
 
 /**
  * The acting Manager and Team, from the session and nothing else (AD-4).
@@ -107,7 +110,15 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		phase: locals.phase,
 		// Every sentence on the control is already worded by the pure core —
 		// the surface prints them and never re-words one.
-		auction
+		auction,
+		// Asked of the ONE catalog (AD-30), exactly as the Team page asks it
+		// for `/close-reversal`: the control on a cancelled history row shows
+		// where `/bid-reinstatement` is live for this session — a
+		// Commissioner, in the Auction Phase. The route refuses everybody
+		// else whatever this rendered.
+		canReinstateBids: resolveDestinations(locals.phase.name, locals.session).some(
+			(entry) => entry.id === BID_REINSTATEMENT_DESTINATION_ID
+		)
 	};
 };
 

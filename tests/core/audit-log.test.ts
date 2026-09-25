@@ -41,10 +41,12 @@ import type { AppendedEvent } from '../../src/lib/core/types.ts';
 // The event-type constants, taken from the reducers that declare them rather
 // than spelled as literals here — a renamed constant must break this suite.
 import {
+	BID_CANCELLATION_REVERSED_EVENT,
 	BID_CANCELLED_EVENT,
 	BID_PLACED_EVENT,
 	CONTENTION_DISSOLVED_EVENT
 } from '../../src/lib/core/projection/auctions.ts';
+import type { BidCancellationReversedPayload } from '../../src/lib/core/rules/bid-reinstatement.ts';
 import {
 	AUCTION_CLOSED_EVENT,
 	AUCTION_TERMINATED_EVENT,
@@ -461,6 +463,38 @@ const CLOSE_REVERSED: AuctionCloseReversedPayload = {
 	reason: 'Lakers held an IR Contract against the free-agency rule.'
 };
 
+/**
+ * A reinstated Bid (Story 7.14): Celtics' cancelled $2.0M lead on Alperen
+ * Sengun reinstated, Bulls' later $1.0M lottery opening erased.
+ */
+const BID_REINSTATED: BidCancellationReversedPayload = {
+	cancellationSeq: '5',
+	reinstatedSeq: '3',
+	fantraxPlayerId: PLAYER_TWO,
+	playerName: 'Alperen Sengun',
+	teamId: TEAM_B,
+	teamName: 'Celtics',
+	managerId: 'manager-b',
+	amount: 2_000_000,
+	closesAt: '2026-09-02T09:00:00.000Z',
+	clockExpired: true,
+	causePlayerName: 'Jalen Green',
+	erasedBids: [
+		{
+			seq: '6',
+			teamId: TEAM_C,
+			teamName: 'Bulls',
+			managerId: 'm-c',
+			amount: 1_000_000,
+			wasCancelled: false
+		}
+	],
+	leaderBefore: { seq: '6', teamId: TEAM_C, teamName: 'Bulls', amount: 1_000_000 },
+	leagueClockExpiryBefore: '2026-09-05T09:00:00.000Z',
+	leagueClockExpiryAfter: '2026-09-04T09:00:00.000Z',
+	reason: 'Celtics had moved the Contract to IR in Fantrax before the close.'
+};
+
 const ELIGIBILITY_SET: MinorLeagueEligibilitySetPayload = {
 	fantraxPlayerId: PLAYER_ONE,
 	playerName: 'Jalen Green',
@@ -527,6 +561,7 @@ function everyKnownEvent(): AppendedEvent[] {
 		event(DROP_RECORDED_EVENT, DROP),
 		event(ROSTER_REARRANGED_EVENT, ROSTER_MOVE),
 		event(AUCTION_CLOSE_REVERSED_EVENT, CLOSE_REVERSED),
+		event(BID_CANCELLATION_REVERSED_EVENT, BID_REINSTATED),
 		event(MINOR_LEAGUE_ELIGIBILITY_SET, ELIGIBILITY_SET),
 		event(ASSIGNMENTS_SUBMITTED_EVENT, ASSIGNMENTS_SUBMITTED),
 		event(ASSIGNMENT_DEADLINE_SET_EVENT, DEADLINE_SET),

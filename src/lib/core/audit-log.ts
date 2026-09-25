@@ -50,10 +50,12 @@ import { formatExactDollars, formatMoney, isOnMoneyGrid } from './money.ts';
 import type { Money } from './money.ts';
 import { formatTeamManager } from './team-identity.ts';
 import {
+	BID_CANCELLATION_REVERSED_EVENT,
 	BID_CANCELLED_EVENT,
 	BID_PLACED_EVENT,
 	CONTENTION_DISSOLVED_EVENT,
-	MINIMUM_BID_CONTENTION_LABEL
+	MINIMUM_BID_CONTENTION_LABEL,
+	contentionForAmount
 } from './projection/auctions.ts';
 import type { ContentionState } from './projection/auctions.ts';
 import {
@@ -1213,6 +1215,95 @@ function renderCloseReversal(payload: Payload, refs: AuditReferences): AuditRend
 }
 
 /**
+ * `BidCancellationReversed` — `rules/bid-reinstatement.ts`'s
+ * `BidCancellationReversedPayload` (Story 7.14, FR-32, FR-33).
+ *
+ * A distinct **Bid Reinstatement** entry: the reason verbatim and first, then
+ * the cancellation it reverses by `seq`, the reinstated Bid and its Auction
+ * Clock, every Bid it erased, and the League Clock before and after. Every
+ * erased Team is a party, so a Team whose Bid was erased finds this row under
+ * its own filter. Where an erased Bid opened a Minimum-Bid Contention the
+ * entry says that lottery is ruled never to have run and its sealed seed is
+ * not revealed.
+ */
+function renderBidReinstatement(payload: Payload, refs: AuditReferences): AuditRender {
+	const teamId = text(payload, 'teamId');
+	const fantraxPlayerId = text(payload, 'fantraxPlayerId');
+	const team = teamNamed(refs, teamId, text(payload, 'teamName'));
+	const player = playerNamed(refs, fantraxPlayerId, text(payload, 'playerName'));
+	const erased = payloadList(payload, 'erasedBids');
+	const leaderBefore = asPayload(payload['leaderBefore']);
+	const expired = flag(payload, 'clockExpired');
+	const erasedWords =
+		erased.length === 0
+			? EMPTY_LIST
+			: erased
+					.map((bid) => {
+						const who = teamNamed(refs, text(bid, 'teamId'), text(bid, 'teamName'));
+						const figure = amount(bid, 'amount');
+						// A Bid another Close had ALREADY cancelled committed nothing,
+						// so it is marked as such rather than read as capital released.
+						const already = flag(bid, 'wasCancelled') === true ? ' (already cancelled)' : '';
+						return `${figure === null ? who : `${who} at ${figure}`}${already}`;
+					})
+					.join(LIST_SEPARATOR);
+	// The ONE derivation of "which contention this amount is" — never a raw
+	// compare against the constant. Only a live erased Bid can have run a
+	// lottery that is now ruled never to have run.
+	const lotteryErased = erased.some((bid) => {
+		const figure = count(bid, 'amount');
+		return (
+			flag(bid, 'wasCancelled') !== true &&
+			figure !== null &&
+			contentionForAmount(figure as Money) === 'minimum_bid'
+		);
+	});
+	const leaderBeforeWords =
+		text(leaderBefore, 'teamId') === null && text(leaderBefore, 'teamName') === null
+			? 'Nobody'
+			: `${teamNamed(refs, text(leaderBefore, 'teamId'), text(leaderBefore, 'teamName'))}${
+					amount(leaderBefore, 'amount') === null ? '' : ` at ${amount(leaderBefore, 'amount') ?? ''}`
+				}`;
+	const clockBefore = text(payload, 'leagueClockExpiryBefore');
+	const clockAfter = text(payload, 'leagueClockExpiryAfter');
+	return {
+		headline: `${team}'s cancelled bid on ${player} was reinstated.`,
+		details: [
+			...rows(
+				row('Reason', text(payload, 'reason')),
+				row('Reversed cancellation', text(payload, 'cancellationSeq')),
+				row('Reinstated amount', amount(payload, 'amount')),
+				row('Cancelled by the close of', text(payload, 'causePlayerName')),
+				row('Leading before', leaderBeforeWords),
+				row(
+					'Auction Clock',
+					text(payload, 'closesAt') === null
+						? null
+						: `${text(payload, 'closesAt') ?? ''}${
+								expired === true ? ' — already passed; the next tick closes the Auction' : ''
+							}`
+				),
+				row('Bids erased', erasedWords),
+				row(
+					`${MINIMUM_BID_CONTENTION_LABEL} erased`,
+					lotteryErased
+						? 'Ruled never to have run — no draw is owed and its sealed seed is not revealed'
+						: null
+				),
+				row(
+					'League Clock expiry',
+					clockBefore === null && clockAfter === null
+						? null
+						: `${clockBefore ?? '—'}${TO}${clockAfter ?? '—'}`
+				)
+			)
+		],
+		teams: distinct([teamId, text(leaderBefore, 'teamId'), ...erased.map((bid) => text(bid, 'teamId'))]),
+		players: distinct([fantraxPlayerId])
+	};
+}
+
+/**
  * The registry: a LOOKUP from `event_type` to a renderer, never a union.
  *
  * An absent key is not an error — `renderAuditEvent` falls back to the
@@ -1274,6 +1365,10 @@ const RENDERERS: Readonly<Record<string, AuditEntry>> = Object.freeze({
 	// Story 7.13: the distinct entry FR-32 requires. `RENDERERS` is OPEN, so
 	// `tests/core/audit-log.test.ts` is the only proof this key exists.
 	[AUCTION_CLOSE_REVERSED_EVENT]: { label: 'Close Reversal', render: renderCloseReversal },
+	// Story 7.14: the distinct entry a Commissioner reinstatement owes.
+	// `RENDERERS` is OPEN, so `tests/core/audit-log.test.ts` is the only proof
+	// this key exists.
+	[BID_CANCELLATION_REVERSED_EVENT]: { label: 'Bid Reinstatement', render: renderBidReinstatement },
 	[MINOR_LEAGUE_ELIGIBILITY_SET]: {
 		label: 'Minor League Eligibility set',
 		render: renderEligibilitySet

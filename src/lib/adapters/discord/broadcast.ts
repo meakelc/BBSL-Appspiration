@@ -71,7 +71,12 @@ export const BROADCAST_EVENT_TYPES: readonly string[] = [
 	// Move — because it takes a Player off a Team that won him in public, and
 	// the league heard about that win here. The notice names the actor and the
 	// reason; the winning Team's Managers are mentioned.
-	'AuctionCloseReversed'
+	'AuctionCloseReversed',
+	// Story 7.14. A reinstated Bid IS announced, for the reversal's reason: it
+	// hands a Team back a lead the league saw cancelled, and it erases Bids the
+	// league saw placed. The notice names the actor, the reason, the
+	// reinstated Team and every Team whose Bid was erased; they are mentioned.
+	'BidCancellationReversed'
 ];
 
 /** Whether an appended event's type earns a line in the league channel. */
@@ -303,6 +308,27 @@ function contenderName(teamId: string, directory: LeagueDirectory): string {
 	return formatTeamManagers(teamName, managerNames);
 }
 
+/**
+ * A Team named off a payload — its recorded name first, the directory's
+ * second — with EVERY Manager acting for it: `Lakers — Meakel & Dana`.
+ *
+ * For a notice about a Team that did not act (Story 7.14's reinstatement
+ * names the reinstated Team and every Team whose Bid it erased), so no single
+ * Manager is the one named. `null` when neither source names the Team.
+ */
+function teamWithEveryManager(
+	teamId: string | null,
+	statedName: string | null,
+	directory: LeagueDirectory
+): string | null {
+	const teamName = statedName ?? (teamId === null ? null : (directory.teamNames.get(teamId) ?? null));
+	if (teamName === null) return null;
+	const managerNames = (teamId === null ? [] : (directory.managersOfTeam.get(teamId) ?? []))
+		.map((managerId) => directory.managerNames.get(managerId))
+		.filter((name): name is string => name !== undefined);
+	return formatTeamManagers(teamName, managerNames);
+}
+
 // --- The composer ---------------------------------------------------------
 
 /**
@@ -431,6 +457,64 @@ function composed(event: BroadcastEvent, directory: LeagueDirectory): string | n
 			return (
 				`${who} reversed the Close that gave ${player} to ${team}. ${player} is back in the pool. ` +
 				`Reason: ${reason}`
+			);
+		}
+
+		case 'BidCancellationReversed': {
+			// The actor is the ENVELOPE's Manager — the Commissioner — and every
+			// Team is the payload's. Nobody on the reinstated Team acted, so it is
+			// named with every Manager acting for it, as a reversal names its Team.
+			const team = teamWithEveryManager(
+				text(payload, 'teamId'),
+				text(payload, 'teamName'),
+				directory
+			);
+			const player = text(payload, 'playerName') ?? event.playerName ?? null;
+			const amount = displayMoney(payload['amount']);
+			const reason = text(payload, 'reason');
+			const actor =
+				event.managerId === null ? null : (directory.managerNames.get(event.managerId) ?? null);
+			if (team === null || player === null || amount === null || reason === null) return null;
+			const erasedRaw = payload['erasedBids'];
+			const erasedEntries = (Array.isArray(erasedRaw) ? erasedRaw : []).map((entry) => fields(entry));
+			// A Bid another Close had ALREADY cancelled is erased too, but it
+			// committed nothing and its Team lost nothing by this act — so it is
+			// not named among the erased bidders.
+			const live = erasedEntries.filter((bid) => bid['wasCancelled'] !== true);
+			// One unnameable entry does not sink the notice: it is named by its
+			// id, or stated as unnamed, and the rest of the list still reads.
+			const erasedNames = [
+				...new Set(
+					live.map((bid) => {
+						const teamId = text(bid, 'teamId');
+						return (
+							teamWithEveryManager(teamId, text(bid, 'teamName'), directory) ??
+							teamId ??
+							'an unnamed Team'
+						);
+					})
+				)
+			];
+			const who = actor === null ? 'The Commissioner' : `The Commissioner, ${actor},`;
+			// The noun follows the number of Bids erased, never the number of
+			// distinct Teams — one Team can have placed two of them.
+			const erasedSentence =
+				live.length === 0
+					? erasedEntries.length === 0
+						? 'No later Bid was erased.'
+						: 'No standing later Bid was erased.'
+					: `Erased: the later ${live.length === 1 ? 'Bid' : 'Bids'} by ${erasedNames.join(', ')}.`;
+			const closesAt = text(payload, 'closesAt');
+			const closes = closesAt === null ? null : discordTimestamp(closesAt);
+			const clock =
+				payload['clockExpired'] === true
+					? 'Its Auction Clock has passed, so the next close awards it.'
+					: closes === null
+						? ''
+						: `Closes ${closes}.`;
+			return (
+				`${who} reinstated ${team}'s ${amount} Bid on ${player}, which leads again. ` +
+				`${erasedSentence}${clock === '' ? '' : ` ${clock}`} Reason: ${reason}`
 			);
 		}
 

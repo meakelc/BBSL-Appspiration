@@ -128,6 +128,29 @@ export const CONTENTION_DISSOLVED_EVENT = 'ContentionDissolved';
 export const BID_CANCELLED_EVENT = 'BidCancelled';
 
 /**
+ * The event type a Commissioner reinstatement appends — the compensating
+ * event that reverses one `BidCancelled` (Story 7.14, FR-32, FR-40; the
+ * spine addendum AD-31 is to gain).
+ *
+ * Declared here for `BID_CANCELLED_EVENT`'s reason: this is the reducer that
+ * gives it meaning, `auction_events.event_type` is generic `text`, and no
+ * migration was needed or written.
+ *
+ * **It names the `BidCancelled` it reverses, by that event's own `seq`**, and
+ * the fold is the whole of its effect (`withBidReinstated`): the cancelled Bid
+ * leads again with its ORIGINAL `closesAt`, and every Bid placed on that
+ * Auction after the cancellation is ERASED — out of `bids`, its capital
+ * released, and its League Clock reset withdrawn (`league-clock.ts` reads
+ * `readErasedSeqs`). The cancellation itself stays in the log, as does every
+ * erased `BidPlaced` (AD-4).
+ *
+ * **It never closes anything.** An Auction whose reinstated clock has already
+ * passed is closed by the ordinary sweep on the next tick, so `rules/close.ts`
+ * stays the sole appender of `AuctionClosed` and of every `BidCancelled`.
+ */
+export const BID_CANCELLATION_REVERSED_EVENT = 'BidCancellationReversed';
+
+/**
  * Which contention an Auction is in.
  *
  * `awaiting_opening_bid` is a nominated Player nobody has bid on. `standard`
@@ -228,6 +251,18 @@ export type BidCancellation = {
 	 * re-validation at all.
 	 */
 	readonly restoration: Restoration | null;
+	/**
+	 * Whether the cancelled commitment was a Minimum-Bid Contention entry, as
+	 * the `BidCancelled` payload RECORDED it (Story 7.14) — the fact a
+	 * Commissioner's reinstatement refuses on, carried so a surface offering
+	 * the control reads the same fact rather than guessing from the amount.
+	 *
+	 * Optional, and set by the reducer only when the payload says `true`:
+	 * `rules/close.ts`'s cascade builds markers without it, and an ordinary
+	 * lead's marker must stay identical to the cascade's. Every reader takes
+	 * it as `=== true`.
+	 */
+	readonly wasContentionEntry?: boolean;
 };
 
 /**
@@ -1005,6 +1040,7 @@ function readCancelledPayload(payload: unknown): {
 	readonly causeFantraxPlayerId: string;
 	readonly causePlayerName: string;
 	readonly restoration: Restoration | null;
+	readonly wasContentionEntry: boolean;
 } | null {
 	if (typeof payload !== 'object' || payload === null) return null;
 	const record = payload as Record<string, unknown>;
@@ -1033,7 +1069,8 @@ function readCancelledPayload(payload: unknown): {
 		cancelledSeq,
 		causeFantraxPlayerId,
 		causePlayerName,
-		restoration: readRestoration(record['restoration'])
+		restoration: readRestoration(record['restoration']),
+		wasContentionEntry: record['wasContentionEntry'] === true
 	};
 }
 
@@ -1197,6 +1234,120 @@ export function withBidCancelled(
 		// Untouched wherever a leader stands — restored or never withdrawn —
 		// and cleared only where a Standard Auction has none.
 		closesAt: leaderless ? null : auction.closesAt,
+		bids,
+		contenders: contendersFor(bids)
+	};
+}
+
+/**
+ * The `BidCancellationReversed` payload as this reducer needs it, read
+ * defensively — `readCancelledPayload`'s idiom for its reason. An event naming
+ * no Player or no cancellation is SKIPPED: there is no Bid it could be about.
+ *
+ * The fields this reducer does NOT read — the reinstated Team, the erased
+ * Bids, the League Clock figures and the reason — ride the payload for the
+ * Audit Log, the broadcast and the mentions.
+ */
+function readReinstatedPayload(
+	payload: unknown
+): { readonly fantraxPlayerId: string; readonly cancellationSeq: string } | null {
+	if (typeof payload !== 'object' || payload === null) return null;
+	const record = payload as Record<string, unknown>;
+	const fantraxPlayerId = record['fantraxPlayerId'];
+	const cancellationSeq = record['cancellationSeq'];
+	if (typeof fantraxPlayerId !== 'string' || fantraxPlayerId === '') return null;
+	if (typeof cancellationSeq !== 'string' || !/^(?:0|[1-9][0-9]*)$/.test(cancellationSeq)) {
+		return null;
+	}
+	return { fantraxPlayerId, cancellationSeq };
+}
+
+/**
+ * The `seq`s of the Bids a `BidCancellationReversed` erased, off its
+ * `erasedBids` list — the handle `league-clock.ts` withdraws each erased
+ * Bid's reset by (Story 7.14, AD-22's void treatment).
+ *
+ * Exported from HERE, beside the event type, so the League Clock reads the
+ * one definition of the payload rather than a second spelling of it. A
+ * malformed payload or entry contributes nothing: withdrawing an unidentified
+ * reset is not a thing a fold can do (`readVoidedSeq`'s reasoning).
+ */
+export function readErasedSeqs(payload: unknown): readonly string[] {
+	if (typeof payload !== 'object' || payload === null) return [];
+	const erased = (payload as Record<string, unknown>)['erasedBids'];
+	if (!Array.isArray(erased)) return [];
+	const seqs: string[] = [];
+	for (const entry of erased) {
+		if (typeof entry !== 'object' || entry === null) continue;
+		const seq = (entry as Record<string, unknown>)['seq'];
+		if (typeof seq !== 'string' || seq === '' || seqs.includes(seq)) continue;
+		seqs.push(seq);
+	}
+	return seqs;
+}
+
+/**
+ * One Auction with a cancelled Bid reinstated — the WHOLE of what a
+ * `BidCancellationReversed` does to the fold (Story 7.14).
+ *
+ * Exported because two callers must produce identical state from one
+ * decision: `auctionsReducer` folding the appended event, and
+ * `rules/bid-reinstatement.ts`, which re-tests the reinstated Team's gates
+ * against the Auctions as the reinstatement will leave them.
+ *
+ * The Bid is found by the `seq` of the `BidCancelled` that marked it — its
+ * `cancellation.seq` — and then:
+ *
+ *  - its marker is removed. It is the same history line it always was;
+ *  - every Bid on this Auction placed AFTER the cancellation — `seq` greater
+ *    than the cancellation's — is ERASED from `bids`: a void's treatment,
+ *    because the Commissioner has ruled the cancellation should not have
+ *    happened and so the Auction those Bids were placed into never existed.
+ *    Their capital is released as a consequence (`teamMoneyStateFor` stops
+ *    finding them), and `league-clock.ts` withdraws their resets;
+ *  - the reinstated Bid LEADS, with its ORIGINAL `closesAt` — the Auction
+ *    Clock it earned, which may already have passed. An expired clock is not
+ *    closed here: `overdueAuctions` offers it to the next sweep, and
+ *    `rules/close.ts` closes it the ordinary way;
+ *  - `contention` is read off the reinstated amount and `contenders` is
+ *    recomputed, so a Minimum-Bid Contention opened by an erased Bid is gone.
+ *
+ * `seedHash` and `seed` are carried unchanged: the first Bid on an Auction is
+ * never erased (it precedes the reinstated one), so the published commitment
+ * it carried is still the one this Auction holds.
+ *
+ * Idempotent: once reinstated the marker is gone, so a second application —
+ * or a `seq` this Auction's history never marked — returns the Auction
+ * unchanged, which is what makes replay converge.
+ */
+export function withBidReinstated(auction: Auction, cancellationSeq: string): Auction {
+	const target =
+		auction.bids.find((bid) => (bid.cancellation ?? null)?.seq === cancellationSeq) ?? null;
+	if (target === null) return auction;
+	const cut = BigInt(cancellationSeq);
+
+	const bids: Bid[] = [];
+	let reinstated: Bid | null = null;
+	for (const bid of auction.bids) {
+		if (BigInt(bid.seq) > cut) continue;
+		if (bid.seq !== target.seq) {
+			bids.push(bid);
+			continue;
+		}
+		// The marker dropped rather than set to `null`, so a reinstated Bid is
+		// structurally the Bid that was never cancelled.
+		const { cancellation: _dropped, ...standing } = bid;
+		void _dropped;
+		reinstated = standing;
+		bids.push(standing);
+	}
+	if (reinstated === null) return auction;
+
+	return {
+		...auction,
+		contention: contentionForAmount(reinstated.amount),
+		leadingBid: reinstated,
+		closesAt: reinstated.closesAt,
 		bids,
 		contenders: contendersFor(bids)
 	};
@@ -1409,8 +1560,14 @@ export const auctionsReducer: Reducer<OpenAuctions> = (state, event) => {
 			// over a Team whose roster this projection cannot see.
 			const read = readCancelledPayload(event.payload);
 			if (read === null) return state;
-			const { fantraxPlayerId, cancelledSeq, causeFantraxPlayerId, causePlayerName, restoration } =
-				read;
+			const {
+				fantraxPlayerId,
+				cancelledSeq,
+				causeFantraxPlayerId,
+				causePlayerName,
+				restoration,
+				wasContentionEntry
+			} = read;
 			if (!hasOwn(state.byPlayer, fantraxPlayerId)) return state;
 			const existing = state.byPlayer[fantraxPlayerId] ?? null;
 			if (existing === null) return state;
@@ -1424,12 +1581,34 @@ export const auctionsReducer: Reducer<OpenAuctions> = (state, event) => {
 				// to `null` if the payload could not be read. This reducer makes
 				// no restoration decision of its own and could not: the gates
 				// that made this one ran over a roster no projection can see.
-				restoration
+				restoration,
+				// The recorded fact, carried for the Auction page's reinstatement
+				// control (Story 7.14). Present only when `true`, so a marker for
+				// an ordinary lead is byte-identical to the one `rules/close.ts`'s
+				// cascade builds through this same function.
+				...(wasContentionEntry ? { wasContentionEntry: true } : {})
 			});
 			// Unchanged when the `seq` names no Bid here or one already
 			// cancelled — the identity check that makes replay converge.
 			if (cancelled === existing) return state;
 			return { byPlayer: { ...state.byPlayer, [fantraxPlayerId]: cancelled } };
+		}
+		case BID_CANCELLATION_REVERSED_EVENT: {
+			// **This case READS a decision it does not make** (Story 7.14), for
+			// `BID_CANCELLED_EVENT`'s reason: whether the reinstated Team could
+			// still keep the Bid was decided by `rules/bid-reinstatement.ts`
+			// under the lock, over a roster no projection can see. The fold only
+			// applies the one effect that decision permits.
+			const read = readReinstatedPayload(event.payload);
+			if (read === null) return state;
+			if (!hasOwn(state.byPlayer, read.fantraxPlayerId)) return state;
+			const existing = state.byPlayer[read.fantraxPlayerId] ?? null;
+			if (existing === null) return state;
+			const reinstated = withBidReinstated(existing, read.cancellationSeq);
+			// Unchanged when nothing carries that cancellation any more — the
+			// identity check that makes replay converge.
+			if (reinstated === existing) return state;
+			return { byPlayer: { ...state.byPlayer, [read.fantraxPlayerId]: reinstated } };
 		}
 		case AUCTION_CLOSED_EVENT: {
 			// The SAME reader `nominationsReducer` folds a close through, so a

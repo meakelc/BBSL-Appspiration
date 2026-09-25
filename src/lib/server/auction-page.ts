@@ -203,6 +203,17 @@ export type AuctionPageBid = {
 		 * nomination the board already has.
 		 */
 		readonly restored: boolean;
+		/**
+		 * The `BidCancelled` event's own `seq` — what a Commissioner's
+		 * reinstatement names (Story 7.14). The control links with it.
+		 */
+		readonly cancellationSeq: string;
+		/**
+		 * Whether the row may carry the reinstatement control at all: `false`
+		 * for a Minimum-Bid Contention entry, which cannot be reinstated. Only
+		 * where to OFFER the control — `decideBidReinstatement` is the check.
+		 */
+		readonly reinstatable: boolean;
 	} | null;
 };
 
@@ -682,7 +693,12 @@ function renderBidHistory(
 					? null
 					: {
 							causePlayerName: cancellation.causePlayerName,
-							restored: cancellation.restoration !== null
+							restored: cancellation.restoration !== null,
+							cancellationSeq: cancellation.seq,
+							// The `BidCancelled` payload's RECORDED `wasContentionEntry` —
+							// the very fact `decideBidReinstatement` refuses on — never a
+							// guess from the amount. A lottery entry is never reinstated.
+							reinstatable: cancellation.wasContentionEntry !== true
 						}
 		};
 	});

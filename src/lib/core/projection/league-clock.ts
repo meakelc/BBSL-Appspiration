@@ -83,7 +83,7 @@
 
 import { LEAGUE_CLOCK } from '../constants.ts';
 import { formatInstant, parseInstant } from '../instant.ts';
-import { BID_PLACED_EVENT } from './auctions.ts';
+import { BID_CANCELLATION_REVERSED_EVENT, BID_PLACED_EVENT, readErasedSeqs } from './auctions.ts';
 import type { Reducer } from './fold.ts';
 import { NOMINATION_PLACED_EVENT } from './nominations.ts';
 import { AUCTION_OPENED_EVENT } from './phase.ts';
@@ -249,6 +249,21 @@ export const leagueClockReducer: Reducer<LeagueClock> = (state, event) => {
 			if (voidedSeq === null) return state;
 			if (state.voidedSeqs.includes(voidedSeq)) return state;
 			return { ...state, voidedSeqs: [...state.voidedSeqs, voidedSeq] };
+		}
+		case BID_CANCELLATION_REVERSED_EVENT: {
+			// **A reinstatement ERASES the Bids placed after the cancellation it
+			// reverses, and an erased Bid takes a void's treatment** (Story 7.14,
+			// AD-22): each one's reset is withdrawn exactly as a `BidVoided`
+			// withdraws one, by membership in `voidedSeqs`. The reinstated Bid's
+			// own reset is untouched — a cancellation never removed it.
+			//
+			// The erased `seq`s ride the payload (`readErasedSeqs`), decided under
+			// the lock from the same Auction fold `withBidReinstated` erases from.
+			const erased = readErasedSeqs(event.payload).filter(
+				(seq) => !state.voidedSeqs.includes(seq)
+			);
+			if (erased.length === 0) return state;
+			return { ...state, voidedSeqs: [...state.voidedSeqs, ...erased] };
 		}
 		default:
 			return state;

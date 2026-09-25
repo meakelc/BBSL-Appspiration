@@ -99,7 +99,10 @@ describe('BROADCAST_EVENT_TYPES — seven types, and nothing else', () => {
 			'AssignmentDeadlinePassed',
 			// Story 7.13. A reversed Close takes back a win the channel heard
 			// about, so the channel hears about the reversal — actor and reason.
-			'AuctionCloseReversed'
+			'AuctionCloseReversed',
+			// Story 7.14. A reinstated Bid hands back a lead the channel saw
+			// cancelled and erases Bids it saw placed — actor, reason, Teams.
+			'BidCancellationReversed'
 		]);
 	});
 
@@ -784,5 +787,89 @@ describe('noticeFor — AuctionCloseReversed with no Player name to be had', () 
 		const line = noticeFor(nameless, DIRECTORY);
 		expect(line).not.toContain('undefined');
 		expect(line).toBe('A AuctionCloseReversed was recorded (event #1).');
+	});
+});
+
+// --- Story 7.14: a reinstated Bid ------------------------------------------
+
+describe('noticeFor — BidCancellationReversed (Story 7.14)', () => {
+	const reinstatement = (payload: Record<string, unknown> = {}, overrides: Partial<BroadcastEvent> = {}) =>
+		event(
+			'BidCancellationReversed',
+			{
+				cancellationSeq: '5479',
+				fantraxPlayerId: PLAYER,
+				playerName: 'Anthony Davis',
+				teamId: BULLS,
+				teamName: 'Bulls',
+				amount: 2_000_000,
+				closesAt: CLOSES_AT,
+				clockExpired: true,
+				erasedBids: [{ seq: '5534', teamId: LAKERS, teamName: 'Lakers', amount: 1_000_000 }],
+				reason: 'The IR Move had been made in Fantrax before the close.',
+				...payload
+			},
+			// The actor is the Commissioner — Dana, who holds no Team here.
+			{ managerId: DANA, ...overrides }
+		);
+
+	it('names the actor, the reinstated Team, the erased bidders and the reason verbatim', () => {
+		expect(noticeFor(reinstatement(), DIRECTORY)).toBe(
+			"The Commissioner, Dana, reinstated Bulls — Ari's $2.0M Bid on Anthony Davis, which leads " +
+				'again. Erased: the later Bid by Lakers — Meakel. Its Auction Clock has passed, so the next ' +
+				'close awards it. Reason: The IR Move had been made in Fantrax before the close.'
+		);
+	});
+
+	it('states a running clock as its close instant, and an empty erasure as none', () => {
+		const line = noticeFor(reinstatement({ clockExpired: false, erasedBids: [] }), DIRECTORY);
+		expect(line).toContain('No later Bid was erased.');
+		expect(line).toContain(`Closes ${CLOSES_AT_MARKUP}.`);
+	});
+
+	it('falls back to the plain line when the reason is missing', () => {
+		expect(noticeFor(reinstatement({ reason: undefined }), DIRECTORY)).toBe(
+			'A BidCancellationReversed was recorded (event #1).'
+		);
+	});
+});
+
+describe('noticeFor — BidCancellationReversed, the erased list (Story 7.14 review)', () => {
+	const withErased = (erasedBids: unknown[]) =>
+		event(
+			'BidCancellationReversed',
+			{
+				teamId: BULLS,
+				teamName: 'Bulls',
+				playerName: 'Anthony Davis',
+				amount: 2_000_000,
+				clockExpired: true,
+				erasedBids,
+				reason: 'R.'
+			},
+			{ managerId: null }
+		);
+
+	it('counts Bids, not the Teams that placed them', () => {
+		const line = noticeFor(
+			withErased([
+				{ seq: '8', teamId: LAKERS, teamName: 'Lakers', amount: 1_000_000 },
+				{ seq: '9', teamId: LAKERS, teamName: 'Lakers', amount: 1_500_000 }
+			]),
+			DIRECTORY
+		);
+		expect(line).toContain('Erased: the later Bids by Lakers — Meakel.');
+	});
+
+	it('names an unnameable entry by its id, or as unnamed, and keeps the rest', () => {
+		const line = noticeFor(
+			withErased([
+				{ seq: '8', teamId: LAKERS, teamName: 'Lakers', amount: 1_000_000 },
+				{ seq: '9', teamId: 't-unknown', amount: 1_000_000 },
+				{ seq: '10', amount: 1_000_000 }
+			]),
+			DIRECTORY
+		);
+		expect(line).toContain('Erased: the later Bids by Lakers — Meakel, t-unknown, an unnamed Team.');
 	});
 });

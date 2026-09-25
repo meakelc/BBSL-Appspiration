@@ -228,7 +228,12 @@ describe('every control sits in the block its class belongs to', () => {
 	// half, by calling `classifyDestinations` directly.)
 	function blocksOf(source: string, className: string): string[] {
 		return [
-			...source.matchAll(new RegExp(`<(section|div) class="${className}"[\\s\\S]*?</\\1>`, 'g'))
+			...source.matchAll(
+				// A `<span>` block too (Story 7.14): a control inside inline
+				// markup — the Auction page's Bid history row — must use one,
+				// because a `<div>` there is invalid block-in-inline.
+				new RegExp(`<(section|div|span) class="${className}"[\\s\\S]*?</\\1>`, 'g')
+			)
 		].map((match) => match[0]);
 	}
 
