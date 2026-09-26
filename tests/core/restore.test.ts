@@ -306,6 +306,45 @@ describe('selectRestoration — the next-highest surviving Bid that still stands
 		expect(outcome.restored).toBeNull();
 	});
 
+	it('never names a join a dissolution released (FR-19)', () => {
+		// The lottery t-a opened and t-b joined was converted by t-c. Cancel
+		// t-c and there is nothing to restore: the joins' $1,000,000 went back
+		// at the dissolution, and seating one would be a Standard lead at the
+		// lottery amount with the other Contender shown as outbid.
+		const released = { seq: '4' };
+		const tomlin = standardAuction('p-tomlin', [
+			{ ...bidBy('1', 't-a', 1_000_000), release: released },
+			{ ...bidBy('2', 't-b', 1_000_000), release: released },
+			bidBy('3', 't-c', 1_500_000)
+		]);
+		const outcome = select({
+			auctions: auctionsOf([withdraw(tomlin, '3')]),
+			fantraxPlayerId: 'p-tomlin',
+			withdrawnSeq: '3',
+			rosters: { 't-a': figures(4), 't-b': figures(4), 't-c': figures(12) }
+		});
+
+		expect(outcome.restored).toBeNull();
+	});
+
+	it('still restores a Standard Bid placed after the dissolution', () => {
+		const released = { seq: '4' };
+		const tomlin = standardAuction('p-tomlin', [
+			{ ...bidBy('1', 't-a', 1_000_000), release: released },
+			{ ...bidBy('2', 't-b', 1_000_000), release: released },
+			bidBy('3', 't-c', 1_500_000),
+			bidBy('5', 't-d', 2_000_000)
+		]);
+		const outcome = select({
+			auctions: auctionsOf([withdraw(tomlin, '5')]),
+			fantraxPlayerId: 'p-tomlin',
+			withdrawnSeq: '5',
+			rosters: { 't-a': figures(4), 't-b': figures(4), 't-c': figures(4), 't-d': figures(12) }
+		});
+
+		expect(outcome.restored?.teamId).toBe('t-c');
+	});
+
 	it('answers null for an Auction that is not in the fold at all', () => {
 		const outcome = select({
 			auctions: { byPlayer: {} },

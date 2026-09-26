@@ -12,6 +12,7 @@ import { closedPayload } from './fixtures/closed-event.ts';
 import { AUCTION_CLOCK, MINIMUM_BID } from '../src/lib/core/constants.ts';
 import {
 	AUCTION_EXPIRED,
+	BID_CANCELLATION_REVERSED_EVENT,
 	BID_CANCELLED_EVENT,
 	CAUSE_UNNAMED,
 	BID_PLACED_EVENT,
@@ -661,7 +662,7 @@ describe('ContentionDissolved — the reveal, folded and nothing else (Story 3.3
 		expect(at([bid(1, MINIMUM_BID, { seedHash: SEED_HASH })])?.seed).toBeNull();
 	});
 
-	it('leaves the Contender list and the Bid history untouched', () => {
+	it('leaves the Contender list untouched and only MARKS the joins released', () => {
 		// **`contenders` is NOT cleared, and that is the rule.** "The
 		// Contender list is discarded" is about commitment and the draw:
 		// `teamMoneyStateFor` tests the contention STATE rather than the list
@@ -677,7 +678,16 @@ describe('ContentionDissolved — the reveal, folded and nothing else (Story 3.3
 
 		expect(after?.contenders).toEqual(before?.contenders);
 		expect(after?.contenders.map((contender) => contender.teamId)).toEqual(['t-1', 't-2']);
-		expect(after?.bids).toEqual(before?.bids);
+		// Every Bid is still there, in order; the two joins carry the
+		// dissolution's release mark and the converting Bid carries none.
+		expect(after?.bids.map((entry) => ({ ...entry, release: undefined }))).toEqual(
+			before?.bids.map((entry) => ({ ...entry, release: undefined }))
+		);
+		expect(after?.bids.map((entry) => entry.release ?? null)).toEqual([
+			{ seq: '4' },
+			{ seq: '4' },
+			null
+		]);
 		expect(after?.closesAt).toBe(before?.closesAt);
 	});
 
@@ -1580,5 +1590,69 @@ describe('auctionAtClose — cut at a NAMED close (Story 7.13)', () => {
 	it('returns null for a named seq that is not a close of this Player', () => {
 		expect(auctionAtClose(log, 'p-1', '5')).toBeNull();
 		expect(auctionAtClose(log, 'p-2', '7')).toBeNull();
+	});
+});
+
+// --- A dissolved lottery's joins stand for nothing (FR-19, FR-40) ----------
+
+describe('auctionsReducer — cancelling the Bid that dissolved a lottery', () => {
+	/** A lottery t-1 opened and t-2 joined, converted by t-3 at $1.5M. */
+	const dissolvedLottery = [
+		bid(1, MINIMUM_BID, { teamId: 't-1', seedHash: SEED_HASH }),
+		bid(2, MINIMUM_BID, { teamId: 't-2', teamName: 'Rockets' }),
+		bid(3, 1_500_000, { teamId: 't-3', teamName: 'Bulls' }),
+		dissolved(4, reveal())
+	];
+	const NEW_HASH = 'e'.repeat(64);
+
+	it('goes back to Awaiting Opening Bid rather than a $1,000,000 Standard lead', () => {
+		// The shape that reached prod: a restoration recorded before the
+		// selector stopped naming released joins. The fold refuses to seat it.
+		const auction = at([
+			...dissolvedLottery,
+			cancelled(5, '3', { restoration: restoring('1', 't-1', MINIMUM_BID) })
+		]);
+
+		expect(auction?.contention).toBe('awaiting_opening_bid');
+		expect(auction?.leadingBid).toBeNull();
+		expect(auction?.closesAt).toBeNull();
+		// History and the former-Contender list are kept, not erased.
+		expect(auction?.bids).toHaveLength(3);
+		expect(auction?.contenders.map((contender) => contender.teamId)).toEqual(['t-1', 't-2']);
+		expect(auction?.seed).toBe('the-revealed-seed');
+	});
+
+	it('lets a fresh $1,000,000 Bid open a new lottery with its OWN commitment', () => {
+		const auction = at([
+			...dissolvedLottery,
+			cancelled(5, '3'),
+			bid(6, MINIMUM_BID, { teamId: 't-4', teamName: 'Knicks', seedHash: NEW_HASH }),
+			bid(7, MINIMUM_BID, { teamId: 't-1' })
+		]);
+
+		expect(auction?.contention).toBe('minimum_bid');
+		expect(auction?.leadingBid?.teamId).toBe('t-4');
+		// Only the Teams that joined THIS lottery — t-2's released join is no
+		// ticket, and t-1 is in because it joined again.
+		expect(auction?.contenders.map((contender) => contender.teamId)).toEqual(['t-4', 't-1']);
+		expect(auction?.seedHash).toBe(NEW_HASH);
+		expect(auction?.seed).toBeNull();
+		expect(wasDissolved(auction as never)).toBe(false);
+	});
+
+	it('puts the old commitment back when a reinstatement erases the new round', () => {
+		const auction = at([
+			...dissolvedLottery,
+			cancelled(5, '3'),
+			bid(6, MINIMUM_BID, { teamId: 't-4', seedHash: NEW_HASH }),
+			event(7, BID_CANCELLATION_REVERSED_EVENT, { fantraxPlayerId: 'p-1', cancellationSeq: '5' })
+		]);
+
+		expect(auction?.contention).toBe('standard');
+		expect(auction?.leadingBid?.teamId).toBe('t-3');
+		expect(auction?.bids.map((entry) => entry.seq)).toEqual(['1', '2', '3']);
+		expect(auction?.seedHash).toBe(SEED_HASH);
+		expect(auction?.seed).toBe('the-revealed-seed');
+		expect(auction?.contenders.map((contender) => contender.teamId)).toEqual(['t-1', 't-2']);
 	});
 });
