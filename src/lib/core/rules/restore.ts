@@ -46,7 +46,7 @@
 
 import { compareMoney } from '../money.ts';
 import type { Money } from '../money.ts';
-import { auctionForPlayer, wasCancelled } from '../projection/auctions.ts';
+import { auctionForPlayer, wasCancelled, wasReleased } from '../projection/auctions.ts';
 import type { Bid, OpenAuctions, Restoration } from '../projection/auctions.ts';
 import type { RestoreLeadingBid, RestoreLeadingBidGateResults } from '../types.ts';
 import {
@@ -148,8 +148,8 @@ export type RestorationOutcome = {
  * by being strictly higher, so the earliest of two equal amounts is the one
  * that was leading and the one that leads again.
  *
- * **A cancelled Bid is not a candidate, and neither is the one just
- * withdrawn.** The `retain` axis leaves the withdrawn Bid in `bids` carrying
+ * **A cancelled Bid is not a candidate, nor is a join a dissolution
+ * released, nor the one just withdrawn.** The `retain` axis leaves the withdrawn Bid in `bids` carrying
  * its marker, so `wasCancelled` already excludes it; the explicit `seq` test
  * covers the `erase` axis and the caller who hands over a fold the withdrawal
  * has not yet been applied to. Nothing else is filtered — the winning Team's
@@ -204,7 +204,13 @@ export function selectRestoration(input: {
 
 /** The surviving Bids, highest first, earliest `seq` first on a tie (AD-5). */
 function candidatesFor(bids: readonly Bid[], withdrawnSeq: string): readonly Bid[] {
-	const surviving = bids.filter((bid) => !wasCancelled(bid) && bid.seq !== withdrawnSeq);
+	// A released join is no candidate: the dissolution already gave its
+	// $1,000,000 back, and restoring it would re-commit a Contender who was
+	// told the lottery was over — the "fourth restoration shape" the PRD
+	// forbids (§4.4, FR-15/FR-19).
+	const surviving = bids.filter(
+		(bid) => !wasCancelled(bid) && !wasReleased(bid) && bid.seq !== withdrawnSeq
+	);
 	return [...surviving].sort((left, right) => {
 		const byAmount = compareMoney(right.amount, left.amount);
 		if (byAmount !== 0) return byAmount;

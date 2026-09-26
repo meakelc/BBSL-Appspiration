@@ -344,11 +344,47 @@ export type Bid = {
 	 * missing fact — and every reader takes it as `bid.cancellation ?? null`.
 	 */
 	readonly cancellation?: BidCancellation | null;
+	/**
+	 * The mark a `ContentionDissolved` leaves on every join it released, or
+	 * `null`/absent on every Bid that was never a join of a dissolved lottery.
+	 *
+	 * **A released join stands for nothing.** FR-19's conversion discards the
+	 * Contender list and hands every Contender its $1,000,000 back, so the
+	 * PRD's reading is that "a dissolved contention has no surviving Bid — only
+	 * a discarded list of equal $1,000,000 entries" (§4.4, FR-15/FR-19). The
+	 * join stays in `bids` as history and stays the former-Contender list the
+	 * dissolution block prints; what it stops being is a restoration candidate,
+	 * a floor a new Bid must beat, and a ticket in any later lottery. Without
+	 * the mark, cancelling the converting Bid handed the Auction to the
+	 * earliest former Contender as a `standard` lead at exactly `MINIMUM_BID`.
+	 *
+	 * Optional for `cancellation`'s reason: a later event writes it onto a Bid
+	 * already folded, so its absence is the ordinary case.
+	 */
+	readonly release?: { readonly seq: string } | null;
+	/**
+	 * The `seedHash` and `seed` the Auction held before THIS Bid opened a new
+	 * round on it, or `null`/absent on every Bid that did not.
+	 *
+	 * A round opens when a Bid takes the lead of a leaderless Auction that is
+	 * not a lottery — every earlier Bid cancelled or released — and it takes a
+	 * fresh commitment with it. `withBidReinstated` can erase that opening
+	 * again, and this is what it puts back.
+	 */
+	readonly previousRound?: {
+		readonly seedHash: string | null;
+		readonly seed: string | null;
+	} | null;
 };
 
 /** Whether this Bid's standing was withdrawn by a `BidCancelled` (FR-40). */
 export function wasCancelled(bid: Bid): boolean {
 	return (bid.cancellation ?? null) !== null;
+}
+
+/** Whether this Bid was a join a `ContentionDissolved` released (FR-19). */
+export function wasReleased(bid: Bid): boolean {
+	return (bid.release ?? null) !== null;
 }
 
 /**
@@ -832,7 +868,9 @@ export function contentionForAmount(amount: Money): ContentionState {
 function highestStandingBid(bids: readonly Bid[]): Bid | null {
 	let highest: Bid | null = null;
 	for (const bid of bids) {
-		if (wasCancelled(bid)) continue;
+		// A released join is not standing either: the dissolution gave its
+		// $1,000,000 back, so it is no floor for a new Bid and no successor.
+		if (wasCancelled(bid) || wasReleased(bid)) continue;
 		if (highest === null || compareMoney(bid.amount, highest.amount) > 0) highest = bid;
 	}
 	return highest;
@@ -852,8 +890,37 @@ function highestStandingBid(bids: readonly Bid[]): Bid | null {
  * dedup keeps the earliest join per Team, which is both what "ascending join
  * `seq`" means and what stops a Team appearing twice in the ordered list the
  * winner is derived from.
+ *
+ * **`live` decides what a released join is.** Inside a running lottery it is
+ * no Contender at all — it belongs to an earlier contention that dissolved,
+ * and a ticket in this one would be a draw nobody joined. Outside one, the
+ * list is the FORMER Contenders the dissolution block prints: the joins not
+ * yet released if there are any (the converting Bid has folded and its
+ * `ContentionDissolved` not yet), and otherwise the joins the latest
+ * dissolution released, so a second dissolved round never lists the first's.
  */
-function contendersFor(bids: readonly Bid[]): readonly Contender[] {
+function contendersFor(bids: readonly Bid[], live: boolean): readonly Contender[] {
+	if (live) return contendersAmong(bids.filter((bid) => !wasReleased(bid)));
+	const unreleased = contendersAmong(bids.filter((bid) => !wasReleased(bid)));
+	if (unreleased.length > 0) return unreleased;
+	let latest: bigint | null = null;
+	for (const bid of bids) {
+		const release = bid.release ?? null;
+		if (release === null) continue;
+		const seq = BigInt(release.seq);
+		if (latest === null || seq > latest) latest = seq;
+	}
+	if (latest === null) return [];
+	const cut = latest;
+	return contendersAmong(
+		bids.filter((bid) => {
+			const release = bid.release ?? null;
+			return release !== null && BigInt(release.seq) === cut;
+		})
+	);
+}
+
+function contendersAmong(bids: readonly Bid[]): readonly Contender[] {
 	const contenders: Contender[] = [];
 	const joined = new Set<string>();
 	for (const bid of bids) {
@@ -1235,7 +1302,7 @@ export function withBidCancelled(
 		// and cleared only where a Standard Auction has none.
 		closesAt: leaderless ? null : auction.closesAt,
 		bids,
-		contenders: contendersFor(bids)
+		contenders: contendersFor(bids, auction.contention === 'minimum_bid')
 	};
 }
 
@@ -1312,9 +1379,10 @@ export function readErasedSeqs(payload: unknown): readonly string[] {
  *  - `contention` is read off the reinstated amount and `contenders` is
  *    recomputed, so a Minimum-Bid Contention opened by an erased Bid is gone.
  *
- * `seedHash` and `seed` are carried unchanged: the first Bid on an Auction is
- * never erased (it precedes the reinstated one), so the published commitment
- * it carried is still the one this Auction holds.
+ * `seedHash` and `seed` are carried unchanged unless an erased Bid opened a
+ * new round (it went leaderless after the cancellation and was opened again):
+ * that opening took a fresh commitment, and erasing it puts back the one the
+ * Auction held before — `Bid.previousRound`.
  *
  * Idempotent: once reinstated the marker is gone, so a second application —
  * or a `seq` this Auction's history never marked — returns the Auction
@@ -1328,8 +1396,15 @@ export function withBidReinstated(auction: Auction, cancellationSeq: string): Au
 
 	const bids: Bid[] = [];
 	let reinstated: Bid | null = null;
+	// The commitment in force before the EARLIEST erased Bid that opened a
+	// round — `null` when no erased Bid opened one, and the Auction keeps its own.
+	let previousRound: { readonly seedHash: string | null; readonly seed: string | null } | null =
+		null;
 	for (const bid of auction.bids) {
-		if (BigInt(bid.seq) > cut) continue;
+		if (BigInt(bid.seq) > cut) {
+			if (previousRound === null) previousRound = bid.previousRound ?? null;
+			continue;
+		}
 		if (bid.seq !== target.seq) {
 			bids.push(bid);
 			continue;
@@ -1342,14 +1417,18 @@ export function withBidReinstated(auction: Auction, cancellationSeq: string): Au
 		bids.push(standing);
 	}
 	if (reinstated === null) return auction;
+	const contention = contentionForAmount(reinstated.amount);
 
 	return {
 		...auction,
-		contention: contentionForAmount(reinstated.amount),
+		contention,
 		leadingBid: reinstated,
 		closesAt: reinstated.closesAt,
 		bids,
-		contenders: contendersFor(bids)
+		contenders: contendersFor(bids, contention === 'minimum_bid'),
+		...(previousRound === null
+			? {}
+			: { seedHash: previousRound.seedHash, seed: previousRound.seed })
 	};
 }
 
@@ -1374,7 +1453,11 @@ function restoredBidFor(
 	if (restoration === null) return null;
 	if (restoration.seq === cancelledSeq) return null;
 	const bid = bids.find((candidate) => candidate.seq === restoration.seq) ?? null;
-	if (bid === null || wasCancelled(bid)) return null;
+	// A released join is refused here as a cancelled Bid is. `selectRestoration`
+	// no longer names one, but logs recorded before it stopped do: seating it
+	// would make a `standard` lead at exactly `MINIMUM_BID` out of an entry the
+	// dissolution already gave back.
+	if (bid === null || wasCancelled(bid) || wasReleased(bid)) return null;
 	return bid;
 }
 
@@ -1415,13 +1498,14 @@ export const auctionsReducer: Reducer<OpenAuctions> = (state, event) => {
 				: null;
 
 			if (existing === null) {
+				const contention = contentionForAmount(bid.amount);
 				const auction: Auction = {
 					fantraxPlayerId,
-					contention: contentionForAmount(bid.amount),
+					contention,
 					leadingBid: bid,
 					closesAt: bid.closesAt,
 					bids: [bid],
-					contenders: contendersFor([bid]),
+					contenders: contendersFor([bid], contention === 'minimum_bid'),
 					seedHash: bid.seedHash,
 					// No reveal can precede the first Bid: a `ContentionDissolved`
 					// for a Player with no Auction is skipped below, so the only
@@ -1470,22 +1554,39 @@ export const auctionsReducer: Reducer<OpenAuctions> = (state, event) => {
 					? bid
 					: existing.leadingBid;
 
+			// **A Bid that leads a leaderless, non-lottery Auction opens a new
+			// round on it** — the same state `decide()` calls an Opening Bid
+			// (its `opensContention` test), reached because every earlier Bid
+			// was cancelled or released. The round takes THIS Bid's commitment
+			// and no reveal: keeping the old ones would check a fresh lottery's
+			// draw against a seed already published, or against none. What the
+			// Auction held before rides the Bid, for `withBidReinstated`.
+			const opensRound =
+				existing.leadingBid === null &&
+				existing.contention !== 'minimum_bid' &&
+				leadingBid === bid;
+			const placed: Bid = opensRound
+				? { ...bid, previousRound: { seedHash: existing.seedHash, seed: existing.seed } }
+				: bid;
+			const leading = leadingBid === bid ? placed : leadingBid;
+
 			// Appended in fold order, which `fold()` guarantees is `seq` order
 			// (AD-5) — so the history is chronological by construction and
 			// nothing here sorts by `occurredAt`, which under the global lock
 			// can run backwards relative to commit order.
-			const bids = [...existing.bids, bid];
+			const bids = [...existing.bids, placed];
+			// Both read off the leader, and both stand still when there is
+			// none: an Auction that stays leaderless keeps the contention and
+			// the clock it already had, which is the same "a cancellation
+			// resets nothing" the cancellation itself keeps.
+			const contention =
+				leading === null ? existing.contention : contentionForAmount(leading.amount);
 
 			const auction: Auction = {
-				// Both read off the leader, and both stand still when there is
-				// none: an Auction that stays leaderless keeps the contention
-				// and the clock it already had, which is the same "a
-				// cancellation resets nothing" the cancellation itself keeps.
-				contention:
-					leadingBid === null ? existing.contention : contentionForAmount(leadingBid.amount),
+				contention,
 				fantraxPlayerId,
-				leadingBid,
-				closesAt: leadingBid === null ? existing.closesAt : leadingBid.closesAt,
+				leadingBid: leading,
+				closesAt: leading === null ? existing.closesAt : leading.closesAt,
 				bids,
 				// **A join never moves the lead, so it never moves the clock —
 				// and that is a second guarantee, not the rule.** A Bid of
@@ -1496,22 +1597,23 @@ export const auctionsReducer: Reducer<OpenAuctions> = (state, event) => {
 				// EXISTING `closesAt` onto every join's own payload, so the
 				// persisted log states one close instant per contention whether
 				// or not this fold happens to preserve it.
-				contenders: contendersFor(bids),
-				// The FIRST commitment seen, kept. A second `seedHash` in the
-				// same Auction cannot replace the published one — replay would
-				// otherwise be able to swap the commitment a Manager already
-				// checked.
-				seedHash: existing.seedHash,
+				contenders: contendersFor(bids, contention === 'minimum_bid'),
+				// The FIRST commitment seen in this round, kept. A second
+				// `seedHash` in the same round cannot replace the published one —
+				// replay would otherwise be able to swap the commitment a Manager
+				// already checked. Only a round's own opening brings a new one.
+				seedHash: opensRound ? bid.seedHash : existing.seedHash,
 				// A Bid never reveals anything. The reveal is `ContentionDissolved`'s
 				// alone, and it is carried across here unchanged so a Bid placed
 				// AFTER a dissolution — an ordinary ascending raise — cannot
-				// erase the seed the dissolution published.
-				seed: existing.seed
+				// erase the seed the dissolution published. A new round has
+				// revealed nothing yet.
+				seed: opensRound ? null : existing.seed
 			};
 			return { byPlayer: { ...state.byPlayer, [fantraxPlayerId]: auction } };
 		}
 		case CONTENTION_DISSOLVED_EVENT: {
-			// **This case records the reveal and NOTHING else.** The return to
+			// **This case records the reveal and the release, NOTHING else.** The return to
 			// `standard`, the new Leading Bidder, the restarted clock and the
 			// released commitments are all consequences of the converting
 			// `BidPlaced` folded above — a strictly higher amount, read through
@@ -1547,9 +1649,26 @@ export const auctionsReducer: Reducer<OpenAuctions> = (state, event) => {
 			// The FIRST reveal seen, kept — `seedHash`'s rule, and what makes a
 			// second fold of the same log converge on the same seed.
 			if (existing.seed !== null) return state;
-			if (seed === null) return state;
+			// **And every join is released** (FR-19): each Contender had its
+			// $1,000,000 back the moment the contention dissolved, so no join
+			// may later be restored, set a floor, or be counted into a new
+			// lottery. The mark is all that changes — each Bid stays in `bids`,
+			// and `contenders` stays the former-Contender list. Released even
+			// when the reveal is unreadable: the dissolution still happened.
+			let released = false;
+			const bids = existing.bids.map((bid) => {
+				if (wasCancelled(bid) || wasReleased(bid)) return bid;
+				if (contentionForAmount(bid.amount) !== 'minimum_bid') return bid;
+				released = true;
+				return { ...bid, release: { seq: event.seq } };
+			});
+			if (!released && seed === null) return state;
+			const dissolved = { ...existing, bids, contenders: contendersFor(bids, false) };
 			return {
-				byPlayer: { ...state.byPlayer, [fantraxPlayerId]: { ...existing, seed } }
+				byPlayer: {
+					...state.byPlayer,
+					[fantraxPlayerId]: seed === null ? dissolved : { ...dissolved, seed }
+				}
 			};
 		}
 		case BID_CANCELLED_EVENT: {
